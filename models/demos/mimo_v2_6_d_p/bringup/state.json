@@ -1972,6 +1972,63 @@
   "started": "2026-09-26T23:45:17",
   "status": "PASS"
  },
+ "L.s56320": {
+  "attempts": 0,
+  "duration_s": 60.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-26T23:49:36"
+   }
+  ],
+  "last_run": "2026-09-26T23:49:36",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/L.s56320.log",
+  "metrics": {
+   "chunk_seconds_c00": 4.909,
+   "chunk_seconds_c01": 2.746,
+   "chunk_seconds_c02": 2.756,
+   "chunk_seconds_c03": 2.759,
+   "chunk_seconds_c04": 2.772,
+   "chunk_seconds_c05": 2.832,
+   "chunk_seconds_c06": 2.792,
+   "chunk_seconds_c07": 2.792,
+   "chunk_seconds_c08": 2.794,
+   "chunk_seconds_c09": 2.802,
+   "chunk_seconds_c10": 1.549,
+   "covered_layers": 6,
+   "device_model_hybrid": 0,
+   "host_transfers_per_layer": 0,
+   "model_load_s": 10.8,
+   "pcc_layer_L00": 0.9997468251709924,
+   "pcc_layer_L01": 0.9996389021017913,
+   "pcc_layer_L02": 0.9996416479912199,
+   "pcc_layer_L03": 0.9996852307191894,
+   "pcc_layer_L04": 0.9997436224017845,
+   "pcc_layer_L05": 0.9997062775092533,
+   "pcc_state_key_L00": 0.9999953729337548,
+   "pcc_state_key_L01": 0.9979729082630334,
+   "pcc_state_key_L02": 0.9963570536861484,
+   "pcc_state_key_L03": 0.997650638656269,
+   "pcc_state_key_L04": 0.998583794919991,
+   "pcc_state_key_L05": 0.9999090101044537,
+   "pcc_state_min": 0.9963570536861484,
+   "pcc_state_value_L00": 0.9999955734346874,
+   "pcc_state_value_L01": 0.9974521673487651,
+   "pcc_state_value_L02": 0.9969329644189607,
+   "pcc_state_value_L03": 0.9975133264463534,
+   "pcc_state_value_L04": 0.9977114814426946,
+   "pcc_state_value_L05": 0.9995055125622536,
+   "prefill_seconds": 31.502,
+   "rung_chunk": 5120,
+   "rung_seq": 56320,
+   "rung_start": 0,
+   "subset": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T23:48:35",
+  "status": "PASS"
+ },
  "M.1": {
   "agent": {
    "defs": {
