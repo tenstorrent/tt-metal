@@ -40,9 +40,8 @@ namespace ttnn::experimental {
 
 namespace {
 
-// `BLOCK_TILES_H` in the Python module; both W0/W1 and W2 use the same value.
-// Stays in sync with moe_ring_common.h.
-constexpr uint32_t BLOCK_TILES_H = ::moe_ring::W0_W1_BLOCK_TILES_H;
+// Stays in sync with moe_ring_common.h. (Block heights depend on the per-shape transaction size:
+// ::moe_ring::block_tiles_h / half_block_tiles_h.)
 constexpr uint32_t BLOCK_TILES_W = ::moe_ring::W0_W1_BLOCK_TILES_W;
 constexpr uint32_t TILE_SIZE = tt::constants::TILE_WIDTH;
 
@@ -277,6 +276,118 @@ ttnn::Tensor prepare_w2_no_n_pad(
     return result;
 }
 
+// Lay the ring-rotated W2 groups (num_cores, L, E, groups, k_tiles * TILE, 4 * TILE) out in DRAM blocks for a
+// transaction size (Python mirror: moe_compute_utils.py::_w2_blocks_from_groups). Full a2a iterations stay 4 wide
+// with K padded to whole block_tiles_h blocks; a half-width last iteration keeps its 2 valid columns with K padded
+// to whole half_block_tiles_h blocks, two consecutive K tile rows side by side per stored row. Without a half
+// iteration the grouped shape is kept (the old layout for 14-tile transactions); with one the result is
+// (num_cores, L, E, blocks, block_rows, 4 * TILE).
+ttnn::Tensor w2_blocks_from_groups(ttnn::Tensor& grouped, uint32_t k_tiles, uint32_t Ht, uint32_t tiles_per_txn) {
+    const auto& shape = grouped.logical_shape();
+    const uint32_t num_cores = shape[0];
+    const uint32_t L = shape[1];
+    const uint32_t E = shape[2];
+    const uint32_t groups = shape[3];
+    const uint32_t rows = shape[4];
+    const uint32_t block_h = ::moe_ring::block_tiles_h(tiles_per_txn);
+    const uint32_t half_block_h = ::moe_ring::half_block_tiles_h(tiles_per_txn);
+    const uint32_t full_rows = ceil_div(k_tiles, block_h) * block_h * TILE_SIZE;
+    const bool half = ::moe_ring::w2_last_a2a_iter_half(Ht, num_cores, tiles_per_txn);
+    const uint32_t full_groups = groups - (half ? 1 : 0);
+
+    ttnn::Tensor full = grouped;
+    if (half && full_groups > 0) {
+        full = slice_basic(
+            grouped,
+            {0, 0, 0, 0, 0, 0},
+            {static_cast<int32_t>(num_cores),
+             static_cast<int32_t>(L),
+             static_cast<int32_t>(E),
+             static_cast<int32_t>(full_groups),
+             static_cast<int32_t>(rows),
+             static_cast<int32_t>(4 * TILE_SIZE)});
+    }
+    if (full_groups > 0 && full_rows > rows) {
+        auto pad = zeros_like_dtype({num_cores, L, E, full_groups, full_rows - rows, 4 * TILE_SIZE}, grouped);
+        auto padded = ttnn::concat({full, pad}, 4);
+        pad.deallocate(/*force=*/true);
+        if (half) {
+            full.deallocate(/*force=*/true);
+        }
+        full = padded;
+    }
+    if (!half) {
+        return full;
+    }
+
+    const uint32_t half_rows = ceil_div(k_tiles, half_block_h) * half_block_h * TILE_SIZE;
+    auto last = slice_basic(
+        grouped,
+        {0, 0, 0, static_cast<int32_t>(groups - 1), 0, 0},
+        {static_cast<int32_t>(num_cores),
+         static_cast<int32_t>(L),
+         static_cast<int32_t>(E),
+         static_cast<int32_t>(groups),
+         static_cast<int32_t>(rows),
+         static_cast<int32_t>(::moe_ring::W2_HALF_A2A_ITER_TILES_W * TILE_SIZE)});
+    if (half_rows > rows) {
+        auto pad = zeros_like_dtype(
+            {num_cores, L, E, 1, half_rows - rows, ::moe_ring::W2_HALF_A2A_ITER_TILES_W * TILE_SIZE}, grouped);
+        auto padded = ttnn::concat({last, pad}, 4);
+        pad.deallocate(/*force=*/true);
+        last.deallocate(/*force=*/true);
+        last = padded;
+    }
+    // (num_cores, L, E, 1, half_rows, 2*TILE) -> (num_cores, L, E, half_rows / 2, 4*TILE)
+    auto last_grouped = reshape_to(
+        last,
+        {static_cast<int32_t>(num_cores),
+         static_cast<int32_t>(L),
+         static_cast<int32_t>(E),
+         static_cast<int32_t>(half_rows / (2 * TILE_SIZE)),
+         2,
+         static_cast<int32_t>(TILE_SIZE),
+         static_cast<int32_t>(2 * TILE_SIZE)});
+    last.deallocate(/*force=*/false);
+    auto side_by_side = permute_to(last_grouped, {0, 1, 2, 3, 5, 4, 6});
+    last_grouped.deallocate(/*force=*/true);
+    auto last_rows = reshape_to(
+        side_by_side,
+        {static_cast<int32_t>(num_cores),
+         static_cast<int32_t>(L),
+         static_cast<int32_t>(E),
+         static_cast<int32_t>(half_rows / 2),
+         static_cast<int32_t>(4 * TILE_SIZE)});
+    ttnn::Tensor stream;
+    if (full_groups > 0) {
+        auto full_rows_t = reshape_to(
+            full,
+            {static_cast<int32_t>(num_cores),
+             static_cast<int32_t>(L),
+             static_cast<int32_t>(E),
+             static_cast<int32_t>(full_groups * full_rows),
+             static_cast<int32_t>(4 * TILE_SIZE)});
+        stream = ttnn::concat({full_rows_t, last_rows}, 3);
+        full.deallocate(/*force=*/true);
+        side_by_side.deallocate(/*force=*/true);
+    } else {
+        // The half iteration is the only one (ceil(Ht / num_cores) <= 2).
+        stream = last_rows;
+    }
+    const uint32_t block_rows = block_h * TILE_SIZE;
+    const uint32_t stream_rows = full_groups * full_rows + half_rows / 2;
+    auto result = reshape_to(
+        stream,
+        {static_cast<int32_t>(num_cores),
+         static_cast<int32_t>(L),
+         static_cast<int32_t>(E),
+         static_cast<int32_t>(stream_rows / block_rows),
+         static_cast<int32_t>(block_rows),
+         static_cast<int32_t>(4 * TILE_SIZE)});
+    stream.deallocate(/*force=*/false);
+    return result;
+}
+
 }  // namespace
 
 WeightCoreShardMaps get_weight_core_shard_maps(
@@ -351,29 +462,25 @@ WeightMemoryConfigs get_weight_mem_configs(
 
     const auto shard_maps = get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size);
     const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
-    const auto& w2_shard_map = shard_maps.w2_shard_map;
 
-    // K dimension for W0/W1: with bias, grow by one tile and pad to BLOCK_TILES_H;
-    // without bias, just pad hidden_size to BLOCK_TILES_H tiles.
+    // Stored K height for W0/W1: hidden tiles, plus one bias tile row.
     const uint32_t Ht = hidden_size / TILE_SIZE;
-    const uint32_t K_for_shard =
-        (has_bias ? ceil_div(Ht + 1, BLOCK_TILES_H) : ceil_div(Ht, BLOCK_TILES_H)) * BLOCK_TILES_H * TILE_SIZE;
+    const uint32_t k_dram_tiles = has_bias ? Ht + 1 : Ht;
+    const uint32_t Nt_w0_w1 = intermediate_size / TILE_SIZE;
 
     const uint32_t num_cores = static_cast<uint32_t>(w0_w1_shard_map.size());
     const uint32_t num_banks = shard_maps.dram_core_range_set.num_cores();
 
-    const uint32_t max_w0_w1 = *std::max_element(w0_w1_shard_map.begin(), w0_w1_shard_map.end());
-    const uint32_t w1_w0_groups_per_core = ::moe_ring::even_stride_at_least_a2a_width(max_w0_w1) / 2;
-    const uint32_t w0_w1_total_rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard;
-    TT_FATAL(
-        w0_w1_total_rows % num_banks == 0,
-        "w0_w1 total rows {} not divisible by num_banks {} (num_cores={}, groups_per_core={}, K_for_shard={})",
-        w0_w1_total_rows,
-        num_banks,
-        num_cores,
-        w1_w0_groups_per_core,
-        K_for_shard);
-    const uint32_t w0_w1_shard_height = w0_w1_total_rows / num_banks;
+    // Per-shape DRAM transaction size (both streams) and the stored rows of one block.
+    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Ht, Nt_w0_w1, has_bias, num_cores);
+    const uint32_t block_rows = ::moe_ring::block_tiles_h(tiles_per_txn) * TILE_SIZE;
+
+    // Compact W0/W1 layout (prepare_w0_w1_tensor_for_moe_compute): every bank holds the same whole blocks
+    // per (layer, expert).
+    const uint32_t w0_w1_shard_height =
+        num_layers * experts_per_device *
+        ::moe_ring::w0_w1_bank_blocks_per_expert(k_dram_tiles, Nt_w0_w1, num_cores, num_banks, tiles_per_txn) *
+        block_rows;
     constexpr uint32_t shard_width = 4 * TILE_SIZE;
 
     const ttnn::MemoryConfig w0_w1_mem_config{
@@ -385,22 +492,19 @@ WeightMemoryConfigs get_weight_mem_configs(
             tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    // N dimension for W2.
+    // W2: every ring core stores the same whole blocks per (layer, expert) (full a2a iterations plus a possible
+    // half-width last one; prepare_w2_tensor_for_moe_compute).
     const uint32_t Nt = intermediate_size / TILE_SIZE;
-    const uint32_t w2_N_total =
-        (has_bias ? ceil_div(Nt + 1, BLOCK_TILES_H) : ceil_div(Nt, BLOCK_TILES_H)) * BLOCK_TILES_H * TILE_SIZE;
-
-    const uint32_t first_pair_sum = w2_shard_map[0].first + w2_shard_map[0].second;
-    const uint32_t w2_groups_per_core = ceil_div(Ht, num_cores * first_pair_sum);
-    const uint32_t w2_total_rows = num_layers * experts_per_device * num_cores * w2_groups_per_core * w2_N_total;
+    const uint32_t w2_core_rows =
+        ::moe_ring::w2_core_blocks_per_expert(Ht, has_bias ? Nt + 1 : Nt, num_cores, tiles_per_txn) * block_rows;
+    const uint32_t w2_total_rows = num_layers * experts_per_device * num_cores * w2_core_rows;
     TT_FATAL(
         w2_total_rows % num_banks == 0,
-        "w2 total rows {} not divisible by num_banks {} (num_cores={}, w2_groups_per_core={}, w2_N_total={})",
+        "w2 total rows {} not divisible by num_banks {} (num_cores={}, w2_core_rows={})",
         w2_total_rows,
         num_banks,
         num_cores,
-        w2_groups_per_core,
-        w2_N_total);
+        w2_core_rows);
     const uint32_t w2_shard_height = w2_total_rows / num_banks;
 
     const ttnn::MemoryConfig w2_mem_config{
@@ -467,17 +571,53 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     return {output_w0, output_w1, output_w2};
 }
 
-ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w0, const ttnn::Tensor& tt_w1, uint32_t L, uint32_t E, uint32_t K, uint32_t N) {
+namespace {
+
+// tiles_per_txn: the op's per-shape transaction size (moe_ring::tiles_per_txn_for_shape of the hidden size, N and
+// the bias flag).
+ttnn::Tensor prepare_w0_w1_compact(
+    const ttnn::Tensor& tt_w0,
+    const ttnn::Tensor& tt_w1,
+    uint32_t L,
+    uint32_t E,
+    uint32_t K,
+    uint32_t N,
+    uint32_t tiles_per_txn) {
     TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
     TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
 
-    const auto shard_map =
-        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map;
+    const auto shard_maps = get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N);
+    const auto& shard_map = shard_maps.w0_w1_shard_map;
     const uint32_t Nt = N / TILE_SIZE;
-    // Pad K up to a multiple of (TILE_SIZE * BLOCK_TILES_H) — matches the DRAM read transaction.
-    const uint32_t Kp = ceil_div(K / TILE_SIZE, BLOCK_TILES_H) * TILE_SIZE * BLOCK_TILES_H;
     const uint32_t num_cores = static_cast<uint32_t>(shard_map.size());
+    const uint32_t num_banks = shard_maps.dram_core_range_set.num_cores();
+
+    // Compact layout (moe_ring_common.h MoeRingConfig; Python mirror in moe_compute_utils.py): ring core c stores
+    // only its shard_map[c] columns -- 4-wide block-columns (W0 c, W1 c, W0 c+1, W1 c+1) over K padded to 7-row
+    // blocks, then for an odd count the last column as a 2-wide half block-column over K padded to 14-row blocks
+    // (two consecutive K tile rows side by side per stored tile row). Per (layer, expert) the cores' slices are
+    // laid back to back and cut into num_banks equal pieces (zero-padded); piece b lands in bank b.
+    const uint32_t Kt = K / TILE_SIZE;
+    const uint32_t block_h = ::moe_ring::block_tiles_h(tiles_per_txn);
+    const uint32_t half_block_h = ::moe_ring::half_block_tiles_h(tiles_per_txn);
+    const uint32_t blocks_per_col = ceil_div(Kt, block_h);
+    const uint32_t blocks_per_half_col = ceil_div(Kt, half_block_h);
+    const uint32_t Kp_full = blocks_per_col * block_h * TILE_SIZE;
+    const uint32_t Kp_half = blocks_per_half_col * half_block_h * TILE_SIZE;
+    const uint32_t Kp = std::max(Kp_full, Kp_half);
+    const uint32_t expert_blocks =
+        ::moe_ring::w0_w1_core_block_offset(Nt, num_cores, num_cores, blocks_per_col, blocks_per_half_col);
+    const uint32_t bank_blocks = ::moe_ring::w0_w1_bank_blocks_per_expert(Kt, Nt, num_cores, num_banks, tiles_per_txn);
+    const uint32_t block_rows = block_h * TILE_SIZE;  // every block (full or half) is block_h stored tile rows
+    // Today's per-core stride shape is kept where the layout is byte-identical to it (14-tile transactions, every
+    // core owning the same even column count, one core per bank).
+    const uint32_t stored0 = ::moe_ring::w0_w1_stored_cols(Nt, 0, num_cores);
+    bool same_stored = true;
+    for (uint32_t c = 1; c < num_cores; ++c) {
+        same_stored = same_stored && ::moe_ring::w0_w1_stored_cols(Nt, c, num_cores) == stored0;
+    }
+    const bool uniform =
+        tiles_per_txn == ::moe_ring::DEFAULT_TILES_PER_TXN && num_banks == num_cores && stored0 % 2 == 0 && same_stored;
 
     ttnn::Tensor working_w0 = tt_w0;
     ttnn::Tensor working_w1 = tt_w1;
@@ -523,75 +663,147 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
     interleaved.deallocate(/*force=*/false);
     stacked.deallocate(/*force=*/true);
 
-    // Pick the padded shard size. shard_map is generated by get_weight_core_shard_maps above,
-    // so it already matches the logical distribution consumed by the kernel.
-    uint32_t max_shard_size = *std::max_element(shard_map.begin(), shard_map.end());
-    max_shard_size = ::moe_ring::even_stride_at_least_a2a_width(max_shard_size);
-
-    std::vector<ttnn::Tensor> each_shard;
-    each_shard.reserve(2 * shard_map.size());
+    // Each core's compact slice as stored 4-tile rows: (L, E, rows, 4*TILE_SIZE).
+    std::vector<ttnn::Tensor> each_slice;
+    each_slice.reserve(2 * shard_map.size() + 1);
     uint32_t start_tile = 0;
-    for (uint32_t num_tiles : shard_map) {
-        each_shard.push_back(slice_basic(
+    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+        const uint32_t num_tiles = shard_map[core_id];
+        // Columns this core stores: its own, then zero columns up to the uniform stride for a non-compact shape.
+        const uint32_t stored = ::moe_ring::w0_w1_stored_cols(Nt, core_id, num_cores);
+        auto core_cols = slice_basic(
             permuted,
             {0, 0, static_cast<int32_t>(start_tile), 0, 0},
             {static_cast<int32_t>(L),
              static_cast<int32_t>(E),
              static_cast<int32_t>(start_tile + num_tiles),
              static_cast<int32_t>(Kp),
-             static_cast<int32_t>(2 * TILE_SIZE)}));
-        const uint32_t pad_tiles = max_shard_size - num_tiles;
-        if (pad_tiles > 0) {
-            each_shard.push_back(zeros_like_dtype({L, E, pad_tiles, Kp, 2 * TILE_SIZE}, permuted));
+             static_cast<int32_t>(2 * TILE_SIZE)});
+        if (stored > num_tiles) {
+            auto zero_cols = zeros_like_dtype({L, E, stored - num_tiles, Kp, 2 * TILE_SIZE}, permuted);
+            auto padded = ttnn::concat({core_cols, zero_cols}, 2);
+            core_cols.deallocate(/*force=*/true);
+            zero_cols.deallocate(/*force=*/true);
+            core_cols = padded;
         }
+        const uint32_t pairs = stored / 2;
+        if (pairs > 0) {
+            // (L, E, 2*pairs, Kp_full, 2*TILE) -> (L, E, pairs, Kp_full, 4*TILE): row k = W0 c, W1 c, W0 c+1, W1 c+1
+            auto cols = slice_basic(
+                core_cols,
+                {0, 0, 0, 0, 0},
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(2 * pairs),
+                 static_cast<int32_t>(Kp_full),
+                 static_cast<int32_t>(2 * TILE_SIZE)});
+            auto grouped = reshape_to(
+                cols,
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(pairs),
+                 2,
+                 static_cast<int32_t>(Kp_full),
+                 static_cast<int32_t>(2 * TILE_SIZE)});
+            cols.deallocate(/*force=*/false);
+            auto paired = permute_to(grouped, {0, 1, 2, 4, 3, 5});
+            grouped.deallocate(/*force=*/true);
+            each_slice.push_back(reshape_to(
+                paired,
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(pairs * Kp_full),
+                 static_cast<int32_t>(4 * TILE_SIZE)}));
+        }
+        if (stored % 2 != 0) {
+            // (L, E, Kp_half, 2*TILE) -> (L, E, Kp_half / 2, 4*TILE): tile row j = K tile rows 2j and 2j+1 side by side
+            const uint32_t col = 2 * pairs;
+            auto half = slice_basic(
+                core_cols,
+                {0, 0, static_cast<int32_t>(col), 0, 0},
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(col + 1),
+                 static_cast<int32_t>(Kp_half),
+                 static_cast<int32_t>(2 * TILE_SIZE)});
+            auto grouped = reshape_to(
+                half,
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(Kp_half / (2 * TILE_SIZE)),
+                 2,
+                 static_cast<int32_t>(TILE_SIZE),
+                 static_cast<int32_t>(2 * TILE_SIZE)});
+            half.deallocate(/*force=*/false);
+            auto side_by_side = permute_to(grouped, {0, 1, 2, 4, 3, 5});
+            grouped.deallocate(/*force=*/true);
+            each_slice.push_back(reshape_to(
+                side_by_side,
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(Kp_half / 2),
+                 static_cast<int32_t>(4 * TILE_SIZE)}));
+        }
+        core_cols.deallocate(/*force=*/true);
         start_tile += num_tiles;
     }
+    const uint32_t stream_pad_blocks = num_banks * bank_blocks - expert_blocks;
+    if (stream_pad_blocks > 0) {
+        each_slice.push_back(zeros_like_dtype({L, E, stream_pad_blocks * block_rows, 4 * TILE_SIZE}, permuted));
+    }
 
-    auto reordered = ttnn::concat(each_shard, 2);
-    for (auto& s : each_shard) {
+    auto stream = ttnn::concat(each_slice, 2);
+    for (auto& s : each_slice) {
         s.deallocate(/*force=*/true);
     }
-    each_shard.clear();
+    each_slice.clear();
     permuted.deallocate(/*force=*/true);
 
-    // (L, E, num_cores * max_shard_size, Kp, 2*TILE_SIZE) -> (num_cores, L, E, max_shard_size, Kp, 2*TILE_SIZE)
-    auto all_groups = reshape_to(
-        reordered,
+    // (L, E, num_banks * bank_blocks * block_rows, 4*TILE) -> (num_banks, L, E, bank_blocks, block_rows, 4*TILE)
+    auto banked = reshape_to(
+        stream,
         {static_cast<int32_t>(L),
          static_cast<int32_t>(E),
-         static_cast<int32_t>(num_cores),
-         static_cast<int32_t>(max_shard_size),
-         static_cast<int32_t>(Kp),
-         static_cast<int32_t>(2 * TILE_SIZE)});
-    all_groups = permute_to(all_groups, {2, 0, 1, 3, 4, 5});
-    reordered.deallocate(/*force=*/true);
-
-    // Pair adjacent (w0, w1) tiles into 4-wide trailing chunks:
-    // (num_cores, L, E, groups_per_core, 2, Kp, 2*TILE_SIZE)
-    const uint32_t groups_per_core = max_shard_size / 2;
-    auto paired = reshape_to(
-        all_groups,
-        {static_cast<int32_t>(num_cores),
-         static_cast<int32_t>(L),
-         static_cast<int32_t>(E),
-         static_cast<int32_t>(groups_per_core),
-         2,
-         static_cast<int32_t>(Kp),
-         static_cast<int32_t>(2 * TILE_SIZE)});
-    paired = permute_to(paired, {0, 1, 2, 3, 5, 4, 6});
-    all_groups.deallocate(/*force=*/true);
-    auto packed = reshape_to(
-        paired,
-        {static_cast<int32_t>(num_cores),
-         static_cast<int32_t>(L),
-         static_cast<int32_t>(E),
-         static_cast<int32_t>(groups_per_core),
-         static_cast<int32_t>(Kp),
+         static_cast<int32_t>(num_banks),
+         static_cast<int32_t>(bank_blocks),
+         static_cast<int32_t>(block_rows),
          static_cast<int32_t>(4 * TILE_SIZE)});
+    auto packed = permute_to(banked, {2, 0, 1, 3, 4, 5});
+    banked.deallocate(/*force=*/false);
+    stream.deallocate(/*force=*/true);
+    if (uniform) {
+        // Every core owns the same even column count: byte-identical to the per-core stride layout, keep its shape
+        // (num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE).
+        auto per_core = reshape_to(
+            packed,
+            {static_cast<int32_t>(num_cores),
+             static_cast<int32_t>(L),
+             static_cast<int32_t>(E),
+             static_cast<int32_t>(stored0 / 2),
+             static_cast<int32_t>(Kp_full),
+             static_cast<int32_t>(4 * TILE_SIZE)});
+        packed.deallocate(/*force=*/false);
+        packed = per_core;
+    }
     auto result = ttnn::to_layout(packed, ttnn::Layout::TILE);
     packed.deallocate(/*force=*/false);
-    paired.deallocate(/*force=*/true);
     return result;
+}
+
+}  // namespace
+
+ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
+    const ttnn::Tensor& tt_w0, const ttnn::Tensor& tt_w1, uint32_t L, uint32_t E, uint32_t K, uint32_t N) {
+    const uint32_t num_cores = static_cast<uint32_t>(
+        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map.size());
+    return prepare_w0_w1_compact(
+        tt_w0,
+        tt_w1,
+        L,
+        E,
+        K,
+        N,
+        ::moe_ring::tiles_per_txn_for_shape(K / TILE_SIZE, N / TILE_SIZE, /*has_bias=*/false, num_cores));
 }
 
 ttnn::Tensor prepare_w2_tensor_for_moe_compute(
@@ -606,25 +818,16 @@ ttnn::Tensor prepare_w2_tensor_for_moe_compute(
     auto n_reordered_no_pad = prepare_w2_no_n_pad(tt_w2, L, E, N, K, w2_shard_map, w0_w1_shard_map);
 
     const uint32_t Nt = N / TILE_SIZE;
-    const uint32_t num_cores = static_cast<uint32_t>(w2_shard_map.size());
-    const uint32_t first_pair_sum = w2_shard_map[0].first + w2_shard_map[0].second;
     const uint32_t Kt = K / TILE_SIZE;
-    const uint32_t w2_groups_per_core = ceil_div(Kt, num_cores * first_pair_sum);
 
-    // Pad N up to a multiple of BLOCK_TILES_H tiles for the 7-tile DRAM reads.
-    const uint32_t n_padded_tiles = ceil_div(Nt, BLOCK_TILES_H) * BLOCK_TILES_H;
-    const uint32_t n_padding = n_padded_tiles * TILE_SIZE - N;
-    if (n_padding > 0) {
-        auto pad = zeros_like_dtype({num_cores, L, E, w2_groups_per_core, n_padding, 4 * TILE_SIZE}, tt_w2);
-        auto padded = ttnn::concat({n_reordered_no_pad, pad}, 4);
-        n_reordered_no_pad.deallocate(/*force=*/true);
-        pad.deallocate(/*force=*/true);
-        auto result = ttnn::to_layout(padded, ttnn::Layout::TILE);
-        padded.deallocate(/*force=*/false);
-        return result;
-    }
-    auto result = ttnn::to_layout(n_reordered_no_pad, ttnn::Layout::TILE);
+    // Pad N to whole DRAM blocks for the per-shape transaction size (and lay a half-width last a2a iteration out
+    // 2 wide).
+    const uint32_t tiles_per_txn =
+        ::moe_ring::tiles_per_txn_for_shape(Kt, Nt, /*has_bias=*/false, static_cast<uint32_t>(w0_w1_shard_map.size()));
+    auto blocks = w2_blocks_from_groups(n_reordered_no_pad, Nt, Kt, tiles_per_txn);
     n_reordered_no_pad.deallocate(/*force=*/false);
+    auto result = ttnn::to_layout(blocks, ttnn::Layout::TILE);
+    blocks.deallocate(/*force=*/false);
     return result;
 }
 
@@ -657,7 +860,11 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     b0_tiled.deallocate(/*force=*/true);
     b1_tiled.deallocate(/*force=*/true);
 
-    auto result = prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N);
+    const uint32_t num_cores = static_cast<uint32_t>(
+        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map.size());
+    const uint32_t tiles_per_txn =
+        ::moe_ring::tiles_per_txn_for_shape(K / TILE_SIZE, N / TILE_SIZE, /*has_bias=*/true, num_cores);
+    auto result = prepare_w0_w1_compact(w0_b0, w1_b1, L, E, K_with_bias, N, tiles_per_txn);
     w0_b0.deallocate(/*force=*/true);
     w1_b1.deallocate(/*force=*/true);
     return result;
@@ -739,19 +946,13 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     n_reordered_no_pad.deallocate(/*force=*/true);
     b2_grouped.deallocate(/*force=*/true);
 
-    // 4) Pad to BLOCK_TILES_H tile multiple along N.
-    const uint32_t n_total_tiles = Nt + 1;
-    const uint32_t n_target_tiles = ceil_div(n_total_tiles, BLOCK_TILES_H) * BLOCK_TILES_H;
-    const uint32_t n_padding = (n_target_tiles - n_total_tiles) * TILE_SIZE;
-    if (n_padding > 0) {
-        auto pad = zeros_like_dtype({num_cores, L, E, w2_groups_per_core, n_padding, 4 * TILE_SIZE}, tt_w2);
-        auto padded = ttnn::concat({n_with_bias, pad}, 4);
-        n_with_bias.deallocate(/*force=*/true);
-        pad.deallocate(/*force=*/true);
-        n_with_bias = padded;
-    }
-    auto result = ttnn::to_layout(n_with_bias, ttnn::Layout::TILE);
+    // 4) Pad to whole DRAM blocks for the per-shape transaction size (and lay a half-width last a2a iteration out
+    //    2 wide).
+    const uint32_t tiles_per_txn = ::moe_ring::tiles_per_txn_for_shape(Kt, Nt, /*has_bias=*/true, num_cores);
+    auto blocks = w2_blocks_from_groups(n_with_bias, Nt + 1, Kt, tiles_per_txn);
     n_with_bias.deallocate(/*force=*/false);
+    auto result = ttnn::to_layout(blocks, ttnn::Layout::TILE);
+    blocks.deallocate(/*force=*/false);
     return result;
 }
 
