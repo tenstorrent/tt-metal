@@ -28,7 +28,16 @@ def hf_layers(model):
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
-    "sliding": {"attn_norm", "attention", "post_attn_norm", "attn_residual", "ffn_norm", "mlp", "post_mlp_norm"},
+    "sliding": {
+        "attn_norm",
+        "attention",
+        "post_attn_norm",
+        "attn_residual",
+        "ffn_norm",
+        "mlp",
+        "post_mlp_norm",
+        "router",
+    },
     "global": set(),
 }
 
@@ -101,6 +110,40 @@ def _mlp_module(mesh, spec, layer, loader=None):
     return TtDenseMLP(mesh, *(loader.get(p + n + ".weight") for n in ("gate_proj", "up_proj", "down_proj")))
 
 
+def _router_module(mesh, spec, layer, loader=None):
+    """TtRouter (replicated, fp32) for one layer, loading only router.{proj.weight, scale, per_expert_scale}."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, WeightLoader
+    from models.demos.gemma4_a4b_d_p.tt.router import TtRouter
+
+    loader = loader or WeightLoader(hf_path(spec))
+    p = f"{PREFIX}layers.{layer}.router."
+    return TtRouter(mesh, loader.get(p + "proj.weight"), loader.get(p + "scale"), loader.get(p + "per_expert_scale"))
+
+
+def _router_host_fn(mesh, module):
+    """fn(ctx, h_mid_host [S, H]) -> dense routing host [S, E]. h_mid goes up in fp32 (no bf16 rounding before top-8)."""
+    import ttnn
+    from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host
+
+    def fn(ctx, x):
+        xd = ttnn.from_torch(
+            x.float().reshape(1, 1, *x.shape[-2:]),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        dense, idx, wts = module(xd)
+        y = replicated_to_host(dense)
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
     """TtSlidingAttention for a sliding layer, loading only its attention weights (not the experts)."""
     import os
@@ -144,6 +187,8 @@ def device_component(mesh, spec, layer, step):
         return _residual_host_fn(mesh)
     if step == "mlp":
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
+    if step == "router":
+        return _router_host_fn(mesh, _router_module(mesh, spec, layer))
     if step == "attention":
         from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
 
@@ -217,6 +262,8 @@ class HybridDeviceModel:
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
             if "mlp" in steps:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
+            if "router" in steps:
+                ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader))
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, self.cfg, lambda ctx: ctx.extra["dev_cache"])
