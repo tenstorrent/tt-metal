@@ -646,4 +646,141 @@ TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     }
 }
 
+// In fast dispatch every worker gets the go signal and reads the launch-ring slot at launch_msg_rd_ptr,
+// whether or not the current program targets it. After a slot runs, firmware clears only `enables`;
+// local_cb_mask/local_cb_offset keep the values of whichever program last ran there. This test ensures
+// DM0/DM1 on an idle core do not set up implicit sync and the remapper from stale DFB config.
+//
+// Reaching a stale slot naturally takes launch_msg_buffer_num_entries launches, so instead the test seeds
+// idle core_b's next slot directly: enables = 0, a nonzero local_cb_mask, and a config pointer aimed at a
+// zeroed DFB header in scratch L1. A DFB program then runs once on core_a only. With has_dm0_isr == 0,
+// setup_dfb_implicit_sync() marks the header by setting dm0_isr_ready = 1, so the byte records whether
+// core_b's DM0 consumed the slot's DFB config. Fixed firmware treats the slot as having no DFBs and never
+// touches it.
+TEST_F(UnitMeshAnyDispatchFixture, IdleCoreStaleLaunchSlot_DMDM) {
+    if (this->IsSlowDispatch()) {
+        GTEST_SKIP() << "Slow dispatch sends the go signal only to program cores; this needs fast dispatch";
+    }
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    if (grid.x < 2) {
+        GTEST_SKIP() << "Idle-core test requires >= 2 Tensix cores in a row";
+    }
+
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 4;
+    constexpr bool implicit_sync = true;
+    const m2::NodeCoord core_a{0, 0};
+    const CoreCoord core_b{1, 0};
+
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+
+    m2::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB, IN_TENSOR, num_entries, implicit_sync);
+    auto consumer =
+        make_dm_dfb_consumer(CONSUMER, DFB, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, implicit_sync);
+
+    m2::ProgramSpec spec{
+        .name = "idle_core_stale_slot",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {m2::WorkUnitSpec{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = core_a}},
+    };
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = PRODUCER,
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+        {.kernel = CONSUMER,
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(core_a, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
+    };
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, num_entries * entry_size / 4);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    slow_dispatch::WriteToBuffer(out_tensor.mesh_buffer(), std::vector<uint32_t>(input.size(), 0u));
+
+    // Seed core_b while the device is idle, so neither firmware nor dispatch is touching its launch ring.
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::Finish(cq);
+
+    const auto& hal = MetalContext::instance().hal();
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto device_id = mesh_device.get_device_ids()[0];
+    const CoreCoord virtual_core_b = mesh_device.worker_core_from_logical_core(core_b);
+    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
+    const uint32_t tensix_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+
+    // Fake stale DFB config: a zeroed header (has_dm0_isr = 0, dm0_isr_ready = 0) followed by a zeroed DM1
+    // remapper blob (num_slots = 0), so pre-fix firmware takes only the harmless marker-writing path.
+    const uint32_t fake_config_bytes = 2 * sizeof(dfb_global_header_t);
+    const uint32_t fake_config_addr = top_of_l1_scratch_addr(mesh_device, fake_config_bytes);
+    std::vector<uint32_t> fake_config(fake_config_bytes / sizeof(uint32_t), 0u);
+    fake_config[offsetof(dfb_global_header_t, dm1_remapper_blob_offset) / sizeof(uint32_t)] =
+        sizeof(dfb_global_header_t);
+    slow_dispatch::WriteToL1(mesh_device, core_b, fake_config_addr, fake_config);
+
+    // core_b's next launch slot: keep what is there (mode stays DEV), overwrite the stale-able fields.
+    const uint32_t rd_ptr = cluster.read_core(
+        device_id,
+        virtual_core_b,
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR),
+        sizeof(uint32_t))[0];
+    const uint32_t launch_msg_size = factory.size_of<dev_msgs::launch_msg_t>();
+    const uint64_t slot_addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) + rd_ptr * launch_msg_size;
+    std::vector<std::byte> slot(launch_msg_size);
+    cluster.read_core(slot.data(), launch_msg_size, tt_cxy_pair(device_id, virtual_core_b), slot_addr);
+    {
+        auto kernel_config = factory.create_view<dev_msgs::launch_msg_t>(slot.data()).kernel_config();
+        ASSERT_EQ(kernel_config.mode(), dev_msgs::DISPATCH_MODE_DEV);
+        ASSERT_EQ(kernel_config.enables(), 0u) << "core_b's next launch slot should be idle";
+        kernel_config.kernel_config_base()[tensix_index] = fake_config_addr;
+        kernel_config.local_cb_offset() = 0;
+        kernel_config.local_cb_mask() = 1;
+    }
+    cluster.write_core(slot.data(), launch_msg_size, tt_cxy_pair(device_id, virtual_core_b), slot_addr);
+    tt_driver_atomics::mfence();
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<uint32_t> readback;
+    slow_dispatch::ReadFromL1(mesh_device, core_b, fake_config_addr, sizeof(dfb_global_header_t), readback);
+    const uint8_t dm0_isr_ready =
+        reinterpret_cast<const uint8_t*>(readback.data())[offsetof(dfb_global_header_t, dm0_isr_ready)];
+    EXPECT_EQ(dm0_isr_ready, 0u) << "Idle core_b set up DFBs from its stale launch slot";
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(input, output) << "Program on core_a mismatch";
+}
+
 }  // namespace tt::tt_metal
