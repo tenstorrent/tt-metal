@@ -381,3 +381,48 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (every check). Device gate PASS (moe_norm is already implemented):
   pcc_swap_out 0.999967, block out rel 0.0081 / 0.0070 (no change from swap 8), moe_norm pcc 0.99998, rel 0.0065 vs golden, iso 0.0019, ratio [0.9984, 1.0002].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py`
+
+## C.sliding.experts test (run1, attempt 1)
+- Replaced the one-line template body with the reviewed body. Inputs are moe_norm [2048, 2816] and the dense router [2048, 128] (bf16 golden); the output is experts_out.
+  PCC >= 0.99 stays the gated metric. Asserted extras: finite output, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03], and a new check,
+  worst per-token rel L2 <= 0.1, which catches a single dropped (token, expert) pair.
+- Scored mutations once in a temporary test under BRINGUP_IMPL=reference, then deleted it. The numbers are in the docstring. PCC misses a dropped
+  expert (0.9973), a dropped pair and zeroed rows, and 2x. The extra checks catch all of them.
+- Expected device quality from emulated bfp8 activations and weights (the fused kernel packs to bfp8): rel 0.0113, ratio [0.990, 1.011], worst row 0.020.
+  So there is margin, but HiFi2 norm shrink (known issue) would eat into the ratio budget.
+- Routing is very skewed on this golden: per-expert token counts are 0..1255, and expert 47 takes 1255 of 2048 tokens. For implement: size the dispatch
+  buffers for the worst case (every token to one expert), not the mean of 128. A capacity of 512 fails (PCC 0.978). Several experts get 0 tokens.
+- Known gap: renormalizing the routing weights inside the module (dropping per_expert_scale) passes (rel 0.0051). The router test owns that bug.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023, ratio [0.9963, 1.0034], worst row 0.0043); stub FAIL (pcc 0.0). The device gate fails as
+  expected until the implement step: `NotImplementedError: implement step: no device module for experts yet`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py`
+
+## C.sliding.experts implement (run1, attempt 1): gate NOT verified (board went down)
+- ttnn (needs `./build_metal.sh`, done): `RoutedExpertActivation::GeluTanh = 4` (types.hpp, nanobind). The program factory sets the compute define
+  `ROUTED_GELU_TANH`. The name `GELU_TANH` collides with the `KernelActivation::GELU_TANH` enumerator and breaks the trisc build.
+  fused_swiglu.cpp: the unary gate activation is now the macros `GATE_ACT_INIT/GATE_ACT_TILE` = `gelu_tanh_tile_init/gelu_tanh_tile`
+  under ROUTED_GELU_TANH, else silu. It uses the silu path (gate on dst, bf8 gate_intermed, then multiply_phase).
+- ttnn accuracy hack, GeluTanh only (the other variants are unchanged): the factory honours compute_kernel_config.math_fidelity and fp32_dest_acc_en.
+  Everything else stays hard-coded LoFi + bf16 dst. compute_kernel_config was added to the program-cache key (attribute_values).
+- `tt/experts.py:TtExperts`: an adaptation of ernie `moe_unified.routed_partial`. It takes dense routing [1,1,S,128] and runs `ttnn.topk(8)` on device, then
+  masked_bincount + offset_cumsum, dispatch (capacity factor 8 = top_k, the worst case with all 8 experts on one chip), TtRoutedExpert(GeluTanh,
+  HiFi2, fp32 dest, bf16 weights, per-expert cap max_tokens = the largest chunk in the spec, 8192), combine(init_zeros), reduce, then `all_reduce(cluster_axis=1)`.
+  The weight cache is `generated/gemma4_a4b_d_p/tt_cache/experts`. hooks.py: `_experts_module`, `_experts_host_fn`, `experts` in DEVICE_STEPS["sliding"],
+  device_component, HybridDeviceModel.
+- Measured on the gate golden: first attempt (LoFi, bf16 dst): pcc 0.99970, rel 0.045, ratio [0.927, 1.007] (FAIL rel/ratio). HiFi4 + bf16 dst:
+  pcc 0.99981, rel 0.039, ratio [0.967, 1.052] (FAIL). Both are uniform output scales (per-column scale 1.040 +- 0.002), not dropped work.
+  One-hot routing to expert 47 vs fp32 CPU: LoFi 0.96 (Silu 0.96 too), HiFi2/4 bf16 dst 1.036 (bfp8 weights 1.034, TILE-input path 1.033),
+  **HiFi2 fp32 dst 1.011, rel 0.022**, HiFi4 fp32 dst 1.014. A CPU emulation of the kernel's bf8 roundings gives 1.000 / rel 0.017.
+- The final config (HiFi2 + fp32 dest) has NOT been run through the gate. The `--dev` debug run that measured fp32 dest passed, but at teardown
+  ethernet core 31-25 stopped responding. Every later run fails at mesh open (all 4 chips), and run_safe_pytest does not reset after a
+  failed open. **The board needs a reset (`tt-smi -r` by a person), then re-run the gate.** If the ratio check still fails, try HiFi4 fp32 dest
+  (the remaining +1% overshoot is probably from the bf16 partials / bf8 intermediates).
+- Also note: a host-only analysis script that imported ttnn opened the UMD driver twice (00:40). Later device runs worked, so it is not the cause.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py`
+
+## C.sliding.experts implement (run1, attempt 2): blocked, the board is still down
+- No code changes. The attempt-1 implementation (GeluTanh kernel variant, HiFi2 + fp32 dest, `tt/experts.py:TtExperts`, hooks) is unchanged and still not verified on the gate.
+- I ran the gate at 01:02. It failed again at mesh open on all 4 chips ("Timed out while waiting for active ethernet core 31-25"), and the test never ran.
+  The wrapper resets only when its dirty flag is set by a hang, so it did not reset after the failed open. Agents may not run `tt-smi -r`, and I did not touch the dirty flag to force one.
+- **A person must reset the board (`tt-smi -r`), then re-run the gate.** If the ratio check fails after that, the next thing to try is HiFi4 + fp32 dest in `tt/experts.py`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py`
