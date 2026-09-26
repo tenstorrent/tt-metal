@@ -1702,8 +1702,14 @@ class ModelArgs:
                 )
             )
         )
+        # Prefill Q, K and V are interleaved in DRAM, so the op is free to use the whole Blackhole grid.
+        grid_size = (
+            self.mesh_device.compute_with_storage_grid_size()
+            if is_blackhole() and self.mesh_device is not None
+            else (8, 8)
+        )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=grid_size,
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
