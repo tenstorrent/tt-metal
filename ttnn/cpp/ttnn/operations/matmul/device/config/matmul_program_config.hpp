@@ -43,4 +43,8 @@ MatmulProgramConfig get_program_config(
 // config that ran (for sparse matmul it is the one the sparse factory generated). `reset` clears it after reading.
 std::optional<MatmulProgramConfig> get_last_auto_program_config(bool reset = false);
 
+// Testing/benchmark only: whether that config came from the legacy selection although
+// ttnn.CONFIG.matmul_auto_config_v2 was set (the new selector doesn't handle those inputs yet).
+bool last_auto_program_config_fell_back();
+
 }  // namespace ttnn::operations::matmul

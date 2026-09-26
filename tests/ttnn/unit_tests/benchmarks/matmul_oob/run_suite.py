@@ -86,6 +86,8 @@ EXTRA_DURATIONS = {
     "trisc2_ns": "DEVICE TRISC2 KERNEL DURATION [ns]",
 }
 last_auto_config = ttnn._ttnn.operations.matmul.matmul_last_auto_program_config
+# v2 mode: whether the selection fell back to the legacy one (inputs v2 doesn't handle yet)
+last_auto_fell_back = getattr(ttnn._ttnn.operations.matmul, "matmul_last_auto_config_fell_back", lambda: False)
 PCC_SAMPLE = 1 << 24  # max output elements used for PCC
 
 
@@ -105,6 +107,7 @@ FIELDS = [
     "error",
     "config_type",
     "config",
+    "fallback",
     "device_ns",
     "device_ns_min",
     "fw_ns",
@@ -133,6 +136,9 @@ FIELDS = [
     "a_mem",
     "b_mem",
     "out_mem",
+    "a_shard",
+    "b_shard",
+    "out_shard",
     "transpose_a",
     "transpose_b",
     "op",
@@ -167,11 +173,37 @@ def short_error(e):
     return " ".join(msg.split())[:300]
 
 
-def input_memory_config(mem, shape, grid):
+SHARD_LAYOUTS = {
+    "l1_height": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    "l1_width": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    "l1_block": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+}
+
+
+def explicit_sharded_memory_config(mem, shard):
+    ranges, shape, orientation = shard
+    grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, y0, x1, y1 in ranges]
+    )
+    spec = ttnn.ShardSpec(
+        grid,
+        list(shape),
+        ttnn.ShardOrientation.COL_MAJOR if orientation == "col" else ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(SHARD_LAYOUTS[mem], ttnn.BufferType.L1, spec)
+
+
+def shard_fits(shard, grid):
+    return shard is None or all(x1 < grid.x and y1 < grid.y for _, _, x1, y1 in shard[0])
+
+
+def input_memory_config(mem, shape, grid, shard=None):
     if mem == "dram":
         return ttnn.DRAM_MEMORY_CONFIG
     if mem == "l1":
         return ttnn.L1_MEMORY_CONFIG
+    if shard is not None:
+        return explicit_sharded_memory_config(mem, shard)
     return ttnn.create_sharded_memory_config(
         shape,
         core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
@@ -180,11 +212,13 @@ def input_memory_config(mem, shape, grid):
     )
 
 
-def output_memory_config(mem):
+def output_memory_config(mem, shard=None):
     if mem == "dram":
         return ttnn.DRAM_MEMORY_CONFIG
     if mem == "l1":
         return ttnn.L1_MEMORY_CONFIG
+    if shard is not None:
+        return explicit_sharded_memory_config(mem, shard)
     return OUT_SHARDED_MEMS[mem]
 
 
@@ -252,6 +286,8 @@ class CaseRun:
 
         l1_bytes, self.dram_bytes = placement_bytes(case)
         l1_capacity = L1_FEASIBLE_FRACTION * L1_BYTES_PER_CORE * self.grid.x * self.grid.y
+        if not all(shard_fits(s, self.grid) for s in (case.a_shard, case.b_shard, case.out_shard)):
+            raise CaseRun.Infeasible("shard grid exceeds the device grid")
         if l1_bytes > l1_capacity:
             raise CaseRun.Infeasible(
                 f"L1-resident tensors need {l1_bytes / 2**20:.0f} MiB > {l1_capacity / 2**20:.0f} MiB"
@@ -260,8 +296,12 @@ class CaseRun:
             torch.manual_seed(0)
             a_t = torch.randn(case.a_shape, dtype=torch.bfloat16)
             b_t = torch.randn(case.b_shape, dtype=torch.bfloat16) / math.sqrt(K)
-            self.a = self._to_device(a_t, case.a_dtype, input_memory_config(case.a_mem, case.a_shape, self.grid))
-            self.b = self._to_device(b_t, case.b_dtype, input_memory_config(case.b_mem, case.b_shape, self.grid))
+            self.a = self._to_device(
+                a_t, case.a_dtype, input_memory_config(case.a_mem, case.a_shape, self.grid, case.a_shard)
+            )
+            self.b = self._to_device(
+                b_t, case.b_dtype, input_memory_config(case.b_mem, case.b_shape, self.grid, case.b_shard)
+            )
             self.bias = None
             if case.bias:
                 bias_t = torch.randn((1, N), dtype=torch.bfloat16)
@@ -273,7 +313,7 @@ class CaseRun:
         self.kwargs = dict(
             transpose_a=case.transpose_a,
             transpose_b=case.transpose_b,
-            memory_config=output_memory_config(case.out_mem),
+            memory_config=output_memory_config(case.out_mem, case.out_shard),
             dtype=DTYPES[case.out_dtype] if case.out_dtype else None,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=FIDELITIES[case.fidelity],
@@ -307,8 +347,8 @@ class CaseRun:
         """Allocate and free a NaN tensor the size of the output in the output's memory, so output tiles the
         kernel never writes read back as NaN (and fail PCC) instead of showing a previous run's result."""
         case = self.case
-        if case.out_mem not in ("dram", "l1"):
-            return
+        if case.out_mem not in ("dram", "l1") and case.out_shard is None:
+            return  # a sharded output without a spec gets its shard grid from the program config
         batch, M, _, N = case.mkn
         try:
             t = ttnn.from_torch(
@@ -316,7 +356,7 @@ class CaseRun:
                 dtype=DTYPES[case.out_dtype or case.a_dtype],
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=output_memory_config(case.out_mem),
+                memory_config=output_memory_config(case.out_mem, case.out_shard),
             )
             ttnn.deallocate(t)
         except Exception:
@@ -333,7 +373,9 @@ class CaseRun:
                 last_auto_config(reset=True)
                 out = self._call(program_config)  # compile
                 ttnn.synchronize_device(self.device)
+                fell_back = program_config is None and last_auto_fell_back()
                 config = repr(program_config) if program_config is not None else last_auto_config(reset=True)
+                row["fallback"] = int(fell_back)
                 row["config"] = config or ""
                 row["config_type"] = config.split("(", 1)[0] if config else ""
                 for _ in range(args.warmup):
@@ -454,6 +496,14 @@ def run_case(case, mode, device, args, seen_programs):
         run.close()
 
 
+def shard_str(shard):
+    if shard is None:
+        return ""
+    ranges, shape, orientation = shard
+    grid = "+".join(f"({x0},{y0})-({x1},{y1})" for x0, y0, x1, y1 in ranges)
+    return f"{grid}:{shape[0]}x{shape[1]}:{orientation}"
+
+
 def case_fields(case, arch, grid, git):
     batch, M, K, N = case.mkn
     return dict(
@@ -473,6 +523,9 @@ def case_fields(case, arch, grid, git):
         a_mem=case.a_mem,
         b_mem=case.b_mem,
         out_mem=case.out_mem,
+        a_shard=shard_str(case.a_shard),
+        b_shard=shard_str(case.b_shard),
+        out_shard=shard_str(case.out_shard),
         transpose_a=int(case.transpose_a),
         transpose_b=int(case.transpose_b),
         op=case.op,

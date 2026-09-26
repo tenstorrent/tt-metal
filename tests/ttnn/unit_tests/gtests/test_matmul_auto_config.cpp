@@ -22,6 +22,7 @@ namespace {
 
 using namespace ttnn::operations::matmul;
 using namespace ttnn::operations::matmul::auto_config;
+using Layout = ttnn::operations::matmul::auto_config::Layout;
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
@@ -260,6 +261,124 @@ TEST(MatmulAutoConfig, NoBlockFloatPartials) {
             EXPECT_NE(num_k_blocks, 2u) << "k=" << chosen->blocking.in0_block_w;
         }
     }
+    // Without packer L1 accumulation every split of K rounds partials through the output format: one K block,
+    // even beyond the K depth limit (traced 1024x160x256 and 1x1024x1000 linears)
+    for (auto [M, K, N] : {std::tuple{1024u, 160u, 256u}, std::tuple{32u, 1024u, 1000u}}) {
+        auto p = make_problem(1, 1, M, K, N, tt::DataFormat::Bfp8_b);
+        p.out_format = tt::DataFormat::Bfp8_b;
+        p.packer_l1_acc = false;
+        const auto chosen = choose_candidate(p, hw);
+        ASSERT_TRUE(chosen.has_value()) << M << "x" << K << "x" << N;
+        EXPECT_EQ(chosen->blocking.in0_block_w, p.Kt) << M << "x" << K << "x" << N;
+    }
+}
+
+Placement sharded(Layout layout, CoreCoord grid, uint32_t shard_h, uint32_t shard_w, bool col_major = false) {
+    Placement pl;
+    pl.layout = layout;
+    pl.in_l1 = true;
+    pl.has_shard_spec = true;
+    pl.shard_grid = CoreRange({0, 0}, {grid.x - 1, grid.y - 1});
+    pl.shard_cores = grid.x * grid.y;
+    pl.shard_h = shard_h;
+    pl.shard_w = shard_w;
+    pl.col_major = col_major;
+    return pl;
+}
+
+Placement sharded_output(Layout layout) {
+    Placement pl;
+    pl.layout = layout;
+    pl.in_l1 = true;
+    return pl;
+}
+
+// Sharded layouts pin the family, grid and per-core sizes; the rest must satisfy the layout's rules
+TEST(MatmulAutoConfig, ShardedLayouts) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    struct Case {
+        std::string name;
+        Problem p;
+        Family family;
+        uint32_t per_core_M, per_core_N;
+        bool transpose_mcast = false;
+    };
+    std::vector<Case> cases;
+    {  // decode: width-sharded activation, 1D in0-mcast, each core a slice of N
+        auto p = make_problem(1, 1, 32, 4096, 4096, tt::DataFormat::Bfp8_b);
+        p.a = sharded(Layout::WidthSharded, CoreCoord(8, 8), 1, 2);
+        cases.push_back({"width A", p, Family::Mcast1DIn0, 1, 2});
+        p.out = sharded_output(Layout::WidthSharded);
+        cases.push_back({"width A, width out", p, Family::Mcast1DIn0, 1, 2});
+    }
+    {  // tall: height-sharded activation, 1D in1-mcast
+        auto p = make_problem(1, 1, 8192, 256, 256);
+        p.a = sharded(Layout::HeightSharded, CoreCoord(8, 8), 4, 8);
+        cases.push_back({"height A", p, Family::Mcast1DIn1, 4, 8});
+        p.out = sharded_output(Layout::HeightSharded);
+        cases.push_back({"height A, height out", p, Family::Mcast1DIn1, 4, 8});
+    }
+    {  // block-sharded 2D, row- and column-major
+        auto p = make_problem(1, 1, 2048, 2048, 2048);
+        p.a = sharded(Layout::BlockSharded, CoreCoord(8, 8), 8, 8);
+        cases.push_back({"block A", p, Family::Mcast2D, 8, 8});
+        p.out = sharded_output(Layout::BlockSharded);
+        cases.push_back({"block A, block out", p, Family::Mcast2D, 8, 8});
+        p.a.col_major = true;
+        cases.push_back({"block A col-major", p, Family::Mcast2D, 8, 8, true});
+    }
+    {  // batched B with height-sharded A: Reuse over A's shards
+        auto p = make_problem(48, 48, 256, 256, 64);
+        p.a = sharded(Layout::HeightSharded, CoreCoord(8, 6), 8, 8);
+        cases.push_back({"height A, batched B", p, Family::Reuse, 8, 2});
+    }
+    {  // interleaved inputs, sharded output
+        auto p = make_problem(1, 1, 8192, 512, 512);
+        p.out = sharded_output(Layout::HeightSharded);
+        cases.push_back({"height out", p, Family::Mcast1DIn1, 4, 16});
+        p = make_problem(1, 1, 32, 4096, 8192, tt::DataFormat::Bfp8_b);
+        p.out = sharded_output(Layout::WidthSharded);
+        cases.push_back({"width out", p, Family::Mcast1DIn0, 1, 4});
+        p = make_problem(1, 1, 2048, 2048, 2048);
+        p.out = sharded_output(Layout::BlockSharded);
+        cases.push_back({"block out", p, Family::Mcast2D, 8, 8});
+        // an output shard spec fixes the grid: 4x2 cores of 16x32 tiles
+        p.out = sharded(Layout::BlockSharded, CoreCoord(4, 2), 32, 16);
+        cases.push_back({"block out with spec", p, Family::Mcast2D, 32, 16});
+        p = make_problem(1, 1, 256, 2048, 2048);
+        p.out = sharded(Layout::BlockSharded, CoreCoord(8, 1), 8, 8);
+        cases.push_back({"block out on a row", p, Family::Mcast1DIn0, 8, 8});
+        p = make_problem(1, 1, 4096, 512, 512);
+        p.out = sharded(Layout::HeightSharded, CoreCoord(8, 4), 4, 16);
+        cases.push_back({"height out with spec", p, Family::Mcast1DIn1, 4, 16});
+    }
+    for (const auto& c : cases) {
+        const auto chosen = choose_candidate(c.p, hw);
+        ASSERT_TRUE(chosen.has_value()) << c.name;
+        const auto& b = chosen->blocking;
+        EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(c.family)) << c.name;
+        EXPECT_EQ(b.per_core_M, c.per_core_M) << c.name;
+        EXPECT_EQ(b.per_core_N, c.per_core_N) << c.name;
+        EXPECT_EQ(chosen->transpose_mcast, c.transpose_mcast) << c.name;
+        EXPECT_EQ(c.p.Kt % b.in0_block_w, 0u) << c.name;
+        if (c.p.a.sharded() && c.p.a.layout != Layout::HeightSharded) {
+            EXPECT_EQ(b.in0_block_w, c.p.a.shard_w) << c.name << ": K blocks should be whole shard columns";
+        }
+        if (c.p.a.layout == Layout::HeightSharded) {
+            EXPECT_EQ(b.in0_block_w, c.p.Kt) << c.name << ": height-sharded A is read in place over all of K";
+        }
+        if (c.p.out.sharded() && c.family != Family::Reuse) {
+            EXPECT_TRUE(b.out_block_w == b.per_core_N || b.out_block_h == 1) << c.name;
+            EXPECT_TRUE(b.out_subblock_w == b.per_core_N || b.out_subblock_h == 1) << c.name;
+        }
+        EXPECT_LE(circular_buffer_bytes(c.p, hw, chosen->family, b), hw.l1_cb_budget) << c.name;
+    }
+
+    // Layout combinations the factories reject are not produced
+    auto p = make_problem(1, 1, 2048, 2048, 2048);
+    p.a = sharded(Layout::BlockSharded, CoreCoord(8, 8), 8, 8);
+    p.out = sharded_output(Layout::HeightSharded);
+    EXPECT_FALSE(choose_candidate(p, hw).has_value()) << "sharded output must be laid out like A";
 }
 
 // Family choices of the heuristics, from the Wormhole config sweep (tests/ttnn/unit_tests/benchmarks/matmul_oob)

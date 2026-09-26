@@ -1016,7 +1016,10 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 namespace {
 // Last auto-generated config, recorded for tests and benchmarks (see get_last_auto_program_config).
 thread_local std::optional<MatmulProgramConfig> last_auto_program_config;
+thread_local bool last_auto_program_config_fallback = false;
 }  // namespace
+
+bool last_auto_program_config_fell_back() { return last_auto_program_config_fallback; }
 
 std::optional<MatmulProgramConfig> get_last_auto_program_config(bool reset) {
     auto config = last_auto_program_config;
@@ -1037,10 +1040,12 @@ MatmulProgramConfig get_program_config(
         return attributes.program_config.value();
     }
     std::optional<MatmulProgramConfig> auto_config;
-    if (ttnn::CONFIG.get<"matmul_auto_config_v2">()) {
+    const bool use_v2 = ttnn::CONFIG.get<"matmul_auto_config_v2">();
+    if (use_v2) {
         auto_config = auto_config::select_program_config(
             input_tensor_a, input_tensor_b, transpose_a, transpose_b, bias_single_tile_size, attributes);
     }
+    last_auto_program_config_fallback = use_v2 && !auto_config.has_value();
     auto config = auto_config.has_value() ? std::move(auto_config.value())
                                           : generate_matmul_program_config(
                                                 input_tensor_a,

@@ -23,9 +23,14 @@ from typing import Optional, Tuple, Union
 #   "l1_height" / "l1_width" / "l1_block"
 #                            L1 sharded; inputs are sharded across the full device grid, outputs get
 #                            the matching ttnn.L1_*_SHARDED_MEMORY_CONFIG (shard spec left to matmul)
+# An explicit shard spec (a_shard / b_shard / out_shard) replaces those defaults: a ShardDesc of the shard
+# grid as (x0, y0, x1, y1) core ranges, the shard shape in elements, and "row" / "col" orientation.
 MEMS = ("dram", "l1", "l1_height", "l1_width", "l1_block")
 DTYPES = ("bf16", "bfp8", "bfp4", "fp32")
 FIDELITIES = ("LoFi", "HiFi2", "HiFi3", "HiFi4")
+
+
+ShardDesc = Tuple[Tuple[Tuple[int, int, int, int], ...], Tuple[int, int], str]
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,9 @@ class Case:
     a_mem: str = "dram"
     b_mem: str = "dram"
     out_mem: str = "dram"
+    a_shard: Optional[ShardDesc] = None
+    b_shard: Optional[ShardDesc] = None
+    out_shard: Optional[ShardDesc] = None
     transpose_a: bool = False
     transpose_b: bool = False
     op: str = "matmul"  # "matmul" | "linear"
@@ -58,6 +66,8 @@ class Case:
         assert self.out_dtype is None or self.out_dtype in DTYPES, self
         assert self.fidelity in FIDELITIES, self
         assert self.op in ("matmul", "linear"), self
+        for mem, shard in ((self.a_mem, self.a_shard), (self.b_mem, self.b_shard), (self.out_mem, self.out_shard)):
+            assert shard is None or mem.startswith("l1_"), self
         assert self.op == "linear" or (not self.bias and self.activation is None), self
 
     @property
@@ -341,6 +351,7 @@ def get_cases(tiers=None):
 
 TRACE_JSON_ENV = "MATMUL_OOB_TRACE_JSON"
 _TRACE_DTYPES = {"BFLOAT16": "bf16", "BFLOAT8_B": "bfp8", "BFLOAT4_B": "bfp4", "FLOAT32": "fp32"}
+_TRACE_SHARD_LAYOUTS = {"HEIGHT_SHARDED": "l1_height", "WIDTH_SHARDED": "l1_width", "BLOCK_SHARDED": "l1_block"}
 _TRACE_ACTIVATIONS = {"gelu", "silu", "relu", "gelu_approx"}
 
 
@@ -348,8 +359,9 @@ def _traced_cases():
     """Single-device ttnn.matmul/ttnn.linear calls that reach the default config selection.
 
     Reads the master JSON produced by model_tracer (the `ttnn-operations-master-json` CI artifact), path given
-    by $MATMUL_OOB_TRACE_JSON. Keeps calls without a program_config whose operands and output are interleaved,
-    and skips anything it can't reproduce (multi-device placements, global CBs, sub-devices, other dtypes).
+    by $MATMUL_OOB_TRACE_JSON. Keeps calls without a program_config whose operands and output are interleaved or
+    L1 sharded (with the traced shard specs), and skips anything it can't reproduce (multi-device placements,
+    DRAM or ND sharding, global CBs, sub-devices, other dtypes).
     """
     import json
     import os
@@ -372,16 +384,27 @@ def _traced_cases():
                 continue
 
             def mem(mc):
+                """(placement, ShardDesc or None), or (None, None) if it can't be reproduced."""
                 if mc is None:
-                    return "dram"
-                if mc.get("is_sharded") or not mc.get("interleaved", True):
-                    return None
-                return "l1" if mc.get("buffer_type") == "BufferType.L1" else "dram"
+                    return "dram", None
+                l1 = mc.get("buffer_type") == "BufferType.L1"
+                if not (mc.get("is_sharded") or not mc.get("interleaved", True)):
+                    return ("l1" if l1 else "dram"), None
+                layout = _TRACE_SHARD_LAYOUTS.get(str(mc.get("memory_layout")).replace("TensorMemoryLayout.", ""))
+                if not l1 or layout is None or mc.get("nd_shard_spec"):
+                    return None, None
+                spec = mc.get("shard_spec")
+                if spec is None:
+                    return layout, None
+                grid = tuple((r["start"]["x"], r["start"]["y"], r["end"]["x"], r["end"]["y"]) for r in spec["grid"])
+                orientation = "col" if "COL" in str(spec["orientation"]) else "row"
+                return layout, (grid, tuple(spec["shape"]), orientation)
 
             def dtype(t):
                 return _TRACE_DTYPES.get(str(t).replace("DataType.", ""))
 
-            a_mem, b_mem, out_mem = mem(t0["memory_config"]), mem(t1["memory_config"]), mem(a.get("memory_config"))
+            (a_mem, a_shard), (b_mem, b_shard) = mem(t0["memory_config"]), mem(t1["memory_config"])
+            out_mem, out_shard = mem(a.get("memory_config"))
             a_dt, b_dt = dtype(t0["original_dtype"]), dtype(t1["original_dtype"])
             out_dt = dtype(a["dtype"]["repr"]) if isinstance(a.get("dtype"), dict) else None
             if None in (a_mem, b_mem, out_mem, a_dt, b_dt) or (a.get("dtype") and out_dt is None):
@@ -397,7 +420,7 @@ def _traced_cases():
                 core_grid = (int(m[1]), int(m[2])) if m else None
             op = "linear" if op_name == "ttnn.linear" else "matmul"
             case = Case(
-                name=f"t_{op}_{cfg['config_hash'][:10]}",
+                name=f"t_{'s_' if 'l1_' in a_mem + b_mem + out_mem else ''}{op}_{cfg['config_hash'][:10]}",
                 a_shape=tuple(t0["original_shape"]),
                 b_shape=tuple(t1["original_shape"]),
                 tier="traced",
@@ -408,6 +431,9 @@ def _traced_cases():
                 a_mem=a_mem,
                 b_mem=b_mem,
                 out_mem=out_mem,
+                a_shard=a_shard,
+                b_shard=b_shard,
+                out_shard=out_shard,
                 transpose_a=bool(a.get("transpose_a", False)),
                 transpose_b=bool(a.get("transpose_b", False)),
                 op=op,

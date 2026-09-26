@@ -30,7 +30,13 @@
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores)
 //    or Reuse would read ONE_D_CORE_ADVANTAGE times as much input (splitting batch matrices re-reads B);
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
-//    (MAX_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP).
+//    (MAX_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP) that yields only to precision: partial sums never go
+//    through a block-float format, using a single K block if nothing shallower avoids it.
+// Sharded tensors constrain the choice rather than change the rules: a sharded A fixes the family, grid and
+// per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B, block -> 2D), a sharded
+// output (with interleaved inputs) fixes the family (and with a shard spec, the grid and per-core sizes), and
+// what remains free (in0_block_w, output blocks, subblocks) is chosen as above within the layout's constraints.
+// A width- or block-sharded A's K blocks are whole shard columns when they fit, multicast in place.
 // Problems it does not handle yet return nullopt, and the caller falls back to the legacy selection.
 namespace ttnn::operations::matmul::auto_config {
 
@@ -62,6 +68,23 @@ struct HardwareDesc {
     static HardwareDesc for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget);
 };
 
+enum class Layout { Interleaved, HeightSharded, WidthSharded, BlockSharded };
+
+// Where a tensor lives. Shard dimensions are in tiles; a sharded output may come without a shard spec, in
+// which case the program config decides its shard grid.
+struct Placement {
+    Layout layout = Layout::Interleaved;
+    bool in_l1 = false;
+    bool has_shard_spec = false;
+    CoreRange shard_grid = CoreRange({0, 0}, {0, 0});  // bounding box of the shard grid
+    uint32_t shard_cores = 0;
+    uint32_t shard_h = 0;
+    uint32_t shard_w = 0;
+    bool col_major = false;
+
+    bool sharded() const { return layout != Layout::Interleaved; }
+};
+
 // The matmul as the selector sees it. Dimensions are in 32x32 tiles, after transposes.
 struct Problem {
     uint32_t batch_a = 1;  // product of A's leading dims
@@ -79,6 +102,10 @@ struct Problem {
     bool packer_l1_acc = true;
     bool dst_full_sync_en = false;
     std::optional<unary::UnaryWithParam> activation;
+    Placement a;
+    Placement b;
+    Placement out;
+    bool b_shard_matches_a = false;  // B sharded with A's layout, grid and orientation (Reuse only)
 };
 
 enum class Family { Mcast2D, Mcast1DIn0, Mcast1DIn1, Reuse };
@@ -97,11 +124,14 @@ struct Blocking {
 struct Candidate {
     Family family;
     Blocking blocking;
-    uint32_t cores = 0;  // cores with work
+    uint32_t cores = 0;                     // cores with work
+    CoreCoord grid;                         // compute_with_storage_grid_size of the config
+    std::optional<CoreRange> worker_cores;  // allowed_worker_cores (sharded layouts: the shard grid)
+    bool transpose_mcast = false;           // 2D on a column-major block-sharded A
 };
 
-// Per-core circular-buffer bytes the factory for `family` allocates with this blocking (interleaved operands
-// and output, 32x32 tiles).
+// Per-core L1 bytes the factory for `family` needs with this blocking (32x32 tiles): its circular buffers,
+// less those backed by a sharded tensor, plus a sharded output's shard, which is not allocated yet.
 uint32_t circular_buffer_bytes(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
 
 // The blocked candidate of each family that can run the problem and fits L1, in family order.
@@ -114,7 +144,7 @@ std::optional<Candidate> choose_candidate(const Problem& problem, const Hardware
 std::optional<MatmulProgramConfig> select_program_config(const Problem& problem, const HardwareDesc& hw);
 
 // Builds the Problem and HardwareDesc from matmul's inputs and selects a config. Returns nullopt for inputs
-// the new selector does not handle yet (sharded tensors, non-32x32 tiles, global CBs, sub-devices, ...).
+// the new selector does not handle yet (DRAM- or ND-sharded tensors, non-32x32 tiles, global CBs, ...).
 std::optional<MatmulProgramConfig> select_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
