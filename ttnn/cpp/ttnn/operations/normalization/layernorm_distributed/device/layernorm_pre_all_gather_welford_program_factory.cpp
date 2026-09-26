@@ -261,7 +261,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherWelfordProgramFact
         .dfb_bindings = {m2::DFBBinding{
             .dfb_spec_name = PREWF_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PREWF_OUTPUT_T, .accessor_name = "dst"}},
-        .compile_time_args = {{"blk", writer_block_size}},
+        // Wt == Wt_full: the shared writer's row stride is a no-op here, preserving the old flat write order.
+        .compile_time_args = {{"blk", writer_block_size}, {"Wt", out0_tiles}, {"Wt_full", out0_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
