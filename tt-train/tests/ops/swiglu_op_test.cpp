@@ -325,6 +325,70 @@ void CompareSwiGLUBackwardAgainstReference(const std::vector<uint32_t>& input_sh
     EXPECT_LT(relative_l2(dw3_kernel, ref.dL_dw3), tol) << "dL/dW3 mismatch";
 }
 
+void CompareRetainedSwiGLUBackwardAgainstReference() {
+    using namespace ttml;
+
+    constexpr uint32_t input_dim = 32U;
+    constexpr uint32_t hidden_dim = 32U;
+    const std::vector<uint32_t> input_shape = {1U, 1U, 32U, input_dim};
+    auto& rng = autograd::ctx().get_generator();
+    auto* device = &autograd::ctx().get_device();
+
+    xt::xarray<float> input_data = xt::empty<float>(input_shape);
+    core::parallel_generate<float>(input_data, []() { return std::normal_distribution<float>(0.0F, 1.0F); }, rng());
+
+    const std::vector<uint32_t> w13_shape = {hidden_dim, input_dim};
+    const std::vector<uint32_t> w2_shape = {input_dim, hidden_dim};
+    xt::xarray<float> w1_data = xt::empty<float>(w13_shape);
+    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
+    xt::xarray<float> w3_data = xt::empty<float>(w13_shape);
+    const float w_std = 1.0F / std::sqrt(static_cast<float>(input_dim));
+    core::parallel_generate<float>(w1_data, [w_std]() { return std::normal_distribution<float>(0.0F, w_std); }, rng());
+    core::parallel_generate<float>(w2_data, [w_std]() { return std::normal_distribution<float>(0.0F, w_std); }, rng());
+    core::parallel_generate<float>(w3_data, [w_std]() { return std::normal_distribution<float>(0.0F, w_std); }, rng());
+
+    const auto ref = build_swiglu_backward_reference(input_data, w1_data, w2_data, w3_data);
+    const auto x = autograd::create_tensor(core::from_xtensor(input_data, device), /*requires_grad=*/true);
+    const auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, device), /*requires_grad=*/true);
+    const auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, device), /*requires_grad=*/true);
+    const auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, device), /*requires_grad=*/true);
+    const auto out = ops::swiglu(x, w1, w2, w3, /*dropout_prob=*/0.0F);
+    out->set_grad(core::ones_like(out->get_value()));
+
+    out->backward(/*retain_graph=*/true);
+    const auto dx_first = core::to_xtensor(x->get_grad());
+    const auto dw1_first = core::to_xtensor(w1->get_grad());
+    const auto dw2_first = core::to_xtensor(w2->get_grad());
+    const auto dw3_first = core::to_xtensor(w3->get_grad());
+
+    out->backward(/*retain_graph=*/false);
+    const auto dx_second = core::to_xtensor(x->get_grad());
+    const auto dw1_second = core::to_xtensor(w1->get_grad());
+    const auto dw2_second = core::to_xtensor(w2->get_grad());
+    const auto dw3_second = core::to_xtensor(w3->get_grad());
+
+    constexpr float tol = 1e-2F;
+    auto check = [tol](
+                     const xt::xarray<float>& first,
+                     const xt::xarray<float>& second,
+                     const xt::xarray<float>& reference,
+                     const char* name) {
+        const xt::xarray<float> twice_reference = 2.0F * reference;
+        const xt::xarray<float> twice_first = 2.0F * first;
+        EXPECT_TRUE(xt::all(xt::isfinite(first))) << name << " first gradient is non-finite";
+        EXPECT_GT(xt::amax(xt::abs(first))(), 0.0F) << name << " first gradient is zero";
+        EXPECT_LT(relative_l2(first, reference), tol) << name << " first gradient mismatch";
+        EXPECT_LT(relative_l2(second, twice_reference), tol) << name << " accumulated gradient mismatch";
+        EXPECT_LT(relative_l2(second, twice_first), tol) << name << " second backward did not repeat the first";
+    };
+    check(dx_first, dx_second, ref.dL_dx, "dL/dx");
+    check(dw1_first, dw1_second, ref.dL_dw1, "dL/dW1");
+    check(dw2_first, dw2_second, ref.dL_dw2, "dL/dW2");
+    check(dw3_first, dw3_second, ref.dL_dw3, "dL/dW3");
+
+    autograd::ctx().reset_graph();
+}
+
 }  // namespace
 
 // ============================================================================
@@ -454,6 +518,9 @@ TEST_F(SwiGLUForwardTest, ShapeMismatch_W2WrongDimensions) {
 // Full backward equivalence against xtensor reference.
 TEST_F(SwiGLUBackwardTest, BackwardAccuracy_1x1x32x32) {
     CompareSwiGLUBackwardAgainstReference({1, 1, 32, 32}, 32);
+}
+TEST_F(SwiGLUBackwardTest, RetainGraphTwoBackwardsAccumulate) {
+    CompareRetainedSwiGLUBackwardAgainstReference();
 }
 TEST_F(SwiGLUBackwardTest, BackwardAccuracy_1x1x32x64) {
     CompareSwiGLUBackwardAgainstReference({1, 1, 32, 64}, 64);
