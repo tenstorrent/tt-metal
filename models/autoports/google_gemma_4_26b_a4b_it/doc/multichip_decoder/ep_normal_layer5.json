@@ -1,0 +1,331 @@
+{
+  "layer": 5,
+  "passed": true,
+  "records": [
+    {
+      "name": "rank0_eight",
+      "local_union_counts": [
+        8,
+        0,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9997842194420088
+      ],
+      "total_pcc": 0.9997842194420088,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "rank1_eight",
+      "local_union_counts": [
+        0,
+        8,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9998832288373354
+      ],
+      "total_pcc": 0.9998832288373354,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "rank2_eight",
+      "local_union_counts": [
+        0,
+        0,
+        8,
+        0
+      ],
+      "local_pcc": [
+        0.9998789820626252
+      ],
+      "total_pcc": 0.9998789820626252,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "rank3_eight",
+      "local_union_counts": [
+        0,
+        0,
+        0,
+        8
+      ],
+      "local_pcc": [
+        0.9998248150956427
+      ],
+      "total_pcc": 0.9998248150956427,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "balanced",
+      "local_union_counts": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "local_pcc": [
+        0.9995068302988973,
+        0.9997925375611709,
+        0.9997903949353424,
+        0.999663651947647
+      ],
+      "total_pcc": 0.9998868883922489,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "mixed",
+      "local_union_counts": [
+        1,
+        1,
+        1,
+        5
+      ],
+      "local_pcc": [
+        0.9994856885035592,
+        0.9997024263352693,
+        0.9997444255179387,
+        0.9998353716655128
+      ],
+      "total_pcc": 0.999879070680059,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "rank0_eight_again",
+      "local_union_counts": [
+        8,
+        0,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9997842194420088
+      ],
+      "total_pcc": 0.9997842194420088,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "rank0_eight",
+      "local_union_counts": [
+        8,
+        0,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9997842194420088
+      ],
+      "total_pcc": 0.9997842194420088,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        286.2755209207535,
+        282.00726956129074,
+        283.4685146808624,
+        282.92834758758545,
+        286.7355942726135,
+        288.69882225990295,
+        286.3844856619835,
+        290.1218831539154
+      ]
+    },
+    {
+      "name": "rank1_eight",
+      "local_union_counts": [
+        0,
+        8,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9998832288373354
+      ],
+      "total_pcc": 0.9998832288373354,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        287.1369943022728,
+        284.5609560608864,
+        285.98401695489883,
+        283.3995968103409,
+        282.95814990997314,
+        285.14210134744644,
+        284.5320850610733,
+        283.93976390361786
+      ]
+    },
+    {
+      "name": "rank2_eight",
+      "local_union_counts": [
+        0,
+        0,
+        8,
+        0
+      ],
+      "local_pcc": [
+        0.9998789820626252
+      ],
+      "total_pcc": 0.9998789820626252,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        284.96235609054565,
+        286.8259325623512,
+        288.5693684220314,
+        285.9337255358696,
+        286.42453253269196,
+        285.94397008419037,
+        284.4007685780525,
+        288.8580784201622
+      ]
+    },
+    {
+      "name": "rank3_eight",
+      "local_union_counts": [
+        0,
+        0,
+        0,
+        8
+      ],
+      "local_pcc": [
+        0.9998248150956427
+      ],
+      "total_pcc": 0.9998248150956427,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        284.43150222301483,
+        279.81214225292206,
+        279.54205870628357,
+        279.9518406391144,
+        281.9271758198738,
+        287.26737946271896,
+        280.62425553798676,
+        286.55678033828735
+      ]
+    },
+    {
+      "name": "balanced",
+      "local_union_counts": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "local_pcc": [
+        0.9995068302988973,
+        0.9997925375611709,
+        0.9997903949353424,
+        0.999663651947647
+      ],
+      "total_pcc": 0.9998868883922489,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        222.35233336687088,
+        220.23916244506836,
+        217.91458129882812,
+        219.93834525346756,
+        219.33764219284058,
+        220.0789749622345,
+        218.27593445777893,
+        218.6764031648636
+      ]
+    },
+    {
+      "name": "mixed",
+      "local_union_counts": [
+        1,
+        1,
+        1,
+        5
+      ],
+      "local_pcc": [
+        0.9994856885035592,
+        0.9997024263352693,
+        0.9997444255179387,
+        0.9998353716655128
+      ],
+      "total_pcc": 0.999879070680059,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        254.80426847934723,
+        250.85732340812683,
+        250.21564215421677,
+        251.62938982248306,
+        249.9045804142952,
+        253.34209203720093,
+        251.81937962770462,
+        250.99702179431915
+      ]
+    },
+    {
+      "name": "rank0_eight_again",
+      "local_union_counts": [
+        8,
+        0,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9997842194420088
+      ],
+      "total_pcc": 0.9997842194420088,
+      "zero_partitions_exact": true,
+      "trace": true,
+      "host_us": [
+        282.32671320438385,
+        281.7455679178238,
+        280.1325172185898,
+        281.1858430504799,
+        284.2601388692856,
+        286.52604669332504,
+        286.5353599190712,
+        282.03707188367844
+      ]
+    },
+    {
+      "name": "prefill_empty_ranks",
+      "local_union_counts": [
+        32,
+        0,
+        0,
+        0
+      ],
+      "local_pcc": [
+        0.9995969772949812
+      ],
+      "total_pcc": 0.9995969772949812,
+      "zero_partitions_exact": true,
+      "trace": false
+    },
+    {
+      "name": "prefill_union",
+      "local_union_counts": [
+        32,
+        32,
+        32,
+        32
+      ],
+      "local_pcc": [
+        0.999695075473243,
+        0.9995536865638317,
+        0.9995108813256472,
+        0.9996812339746267
+      ],
+      "total_pcc": 0.9996060383521382,
+      "zero_partitions_exact": true,
+      "trace": false
+    }
+  ]
+}

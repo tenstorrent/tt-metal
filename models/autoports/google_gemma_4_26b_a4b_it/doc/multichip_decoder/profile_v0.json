@@ -1,0 +1,22 @@
+{
+  "layer_type": "sliding_attention",
+  "length": 4096,
+  "steps": 1,
+  "pcc": [],
+  "passed": null,
+  "trace": true,
+  "timings": {
+    "4": {
+      "prefill_host_us": [
+        827546.8219071627,
+        828136.4850699902,
+        826615.5552119017
+      ],
+      "decode_host_us": [
+        1027.6855900883675
+      ]
+    }
+  },
+  "all_replicas_equal": true,
+  "sharded_residual": false
+}

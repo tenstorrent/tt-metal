@@ -1,0 +1,8 @@
+# Large raw captures stay local; compact reports and provenance are retained.
+profile*/.logs/
+profile*/reports/
+*.log
+*.pt
+*.png
+profile*/prefill_table.txt
+profile*/*_perf_report.txt
