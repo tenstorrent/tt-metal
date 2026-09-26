@@ -84,21 +84,25 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
 // accumulator and the row sums in fp32, so it is only taken when those buffers fit in L1 next to the K/V slots.
 // The fp32 rescale costs a fixed amount per K chunk step; below 256x256 chunks it is not amortized and the
 // legacy kernel is faster, so small chunks with fp32 DEST stay on the legacy kernel. Its normalize sums the rows
-// with the Blackhole SFPU row reduce, so fp32 DEST streams on Blackhole only.
+// with the Blackhole SFPU row reduce, so fp32 DEST streams on Blackhole only. That normalize is a fixed cost per Q
+// chunk, which the K loop pays back from 16 K chunks on (measured on Blackhole: 0.5 percent slower at 8).
 constexpr uint32_t kFp32StreamingMinChunkTiles = 8;
+constexpr uint32_t kFp32StreamingMinKChunks = 16;
 
 bool can_use_streaming_compute(
     tt::ARCH arch,
     bool fp32_dest_acc_en,
     uint32_t q_chunk_tiles,
     uint32_t k_chunk_tiles,
+    uint32_t k_num_chunks,
     uint32_t fp32_intermediate_bytes,
     uint32_t l1_budget_bytes) {
     if (!fp32_dest_acc_en) {
         return true;
     }
     return arch == tt::ARCH::BLACKHOLE && q_chunk_tiles >= kFp32StreamingMinChunkTiles &&
-           k_chunk_tiles >= kFp32StreamingMinChunkTiles && fp32_intermediate_bytes <= l1_budget_bytes;
+           k_chunk_tiles >= kFp32StreamingMinChunkTiles && k_num_chunks >= kFp32StreamingMinKChunks &&
+           fp32_intermediate_bytes <= l1_budget_bytes;
 }
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
@@ -734,7 +738,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const bool use_streaming_compute = can_use_streaming_compute(
-        device->arch(), fp32_dest_acc_en, Sq_chunk_t, Sk_chunk_t, fp32_streaming_bytes, l1_budget_bytes);
+        device->arch(), fp32_dest_acc_en, Sq_chunk_t, Sk_chunk_t, k_num_chunks, fp32_streaming_bytes, l1_budget_bytes);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
