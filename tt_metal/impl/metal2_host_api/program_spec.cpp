@@ -2005,7 +2005,7 @@ void ValidateProgramSpec(
                         cons.kernel->unique_id,
                         cons.binding->block_size);
                     // BLOCKED->BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
-                    // round-robin), but only at an INTEGER ratio (matches calculate_num_tile_counters).
+                    // round-robin), but only at an INTEGER ratio.
                     const uint32_t pt = prod.kernel->num_threads;
                     const uint32_t ct = cons.kernel->num_threads;
                     const uint32_t hi = std::max(pt, ct);
@@ -3265,9 +3265,9 @@ static uint8_t DFBAccessPatternCode(DFBAccessPattern pattern) {
     TT_THROW("Unknown DFBAccessPattern {}", static_cast<int>(pattern));
 }
 
-// One entry per DFB: the pattern of its producer bindings and of its consumer bindings. Role
-// uniformity (all producers alike, all consumers alike) is enforced by ValidateProgramSpec, so
-// the first record of each role speaks for the side.
+// Build a map of DFB name: (producer access pattern, consumer access pattern) for all DFBs
+// in the program. This is used to bake the access patterns into each binding's DFBBindingToken
+// at compile time.
 static DFBNameToPatternsMap MakeDFBNameToPatterns(const CollectedSpecData& collected) {
     DFBNameToPatternsMap out;
     out.reserve(collected.dfb_endpoints.size());
@@ -3430,9 +3430,6 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
-    // A PrefetcherPipe relay DFB aliases the pipe's ring and follows the pipe's lane-interleaved
-    // layout, which the BLOCKED access pattern was not designed against; keep relays on STRIDED /
-    // ALL until BLOCKED relays are done as their own effort.
     TT_FATAL(
         dfb_spec->advanced_options.prefetcher_pipe_relays.empty() ||
             (producer_access_pattern != experimental::dfb::AccessPattern::BLOCKED &&

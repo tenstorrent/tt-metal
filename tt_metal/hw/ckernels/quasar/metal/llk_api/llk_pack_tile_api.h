@@ -59,17 +59,14 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
     if constexpr (out_of_order_output) {
-        // Out-of-order packing: output_tile_index is a raw entry offset from the bookmark, like the
-        // unpack side's tile index. On a STRIDED producer whose share is > 1 (feeding BLOCKED
-        // consumers) the kernel must pre-multiply it by get_produce_stride_tiles(); only the
-        // in-order path below applies the stride itself.
+        // The kernel chooses the slot; the index is added to the bookmark unchanged.
         l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
-            // In-order packing: the next entry of this op's share. A STRIDED producer's share
-            // entries sit stride_size_tiles apart (1 on every other ring).
+            // The packer fills the producer's entries one after the other and keeps its own counter,
+            // wr_entry_ptr, of how many tiles it has packed so far in this operation.
             l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
                             local_dfb_interface.wr_entry_ptr * local_dfb_interface.stride_size_tiles;
             local_dfb_interface.wr_entry_ptr++;

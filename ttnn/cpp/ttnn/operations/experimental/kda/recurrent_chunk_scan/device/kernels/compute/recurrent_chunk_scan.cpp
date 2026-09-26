@@ -298,10 +298,6 @@ FORCE_INLINE void update_state(
     state_update.pop_front(key_value_tiles);
 }
 
-// Runs step(current, destination) for one chunk of a scan whose state enters through `seed`, cycles
-// through `ring` and leaves through `terminal`. The pair is selected by branching rather than by a
-// reference ternary: on Quasar each DataflowBuffer is specialized on its binding's access-pattern
-// pair, so `seed`, `ring` and `terminal` need not share a type.
 template <typename Seed, typename Ring, typename Terminal, typename Step>
 FORCE_INLINE void with_chunk_state(bool first, bool last, Seed& seed, Ring& ring, Terminal& terminal, Step&& step) {
     if (first) {
@@ -345,7 +341,6 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
     pack_reconfig_data_format(dfb::state_update);
-    // One recurrence step: reads the state from `current`, writes the updated state to `destination`.
     auto scan_chunk = [&](auto& current, auto& destination) {
         compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             current, kd, v_beta, t_inv, scratch, value_new, scratch);
@@ -420,7 +415,6 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
     pack_reconfig_data_format(dfb::scratch);
-    // One recurrence step: reads the state from `current_state`, writes the updated state to `destination`.
     auto scan_chunk = [&](auto& current_state, auto& destination) {
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
             current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);

@@ -23,11 +23,8 @@
 //
 // Flow per test invocation:
 //   1. DM producer kernel writes data into the DFB L1 ring (NoC read from DRAM).
-//   2. This kernel does wait_front(share) + dummy_unpack + one digest per tile of
-//      the share + pop_front(share) until num_entries_per_consumer tiles are
-//      drained, then dfb.finish(). The share is what the ring dictates for this
-//      hart (get_consume_share): a whole block on a BLOCKED consumer, its part of
-//      each producer block when only the producer is BLOCKED, else 1.
+//   2. This kernel does wait_front(share) + dummy_unpack + one digest per tile +
+//      pop_front(share) until num_entries_per_consumer tiles are drained, then dfb.finish().
 //   3. Host reads the digest region and compares against the input pages it
 //      expects this consumer to have been handed, in order.
 //
@@ -55,11 +52,8 @@ void kernel_main() {
     // DFB, so both operands are the same input id.
     compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
 
-    // One op is this hart's whole share: the block on a BLOCKED ring (contiguous), its part of
-    // each block when only the producers are BLOCKED (spaced `stride` tiles apart), else 1 tile.
-    // MATH has no fifo state, so its share reads as 1; its loop therefore takes one tile per
-    // iteration while UNPACK/PACK take `share` -- the per-tile acquire_dst/release_dst below keeps
-    // the MATH<->PACK handshake count equal (num_entries_per_consumer) on every thread.
+    // One wait/pop covers this hart's share: a whole block on a BLOCKED ring, else 1 tile. MATH has
+    // no fifo state and reads share as 1, so acquire/release stays per tile to match PACK's count.
 #ifdef ARCH_QUASAR
     const uint32_t share = dfb.get_consume_share();
 #else
@@ -73,10 +67,8 @@ void kernel_main() {
     // thread id keys its slice of the digest region.
     const uint32_t entry_bytes = dfb.get_entry_size();
     const uint32_t words_per_entry = entry_bytes / sizeof(uint32_t);
-    // Spacing between consecutive tiles of one share: 1 (contiguous) on a BLOCKED consumer, the
-    // wire stride when only the producer is BLOCKED (entry j of the share is at bookmark +
-    // j * stride, the same walk the implicit-sync NoC path takes). A share never straddles the
-    // ring end: a BLOCKED share is one block and a strided share sits inside one producer block.
+    // Spacing between the tiles of one share: 1 on a BLOCKED consumer, the ring stride when only
+    // the producer is BLOCKED.
 #ifdef ARCH_QUASAR
     const uint32_t stride_tiles = dfb.get_consume_stride_tiles();
 #else
@@ -93,25 +85,25 @@ void kernel_main() {
         dfb.wait_front(share);
         for (uint32_t j = 0; j < share; ++j) {
             acquire_dst();
-            // One UNPACR per tile of the share (a no-op on MATH/PACK); the first already orders the
-            // pop_front below after the wait_front above (TEN-4746 guard), the rest keep this kernel
-            // shaped exactly like the 1-tile-per-op path when share == 1.
+            // TEN-4746: the unpack orders pop_front after wait_front; one per tile, a no-op on MATH/PACK.
             ckernel::dummy_unpack(dfb.get_id());
             release_dst();
         }
 #ifdef UCK_CHLKC_UNPACK
         {
-            // The digest has to be taken after the unpack, not before. wait_front lowers to a
-            // TT_WAIT_TILES that stalls the *unpacker* (llk_wait_tiles now also polls the SYNC busy
-            // bit before returning to this RISC, but the L1 read below still relies on the ordering
-            // proof rather than on that poll). The UNPACRs that dummy_unpack issues are gated by that
-            // stall, so they cannot execute until this share has actually arrived; tensix_sync() then
-            // blocks until the backend is idle, i.e. until those UNPACRs have completed. Only then are
-            // the share's entries known to be in L1. Syncing before the unpack is not enough: it would
-            // only drain the *previous* iteration's UNPACRs, which says nothing about this share (and
-            // leaves drain index 0 unprotected entirely). dummy_unpack reads nothing from L1, so it
-            // neither supplies nor disturbs the bytes hashed here -- it serves only to prove the
-            // entries landed (TEN-4746: "the wait can resolve before tiles are available").
+            // The digest has to be taken after the unpack, not before. wait_front does not block this
+            // RISC: it lowers to a single TT_WAIT_TILES pushed into the Tensix instruction buffer (see
+            // llk_wait_tiles) which stalls the *unpacker*, while the scalar stream runs straight past
+            // it. A read placed before the UNPACR is therefore ungated and races the producer -- the
+            // hazard TEN-4746 states as "the wait can resolve before tiles are available".
+            //
+            // The UNPACR that dummy_unpack issues is gated by that stall, so it cannot execute until
+            // this entry has actually arrived; tensix_sync() then blocks until the backend is idle,
+            // i.e. until that UNPACR has completed. Only then is the entry known to be in L1. Syncing
+            // before the unpack is not enough: it would only drain the *previous* iteration's UNPACR,
+            // which says nothing about this entry (and leaves drain index 0 unprotected entirely).
+            // dummy_unpack reads nothing from L1, so it neither supplies nor disturbs the bytes hashed
+            // here -- it serves only to prove the entry landed.
             // get_read_ptr() is in 16B units on both arches, hence the << 4 (cf. dfb_t6_intra_2_0.cpp).
             ckernel::tensix_sync();
             const uint32_t share_base = dfb.get_read_ptr() << 4;

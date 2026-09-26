@@ -16,8 +16,6 @@
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
 // data format on the way out. SrcA switches from and returns to the physical-LHS
 // format established by startup and restored at the end of each binary chunk.
-// Templated on the three buffer types: on Quasar DataflowBuffer is a class template specialized
-// per (producer, consumer) access-pattern pair, so pre/post/out may each be a different type.
 template <typename DFBPre, typename DFBPost, typename DFBOut, typename ActivationFn>
 ALWI void preprocess_sfpu_impl(
     DFBPre cb_pre, DFBPost cb_post, DFBOut cb_out, uint32_t per_core_block_size, ActivationFn&& process_activations) {

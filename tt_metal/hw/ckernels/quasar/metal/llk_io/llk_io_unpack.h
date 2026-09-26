@@ -23,7 +23,7 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
         dfb_op_is_whole_share(local_dfb_interface, num_tiles),
         "llk_wait_tiles: an op on a BLOCKED ring must move this hart's whole share");
     if (local_dfb_interface.split_tc) {
-        // Split: the block belongs to every counter -- wait for each one's share.
+        // Split: the block belongs to every counter, wait for each one's share.
         const std::uint32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
         for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
             TT_WAIT_TILES(

@@ -49,16 +49,12 @@ inline void mul_and_accumulate_block(
     const uint32_t in1_cb_id = in1_dfb.get_id();
     const uint32_t scratch_cb_id = scratch_dfb.get_id();
     // The last tap writes the finished output to out_dfb; earlier taps write the partial to scratch_dfb.
-    // scratch_dfb and out_dfb may be different DataflowBuffer specializations (Quasar), so the pack target
-    // is selected around the use rather than through a common-typed alias.
-    const bool is_last_tap = (idx + 1 == num_taps);
-    auto pack_dst_tile = [&](auto& dst_dfb) {
-        const uint32_t dst_cb_id = dst_dfb.get_id();
-        dst_dfb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, dst_cb_id);
-        dst_dfb.push_back(1);
-        tile_regs_release();
+    const uint32_t dst_cb_id = dst_dfb.get_id();
+    dst_dfb.reserve_back(1);
+    tile_regs_wait();
+    pack_tile(0, dst_cb_id);
+    dst_dfb.push_back(1);
+    tile_regs_release();
     };
 
     for (uint32_t i = 0; i < block_num_tiles; i++) {
@@ -125,14 +121,9 @@ inline void mul_and_accumulate_block_sfpu(
     // DST slots: 0 holds the running value, 1 stages the incoming operand.
     constexpr uint32_t DST_ACC = 0;
     constexpr uint32_t DST_OPERAND = 1;
-
-    // See mul_and_accumulate_block: the pack target is selected around the use so scratch_dfb and out_dfb
-    // may be different DataflowBuffer specializations.
     auto pack_dst_tile = [&](auto& dst_dfb) {
         const uint32_t dst_cb_id = dst_dfb.get_id();
         dst_dfb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(DST_ACC, dst_cb_id);
         dst_dfb.push_back(1);
         tile_regs_release();
     };

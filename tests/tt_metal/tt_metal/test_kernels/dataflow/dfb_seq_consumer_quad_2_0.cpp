@@ -64,8 +64,7 @@ static inline void consume_one_dfb_impl_sync(
     uint32_t entries_per_consumer,
     uint32_t num_consumers,
     uint32_t consumer_idx) {
-    // One call per tensor page (is_blocked = ALL: every consumer drains every entry, pages
-    // contiguous); the DFB completes each share itself.
+    // One call per page; the DFB does the wait/pop itself.
     for (uint32_t tile_id = 0; tile_id < entries_per_consumer; ++tile_id) {
         const uint32_t page_id = is_blocked ? tile_id : tile_id * num_consumers + consumer_idx;
         noc.template async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = page_id});
