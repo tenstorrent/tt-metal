@@ -27,6 +27,7 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 04:29 | K.1 | owner: yes to K.1 on adapter.py, yes to the no-host-work rule and gate | approval + framework | `approve shared:K.1`; F27 agent rule 5 + host_transfers_per_layer (reported by X.1 for Gemma); selftest 120 passed; resume |
 | 04:48 | K.1 | gate FAIL: shared producer sends Gemma to the MLA KV reader; attempt 2 could not touch it | framework | stopped the run; owner: drop the approval, let the agent change the engine; F28 full prefill in X.1, F29; resume |
 | 04:55 | K.1 | gate PASS 4b0a1482594 (checks 0 failed, acks_early 0, KV PCC k 0.9945 v 0.9943) | review: accepted | producer change is a generic adapter hook (+docs); reader compares device KV to the golden files; runtime builds RoPE once at load; only upload is the engine's token ids. F30 skill: the overseer decides |
+| 05:23 | X.1 | profile: no device durations; the ladder/profile model is the hybrid harness (~20 s/chunk of host glue) | framework + owner picks | killed the fix agent; F32 fast loop (one chunk on the golden prefix, no precompile), F33 run_block sections + standing assemble step; owner delegated picks: P.1 assemble all-device model, then X.1 baseline, then P.2 SDPA config A |
 
 ## Hand-off (2026-09-26 02:10)
 
