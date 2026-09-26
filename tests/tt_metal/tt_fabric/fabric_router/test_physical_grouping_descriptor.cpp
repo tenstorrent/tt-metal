@@ -1834,14 +1834,16 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline
     ASSERT_EQ(valid_groupings.at("MESH").size(), 1u) << "Should have exactly one MESH instance";
 
     // Check that we have a match for the 4x2_Mesh grouping (8 ASICs)
-    // Flattened groupings have "_flat" appended to their name
+    // Flattened groupings have "_flat" appended to their name. The MGD's 4x2 device_topology
+    // uses dim_types [RING, LINE], so dim0 is a genuine torus axis and the matcher emits the
+    // torus-x variant of the horizontal grouping: "4x2_Mesh_horizontal_flat_torus_x".
     bool found_mesh_match = false;
     for (const auto& [instance_name, groupings] : valid_groupings.at("MESH")) {
         for (const auto& grouping : groupings) {
-            if (grouping.asic_count == 8u && grouping.name == "4x2_Mesh_horizontal_flat") {
+            if (grouping.asic_count == 8u && grouping.name == "4x2_Mesh_horizontal_flat_torus_x") {
                 found_mesh_match = true;
-                EXPECT_EQ(grouping.name, "4x2_Mesh_horizontal_flat")
-                    << "Should match 4x2_Mesh_horizontal_flat grouping";
+                EXPECT_EQ(grouping.name, "4x2_Mesh_horizontal_flat_torus_x")
+                    << "Should match 4x2_Mesh_horizontal_flat_torus_x grouping";
                 EXPECT_EQ(grouping.asic_count, 8u) << "Should have 8 ASICs";
                 break;
             }
@@ -1851,7 +1853,7 @@ TEST_F(PhysicalGroupingDescriptorSP4Tests, GetValidGroupingsForMGD_BlitzPipeline
         }
     }
     EXPECT_TRUE(found_mesh_match)
-        << "Should find a match for 4x2 mesh (8 ASICs) matching 4x2_Mesh_horizontal_flat grouping";
+        << "Should find a match for 4x2 mesh (8 ASICs) matching 4x2_Mesh_horizontal_flat_torus_x grouping";
 
     // Check that we have FABRIC level grouping (G0)
     ASSERT_EQ(valid_groupings.count("FABRIC"), 1u) << "Should have FABRIC instance type";
