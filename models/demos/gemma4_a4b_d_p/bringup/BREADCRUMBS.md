@@ -651,3 +651,12 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0022). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0028, ratio [0.9970, 1.0032]).
   The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py`
+
+## S.global.04.test.1 (swap test review, global attn_residual)
+- Replaced the rendered one-liner with global swap 3's checks (s4096 chunk 1, HEAD_ROWS = 128) and extended the
+  CPU-on-same-inputs isolation check from norms to residuals (`ISO_STEP_KINDS = ("norm", "residual")`), as sliding swap 4.
+  Why: PCC misses `2 * (a + b)` and zeroed rows in a residual.
+- BRINGUP_IMPL=reference: pass (pcc_swap_out 0.999996, block out rel 0.0029). BRINGUP_IMPL=stub: fails every check.
+- Device gate: pass, pcc_swap_out 0.999989, block out rel 0.0046 / 0.0035; attn_residual rel 0.0034 vs golden,
+  iso 0.0017, ratio [0.9990, 1.0019].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py`
