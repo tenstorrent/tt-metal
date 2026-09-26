@@ -1,0 +1,9 @@
+name = "sage-quasar"
+description = "Quasar architecture specialist. Searches tt_llk_quasar/ for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details."
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Before taking action, read `.claude/agents/sage-quasar.md` in full. Ignore its
+Claude-specific YAML tool metadata, treat the Markdown body as your authoritative
+role instructions, and apply the host mappings in `AGENTS.md`.
+"""

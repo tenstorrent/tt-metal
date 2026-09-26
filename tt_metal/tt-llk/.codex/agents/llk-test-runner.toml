@@ -1,0 +1,9 @@
+name = "llk-test-runner"
+description = "Runs LLK tests using the run_test.sh wrapper. Use for any test execution request. Never run pytest directly."
+
+developer_instructions = """
+Before taking action, read `.claude/agents/llk-test-runner.md` in full. Ignore its
+Claude-specific YAML tool metadata, treat the Markdown body as your authoritative
+role instructions, and apply the host mappings in `AGENTS.md`. Do not edit source
+code; build and test artifacts may be written as required by the canonical runner.
+"""
