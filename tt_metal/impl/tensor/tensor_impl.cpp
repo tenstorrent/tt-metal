@@ -19,15 +19,15 @@ namespace tt::tt_metal::tensor_impl {
 LocalHostShards select_local_host_shards(
     const DistributedHostBuffer& host_buffer, const distributed::MeshDevice& mesh_device) {
     LocalHostShards local;
-    local.coords.reserve(host_buffer.shard_coords().size());
+    local.shards.reserve(host_buffer.shard_coords().size());
     const auto& view = mesh_device.get_view();
     for (const auto& coord : host_buffer.shard_coords()) {
         if (!view.impl().is_local(coord)) {
             continue;
         }
         if (auto shard = host_buffer.get_shard(coord)) {
-            local.coords.push_back(coord);
             local.size_bytes += shard->view_bytes().size();
+            local.shards.push_back({.coord = coord, .buffer = std::move(*shard)});
         }
     }
     return local;

@@ -11,6 +11,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include <vector>
 
@@ -25,8 +26,13 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
+struct LocalHostShard {
+    distributed::MeshCoordinate coord;
+    HostBuffer buffer;
+};
+
 struct LocalHostShards {
-    std::vector<distributed::MeshCoordinate> coords;
+    ttsl::SmallVector<LocalHostShard> shards;
     size_t size_bytes = 0;
 };
 
