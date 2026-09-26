@@ -206,18 +206,20 @@ inline void BindTensorParameterToKernel(
 // differently: a tile tensor's physical shape is rounded up in both dims, while a row-major
 // sharded tensor aligns on width only (create_default_alignment_rm), so its height is never
 // padded up to the shard height and the tensor may legally be smaller than one of its shards.
+// `tile` overrides the default 32x32 page tile (e.g. to exercise narrow / partial tiles).
 inline TensorParameter MakeShardedTensorParameter(
     std::string name,
     const tt::tt_metal::Shape& logical_shape,
     const std::array<uint32_t, 2>& shard_shape,
     uint32_t num_cores,
-    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE) {
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
+    const std::optional<Tile>& tile = std::nullopt) {
     auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
     tt::tt_metal::ShardSpec shard_spec{
         shard_grid, {shard_shape[0], shard_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
     tt::tt_metal::MemoryConfig memory_config{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
-    auto page_config = tt::tt_metal::PageConfig(layout);
+    auto page_config = tt::tt_metal::PageConfig(layout, tile);
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},

@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "internal/llk_metadata.h"
+
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
@@ -19,13 +21,29 @@
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-// This header holds only the tokens, with no dependency beyond <cstdint>, so the generated
-// bindings header (and anything else that just needs to name a binding) does not have to pull
-// in the whole DataflowBuffer implementation. See api/dataflow/dataflow_buffer.h for the
-// DataflowBuffer class these tokens construct.
+// This header holds only the tokens, with no dependency beyond <cstdint> minimal support headers,
+// so the generated bindings header (and anything else that just needs to name a binding)
+// does not have to pull in the whole DataflowBuffer implementation. See
+// api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
+
+// Support for LLKOperandFrom.
+namespace binding_details {
+template <const auto& Token>
+struct LLKOperandExtractor;
+}
+
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
+
+    // Binding token constructor when host supplies LLK metadata.
+    // See "Entry format metadata" in DataflowBufferSpec.
+    // To extract these metadata, use LLKOperandFrom<dfb::token_name>.
+    //
+    // These metadata are only needed on math kernels to interact with LLK 2.0,
+    // kernels that wish to construct binding tokens from dfb ids without the llk metadata can use the id-only
+    // constructor.
+    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -36,7 +54,11 @@ struct DFBBindingToken {
     constexpr operator uint32_t() const noexcept { return id_; }
 
 private:
+    template <const auto& Token>
+    friend struct binding_details::LLKOperandExtractor;
+
     uint16_t id_;
+    binding_details::LLKMetadata llk_metadata_{};
 };
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.
