@@ -1967,7 +1967,10 @@ static void sdpa_inner_loop_step(
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
         const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
         constexpr bool fp32_acc = sdpa_fp32_accumulator();
-        constexpr uint32_t cb_after_v = fp32_acc ? cb_recip_scratch : cb_qkt_im;
+        // The V matmul's unpack formats: fp32 needs the CBs named at compile time, and with bf16 the causal kernels
+        // measured faster that way while the non causal ones keep main's form (Blackhole).
+        constexpr bool compile_time_v_reconfig = fp32_acc || is_causal_sdpa;
+        constexpr uint32_t cb_after_v = compile_time_v_reconfig ? cb_recip_scratch : cb_qkt_im;
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
@@ -2018,7 +2021,7 @@ static void sdpa_inner_loop_step(
                     {
                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
-                        if constexpr (fp32_acc) {
+                        if constexpr (compile_time_v_reconfig) {
                             sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
                         } else {
                             sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
@@ -2079,7 +2082,7 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                    if constexpr (fp32_acc) {
+                    if constexpr (compile_time_v_reconfig) {
                         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
                     } else {
                         sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
@@ -2236,7 +2239,7 @@ static void sdpa_inner_loop_step(
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
-                if constexpr (fp32_acc) {
+                if constexpr (compile_time_v_reconfig) {
                     sdpa_maybe_reconfig_data_format<cb_recip_scratch, cb_v_in, cb_recip_scratch, cb_qkt_im>();
                 } else {
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
