@@ -81,15 +81,9 @@ void kernel_main() {
         CircularBuffer(cb_identity_scale_in).wait_front(1);
         LightweightMaskContext lw_mask;
         lw_mask.neginf_tile_idx = 0;
+        // When the spatial segment ends inside chunk mask_chunk_0, its padded tiles are narrowed away and the
+        // partial tile, when there is one, is stamped from palette tile 1.
         constexpr uint32_t n_partial_tiles = n_partial_col > 0 ? 1u : 0u;
-        if constexpr (mask_chunk_0 != static_cast<uint32_t>(-1)) {
-            // The spatial segment ends inside chunk mask_chunk_0: its padded tiles are narrowed away and the
-            // partial tile, when there is one, is stamped from palette tile 1.
-            lw_mask.mid_mask_chunk = mask_chunk_0;
-            lw_mask.mid_padded_tiles = mid_padded_tiles;
-            lw_mask.mid_partial_col = n_partial_col;
-            lw_mask.mid_partial_tile_idx = 1;
-        }
         if constexpr (k_partial_col > 0) {
             // The joint tail ends inside the last K chunk: whole padded tiles are narrowed away, the partial
             // tile is stamped from the palette tile after the spatial one.
@@ -125,7 +119,18 @@ void kernel_main() {
                     cb_col_identity,
                     cb_recip_scratch,
                     cb_out,
-                    cb_mask_in>(
+                    cb_mask_in,
+                    0,
+                    false,
+                    false,
+                    INVALID_CB,
+                    false,
+                    false,
+                    INVALID_CB,
+                    mask_chunk_0,
+                    mid_padded_tiles,
+                    n_partial_col,
+                    1>(
                     local_q_end - local_q_start,
                     k_num_chunks,
                     cb_out_im_A,

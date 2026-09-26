@@ -2388,7 +2388,11 @@ template <
     uint32_t cb_attention_sink = INVALID_CB,
     bool use_provided_mask = false,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = INVALID_CB>
+    uint32_t cb_windowed_k_range = INVALID_CB,
+    uint32_t mid_mask_chunk = 0xFFFFFFFFu,  // joint SDPA: K chunk where the spatial segment ends mid chunk
+    uint32_t mid_padded_tiles = 0,
+    uint32_t mid_partial_col = 0,
+    uint32_t mid_partial_tile_idx = 0>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2602,9 +2606,9 @@ void sdpa_standard_v2(
                 if ((k_chunk == k_num_chunks - 1) && lw_mask.global_n_partial_col > 0) {
                     target_active_Sk = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                     apply_partial_mask = true;
-                } else if (k_chunk == lw_mask.mid_mask_chunk) {
-                    target_active_Sk = Sk_chunk_t - lw_mask.mid_padded_tiles;
-                    apply_partial_mask = lw_mask.mid_partial_col > 0;
+                } else if (mid_mask_chunk != 0xFFFFFFFFu && k_chunk == mid_mask_chunk) {
+                    target_active_Sk = Sk_chunk_t - mid_padded_tiles;
+                    apply_partial_mask = mid_partial_col > 0;
                 }
             }
             if constexpr (has_sliding_window) {
@@ -2642,9 +2646,9 @@ void sdpa_standard_v2(
                 apply_causal_mask,
                 k_chunk * Sk_chunk_t,
                 apply_partial_mask,
-                apply_partial_mask ? (k_chunk == lw_mask.mid_mask_chunk ? lw_mask.mid_partial_tile_idx
-                                                                        : lw_mask.global_n_partial_tile_idx)
-                                   : 0u,
+                apply_partial_mask
+                    ? (k_chunk == mid_mask_chunk ? mid_partial_tile_idx : lw_mask.global_n_partial_tile_idx)
+                    : 0u,
                 apply_sliding_mask);
 
             // Post-iteration cleanup
