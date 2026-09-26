@@ -533,18 +533,12 @@ inline void calculate_typecast_uint16_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint16() {
-    // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to shift the value right by 16
-    // and saturate via SFPGT on the *high* bits before the swap-hi-lo16 store. The historical
-    // macro tested the low 16 bits instead and computes a different result, so it is not
-    // equivalent and is not restored here. See #46751.
+    // Harmonized modular wrap: uint32 -> uint16 wraps (x & 0xFFFF) by default matching PyTorch conventions (#55325).
+    // Eliminates unintended saturation at 65535, matching calculate_typecast_uint32_to_uint8 wrap semantics.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPGT_MOD1_SET_ALL_ONES);  // Set LREG0 = -1 if greater than 0
-        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // Leaves garbage in high bits, but packer will ignore it
-        TTI_SFPSTORE(p_sfpu::LREG1, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);  // Swap hi and low 16 before write
+        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);  // Swap hi and low 16 before write, low 16 bits preserved directly
     }
 }
 
