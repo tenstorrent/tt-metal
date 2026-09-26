@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 #include "kernels/sliding_window_work_plan.hpp"
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
@@ -28,10 +29,34 @@ struct ChunkedSlidingHaloLayout {
     // Hops that need a fabric exchange. A halo spanning the whole ring includes this device's own
     // slab, which is a local cache read, so that hop is excluded.
     uint32_t remote_hop_count() const;
-    // Rows shipped by, and first compact-buffer row written by, hop `hop` (1-based).
+    // Rows shipped by hop `hop` (1-based), and the first compact-buffer row that `source_device`'s
+    // payload lands in on the receiver `hop` positions ahead.
     uint32_t hop_rows(uint32_t hop) const;
-    uint32_t hop_dest_row(uint32_t hop) const;
+    uint32_t dest_row(uint32_t source_device, uint32_t hop) const;
+    // Every hop carries a whole slab into a source-keyed block, so a multicast can serve several
+    // receivers (see chunked_sliding_halo_source_keyed).
+    bool source_keyed() const;
 };
+
+// One fabric exchange a device sends for its halo, covering hops [hop, hop + hop_count) in one
+// direction. A multicast exchange sends one line multicast per run of hops that ship the same source
+// slab: one run for aligned chunks.
+struct ChunkedSlidingHaloExchange {
+    uint32_t hop = 1;
+    uint32_t hop_count = 1;
+    bool send_backward = false;
+    bool multicast = false;
+    // Fabric distance to the nearest receiver. Backward, hop h sits ring_size - h devices behind, so the
+    // nearest receiver is the last hop.
+    uint32_t distance = 1;
+};
+
+// The exchanges `source_device` sends, in kernel order. Multicast (allowed and source-keyed layout): at
+// most two, forward to the receivers ahead of the source and backward to those that wrap past its end,
+// on a ring too, where that crosses fewer links than forwarding round the wrap. Otherwise unicast: one
+// per remote hop; on a linear topology a hop whose receiver wraps the ring travels backward.
+std::vector<ChunkedSlidingHaloExchange> plan_chunked_sliding_halo_exchanges(
+    const ChunkedSlidingHaloLayout& layout, uint32_t source_device, bool linear_topology, bool allow_multicast);
 
 ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     uint32_t q_local_tile_rows,

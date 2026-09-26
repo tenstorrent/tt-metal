@@ -97,6 +97,42 @@ constexpr uint32_t chunked_sliding_halo_hop_dest_row(
     return consumed >= halo_tile_rows ? 0 : halo_tile_rows - consumed;
 }
 
+// Source-keyed layout: when every hop carries a whole slab and the hop count divides the ring, a slab
+// lands in block source % hop_count on every receiver, so one line multicast (same address everywhere)
+// serves them all. A receiver's predecessors are consecutive ring positions, so their blocks differ.
+constexpr bool chunked_sliding_halo_source_keyed(
+    uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size) {
+    const uint32_t hops = chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows);
+    return hops > 1 && hops <= ring_size && ring_size % hops == 0 && halo_tile_rows % q_local_tile_rows == 0;
+}
+
+// First compact-buffer row of the block that `source_ring_id`'s payload lands in, `hop` positions ahead
+// of it. Source-keyed when chunked_sliding_halo_source_keyed holds, hop-keyed otherwise.
+constexpr uint32_t chunked_sliding_halo_block_dest_row(
+    uint32_t halo_tile_rows, uint32_t q_local_tile_rows, uint32_t ring_size, uint32_t source_ring_id, uint32_t hop) {
+    if (chunked_sliding_halo_source_keyed(halo_tile_rows, q_local_tile_rows, ring_size)) {
+        return (source_ring_id % chunked_sliding_halo_hop_count(halo_tile_rows, q_local_tile_rows)) * q_local_tile_rows;
+    }
+    return chunked_sliding_halo_hop_dest_row(halo_tile_rows, q_local_tile_rows, hop);
+}
+
+// End of the run of hops from `start` that ship the same source slab (origin row). The halo reader and
+// writer must split a multicast exchange into the same runs.
+constexpr uint32_t chunked_sliding_halo_run_end(const uint32_t* origin_rows, uint32_t start, uint32_t hop_count) {
+    uint32_t end = start + 1;
+    while (end < hop_count && origin_rows[end] == origin_rows[start]) {
+        ++end;
+    }
+    return end;
+}
+
+// Fabric distance to the nearest receiver of run [run_start, run_end) of a multicast exchange whose
+// nearest receiver is `distance` away. Backward, later hops sit closer, so the run's last hop is nearest.
+constexpr uint32_t chunked_sliding_halo_run_distance(
+    uint32_t distance, uint32_t hop_count, uint32_t run_start, uint32_t run_end, bool send_backward) {
+    return send_backward ? distance + hop_count - run_end : distance + run_start;
+}
+
 // The receiver's Q mapping determines which predecessor slabs must be sent: hop d ships the tail of
 // the slab d positions before each Q segment's first slab. A one-hop halo can serve two segments
 // (block-cyclic Q that wraps); a multi-hop halo serves one.
@@ -262,14 +298,14 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
                 const uint32_t halo_slot = slab + 1 == first_query_slab ? 0 : 1;
                 compact_k = (halo_slot * halo + first_k * k_chunk_tile_rows - halo_origin) / k_chunk_tile_rows;
             } else if (source != q_device_index) {
-                // Hop d's block holds the tail of the slab d before the Q slab (sliding_halo_sources).
+                // Hop d's block (hop- or source-keyed) holds the tail of the slab d before the Q slab.
                 const uint32_t hop = first_query_slab - slab;
                 const uint32_t tail = chunked_sliding_halo_hop_rows(halo, q_local_tile_rows, hop);
                 const uint32_t halo_origin = local_base + q_local_tile_rows - tail;
                 if (slab >= first_query_slab || tail == 0 || first_k * k_chunk_tile_rows < halo_origin) {
                     return SlidingQWorkPlan{};
                 }
-                compact_k = (chunked_sliding_halo_hop_dest_row(halo, q_local_tile_rows, hop) +
+                compact_k = (chunked_sliding_halo_block_dest_row(halo, q_local_tile_rows, ring_size, source, hop) +
                              first_k * k_chunk_tile_rows - halo_origin) /
                             k_chunk_tile_rows;
             }
