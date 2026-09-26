@@ -491,3 +491,22 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, ffn_combine rel 0.0024 / iso 0.0); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999953,
   block out rel 0.0097 / 0.0088 (limit 0.02), ffn_combine pcc 0.99996, rel 0.0093 vs golden, iso 0.0018, ratio [0.9992, 1.0022].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py`
+
+## C.sliding.post_ffn_norm test (run1, attempt 1)
+- Replaced the one-line template body with the post_moe_norm test's checks (STEP = post_ffn_norm, ffn_out = rms(ffn_sum) * post_feedforward_layernorm.weight).
+  The gated metric stays `pcc_post_ffn_norm_L00` >= 0.99. The test also asserts rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03] and a finite output. It records
+  `rel_l2_*` and `row_norm_ratio_{min,max}_*` as informational metrics.
+- Why: on this golden (w in [0.02, 23]) PCC passes `1 + w` (0.99988), sum instead of mean, 2x, layer_scalar folded into the norm (all ~1.0), the last row zeroed (0.9997)
+  and the last 32 rows zeroed (0.9922). rel L2 / ratio catch all of them (`1 + w` rel 0.047, ratio >= 1.042). CPU reference: rel 0.0023, ratio [0.9978, 1.0017];
+  bf16 in/out: rel 0.0027. layer_scalar belongs to ffn_residual, not to this step.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023); stub FAIL (PCC). The gate fails with NotImplementedError because there is no device module yet
+  (that is the implement step). The norm module used for the other post_*_norm steps should be reusable.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py`
+
+## C.sliding.post_ffn_norm implement (run1, attempt 1)
+- Reused `tt/rms_norm.py:TtRMSNorm` (replicated `ttnn.rms_norm`, `x * w`, eps 1e-6), the same module as the other norms. The only change is in hooks.py:
+  `post_ffn_norm -> post_feedforward_layernorm.weight` added to `_NORM_WEIGHTS` (so device_component and HybridDeviceModel route it through `_norm_module`), and
+  `post_ffn_norm` added to DEVICE_STEPS["sliding"].
+- Gate PASS: pcc_post_ffn_norm_L00 0.999996, rel L2 0.0028, row norm ratio [0.9960, 1.0022]. The `FAIL ... pcc=0.000000` line comes from the precompile collect pass
+  (comp_pcc stub), not the real pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py`
