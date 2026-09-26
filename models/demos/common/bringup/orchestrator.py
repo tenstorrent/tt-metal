@@ -494,6 +494,8 @@ class Orchestrator:
         previous = first_failure
         pol = self.policy(task, role)
         for attempt in range(1, pol["attempts"] + 1):
+            # the dashboard shows the agent at work, not the check that ran before it started
+            self.led.update(task["id"], status="RUNNING", attempt=attempt, role=role, waiting=None)
             problems = self.run_agent(task, role, attempt, self.brief(task, role, attempt, previous))
             if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
@@ -599,7 +601,8 @@ class Orchestrator:
         return self._after(task) if self.led.status(tid) == "PASS" else STOPPED
 
     def _after(self, task: dict) -> int:
-        if task["id"] == "X.2" or task.get("stop_after"):
+        picked = any(t.get("step") == "perf" and "X.2" in (t.get("deps") or []) for t in self.led.tasks().values())
+        if (task["id"] == "X.2" and not picked) or task.get("stop_after"):
             return self._human(
                 task,
                 f"pick opportunities in {rel(self.spec, self.spec.bringup_dir)}/opportunities.md; "
