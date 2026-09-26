@@ -384,7 +384,8 @@ class ModelOptimizations:
     def _default_settings(self):
         """Default is BFP8/HIFI2 everywhere, activation follows input type (usually BF16)
         Only exceptions:
-        - SDPA runs in HIFI4 during prefill (still HIFI2 during decode)
+        - SDPA runs in HIFI4 during prefill (still HIFI2 during decode); on Blackhole without fp32
+          accumulation, which keeps the prefill SDPA on its streaming kernel
         """
         return {
             "TensorPrecision": {
@@ -407,7 +408,7 @@ class ModelOptimizations:
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP16 if is_blackhole() else MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
