@@ -851,3 +851,32 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Device (the gate, all 14 steps on device): passes. pcc_swap_out 0.999969, block out rel 0.0079 / 0.0075; ffn_residual iso rel 0.0025, ratio [0.9988, 1.0028]; experts iso 0.0224, ratio [1.0007, 1.0214] (as before).
 - The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py`
+
+## K.1 contract (run1, attempt 1) — gate still FAILS: the producer needs a Gemma-4 read-back branch (shared code)
+- Added `tt/model.py` (`TtGemma4Model`). It is the embedding plus 30 blocks, all on the device, chaining the device modules the component and swap gates validated. The hidden state stays a replicated bf16 [1,1,S,H] tensor.
+  Load-time constants: the embedding table with sqrt(H) folded in (cached in generated/gemma4_a4b_d_p/tt_cache/embed_scaled_bf16),
+  RoPE cos/sin for max_seq per RoPE type (sliced on the device per chunk via `set_rope_tables`), and the global caches' identity page table (sliced on the device, `device_page_slices`).
+  The engine's pad ids (0xFFFFFFFF) are masked with `bitwise_and(ids, 2^18 - 1)`. The router's idx/wts go straight to the experts (no dense -> topk round trip).
+- `tt/attention.py`: opt-in additions only. `kv_sink(k, v)` is called after K/V are computed, and `set_rope_tables` / `device_page_slices` are new. The default behaviour, which the frozen tests use, is unchanged.
+- `tt/runners/adapter.py` holds `Gemma4A4BPrefillAdapter` and `Gemma4PrefillRuntime`, registered as `gemma4_a4b_d_p` in `common/prefill/adapter.py` (1 line).
+  KvCaches = `contract` (migratable) + `attn[slot]` (per-user per-layer bf16 attention caches, as ERNIE does).
+  The runtime accepts the engine's uint32 ROW_MAJOR [1,1,chunk] device tensor. Before each `sink(layer, request_id)` it waits on `record_event` + `event_synchronize`, so the layer's KV is on the device when the ack goes out.
+  `compile` warms every chunk offset in slot 0.
+- `tt/runners/kv_contract.py`: sliding (2x256 per chip) and global (1x512 per chip) both give a 512-wide K and V slab per chip per token.
+  The cache is the gpt_oss_d_p GQA substrate with head_dim 512: [users*layers,1,seq,512] bf8, DRAM round-robin 32-token blocks. Table configs 0..3 = K chip c, 4..7 = V chip c.
+  Global heads are replicated on chips (0,1) and (2,3). `read_slot_kv_and_check_pcc` reads the layout back through the table and checks against the bring-up golden [nkv,S,D]. It also checks that the global replicas are equal.
+- Blocker: `prefill_producer._read_slot_kv_and_check_pcc` dispatches on the adapter name, and Gemma-4 falls into the MLA reader, which fails with `AttributeError ... KV_LORA_RANK`.
+  The producer is outside K.1's allowed paths. Fix (2 lines, needs owner approval), at the top of that function after the golden_cap clamp:
+  `if hasattr(ADAPTER, "read_slot_kv_and_check_pcc"): return ADAPTER.read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, NUM_LAYERS)`.
+- Verified with a tt-probe that runs `run_contract_test` unchanged, except that the producer's read-back function is swapped for the adapter's (probe only, deleted afterwards). Results: contract_checks_failed 0, acks_early 0 of 960 blocks, table round trip OK, base address OK.
+  pcc_producer_kv_k 0.99447 and _v 0.99426 (min at layers 15-17); global K and V PCCs match because k_norm is nearly uniform. The whole test takes about 80 s, including a 30-layer load of about 40 s.
+- The first probe (pad-masking check) opened the mesh without a fabric config, which it should not have; later probes used FABRIC_2D.
+- Not done here (outside paths): `bringup/hooks.py` still uses `HybridDeviceModel` for the ladder. `TtGemma4Model` is the device-resident forward the host_transfers_per_layer = 0 rule needs.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## K.1 contract (run1, attempt 2) — gate PASSES
+- This attempt could edit `models/demos/common/prefill`, so I added the adapter-dispatch branch from attempt 1 to `prefill_producer._read_slot_kv_and_check_pcc`, right after the golden_cap clamp: if the adapter defines `read_slot_kv_and_check_pcc`, the producer calls it as `(table, device_map, slot_id, real_len, trace_dir, NUM_LAYERS)`. No other adapter defines that method, so the other models' paths are unchanged.
+- `ADDING_A_PREFILL_MODEL.md`: the KV PCC paragraph now documents the adapter hook in place of "add a branch in the producer". The known-issues entry (producer read-back dispatch) now gives the fix.
+- No model code changed in this attempt. Gate metrics: contract_checks_failed 0, acks_early 0 (960 blocks), pcc_producer_kv_k 0.99447, pcc_producer_kv_v 0.99426. The test takes about 73 s.
+- Still open from attempt 1: `bringup/hooks.py` uses `HybridDeviceModel` for the ladder. `TtGemma4Model` (tt/model.py) is the device-resident forward.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`

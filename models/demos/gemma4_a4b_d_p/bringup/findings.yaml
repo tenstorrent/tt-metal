@@ -1,0 +1,23 @@
+findings:
+- id: K1-producer-readback
+  task: K.1
+  kind: CONTRACT
+  title: The common producer cannot read back Gemma-4 KV; K.1 needs a producer branch (shared code)
+  detail: >-
+    prefill_producer._read_slot_kv_and_check_pcc picks a reader by ADAPTER.name (minimax_m3; gpt_oss_d_p/ernie45_d_p;
+    everything else goes to the DeepSeek MLA reader). The MLA reader fails on Gemma-4 with AttributeError KV_LORA_RANK.
+    The GQA reader does not fit either: it assumes one head_dim for every layer and a [1, nkv, S, D] golden, but Gemma-4 has
+    8x256 sliding and 2x512 global layers and the bring-up golden is [nkv, S, D]. The adapter implements the read-back
+    (Gemma4A4BPrefillAdapter.read_slot_kv_and_check_pcc -> tt/runners/kv_contract.py). A probe ran run_contract_test with that
+    reader in place of the producer's: contract_checks_failed 0, acks_early 0 (960 blocks checked), pcc_producer_kv_k 0.99447,
+    pcc_producer_kv_v 0.99426. The fix needs 2 lines in the producer (outside K.1's allowed paths), at the top of
+    _read_slot_kv_and_check_pcc after the golden_cap clamp:
+    `if hasattr(ADAPTER, "read_slot_kv_and_check_pcc"): return ADAPTER.read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, NUM_LAYERS)`.
+- id: K1-slab-layout
+  task: K.1
+  kind: CONTRACT
+  title: One 512-wide KV slab per chip covers both Gemma-4 attention types
+  detail: >-
+    Sliding (8x256, 2 heads per chip) and global (2x512, 1 head per chip, replicated on 2 chips) layers both hold 512 values per
+    token per chip for K and for V. The migratable cache is therefore the gpt_oss_d_p GQA substrate with head_dim 512:
+    [users*layers, 1, seq, 512] bf8 per chip, configs K chip 0..3 then V chip 0..3. One table config size serves all 30 layers.

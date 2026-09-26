@@ -556,6 +556,9 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
+    if hasattr(ADAPTER, "read_slot_kv_and_check_pcc"):
+        # The adapter owns its KV layout read-back (e.g. mixed per-layer KV shapes); returns {"k": min, "v": min}.
+        return ADAPTER.read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, NUM_LAYERS)
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name in ("gpt_oss_d_p", "ernie45_d_p"):  # same GQA K/V layout (one KV head per TP column)
