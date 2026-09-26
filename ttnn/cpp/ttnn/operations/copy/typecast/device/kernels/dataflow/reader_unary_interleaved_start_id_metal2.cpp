@@ -9,6 +9,7 @@
 // become named runtime args. Forked rather than converted in place because the legacy file is
 // instantiated by ~70 factories that are all still on the legacy positional-arg API; delete this
 // fork once the eltwise/unary family adopts the same rewrite.
+// Unlike the donor, one page can take several tile-sized entries, and only page_size bytes are copied.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -20,17 +21,14 @@ void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
 
-    // ublocks size defined in pages (works for both TILE and ROW_MAJOR layouts)
-    constexpr uint32_t onepage = 1;
+    constexpr uint32_t entries_per_page = get_arg(args::entries_per_page);
+    constexpr uint32_t page_bytes = get_arg(args::page_size);
 
     const auto s = TensorAccessor(tensor::input);
 
     Noc noc;
     // dfb::in — the input pages this reader fills for the consumer downstream
     DataflowBuffer dfb(dfb::in);
-
-    // Get page size from the DFB (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = dfb.get_entry_size();
 
 // read a ublock of pages from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -40,9 +38,9 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        dfb.reserve_back(onepage);
+        dfb.reserve_back(entries_per_page);
         noc.async_read(s, dfb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        dfb.push_back(onepage);
+        dfb.push_back(entries_per_page);
     }
 }
