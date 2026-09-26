@@ -262,3 +262,9 @@ Drive this ledger with
   `~/.claude/skills/bringup` -> this directory: the repo's `.claude` is a symlink into the tt_ops_code_gen submodule,
   so a project-level install would modify another repository.
 - Gate commits also stage the model's `spec.yaml` and `supervision.md`.
+
+## F22 (2026-09-26): context discipline in the skill
+- The supervising session reached 78% context after ~40 gates, mostly from printed logs. The skill now says: pull
+  numbers not files, filter the monitor, one line per routine gate, short device checks, and at ~75% pause, write a
+  hand-off entry in supervision.md and continue in a fresh session from the files.
+- The `pause` command worked on its first real use (Gemma paused cleanly before C.global.attention).
