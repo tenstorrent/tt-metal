@@ -904,3 +904,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   - `GEMMA4_SDPA_CFG=base`: attention 381.6 ms, wall 743.3 ms, pcc 0.9989113 (identical to the baseline).
   - Frozen test_c_sliding_attention / test_c_global_attention still pass under A (pcc 0.99987 / 0.99979).
 - Re-run: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py` (prefix `GEMMA4_SDPA_CFG=base` for the old behaviour).
+
+## P.3 perf (run1, attempt 2): attention sub-section signposts. Gate PASSES
+- Attempt 1 changed no code, so the sub-section metrics were MISSING.
+- `tt/attention.py`: `_sp(name)` calls `profiler.signpost("attention.<name>")` before each sub-step in both `TtSlidingAttention` and `TtGlobalAttention`. The sections are qkv (linear + create_heads), head_norm (q/k/v RMS), rope (q/k), kv_write (kv_sink + fill_cache / paged_fill_cache), kv_tail (sliding only: the cache tail slices and the q/k/v concats), sdpa (SDPA plus the sliding output slice), o_proj (concat_heads + linear) and ccl (all_reduce).
+  Norm and rope are interleaved in the code, and the ops were not reordered. The signposts repeat instead, and the profiler adds up time under the same name.
+- Off switch: env `GEMMA4_ATTN_SIGNPOSTS=0` gives the pre-P.3 single `attention` section. The profile settings record it as `attn_signposts`. The signpost is a no-op when the profiler is off, so wall time is unchanged.
+- Gate: chunk_wall 609.7 ms, pcc_chunk_out 0.99856, host_transfers 0, attention total 248.7 ms. Breakdown in ms: sdpa 185.9, ccl 19.6, qkv 14.2, o_proj 11.2, rope 7.4, kv_tail 4.3, head_norm 4.0, kv_write 2.0. The step-level `attention` section is 0.
+- SDPA is 75% of attention and the next target. This profile does not split sliding from global. From P.2, global is about 35 ms per layer at 51k.
+- Runs without BRINGUP_TASK set write the metrics to `generated/bringup_adhoc/`, not `bringup/results/`.
+- Re-run: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py`
