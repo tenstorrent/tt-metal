@@ -102,6 +102,27 @@ def _close_device_mesh_quietly() -> None:
         pass
 
 
+def _open_mesh_or_skip(shape, axis_names: tuple, purpose: str):
+    """Open a ``shape`` mesh with ``axis_names`` for a module-scoped fixture, or ``pytest.skip`` the requesting module.
+
+    Points ``TT_MESH_GRAPH_DESC_PATH`` at a bundled descriptor first (unless the caller set one), closes whatever mesh
+    an earlier module left open, and undoes both if the open fails. Returns the previous descriptor path, which the
+    fixture hands back to ``_close_mesh`` at teardown."""
+    previous_mgd = _ensure_mgd_path(shape)
+    _close_device_mesh_quietly()
+    try:
+        ttml.open_device_mesh(ttml.Mesh(shape, axis_names))
+    except Exception as e:  # noqa: BLE001
+        _close_mesh(previous_mgd)
+        pytest.skip(f"needs a [{shape[0]}, {shape[1]}] {purpose} mesh: {e}")
+    return previous_mgd
+
+
+def _close_mesh(previous_mgd) -> None:
+    _close_device_mesh_quietly()
+    _restore_mgd_path(previous_mgd)
+
+
 @pytest.fixture(scope="module")
 def tp_mesh():
     """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
@@ -111,10 +132,8 @@ def tp_mesh():
     resolve their TP size through it.
     """
     dp_expected, tp_expected = TP_MESH_SHAPE
-    previous_mgd = _ensure_mgd_path(TP_MESH_SHAPE)
-    _close_device_mesh_quietly()
+    previous_mgd = _open_mesh_or_skip(TP_MESH_SHAPE, ("dp", "tp"), "'tp'")
     try:
-        ttml.open_device_mesh(ttml.Mesh(TP_MESH_SHAPE, ("dp", "tp")))
         ctx = ttml.autograd.AutoContext.get_instance()
         if ctx.is_parallelism_context_initialized():
             # ParallelismContext is a one-shot singleton with no reset hook, so an
@@ -132,14 +151,12 @@ def tp_mesh():
         else:
             ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
     except Exception as e:  # noqa: BLE001
-        _close_device_mesh_quietly()
-        _restore_mgd_path(previous_mgd)
+        _close_mesh(previous_mgd)
         pytest.skip(f"needs a [{dp_expected}, {tp_expected}] 'tp' mesh: {e}")
 
     yield ttml.mesh()
 
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
+    _close_mesh(previous_mgd)
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +174,8 @@ def fsdp_mesh():
     ParallelismContext, so none is installed here and this fixture is usable in a session before or after
     ``tp_mesh`` modules. Module-scoped for the same reason as ``tp_mesh``; skips if the mesh cannot be opened.
     """
-    previous_mgd = _ensure_mgd_path(FSDP_MESH_SHAPE)
-    _close_device_mesh_quietly()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(FSDP_MESH_SHAPE, ("dp", "fsdp")))
-    except Exception as e:  # noqa: BLE001
-        _close_device_mesh_quietly()
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"needs a [{FSDP_MESH_SHAPE[0]}, {FSDP_MESH_SHAPE[1]}] 'fsdp' mesh: {e}")
+    previous_mgd = _open_mesh_or_skip(FSDP_MESH_SHAPE, ("dp", "fsdp"), "'fsdp'")
 
     yield ttml.mesh()
 
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
+    _close_mesh(previous_mgd)
