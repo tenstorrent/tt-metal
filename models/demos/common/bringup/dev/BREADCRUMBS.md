@@ -351,3 +351,12 @@ Drive this ledger with
   host_transfers_per_layer == 0 and accuracy on a multi-chunk rung. The hybrid stays selectable for debugging.
 - Gemma: P.1 (step perf, role assemble) wraps tt/model.py's TtGemma4Model as the device_model hook; X.1 now
   profiles it (real baseline); P.2 (SDPA config A) follows with its threshold from X.1.
+
+## F34 (2026-09-26): false device-command alarm; no retry after a pass; profile timings on the dashboard
+- P.1's agent rewrote hooks.py through a python heredoc whose string carried `ttnn.synchronize_device`; the regex
+  called it device access, and the problem made the orchestrator start attempt 2 of a task whose gate had passed
+  (stopped). `code_opens_device` now parses the code and counts only real calls (strings do not count). A passing
+  gate is never redone for a command problem: the problems go to state `review` for the overseer. Out-of-path
+  changes still retry.
+- The timing section showed only ladder chunks (with readbacks). It now also shows the profile's warm last chunk
+  (chunk_wall_ms) and the warm full prefill (prefill_chunk_ms_c<nn>), labelled.
