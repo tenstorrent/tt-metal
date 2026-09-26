@@ -21,6 +21,7 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 02:10 | S.global.04 | supervising session at 80% context | hand-off | paused before C.global.ffn_norm; hand-off below |
 | ~02:35 | C.global.ffn_norm | new session took over from the hand-off | resume | resumed run1; ffn_norm, S.global.05, mlp, S.global.06, post_mlp_norm passed |
 | 02:50 | C.global.post_mlp_norm | owner: teletext should alternate Index / Model graph every minute | framework (planned) | paused after post_mlp_norm; F24 carousel, selftest 115 passed |
+| 02:57 | S.global.07 | owner: carousel every 20 s, not 1 min | framework (planned) | paused after S.global.07; F24 interval 20 s, selftest 115 passed |
 
 ## Hand-off (2026-09-26 02:10)
 
