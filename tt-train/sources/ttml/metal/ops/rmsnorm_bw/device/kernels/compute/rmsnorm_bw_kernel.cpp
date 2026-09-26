@@ -150,8 +150,8 @@ inline void compute_recip_rms_a_bcasted() {
     compute_kernel_hw_startup(cb_rms_a_idx, cb_recip_rms_a_bcasted_idx);
     unary_bcast_init<BroadcastType::COL>(cb_rms_a_idx);
     unary_bcast<BroadcastType::COL>(cb_rms_a_idx, /* tile idx */ 0, /* reg tile idx */ reg_rms_a);
-    recip_tile_init();
-    recip_tile(reg_rms_a);
+    recip_tile_init<false>();
+    recip_tile<false>(reg_rms_a);
     tile_regs_commit();
     pack_and_push(reg_rms_a, cb_recip_rms_a_bcasted_idx);
 }
