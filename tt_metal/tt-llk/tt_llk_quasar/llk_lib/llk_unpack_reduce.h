@@ -52,7 +52,7 @@ inline void _llk_unpack_reduce_mop_config_(
     {
         constexpr std::uint32_t clr_mode = (POOL_TYPE == PoolType::MAX) ? p_unpacr::UNP_CLRSRC_NEGINF : p_unpacr::UNP_CLRSRC_ZERO;
         const std::uint32_t unpack_zero_srcA =
-            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
+            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_zero_srcA, unpack_srcA_face);
         temp.set_start_op(unpack_srcB_face);
