@@ -415,7 +415,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         out_shape.push_back(operation_attributes.output_tensor_end[i] + 1);
     }
     Shape output_shape(std::move(out_shape));
-    DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor_a.dtype());
     if (!input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded()) {
         // Interleaved input has no shard spec to inherit a shape from, so derive one the same way
         // the sharded-input "single matrix split across cores" case does below: round per-core

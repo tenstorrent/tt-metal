@@ -7,14 +7,14 @@ from typing import List
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopBlock, TileLoop
 
 from .matmul import MatmulFpu
 
 
 class MatmulNoMopFpu(MatmulFpu):
-    loop: TileLoop = LoopBlock()
+    granularity = InvocationGranularity.BLOCK
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -34,8 +34,8 @@ class MatmulNoMopFpu(MatmulFpu):
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         transpose = compute_unit.transpose_within_face.cpp_enum_value
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
 
         tile_r_dim_a = compute_unit.src_a.tile_shape.total_row_dim()
         tile_c_dim_a = compute_unit.src_a.tile_shape.total_col_dim()
@@ -58,15 +58,22 @@ class MatmulNoMopFpu(MatmulFpu):
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        tile_r_dim_a = compute_unit.src_a.tile_shape.total_row_dim()
+        tile_c_dim_a = compute_unit.src_a.tile_shape.total_col_dim()
+        tile_r_dim_b = compute_unit.src_b.tile_shape.total_row_dim()
+        tile_c_dim_b = compute_unit.src_b.tile_shape.total_col_dim()
+        partial_face = compute_unit.src_a.partial_face.cpp_enum_value
 
         return (
             f"for (std::uint32_t kt = 0; kt < {kt_dim}; kt++)\n"
             f"{{\n"
-            f"    _llk_math_matmul_no_mop_<{math_fidelity}>({block.tile_id_block}, {ct_dim}, {rt_dim});\n"
+            f"    _llk_math_matmul_no_mop_<{math_fidelity}>("
+            f"{block.tile_id_dest}, {ct_dim}, {rt_dim}, {tile_r_dim_a}, {tile_c_dim_a}, "
+            f"{tile_r_dim_b}, {tile_c_dim_b}, {partial_face});\n"
             f"}}\n"
         )
 

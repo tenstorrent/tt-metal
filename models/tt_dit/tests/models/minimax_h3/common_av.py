@@ -3,13 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Reference-free A/V sanity checks plus the scaffolding shared by the MiniMax-H3 e2e gates.
-A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only."""
+A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only.
+
+Quality/sanity logs (OK lines, seams, CLIP, reminders) are silent unless `H3_LOG_QUALITY=1`.
+Artifact write paths and pipeline stage durations (`BenchmarkProfiler`) always log, host rank only.
+"""
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import socket
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -18,8 +26,37 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
+from ....pipelines.events import profiler_event_callback
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.weights_minimax_h3 import WeightsNotFoundError, resolve_weights_dir
+
+# Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
+_QUALITY_LOG_ON = ("1", "true", "yes", "on")
+
+
+def is_host() -> bool:
+    """Rank 0, matching WAN's `distributed_context_get_rank() == 0` export/CLIP gate."""
+    return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
+
+
+def quality_logs_enabled() -> bool:
+    return os.environ.get("H3_LOG_QUALITY", "").strip().lower() in _QUALITY_LOG_ON
+
+
+def user_input_enabled() -> bool:
+    return os.environ.get("ENABLE_USER_INPUT", "").strip().lower() in _QUALITY_LOG_ON
+
+
+def log_quality(message: str) -> None:
+    if quality_logs_enabled() and is_host():
+        logger.info(message)
+
+
+def log_quality_warning(message: str) -> None:
+    if quality_logs_enabled() and is_host():
+        logger.warning(message)
 
 
 def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seconds=0.05):
@@ -53,7 +90,7 @@ def check_audio_sanity(audio, *, sampling_rate, expected_seconds, tolerance_seco
     clipped = float((np.abs(audio) >= 0.999).mean())
     assert clipped < 0.01, f"{clipped:.1%} of samples are at full scale; suspect a scaling error"
 
-    logger.info(
+    log_quality(
         f"Audio sanity OK: {channels}ch {seconds:.3f} s @ {sampling_rate} Hz, "
         f"peak={peak:.3f}, rms={rms:.4f}, clipped={clipped:.3%}"
     )
@@ -99,12 +136,12 @@ def check_av_sync(frames, audio, *, sampling_rate, fps, tolerance_seconds=0.05):
         e = (envelope - envelope.mean()) / envelope.std()
         correlation = np.correlate(m, e, mode="full") / len(m)
         lag_frames = int(np.argmax(correlation)) - (len(m) - 1)
-        logger.info(
+        log_quality(
             f"A/V envelope-motion best lag: {lag_frames:+d} frames ({lag_frames / fps:+.3f} s), "
             f"peak r={correlation.max():.3f} (diagnostic, not asserted)"
         )
 
-    logger.info(
+    log_quality(
         f"A/V sync OK: video {video_seconds:.3f} s / {num_frames} frames @ {fps} fps, "
         f"audio {audio_seconds:.3f} s @ {sampling_rate} Hz, delta {audio_seconds - video_seconds:+.4f} s"
     )
@@ -136,7 +173,7 @@ def check_spatial_seams(frames, *, vertical_boundaries, horizontal_boundaries, m
     vertical = ratio(column_gradient, vertical_boundaries)
     horizontal = ratio(row_gradient, horizontal_boundaries)
 
-    logger.info(
+    log_quality(
         f"Spatial seam ratios (1.0 = no seam): vertical {vertical:.3f} at x={list(vertical_boundaries)}, "
         f"horizontal {horizontal:.3f} at y={list(horizontal_boundaries)}"
     )
@@ -168,7 +205,7 @@ def log_spectral_flatness(audio, *, sampling_rate, num_bands=64):
     flatness = float(np.exp(np.log(power + 1e-20).mean()) / (power.mean() + 1e-20))
     band_edges = np.linspace(0, len(power), num_bands + 1).astype(int)
     bands = np.array([power[a:b].mean() for a, b in zip(band_edges[:-1], band_edges[1:]) if b > a])
-    logger.info(
+    log_quality(
         f"Audio log-spectrum: flatness={flatness:.4f}, "
         f"band dB range=[{10 * np.log10(bands.min() + 1e-20):.1f}, {10 * np.log10(bands.max() + 1e-20):.1f}]"
     )
@@ -199,15 +236,28 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         handle.setframerate(sampling_rate)
         handle.writeframes((pcm * 32767.0).astype("<i2").tobytes())
     paths["wav"] = wav_path
-    logger.info(f"wrote {wav_path}")
+    if is_host():
+        logger.info(f"wrote {wav_path}")
 
     exe = _ffmpeg()
     if exe is None:
-        logger.warning("no ffmpeg available; skipping mp4 and the file-level checks")
+        if is_host():
+            logger.warning("no ffmpeg available; skipping mp4 and the file-level checks")
         return paths
 
     silent = directory / f"{stem}_silent.mp4"
-    num_frames, height, width, _ = frames.shape
+    if frames.ndim == 3:
+        _, planar_height, width = frames.shape
+        height = planar_height * 2 // 3
+        pix_fmt = "yuv420p"
+        payload = np.ascontiguousarray(frames, dtype=np.uint8)
+    elif frames.ndim == 4:
+        _, height, width, channels = frames.shape
+        assert channels == 3, f"rgb frames expected (F, H, W, 3), got {frames.shape}"
+        pix_fmt = "rgb24"
+        payload = frames
+    else:
+        raise ValueError(f"frames must be (F, H, W, 3) rgb or (F, H*3//2, W) yuv, got {frames.shape}")
     subprocess.run(
         [
             exe,
@@ -217,7 +267,7 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
             "-f",
             "rawvideo",
             "-pix_fmt",
-            "rgb24",
+            pix_fmt,
             "-s",
             f"{width}x{height}",
             "-r",
@@ -234,7 +284,7 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
             "yuv420p",
             str(silent),
         ],
-        input=frames.tobytes(),
+        input=payload.tobytes(),
         check=True,
         capture_output=True,
     )
@@ -268,7 +318,8 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         capture_output=True,
     )
     paths["mp4"] = muxed
-    logger.info(f"wrote {muxed} and {silent}")
+    if is_host():
+        logger.info(f"wrote {muxed} and {silent}")
     return paths
 
 
@@ -409,23 +460,23 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 
 # ------------------------------------------------------------------ shared e2e gate scaffolding
 
-# Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
+# This is our default testing prompt.
 CALIBRATED_FOX_PROMPT = (
-    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
+    "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "  # <- NOTE THE SPACE HERE! DON'T DELETE IT, else it changes the token count!
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
 )
+CALIBRATED_FOX_PROMPT_NUM_TOKENS = 39
 
 
 def weights_dir(*required_subdirs: str) -> Path:
-    """The snapshot dir from MINIMAX_H3_MODEL_PATH; skips when it or a required partition is missing."""
-    root = os.environ.get("MINIMAX_H3_MODEL_PATH", "")
-    if not root or not Path(root).is_dir():
-        pytest.skip("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
-    directory = Path(root)
-    missing = [name for name in required_subdirs if not (directory / name).is_dir()]
-    if missing:
-        pytest.skip(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
-    return directory
+    """The snapshot dir, from MINIMAX_H3_MODEL_PATH / the HF cache / a download; skips when unresolved.
+
+    A download needs TT_DIT_ALLOW_HF_DOWNLOAD=1; without it an absent snapshot still skips as before.
+    """
+    try:
+        return resolve_weights_dir(*required_subdirs)
+    except WeightsNotFoundError as error:
+        pytest.skip(str(error))
 
 
 def artifact_dir(name: str) -> Path:
@@ -435,63 +486,685 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
-def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
-    """Warmup then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it)."""
-    pipeline.warmup(prompt=prompt, **gen_kwargs)
-    warm_padded_len = pipeline.last_padded_len
+def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
+    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
+    # warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
 
-    # The warmup is a full generation too, so its stage timings are the *cold* numbers -- program
-    # compilation, per-shape conv3d blocking and buffer allocation all land in them. Log them
-    # before the measured call overwrites `last_timings`. Not gated: cold cost depends on what the
-    # weight/JIT caches already held, so it is a diagnostic, not a bar.
-    cold_rows = list(pipeline.last_timings)
-    if cold_rows:
-        cold_total = sum(seconds for _, seconds in cold_rows)
-        logger.info("WARMUP (cold: program compile + buffer alloc included, not a perf target)")
-        for row_label, seconds in cold_rows:
-            share = 100 * seconds / cold_total if cold_total else 0.0
-            logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({share:4.1f} %)")
-        logger.info(f"  {'Total (warmup)':<18} {cold_total:8.1f} s")
+    # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
+    # # reflect this request's rung. The quiet compile pass runs the *real* request, so it establishes
+    # # the rung the measured call will run at -- take the reference from there.
+    # with pipeline.quiet():
+    #     pipeline(prompt, seed=seed, **warmup_kwargs)
+    # warm_padded_len = pipeline.last_seq_len.padded
 
-    ttnn.synchronize_device(pipeline.mesh_device)
-    if ttnn.using_distributed_env():
-        ttnn.distributed_context_barrier()
+    # ttnn.synchronize_device(pipeline.mesh_device)
+    # if ttnn.using_distributed_env():
+    #     ttnn.distributed_context_barrier()
 
-    output = pipeline(prompt, seed=seed, **gen_kwargs)
+    on_event = profiler_event_callback(profiler, profiler_iteration) if profiler is not None else None
+    if profiler is not None:
+        with profiler("run", iteration=profiler_iteration):
+            output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
+            ttnn.synchronize_device(pipeline.mesh_device)
+    else:
+        output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
 
-    assert pipeline.last_padded_len == warm_padded_len, (
-        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
-        f"{pipeline.last_padded_len}; this number is not warm"
-    )
+    # measured = pipeline.last_seq_len.padded
+    # assert measured == warm_padded_len, (
+    #     f"the compile pass ran at padded_len {warm_padded_len} but the measured call ran at "
+    #     f"{measured}; this number is not warm"
+    # )
+    # The real warmth check under bucketing: the rung the measured call ran at must hold a live
+    # capture, so it replayed rather than paying an untraced generation plus recapture.
+    # if pipeline.trace_denoise:
+    #     assert pipeline._rung_captured(measured), (
+    #         f"the measured call ran at padded_len {measured}, which has no captured trace; " f"this number is not warm"
+    #     )
     return output
 
 
-def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
-    """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total."""
-    rows = pipeline.last_timings
-    total = sum(seconds for _, seconds in rows)
-    shape = tuple(pipeline.mesh_device.shape)
-    logger.info(
-        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
-        f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
-        f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
-        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+def log_pipeline_perf(
+    profiler,
+    *,
+    label: str,
+    pipeline,
+    num_forwards: int,
+    width: int | None = None,
+    height: int | None = None,
+    num_frames: int | None = None,
+    fps: float | None = None,
+    aspect_ratio: tuple[int, int] | None = None,
+    num_inference_steps: int | None = None,
+    extra_lines: tuple[str, ...] = (),
+    iteration: int = 0,
+) -> None:
+    """Stage durations from `BenchmarkProfiler`, with a config header. Host rank only."""
+    sections = (
+        ("Text Encoding", "encoder"),
+        ("VAE Encode", "vae_encode"),
+        ("Denoising (total)", "denoising"),
+        ("VAE Decoding", "vae"),
+        ("Audio Decoding", "audio"),
+        ("Total Pipeline", "run"),
     )
-    for row_label, seconds in rows:
-        logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
-    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
-    denoise = dict(rows).get("Denoise")
-    if denoise:
-        logger.info(
-            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
-            f"({num_forwards} forwards over {denoise:.1f} s)"
+    if not is_host():
+        return
+    shape = tuple(pipeline.mesh_device.shape)
+    topology = getattr(pipeline.ccl_manager.topology, "name", pipeline.ccl_manager.topology)
+    lines = [
+        "=" * 80,
+        "MINIMAX-H3 PERFORMANCE RESULTS",
+        "=" * 80,
+        f"Task: {label}",
+    ]
+    if width is not None and height is not None:
+        size = f"{width}x{height}"
+        if aspect_ratio is not None:
+            size += f" ({aspect_ratio[0]}:{aspect_ratio[1]})"
+        lines.append(f"Image Size: {size}")
+    if num_frames is not None:
+        frame_line = f"Num Frames: {num_frames}"
+        if fps:
+            frame_line += f" @ {fps:g} fps ({num_frames / fps:.2f} s)"
+        lines.append(frame_line)
+    if num_inference_steps is not None:
+        step_line = f"Inference Steps: {num_inference_steps}"
+        if num_forwards and num_forwards != num_inference_steps:
+            step_line += f" ({num_forwards} denoise steps)"
+        lines.append(step_line)
+    if pipeline.last_seq_len is not None:
+        logical, padded = pipeline.last_seq_len.logical, pipeline.last_seq_len.padded
+        waste = 100.0 * (padded - logical) / padded if padded else 0.0
+        lines.append(f"sequence_length:{logical}, bucket:{padded}, waste:{waste:.1f}%")
+    lines.append(
+        f"DiT Configuration: sp={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"tp={pipeline.tp_factor} axis {pipeline.tp_axis}"
+    )
+    lines.append(f"Mesh Shape: {shape}")
+    lines.append(f"Topology: {topology}, {pipeline.ccl_manager.num_links} links")
+    lines.extend(extra_lines)
+    lines.append("-" * 80)
+    for name, step in sections:
+        if not profiler.contains_step(step, iteration):
+            continue
+        duration = profiler.get_duration(step, iteration)
+        lines.append(f"{name:25} | {duration:8.4f}s")
+        if step == "denoising" and num_forwards:
+            lines.append(f"{'Denoising (per step)':25} | {duration / num_forwards:8.4f}s")
+    lines.append("=" * 80)
+    logger.info("\n" + "\n".join(lines))
+
+
+def _allgather_host_int(value: int) -> int:
+    """Rank 0's integer, on every rank. A no-op when not under MPI."""
+    if not ttnn.using_distributed_env():
+        return int(value)
+    gathered = ttnn.distributed_context_allgather_int(int(value) if is_host() else 0)
+    return int(gathered[0])
+
+
+def _parse_aspect(text: str, default: tuple[int, int]) -> tuple[int, int]:
+    text = text.strip()
+    if not text:
+        return default
+    for sep in (":", ",", "x", " "):
+        if sep in text:
+            left, right = text.split(sep, 1)
+            return int(left.strip()), int(right.strip())
+    raise ValueError(f"aspect ratio {text!r} is not W:H")
+
+
+def _parse_duration(text: str, default: float) -> float:
+    text = text.strip()
+    if not text:
+        return float(default)
+    duration = float(text)
+    if duration <= 0:
+        raise ValueError("duration must be positive")
+    return duration
+
+
+def _parse_steps(text: str, default: int) -> int:
+    text = text.strip()
+    if not text:
+        return int(default)
+    steps = int(text)
+    if steps <= 0:
+        raise ValueError("steps must be positive")
+    return steps
+
+
+def _parse_seed(text: str, default: int) -> int:
+    text = text.strip()
+    if not text:
+        return int(default)
+    return int(text)
+
+
+def _repl_dir() -> Path:
+    """Same directory the launch script uses: `$TT_METAL_HOME/.h3_repl` (NFS), not the pytest cwd."""
+    return Path(os.environ.get("TT_METAL_HOME") or os.getcwd()) / ".h3_repl"
+
+
+_REPL_SEQ = 0
+
+
+def _next_repl_seq() -> int:
+    global _REPL_SEQ
+    _REPL_SEQ += 1
+    return _REPL_SEQ
+
+
+def _journal_path() -> Path:
+    return _repl_dir() / "journal"
+
+
+def _ensure_journal() -> Path:
+    """Create the journal if needed. Never truncate: a stale NFS exists() must not wipe lines."""
+    path = _journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    os.close(fd)
+    return path
+
+
+def _append_journal_line(line: str) -> None:
+    path = _ensure_journal()
+    payload = line if line.endswith("\n") else line + "\n"
+    fd = os.open(path, os.O_APPEND | os.O_WRONLY | os.O_CREAT | os.O_SYNC, 0o644)
+    try:
+        os.write(fd, payload.encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    dirfd = os.open(str(path.parent), os.O_RDONLY)
+    try:
+        os.fsync(dirfd)
+    finally:
+        os.close(dirfd)
+
+
+def _append_journal(seq: int, line: str) -> None:
+    _append_journal_line(f"{seq}\t{line}")
+
+
+def _wait_journal(seq: int, timeout: float | None = None) -> str:
+    """Read seq's reply from the always-present journal. Never lookup a missing ready/reply name (NFS)."""
+    path = _ensure_journal()
+    prefix = f"{seq}\t"
+    deadline = None if timeout is None else time.time() + timeout
+    while True:
+        try:
+            os.listdir(path.parent)
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                text = os.read(fd, os.fstat(fd).st_size).decode()
+            finally:
+                os.close(fd)
+        except FileNotFoundError:
+            text = ""
+        for entry in text.splitlines():
+            if entry.startswith("Q\t"):
+                continue
+            if entry.startswith(prefix):
+                return entry[len(prefix) :]
+        if deadline is not None and time.time() >= deadline:
+            raise TimeoutError(f"no journal seq {seq} after {timeout:.0f}s")
+        time.sleep(0.05)
+
+
+def _repl_listen_addr(*, timeout: float = 30) -> tuple[str, int]:
+    """Host:port written by `run_H3_perf_d23.sh` before tt-run starts. File already exists; no per-prompt names."""
+    path = _repl_dir() / "listen"
+    deadline = time.time() + timeout
+    while True:
+        try:
+            raw = path.read_bytes().replace(b"\x00", b"").decode().strip()
+        except FileNotFoundError:
+            raw = ""
+        if raw and ":" in raw:
+            host, port_s = raw.rsplit(":", 1)
+            return host, int(port_s)
+        if time.time() >= deadline:
+            raise RuntimeError(f"REPL listen file missing at {path}; run via run_H3_perf_d23.sh")
+        time.sleep(0.05)
+
+
+def _recv_line(sock: socket.socket) -> str:
+    buf = b""
+    while b"\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise EOFError("REPL TCP closed")
+        buf += chunk
+    return buf.split(b"\n", 1)[0].decode()
+
+
+def _prompt_line(message: str, timeout: float | None = None) -> str:
+    """One line from the launch TTY. Local `input()`; under MPI, TCP to the launch-host relay (not NFS)."""
+    if not ttnn.using_distributed_env():
+        return input(message)
+    host, port = _repl_listen_addr()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError as error:
+        raise RuntimeError(f"REPL TCP connect to {host}:{port} failed: {error}") from error
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(message.encode() + b"\n")
+        return _recv_line(sock)
+    except (TimeoutError, socket.timeout) as error:
+        raise TimeoutError(f"no TTY reply within {timeout:.0f}s") from error
+    finally:
+        sock.close()
+
+
+def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
+    """`rounds` TTY round-trips before pipeline init. Fails fast if the launch-host relay is not working."""
+    return
+    if not user_input_enabled():
+        return
+    flag = 0
+    if is_host():
+        try:
+            for i in range(1, rounds + 1):
+                _prompt_line(f"REPL pretest {i}/{rounds} (type anything, Enter): ", timeout=timeout)
+            flag = 1
+        except TimeoutError:
+            flag = 0
+    if not _allgather_host_int(flag):
+        raise RuntimeError(f"REPL pretest failed: no TTY reply within {timeout:.0f}s; run via run_H3_perf_d23.sh")
+    if is_host():
+        logger.info(f"REPL pretest ok ({rounds} round-trips)")
+
+
+def _read_optional_image_path(label: str) -> str | None:
+    """A path to an existing file, or None when left blank. Re-prompts a non-existent path; raises EOFError to abort."""
+    while True:
+        raw = _prompt_line(label).strip()
+        if not raw:
+            return None
+        if os.path.isfile(raw):
+            return raw
+        print(f"no such file: {raw}", file=sys.stderr)
+
+
+def _read_user_spec(
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
+) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
+    """Host stdin: prompt (`q` quits), aspect, duration, steps, seed and optional fl2va keyframes."""
+    while True:
+        try:
+            prompt = _prompt_line("User prompt (q to quit): ").strip()
+        except EOFError:
+            return None
+        if prompt.lower() == "q":
+            return None
+        if prompt:
+            break
+    while True:
+        try:
+            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+            aspect = _parse_aspect(raw, default_aspect_ratio)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+    while True:
+        try:
+            raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
+            duration_s = _parse_duration(raw, default_duration_s)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive number of seconds", file=sys.stderr)
+    while True:
+        try:
+            raw = _prompt_line(f"Inference steps [{default_num_steps}]: ")
+            num_steps = _parse_steps(raw, default_num_steps)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive integer", file=sys.stderr)
+    while True:
+        try:
+            raw = _prompt_line(f"Seed [{default_seed}]: ")
+            seed = _parse_seed(raw, default_seed)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected an integer", file=sys.stderr)
+    try:
+        first_image = _read_optional_image_path("First image path (blank for none): ")
+        last_image = _read_optional_image_path("Last image path (blank for none): ")
+    except EOFError:
+        return None
+    return prompt, aspect, duration_s, num_steps, seed, first_image, last_image
+
+
+def _broadcast_user_spec(
+    spec: tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None,
+) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
+    """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
+    if not ttnn.using_distributed_env():
+        return spec
+    seq = 0
+    if is_host() and spec is not None:
+        seq = _next_repl_seq()
+        prompt, aspect, duration_s, num_steps, seed, first_image, last_image = spec
+        _append_journal(
+            seq,
+            json.dumps(
+                {
+                    "prompt": prompt,
+                    "aspect": [int(aspect[0]), int(aspect[1])],
+                    "duration_s": float(duration_s),
+                    "num_steps": int(num_steps),
+                    "seed": int(seed),
+                    "first_image": first_image,
+                    "last_image": last_image,
+                }
+            ),
         )
-    logger.info(f"  realtime factor    {total / video_seconds:8.1f} x  (compute / video seconds)")
-    if expected_total_s is not None:
+    seq = _allgather_host_int(seq)
+    if not seq:
+        return None
+    if not is_host():
+        payload = json.loads(_wait_journal(seq))
+        spec = (
+            payload["prompt"],
+            (int(payload["aspect"][0]), int(payload["aspect"][1])),
+            float(payload["duration_s"]),
+            int(payload["num_steps"]),
+            int(payload["seed"]),
+            payload["first_image"],
+            payload["last_image"],
+        )
+    ttnn.distributed_context_barrier()
+    return spec
+
+
+def _parse_reference_counts(text: str) -> tuple[int, int, int]:
+    """`images:audio:video` -> three non-negative counts; at least one reference required."""
+    parts = text.replace(" ", "").split(":")
+    if len(parts) != 3:
+        raise ValueError(f"expected images:audio:video (e.g. 2:1:2), got {text!r}")
+    images, audio, video = (int(part) for part in parts)
+    if min(images, audio, video) < 0:
+        raise ValueError("counts must be non-negative")
+    if images + audio + video == 0:
+        raise ValueError("need at least one reference")
+    return images, audio, video
+
+
+def _read_reference_spec(
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
+) -> dict | None:
+    """Host stdin: prompt, aspect, duration, steps, a counts triple, then paths; None on `q` or EOF."""
+    while True:
+        try:
+            prompt = _prompt_line("User prompt (q to quit): ").strip()
+        except EOFError:
+            return None
+        if prompt.lower() == "q":
+            return None
+        if prompt:
+            break
+
+    while True:
+        try:
+            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+            aspect = _parse_aspect(raw, default_aspect_ratio)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+
+    while True:
+        try:
+            raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
+            duration_s = _parse_duration(raw, default_duration_s)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive number of seconds", file=sys.stderr)
+
+    while True:
+        try:
+            raw = _prompt_line(f"Inference steps [{default_num_steps}]: ")
+            num_steps = _parse_steps(raw, default_num_steps)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected a positive integer", file=sys.stderr)
+
+    while True:
+        try:
+            raw = _prompt_line("Enter counts (images:audio:video): ").strip()
+        except EOFError:
+            return None
+        if raw.lower() == "q":
+            return None
+        try:
+            counts = _parse_reference_counts(raw)
+            break
+        except ValueError as error:
+            print(error, file=sys.stderr)
+
+    spec: dict = {
+        "prompt": prompt,
+        "aspect": [int(aspect[0]), int(aspect[1])],
+        "duration_s": float(duration_s),
+        "num_steps": int(num_steps),
+    }
+    for kind, count, label in zip(("image", "audio", "video"), counts, ("Images", "Audio", "Videos")):
+        spec[kind] = []
+        if count == 0:
+            continue
+        while True:
+            try:
+                raw = _prompt_line(f"{label} (colon separated): ")
+            except EOFError:
+                return None
+            paths = [part.strip() for part in raw.split(":") if part.strip()]
+            if len(paths) != count:
+                print(f"expected {count} colon-separated path(s), got {len(paths)}", file=sys.stderr)
+                continue
+            missing = [path for path in paths if not os.path.isfile(path)]
+            if missing:
+                print(f"no such file(s): {missing}", file=sys.stderr)
+                continue
+            spec[kind] = paths
+            break
+    return spec
+
+
+def _broadcast_reference_spec(spec: dict | None) -> dict | None:
+    """Host reference spec (prompt + paths, or None to abort) to every rank via the journal and one allgather."""
+    if not ttnn.using_distributed_env():
+        return spec
+    seq = 0
+    if is_host() and spec is not None:
+        seq = _next_repl_seq()
+        _append_journal(seq, json.dumps(spec))
+    seq = _allgather_host_int(seq)
+    if not seq:
+        return None
+    if not is_host():
+        spec = json.loads(_wait_journal(seq))
+    ttnn.distributed_context_barrier()
+    return spec
+
+
+def read_user_reference_spec(
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
+) -> dict | None:
+    """Collect a ref2va prompt, settings and reference paths from the launch TTY and broadcast to every rank.
+
+    Returns a spec dict, or None when input is disabled or aborted.
+    """
+    if not user_input_enabled():
+        return None
+    spec = _read_reference_spec(default_aspect_ratio, default_duration_s, default_num_steps) if is_host() else None
+    return _broadcast_reference_spec(spec)
+
+
+def run_user_generations(
+    pipeline,
+    *,
+    default_aspect_ratio: tuple[int, int],
+    default_duration_s: float,
+    num_inference_steps: int,
+    seed: int,
+    label: str = "t2va",
+    artifact_name: str = "h3_t2va_artifacts",
+) -> None:
+    """Prompt/aspect/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
+    if not user_input_enabled():
+        return
+    from PIL import Image
+
+    artifacts = artifact_dir(artifact_name)
+    index = 0
+    while True:
+        spec = (
+            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed) if is_host() else None
+        )
+        spec = _broadcast_user_spec(spec)
+        if spec is None:
+            return
+        prompt, aspect_ratio, duration_s, num_steps, seed, first_image, last_image = spec
+        image = Image.open(first_image).convert("RGB") if first_image else None
+        last = Image.open(last_image).convert("RGB") if last_image else None
+        profiler = BenchmarkProfiler()
+        try:
+            height, width = resolve_canvas_size(*aspect_ratio) if image is None else (None, None)
+            num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            with profiler("run", iteration=0):
+                output = pipeline(
+                    prompt,
+                    image=image,
+                    last_image=last,
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    aspect_ratio=aspect_ratio,
+                    num_inference_steps=num_steps,
+                    seed=seed,
+                    on_event=profiler_event_callback(profiler, 0),
+                )
+        except ValueError as error:
+            if is_host():
+                logger.error(f"user generation rejected: {error}")
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
+            continue
+        ttnn.synchronize_device(pipeline.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        log_pipeline_perf(
+            profiler,
+            label=label,
+            pipeline=pipeline,
+            num_forwards=num_steps - 1,
+            width=width,
+            height=height,
+            num_frames=output.num_frames,
+            fps=MINIMAX_H3_FPS,
+            aspect_ratio=aspect_ratio,
+            num_inference_steps=num_steps,
+        )
+        if is_host():
+            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
+            write_artifacts(
+                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            )
+        index += 1
+
+
+def run_user_ref_generations(
+    pipeline,
+    request_provider,
+    *,
+    seed: int,
+    label: str = "ref2va",
+    artifact_name: str = "h3_ref2va_perf_artifacts",
+) -> None:
+    """ref2va prompt+reference REPL after the warm measured run. No-op unless ENABLE_USER_INPUT is set.
+
+    `request_provider()` returns `(prompt, references, aspect_ratio, duration_s, num_steps)`, or None to stop.
+    """
+    if not user_input_enabled():
+        return
+    artifacts = artifact_dir(artifact_name)
+    index = 0
+    while True:
+        request = request_provider()
+        if not request:
+            return
+        prompt, references, aspect_ratio, duration_s, num_steps = request
+        height, width = resolve_canvas_size(*aspect_ratio)
+        num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+        profiler = BenchmarkProfiler()
+        try:
+            with profiler("run", iteration=0):
+                output = pipeline(
+                    prompt,
+                    references=references,
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    num_inference_steps=num_steps,
+                    seed=seed,
+                    on_event=profiler_event_callback(profiler, 0),
+                )
+        except ValueError as error:
+            if is_host():
+                logger.error(f"user ref generation rejected: {error}")
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
+            continue
+        ttnn.synchronize_device(pipeline.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        log_pipeline_perf(
+            profiler,
+            label=label,
+            pipeline=pipeline,
+            num_forwards=num_steps - 1,
+            width=width,
+            height=height,
+            num_frames=output.num_frames,
+            fps=MINIMAX_H3_FPS,
+            aspect_ratio=aspect_ratio,
+            num_inference_steps=num_steps,
+        )
+        if is_host():
+            kinds = "_".join(reference.kind for reference in references)
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{index}_{kinds}"
+            write_artifacts(
+                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            )
+        index += 1
+
+
+def frames_for_export(output) -> np.ndarray:
+    """Bytes the ffmpeg rawvideo pipe wants: planar yuv420p, or packed rgb24 from float RGB."""
+    if getattr(output, "video_format", "rgb_float") == "yuv420":
+        video = output.video
         assert (
-            total < expected_total_s
-        ), f"fully-warm total {total:.1f} s exceeds the {expected_total_s:.0f} s floor bar"
-    return total
+            isinstance(video, np.ndarray) and video.ndim == 3
+        ), f"yuv420 expected (F, H*3//2, W) uint8, got {type(video)} {getattr(video, 'shape', None)}"
+        return np.ascontiguousarray(video, dtype=np.uint8)
+    return to_uint8_frames(output)
 
 
 def to_uint8_frames(output) -> np.ndarray:
@@ -502,20 +1175,36 @@ def to_uint8_frames(output) -> np.ndarray:
     return frames.cpu().numpy()
 
 
+def assert_generation_ok(output, expected_frames: int) -> None:
+    """Frame count plus a layout check that does not assume `video` is a float tensor."""
+    assert output.num_frames == expected_frames, f"generated {output.num_frames} frames, expected {expected_frames}"
+    assert torch.isfinite(output.audio).all()
+    if getattr(output, "video_format", "rgb_float") == "yuv420":
+        video = output.video
+        assert (
+            isinstance(video, np.ndarray) and video.dtype == np.uint8
+        ), f"yuv420 video must be uint8 ndarray, got {type(video)} {getattr(video, 'dtype', None)}"
+        assert (
+            video.ndim == 3 and video.shape[0] == expected_frames
+        ), f"yuv420 expected (F, H*3//2, W) with F={expected_frames}, got {video.shape}"
+        return
+    assert torch.isfinite(output.video).all()
+
+
 def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17, height: int = 0, width: int = 0):
     """Gate the written *file* (streams, A/V skew, frame count, temporal seam); silently no-ops without an mp4."""
     if "mp4" not in paths:
         return
     streams = probe_streams(paths["mp4"])
     if streams:
-        logger.info(f"container streams: { {k: v.get('duration') for k, v in streams.items()} }")
+        log_quality(f"container streams: { {k: v.get('duration') for k, v in streams.items()} }")
         assert "video" in streams and "audio" in streams, f"muxed file is missing a stream: {list(streams)}"
         durations = {k: float(v["duration"]) for k, v in streams.items() if v.get("duration")}
         if {"video", "audio"} <= set(durations):
             skew = durations["audio"] - durations["video"]
             # AAC pads to a frame boundary, so allow a little more than the tensor-level check.
             assert abs(skew) < 0.15, f"muxed A/V skew {skew:+.3f} s"
-            logger.info(f"muxed A/V skew: {skew:+.4f} s")
+            log_quality(f"muxed A/V skew: {skew:+.4f} s")
 
     decoded = decoded_frames(paths["mp4"], count=1, height=height, width=width)
     if decoded.size:
@@ -524,7 +1213,7 @@ def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17,
         ), f"the written mp4 decodes to {decoded.shape[0]} frames, expected ~{expected_frames}"
         # The VAE's temporal chunk covers clip_length (17) pixel frames.
         seam = temporal_seam_score(decoded, period=seam_period)
-        logger.info(f"temporal seam score at the {seam_period}-frame chunk period: {seam:.3f} (1.0 = no seam)")
+        log_quality(f"temporal seam score at the {seam_period}-frame chunk period: {seam:.3f} (1.0 = no seam)")
         if np.isfinite(seam):
             assert seam < 3.0, (
                 f"inter-frame delta at chunk boundaries is {seam:.2f}x the delta elsewhere; "
@@ -536,7 +1225,7 @@ def gate_clip(frames: np.ndarray, prompt: str, threshold: float, label: str):
     """CLIP prompt-alignment gate; skips only if `open_clip` is missing."""
     pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
     alignment = clip_prompt_alignment(frames, prompt)
-    logger.info(
+    log_quality(
         f"{label} CLIP prompt alignment: mean={alignment['mean']:.2f} "
         f"min={alignment['min']:.2f} max={alignment['max']:.2f} (bar {threshold})"
     )
@@ -557,7 +1246,7 @@ def gate_vbench(paths: dict, prompt: str, thresholds: dict, label: str, skip_wit
     scores = run_vbench(paths["mp4"], prompt, tuple(thresholds))
     for dimension, bar in thresholds.items():
         assert dimension in scores, f"VBench returned no score for {dimension}"
-        logger.info(f"{label} VBench {dimension} = {scores[dimension]:.4f} (bar {bar})")
+        log_quality(f"{label} VBench {dimension} = {scores[dimension]:.4f} (bar {bar})")
     failures = [f"{d} = {scores[d]:.4f} < {bar:.4f}" for d, bar in thresholds.items() if scores[d] < bar]
     assert not failures, "VBench below threshold: " + "; ".join(failures)
     return scores

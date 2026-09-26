@@ -22,6 +22,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -84,16 +85,12 @@ UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float32,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
         DataFormat.Int32,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
     same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
-)
+    # This test only runs input_fmt == output_fmt, so its MX pair carries both the
+    # unpack decode and the pack encode.
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.MxFp4)
 
 BROADCAST_TYPES = [
     BroadcastType.Scalar,
@@ -107,8 +104,9 @@ def get_valid_dest_acc_unary_broadcast(formats):
     if formats.input_format.is_32_bit():
         return [DestAccumulation.Yes]
     return [
-        DestAccumulation.No
-    ]  # 32bit dest is not supported for the unpack_to_dest=False case, ISSUE: #47560
+        DestAccumulation.No,
+        DestAccumulation.Yes,
+    ]
 
 
 @pytest.mark.quasar

@@ -160,8 +160,7 @@ static DramPhysicalLocation dram_physical_location_for_device_id(uint32_t device
     return loc;
 }
 
-static std::string device_log_prefix(IDevice* device) {
-    const uint32_t device_id = device->id();
+static std::string device_log_prefix(uint32_t device_id) {
     return fmt::format("[bdf={}][device_id={}]", pci_bdf_for_device_id(device_id), device_id);
 }
 
@@ -192,7 +191,11 @@ static bool dram_test_verbose_enabled() {
 }
 
 static void log_verbose_dram_work_item(
-    IDevice* device, const CoreCoord& core, const DramWorkItem& job, uint32_t core_job_index, uint32_t core_job_count) {
+    uint32_t device_id,
+    const CoreCoord& core,
+    const DramWorkItem& job,
+    uint32_t core_job_index,
+    uint32_t core_job_count) {
     if (!dram_test_verbose_enabled()) {
         return;
     }
@@ -200,7 +203,7 @@ static void log_verbose_dram_work_item(
     log_info(
         tt::LogTest,
         "{} subtest={} core_job={}/{} core=({}, {}) bank={} pattern={} pass={} repeat={}",
-        device_log_prefix(device),
+        device_log_prefix(device_id),
         job.job_id,
         core_job_index + 1u,
         core_job_count,
@@ -214,9 +217,7 @@ static void log_verbose_dram_work_item(
 
 std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, tt_metal::NOC noc) {
-    auto* const device = mesh_device->get_devices()[0];
-
-    const uint32_t num_dram_channels = device->num_dram_channels();
+    const uint32_t num_dram_channels = mesh_device->num_dram_channels();
 
     std::vector<CoreCoord> optimal_workers = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 
@@ -248,12 +249,12 @@ static inline const char* dram_failure_kind_name(uint32_t failure_kind) {
     }
 }
 
-static void log_dram_failure(IDevice* device, const CoreCoord& core, const DramBaseResult* result) {
+static void log_dram_failure(uint32_t device_id, const CoreCoord& core, const DramBaseResult* result) {
     log_info(
         tt::LogTest,
         "{} Mismatch on dram_controller={} core {} pattern={} repeat={} pass={}: failures={}, "
         "first_fail_classified_as={}, write_failures={}, read_failures={}",
-        device_log_prefix(device),
+        device_log_prefix(device_id),
         result->bank_id,
         core,
         pattern_name(result->pattern_id),
@@ -308,8 +309,8 @@ static inline double dram_result_read_error_pct(const DramBaseResult* result) {
     return 100.0 * result->suspected_read_failures / result->words_checked;
 }
 
-static inline uint64_t read_arc_global_tick(tt::tt_metal::IDevice* device) {
-    return MetalContext::instance().get_cluster().get_arc_timer_heartbeat(device->id());
+static inline uint64_t read_arc_global_tick(uint32_t device_id) {
+    return MetalContext::instance().get_cluster().get_arc_timer_heartbeat(device_id);
 }
 
 static inline const char* dram_watchdog_reason_name(uint32_t reason) {
@@ -330,7 +331,7 @@ DramRunSummary run_dram_base_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
     TT_FATAL(cfg.total_bytes <= DRAM_TEST_EFFECTIVE_MAX_BANK_BYTES, "total_bytes must be under (4GB-16MB-2KB)");
@@ -345,7 +346,7 @@ DramRunSummary run_dram_base_test(
 
     std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
     MetalContext::instance().get_cluster().write_core(
-        device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+        device_id, mesh_device->worker_core_from_logical_core(core), zero_result, result_l1_address);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -418,7 +419,7 @@ DramRunSummary run_dram_base_test(
     fixture->FinishCommands(mesh_device);
 
     auto raw_result = MetalContext::instance().get_cluster().read_core(
-        device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+        device_id, mesh_device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
 
     const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
 
@@ -432,7 +433,7 @@ DramRunSummary run_dram_base_test(
     accumulate_result_into_summary(summary, result);
 
     if (result->failures > 0u) {
-        log_dram_failure(device, core, result);
+        log_dram_failure(device_id, core, result);
     }
 
     return summary;
@@ -448,7 +449,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     TT_FATAL(!cores.empty(), "No cores provided");
     TT_FATAL(cfg.bank_id < 8, "bank_id must not exceed the total number of controllers");
@@ -476,7 +477,7 @@ DramRunSummary run_dram_multi_core_single_controller_test(
     std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof zero_result[0], 0u);
     for (const auto& core : cores) {
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+            device_id, mesh_device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -547,14 +548,14 @@ DramRunSummary run_dram_multi_core_single_controller_test(
 
     for (const auto& core : cores) {
         auto raw_result = MetalContext::instance().get_cluster().read_core(
-            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+            device_id, mesh_device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
 
         const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
 
         accumulate_result_into_summary(summary, result);
 
         if (result->failures > 0u) {
-            log_dram_failure(device, core, result);
+            log_dram_failure(device_id, core, result);
         }
     }
 
@@ -579,7 +580,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     constexpr uint32_t num_controllers = 8u;
 
@@ -601,7 +602,7 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
     std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof zero_result[0], 0u);
     for (const auto& core : cores) {
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+            device_id, mesh_device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -698,14 +699,14 @@ DramRunSummary run_dram_multi_core_all_controllers_test(
 
     for (const auto& core : cores) {
         auto raw_result = MetalContext::instance().get_cluster().read_core(
-            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+            device_id, mesh_device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
 
         const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
 
         accumulate_result_into_summary(summary, result);
 
         if (result->failures > 0u) {
-            log_dram_failure(device, core, result);
+            log_dram_failure(device_id, core, result);
         }
     }
 
@@ -731,7 +732,7 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     constexpr uint32_t num_controllers = 8u;
 
@@ -763,7 +764,7 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
     std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
     for (const auto& core : cores) {
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+            device_id, mesh_device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -824,14 +825,14 @@ DramRunSummary run_dram_eight_single_core_single_controller_test(
 
     for (const auto& core : cores) {
         auto raw_result = MetalContext::instance().get_cluster().read_core(
-            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+            device_id, mesh_device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
 
         const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
 
         accumulate_result_into_summary(summary, result);
 
         if (result->failures > 0u) {
-            log_dram_failure(device, core, result);
+            log_dram_failure(device_id, core, result);
         }
     }
 
@@ -858,7 +859,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
     uint32_t repeat_index,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     constexpr uint32_t num_controllers = 8u;
 
@@ -889,7 +890,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
     std::vector<uint32_t> zero_result(sizeof(DramBaseResult) / sizeof(uint32_t), 0u);
     for (const auto& core : cores) {
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), zero_result, result_l1_address);
+            device_id, mesh_device->worker_core_from_logical_core(core), zero_result, result_l1_address);
     }
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -952,7 +953,7 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
 
     for (const auto& core : cores) {
         auto raw_result = MetalContext::instance().get_cluster().read_core(
-            device->id(), device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
+            device_id, mesh_device->worker_core_from_logical_core(core), result_l1_address, sizeof(DramBaseResult));
 
         const DramBaseResult* result = (const DramBaseResult*)raw_result.data();
 
@@ -964,16 +965,20 @@ DramMultiInstanceSummary run_dram_eight_single_core_single_controller_test_verbo
         out.per_core_results.push_back(per_core);
 
         if (result->failures > 0u) {
-            log_dram_failure(device, core, result);
+            log_dram_failure(device_id, core, result);
         }
     }
 
     return out;
 }
 
-static inline void write_core_u32(IDevice* device, const CoreCoord& core, uint32_t l1_addr, uint32_t value) {
+static inline void write_core_u32(
+    distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t l1_addr, uint32_t value) {
     MetalContext::instance().get_cluster().write_core(
-        device->id(), device->worker_core_from_logical_core(core), std::vector<uint32_t>{value}, l1_addr);
+        mesh_device.get_device_ids()[0],
+        mesh_device.worker_core_from_logical_core(core),
+        std::vector<uint32_t>{value},
+        l1_addr);
 }
 
 [[maybe_unused]]
@@ -985,7 +990,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     uint32_t chunk_bytes,
     DataMovementProcessor processor) {
     /* ======================== */
-    auto* const device = mesh_device->get_devices()[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     TT_FATAL(!worker_cores.empty(), "No worker cores provided");
     TT_FATAL(!jobs_per_core.empty(), "No per-core jobs provided");
@@ -1013,7 +1018,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     log_info(
         tt::LogTest,
         "{} persistent queue_capacity={} workers={} total_jobs={}",
-        device_log_prefix(device),
+        device_log_prefix(device_id),
         queue_capacity,
         worker_cores.size(),
         total_jobs);
@@ -1093,8 +1098,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         dram_job_queue_ctrl_init(ctrl, queue_capacity);
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(),
-            device->worker_core_from_logical_core(core),
+            device_id,
+            mesh_device->worker_core_from_logical_core(core),
             std::vector<uint32_t>((uint32_t*)&ctrl, (uint32_t*)&ctrl + sizeof(DramJobQueueCtrl) / sizeof(uint32_t)),
             r.queue_ctrl_l1_addr);
 
@@ -1102,8 +1107,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         dram_progress_status_init(status);
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(),
-            device->worker_core_from_logical_core(core),
+            device_id,
+            mesh_device->worker_core_from_logical_core(core),
             std::vector<uint32_t>(
                 (uint32_t*)&status, (uint32_t*)&status + sizeof(CoreProgressStatus) / sizeof(uint32_t)),
             r.status_l1_addr);
@@ -1167,20 +1172,20 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         zero_mailbox[MB_COMPARE_UNPACK_FIRST_OBSERVED] = 0u;
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), zero_mailbox, r.sync_mailbox_l1_addr);
+            device_id, mesh_device->worker_core_from_logical_core(core), zero_mailbox, r.sync_mailbox_l1_addr);
 
         std::vector<uint32_t> zero_results(sizeof(DramBaseResult) * queue_capacity / sizeof zero_results[0], 0u);
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), zero_results, r.result_ring_l1_addr);
+            device_id, mesh_device->worker_core_from_logical_core(core), zero_results, r.result_ring_l1_addr);
 
         for (uint32_t i = 0; i < queue_capacity; i++) {
             uint32_t offset = i * sizeof(DramBaseResult) + offsetof(DramBaseResult, job_id);
-            write_core_u32(device, core, r.result_ring_l1_addr + offset, 0xFFFFFFFFu);
+            write_core_u32(*mesh_device, core, r.result_ring_l1_addr + offset, 0xFFFFFFFFu);
         }
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(core), std::vector<uint32_t>{0}, r.wake_flag_l1_addr);
+            device_id, mesh_device->worker_core_from_logical_core(core), std::vector<uint32_t>{0}, r.wake_flag_l1_addr);
 
         const auto now = std::chrono::steady_clock::now();
         r.last_monitor_print_time = now;
@@ -1249,7 +1254,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
         for (uint32_t j = 0; j < preload; j++) {
             const DramWorkItem& job = core_jobs[j];
-            log_verbose_dram_work_item(device, r.core, job, j, core_jobs.size());
+            log_verbose_dram_work_item(device_id, r.core, job, j, core_jobs.size());
 
             const uint32_t* p = (const uint32_t*)&job;
 
@@ -1257,7 +1262,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         }
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(), device->worker_core_from_logical_core(r.core), job_words, r.queue_jobs_l1_addr);
+            device_id, mesh_device->worker_core_from_logical_core(r.core), job_words, r.queue_jobs_l1_addr);
 
         r.jobs_enqueued = preload;
         r.host_tail_shadow = preload;
@@ -1268,14 +1273,14 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         ctrl.reserved0 = get_dram_inject_tensix_heartbeat_stall_from_env_once() ? 1u : 0u;
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(),
-            device->worker_core_from_logical_core(r.core),
+            device_id,
+            mesh_device->worker_core_from_logical_core(r.core),
             std::vector<uint32_t>((uint32_t*)&ctrl, (uint32_t*)&ctrl + sizeof(DramJobQueueCtrl) / sizeof(uint32_t)),
             r.queue_ctrl_l1_addr);
 
         MetalContext::instance().get_cluster().write_core(
-            device->id(),
-            device->worker_core_from_logical_core(r.core),
+            device_id,
+            mesh_device->worker_core_from_logical_core(r.core),
             std::vector<uint32_t>{1u},
             r.wake_flag_l1_addr);
     }
@@ -1301,9 +1306,10 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     auto broadcast_stop_to_all_cores = [&]() {
         for (auto& r : per_core) {
             if (!r.stop_sent) {
-                write_core_u32(device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, stop_requested), 1u);
+                write_core_u32(
+                    *mesh_device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, stop_requested), 1u);
 
-                write_core_u32(device, r.core, r.wake_flag_l1_addr, 1u);
+                write_core_u32(*mesh_device, r.core, r.wake_flag_l1_addr, 1u);
 
                 r.stop_sent = true;
             }
@@ -1315,8 +1321,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
         for (size_t i = 0; i < per_core.size(); i++) {
             auto raw_status = MetalContext::instance().get_cluster().read_core(
-                device->id(),
-                device->worker_core_from_logical_core(per_core[i].core),
+                device_id,
+                mesh_device->worker_core_from_logical_core(per_core[i].core),
                 per_core[i].status_l1_addr,
                 sizeof(CoreProgressStatus));
 
@@ -1329,6 +1335,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     };
 
     std::thread refill_thread([&]() {
+        const auto device_id = mesh_device->get_device_ids()[0];
         bool done = false;
 
         while (!done) {
@@ -1343,7 +1350,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
             const auto monitor_now = std::chrono::steady_clock::now();
 
             if ((monitor_now - global_last_monitor_print_time) >= kMonitorPrintInterval) {
-                const uint64_t arc_tick = read_arc_global_tick(device);
+                const uint64_t arc_tick = read_arc_global_tick(device_id);
 
                 bool all_cores_progressing = true;
                 bool all_cores_done = true;
@@ -1353,8 +1360,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     const auto& rr_jobs = jobs_per_core[&rr - per_core.data()];
 
                     auto raw_status = MetalContext::instance().get_cluster().read_core(
-                        device->id(),
-                        device->worker_core_from_logical_core(rr.core),
+                        device_id,
+                        mesh_device->worker_core_from_logical_core(rr.core),
                         rr.status_l1_addr,
                         sizeof(CoreProgressStatus));
 
@@ -1380,7 +1387,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         log_info(
                             tt::LogTest,
                             "{} monitor: arc={} delta={} {} jobs={}/{}",
-                            device_log_prefix(device),
+                            device_log_prefix(device_id),
                             arc_tick,
                             arc_delta,
                             (all_cores_progressing || all_cores_done) ? "all cores progressing"
@@ -1391,7 +1398,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         log_info(
                             tt::LogTest,
                             "{} monitor: arc={} {} jobs={}/{}",
-                            device_log_prefix(device),
+                            device_log_prefix(device_id),
                             arc_tick,
                             (all_cores_progressing || all_cores_done) ? "all cores progressing"
                                                                       : "some cores not progressing",
@@ -1413,8 +1420,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                 const auto& core_jobs = jobs_per_core[core_idx];
 
                 auto raw_status = MetalContext::instance().get_cluster().read_core(
-                    device->id(),
-                    device->worker_core_from_logical_core(r.core),
+                    device_id,
+                    mesh_device->worker_core_from_logical_core(r.core),
                     r.status_l1_addr,
                     sizeof(CoreProgressStatus));
 
@@ -1423,7 +1430,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                 const auto now = std::chrono::steady_clock::now();
 
                 if ((now - r.last_monitor_print_time) >= kMonitorPrintInterval) {
-                    const uint64_t arc_tick = read_arc_global_tick(device);
+                    const uint64_t arc_tick = read_arc_global_tick(device_id);
 
                     const uint32_t hb_delta = status->heartbeat_tick - r.prev_heartbeat_tick;
 
@@ -1435,7 +1442,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         log_info(
                             tt::LogTest,
                             "{} monitor: core=({}, {}) jobs={}/{} hb={} delta={} arc={} delta={} stage={} job_id={}",
-                            device_log_prefix(device),
+                            device_log_prefix(device_id),
                             r.core.x,
                             r.core.y,
                             status->jobs_completed,
@@ -1468,7 +1475,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 log_info(
                                     tt::LogTest,
                                     "{} watchdog disarmed: core=({}, {}) progress resumed",
-                                    device_log_prefix(device),
+                                    device_log_prefix(device_id),
                                     r.core.x,
                                     r.core.y);
                             }
@@ -1484,7 +1491,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 log_info(
                                     tt::LogTest,
                                     "{} watchdog armed: core=({}, {}) reason={} jobs={}/{}",
-                                    device_log_prefix(device),
+                                    device_log_prefix(device_id),
                                     r.core.x,
                                     r.core.y,
                                     dram_watchdog_reason_name(stall_reason),
@@ -1517,9 +1524,9 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                     "    source ~/.tenstorrent-venv/bin/activate\n"
                                     "    tt-smi -r\n"
                                     "======================================================",
-                                    dram_physical_location_for_device_id(device->id()).bdf,
-                                    dram_physical_location_for_device_id(device->id()).ubb_tray,
-                                    dram_physical_location_for_device_id(device->id()).location,
+                                    dram_physical_location_for_device_id(device_id).bdf,
+                                    dram_physical_location_for_device_id(device_id).ubb_tray,
+                                    dram_physical_location_for_device_id(device_id).location,
                                     r.core.x,
                                     r.core.y,
                                     dram_watchdog_reason_name(r.stall_watchdog_reason),
@@ -1537,7 +1544,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
 
                                 ArmWatchdogHardExit(fmt::format(
                                     "{} watchdog timeout on worker core=({}, {}) reason={}",
-                                    device_log_prefix(device),
+                                    device_log_prefix(device_id),
                                     r.core.x,
                                     r.core.y,
                                     dram_watchdog_reason_name(r.stall_watchdog_reason)));
@@ -1578,7 +1585,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         const auto monitor_now = std::chrono::steady_clock::now();
 
                         if ((monitor_now - global_last_monitor_print_time) >= kMonitorPrintInterval) {
-                            const uint64_t arc_tick = read_arc_global_tick(device);
+                            const uint64_t arc_tick = read_arc_global_tick(device_id);
                             const uint64_t completed_jobs_total = get_completed_jobs_total();
 
                             if (dram_test_verbose_enabled()) {
@@ -1588,7 +1595,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                     log_info(
                                         tt::LogTest,
                                         "{} monitor: arc={} delta={} all cores progressing jobs={}/{}",
-                                        device_log_prefix(device),
+                                        device_log_prefix(device_id),
                                         arc_tick,
                                         arc_delta,
                                         completed_jobs_total,
@@ -1597,7 +1604,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                     log_info(
                                         tt::LogTest,
                                         "{} monitor: arc={} all cores progressing jobs={}/{}",
-                                        device_log_prefix(device),
+                                        device_log_prefix(device_id),
                                         arc_tick,
                                         completed_jobs_total,
                                         total_jobs);
@@ -1613,8 +1620,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         }
 
                         auto raw_result = MetalContext::instance().get_cluster().read_core(
-                            device->id(),
-                            device->worker_core_from_logical_core(r.core),
+                            device_id,
+                            mesh_device->worker_core_from_logical_core(r.core),
                             r.result_ring_l1_addr + done_slot * sizeof(DramBaseResult),
                             sizeof(DramBaseResult));
 
@@ -1630,8 +1637,8 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         }
 
                         auto raw_status_poll = MetalContext::instance().get_cluster().read_core(
-                            device->id(),
-                            device->worker_core_from_logical_core(r.core),
+                            device_id,
+                            mesh_device->worker_core_from_logical_core(r.core),
                             r.status_l1_addr,
                             sizeof(CoreProgressStatus));
 
@@ -1679,9 +1686,9 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                                 "    source ~/.tenstorrent-venv/bin/activate\n"
                                 "    tt-smi -r\n"
                                 "======================================================",
-                                dram_physical_location_for_device_id(device->id()).bdf,
-                                dram_physical_location_for_device_id(device->id()).ubb_tray,
-                                dram_physical_location_for_device_id(device->id()).location,
+                                dram_physical_location_for_device_id(device_id).bdf,
+                                dram_physical_location_for_device_id(device_id).ubb_tray,
+                                dram_physical_location_for_device_id(device_id).location,
                                 expected_job.bank_id,
                                 r.core.x,
                                 r.core.y,
@@ -1710,10 +1717,10 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             ArmWatchdogHardExit(fmt::format(
                                 "{} result wait timeout on bdf={} ubb_tray={} location={} dram_channel={} core=({}, "
                                 "{}) expected_job={} transfers={}",
-                                device_log_prefix(device),
-                                dram_physical_location_for_device_id(device->id()).bdf,
-                                dram_physical_location_for_device_id(device->id()).ubb_tray,
-                                dram_physical_location_for_device_id(device->id()).location,
+                                device_log_prefix(device_id),
+                                dram_physical_location_for_device_id(device_id).bdf,
+                                dram_physical_location_for_device_id(device_id).ubb_tray,
+                                dram_physical_location_for_device_id(device_id).location,
                                 expected_job.bank_id,
                                 r.core.x,
                                 r.core.y,
@@ -1735,7 +1742,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             "{} result not ready: core={} job={} slot={} expected(job_id={}, pattern={}, pass={}, "
                             "repeat={}, bank={}) got(job_id={}, pattern={}, pass={}, repeat={}, bank={}, words={}, "
                             "transfers={})",
-                            device_log_prefix(device),
+                            device_log_prefix(device_id),
                             core_idx,
                             done_index,
                             done_slot,
@@ -1815,7 +1822,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     TT_FATAL(result->transfers > 0u, "transfers is zero for core {} job {}", core_idx, done_index);
 
                     write_core_u32(
-                        device,
+                        *mesh_device,
                         r.core,
                         r.result_ring_l1_addr + done_slot * sizeof(DramBaseResult) + offsetof(DramBaseResult, job_id),
                         0xFFFFFFFFu);
@@ -1827,7 +1834,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                             tt::LogTest,
                             "{} job {}/{} failed: core=({}, {}) bank={} pattern={} pass={} repeat={} kind={} "
                             "first_fail_addr=0x{:08x} write_err={:.6f}% read_err={:.6f}%",
-                            device_log_prefix(device),
+                            device_log_prefix(device_id),
                             done_index + 1u,
                             core_jobs.size(),
                             r.core.x,
@@ -1848,7 +1855,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     out.per_core_results.push_back(per_core_result);
 
                     if (result->failures > 0u) {
-                        log_dram_failure(device, r.core, result);
+                        log_dram_failure(device_id, r.core, result);
                     }
 
                     r.jobs_observed_done++;
@@ -1868,11 +1875,11 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                         const uint32_t next_tail = tail + 1u;
                         const uint32_t next_job_index = r.jobs_enqueued;
                         const DramWorkItem& next_job = core_jobs[next_job_index];
-                        log_verbose_dram_work_item(device, r.core, next_job, next_job_index, core_jobs.size());
+                        log_verbose_dram_work_item(device_id, r.core, next_job, next_job_index, core_jobs.size());
 
                         MetalContext::instance().get_cluster().write_core(
-                            device->id(),
-                            device->worker_core_from_logical_core(r.core),
+                            device_id,
+                            mesh_device->worker_core_from_logical_core(r.core),
                             std::vector<uint32_t>(
                                 (const uint32_t*)&next_job,
                                 (const uint32_t*)&next_job + sizeof(DramWorkItem) / sizeof(uint32_t)),
@@ -1883,28 +1890,29 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
                     }
 
                     if (tail != r.host_tail_shadow) {
-                        write_core_u32(device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, tail), tail);
+                        write_core_u32(
+                            *mesh_device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, tail), tail);
 
                         r.host_tail_shadow = tail;
 
-                        write_core_u32(device, r.core, r.wake_flag_l1_addr, 1u);
+                        write_core_u32(*mesh_device, r.core, r.wake_flag_l1_addr, 1u);
                     }
                 }
 
                 if ((r.jobs_observed_done == core_jobs.size()) && !r.stop_sent) {
                     write_core_u32(
-                        device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, stop_requested), 1u);
+                        *mesh_device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, stop_requested), 1u);
 
-                    write_core_u32(device, r.core, r.wake_flag_l1_addr, 1u);
+                    write_core_u32(*mesh_device, r.core, r.wake_flag_l1_addr, 1u);
 
                     r.stop_sent = true;
                 }
 
                 if (g_stop_requested.load() && !r.stop_sent) {
                     write_core_u32(
-                        device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, stop_requested), 1u);
+                        *mesh_device, r.core, r.queue_ctrl_l1_addr + offsetof(DramJobQueueCtrl, stop_requested), 1u);
 
-                    write_core_u32(device, r.core, r.wake_flag_l1_addr, 1u);
+                    write_core_u32(*mesh_device, r.core, r.wake_flag_l1_addr, 1u);
 
                     r.stop_sent = true;
                 }
@@ -1927,7 +1935,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
         log_info(
             tt::LogTest,
             "{} Starting persistent DRAM test: workers={}, total_jobs={}",
-            device_log_prefix(device),
+            device_log_prefix(device_id),
             worker_cores.size(),
             total_jobs);
     }
@@ -1940,7 +1948,7 @@ DramMultiInstanceSummary run_dram_persistent_jobs_test_verbose(
     log_info(
         tt::LogTest,
         "{} Persistent DRAM test finished: workers={}, total_jobs={}, duration={}",
-        device_log_prefix(device),
+        device_log_prefix(device_id),
         worker_cores.size(),
         total_jobs,
         format_duration_seconds(duration_sec));

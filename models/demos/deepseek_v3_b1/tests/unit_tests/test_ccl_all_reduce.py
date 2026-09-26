@@ -38,6 +38,7 @@ ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES"
 ALL_REDUCE_OUTPUT_WIDTH = 2048
 ALL_REDUCE_OUTPUT_SHAPE = [1, ALL_REDUCE_OUTPUT_WIDTH]
 ALL_REDUCE_INPUT_SHARD_SHAPE = (1, ALL_REDUCE_OUTPUT_WIDTH)
+NUM_DEVICES_2x1 = 2 * 1
 
 
 def _get_intermediate_shape(input_shard_shape: tuple[int, int]) -> list[int]:
@@ -186,7 +187,7 @@ def build_all_reduce_test_inputs(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
         (
-            2,
+            NUM_DEVICES_2x1,
             ALL_REDUCE_OUTPUT_SHAPE,
             ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -210,6 +211,9 @@ def build_all_reduce_test_inputs(
     indirect=True,
 )
 @pytest.mark.parametrize("fuse_residual_add", [True])
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_2x1, reason=f"Requires at least {NUM_DEVICES_2x1} devices (2x1 mesh)"
+)
 def test_ccl_all_reduce(
     bh_2d_mesh_device,
     num_devices,
@@ -226,9 +230,6 @@ def test_ccl_all_reduce(
 ):
     if is_slow_dispatch():
         pytest.skip("CCL all-reduce trace test needs fast dispatch")
-
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
@@ -303,7 +304,7 @@ def test_ccl_all_reduce(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
         (
-            2,
+            NUM_DEVICES_2x1,
             ALL_REDUCE_OUTPUT_SHAPE,
             ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -327,6 +328,9 @@ def test_ccl_all_reduce(
     ],
     indirect=True,
 )
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_2x1, reason=f"Requires at least {NUM_DEVICES_2x1} devices (2x1 mesh)"
+)
 def test_ccl_all_reduce_chunk_and_link_matrix(
     bh_2d_mesh_device,
     num_devices,
@@ -340,9 +344,6 @@ def test_ccl_all_reduce_chunk_and_link_matrix(
     chunk_num_tiles,
     fuse_residual_add,
 ):
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
-        pytest.skip("Test requires more devices than are available on this platform")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     inputs = build_all_reduce_test_inputs(
         mesh_device=submesh,

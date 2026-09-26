@@ -171,11 +171,11 @@ KvCacheLocation KvChunkAddressTable::StridedRowMap::lookup(uint32_t layer, uint3
     if (row.step == 0) {
         return KvCacheLocation{};
     }
+    const uint32_t r = chunk % row.step;
     return KvCacheLocation{
-        .noc_addr =
-            row.bases[chunk % row.step] + static_cast<uint64_t>(row.strides[chunk % row.step]) * (chunk / row.step),
+        .noc_addr = row.bases[r] + static_cast<uint64_t>(row.strides[r]) * (chunk / row.step),
         .size_bytes = row.size_bytes,
-        .device_group_index = row.device_group_index,
+        .device_group_index = row.device_group_indices[r],
     };
 }
 
@@ -294,11 +294,13 @@ void KvChunkAddressTable::install_strided_map(uint32_t config_id, StridedRowMap 
         config_id);
     for (const auto& row : map.rows) {
         TT_FATAL(
-            row.step == 0 || (row.bases.size() == row.step && row.strides.size() == row.step),
-            "strided row has step {} but bases {} / strides {}",
+            row.step == 0 || (row.bases.size() == row.step && row.strides.size() == row.step &&
+                              row.device_group_indices.size() == row.step),
+            "strided row has step {} but bases {} / strides {} / device groups {}",
             row.step,
             row.bases.size(),
-            row.strides.size());
+            row.strides.size(),
+            row.device_group_indices.size());
     }
     maps_[config_id] = std::move(map);
 }

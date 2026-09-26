@@ -14,8 +14,6 @@ enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
 
 enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, DISPATCH = 4, COUNT = 5 };
 
-static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
-
 // TODO: Move to llrt/hal.hpp after device function cleanup
 enum class HalL1MemAddrType : uint8_t {
     BASE,
@@ -56,7 +54,8 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_FW_MAILBOX,
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
-    COUNT  // Keep this last so it always indicates number of enum options
+    ETH_PTP_TRACE,  // Runtime FW entry/exit PTP stamps (Blackhole only)
+    COUNT           // Keep this last so it always indicates number of enum options
 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };

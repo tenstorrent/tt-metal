@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/reduce_affine_transforms/device/reduce_affine_transforms_program_factory.hpp"
 
 #include <vector>
@@ -19,16 +21,16 @@
 
 namespace ttnn::experimental::prim {
 
-ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::create_program_artifacts(
+ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFactory::create_mesh_workload_artifacts(
     const ReduceAffineTransformsParams& attrs,
     const ReduceAffineTransformsInputs& in,
-    std::vector<ttnn::Tensor>& outputs) {
+    std::vector<ttnn::Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = in.a.mesh_tensor();
     const auto& b = in.b.mesh_tensor();
     const auto& output_a = outputs[0].mesh_tensor();
     const auto& output_b = outputs[1].mesh_tensor();
     const auto& device = a.device();
-    const auto arch = device.arch();
 
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
@@ -135,12 +137,12 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     for (const auto& name :
          {stage_a_dfb_name, stage_b_dfb_name, remote_a_dfb_name, remote_b_dfb_name, scratch_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
@@ -208,7 +210,6 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
 
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "reduce_affine_transforms",
-        .kernels = {std::move(dataflow), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores =
             {
@@ -244,10 +245,19 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
         {output_b_tensor_name, output_b},
     };
 
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = std::move(run_args),
-    };
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, dataflow, compute);
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, in.actual_start, dataflow);
+    spec.kernels = {std::move(dataflow), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(spec),
+            .run_params = std::move(run_args),
+        },
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.local_rows,
+        dataflow_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim

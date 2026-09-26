@@ -90,7 +90,7 @@ protected:
         const bool simple_kernel = false,
         KernelProperties kernel_properties = KernelProperties()) {
         if (kernel_properties.max_num_cbs == 0) {
-            kernel_properties.max_num_cbs = max_cbs_;
+            kernel_properties.max_num_cbs = max_dfbs_;
         }
 
         CoreRangeSet cores = this->get_cores(kernel_core_type);
@@ -200,7 +200,7 @@ protected:
         small_kernel_properties.min_num_sems = MIN_NUM_SEMS;
         small_kernel_properties.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
         small_kernel_properties.min_num_cbs = MIN_NUM_CBS;
-        small_kernel_properties.max_num_cbs = max_cbs_ * (3.0 / 10);
+        small_kernel_properties.max_num_cbs = max_dfbs_ * (3.0 / 10);
         small_kernel_properties.min_num_rt_args =
             small_kernel_properties.max_num_sems + small_kernel_properties.max_num_cbs;
         return small_kernel_properties;
@@ -216,8 +216,8 @@ protected:
         large_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
         large_kernel_properties.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
         large_kernel_properties.max_num_sems = MAX_NUM_SEMS;
-        large_kernel_properties.min_num_cbs = max_cbs_ * (8.0 / 10);
-        large_kernel_properties.max_num_cbs = max_cbs_;
+        large_kernel_properties.min_num_cbs = max_dfbs_ * (8.0 / 10);
+        large_kernel_properties.max_num_cbs = max_dfbs_;
         return large_kernel_properties;
     }
 

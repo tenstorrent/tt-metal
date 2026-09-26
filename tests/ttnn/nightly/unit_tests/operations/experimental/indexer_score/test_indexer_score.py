@@ -585,7 +585,7 @@ def test_indexer_score_rejects_bad_kv_len(device, expect_error):
     ttnn.experimental.indexer_score_dsa(
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=128
     )
-    for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned")]:
+    for bad in [c["t"] + 32, 100]:  # Above T and not tile-aligned.
         with expect_error(RuntimeError, "kv_len"):
             ttnn.experimental.indexer_score_dsa(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=bad
@@ -967,8 +967,8 @@ def test_indexer_score_streaming_qmcast_uneven_bands(device):
     chunk_start, q_chunk, k_chunk, head_group = 128, 32, 32, 8  # QC=1, KC=1, HB=8 (< Hi -> streaming)
 
     grid = device.compute_with_storage_grid_size()
-    QC, KC = q_chunk // 32, k_chunk // 32
-    G, U = (sq // 32) // QC, ((t // 32) + KC - 1) // KC
+    KC = k_chunk // 32
+    U = ((t // 32) + KC - 1) // KC
     cols_used = min(U, grid.x)
     max_bands = (U + cols_used - 1) // cols_used
     min_bands = U // cols_used
@@ -1633,17 +1633,17 @@ def test_indexer_score_msa_indexed_cache_block_pool(device):
 
 
 @pytest.mark.parametrize(
-    "block_size, k_chunk_size, blocks_per_unit",
+    "block_size, k_chunk_size",
     # blocks_per_unit = KC / block_tiles = k_chunk_size / block_size. Keep KC=32 (same as the passing
     # tests above, so L1 fits) and shrink block_size to push blocks_per_unit past 8.
     [
-        (64, 1024, 16),  # block_tiles=2, KC=32 -> 16
-        (32, 1024, 32),  # block_tiles=1, KC=32 -> 32 (max allowed)
+        (64, 1024),  # block_tiles=2, KC=32 -> 16
+        (32, 1024),  # block_tiles=1, KC=32 -> 32 (max allowed)
     ],
     ids=["bpu16", "bpu32"],
 )
 @pytest.mark.parametrize("num_groups", [1, 4], ids=["g1", "g4"])
-def test_indexer_score_block_pool_large_blocks_per_unit(device, num_groups, block_size, k_chunk_size, blocks_per_unit):
+def test_indexer_score_block_pool_large_blocks_per_unit(device, num_groups, block_size, k_chunk_size):
     """blocks_per_unit > 8 routes the in-kernel pool to the library reduce (compute_kernel_lib::reduce)
     instead of the batched custom reduce (the <=8 fast path). Exact-vs-unpooled pins the reduce bit-for-bit,
     free of bf16 matmul noise, confirming the fallback lands each block max in col 0 as the writer expects."""

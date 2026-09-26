@@ -121,7 +121,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "tile_offset", "outer_stride", "inner_size", "dim_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -132,7 +132,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "tile_offset", "outer_stride", "inner_size", "dim_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     auto outer_stride = Ht * Wt;
@@ -150,9 +150,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
     }
 
     auto make_compute_hw = [&]() {
-        auto hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+        auto hw = ttnn::to_compute_hardware_config(compute_kernel_config);
         if (fp32_dest_acc_en) {
-            std::get<ComputeGen1Config>(hw).unpack_modes = {
+            hw.unpack_modes = {
                 {IN, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {EXPS, tt::tt_metal::UnpackMode::UnpackToSrc},
                 {RECIP, tt::tt_metal::UnpackMode::UnpackToSrc},

@@ -238,17 +238,19 @@ def _expect_chain_compile_rejection(device, kernel, compile_time_args, message, 
     return inputs, program, message
 
 
-def test_shared_cb_staged_window_rejected_owner_first(device, expect_error):
+@pytest.mark.parametrize("window_mode", [0, 1, 2], ids=["upfront", "cumulative-pop", "cumulative-held"])
+def test_shared_cb_staged_window_rejected_owner_first(device, expect_error, window_mode):
     inputs, program, message = _expect_chain_compile_rejection(
-        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 1], SHARED_CB_LIFECYCLE_MSG, with_input=True
+        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 1, window_mode], SHARED_CB_LIFECYCLE_MSG, with_input=True
     )
     with expect_error(Exception, message):
         ttnn.generic_op(inputs, program)
 
 
-def test_shared_cb_staged_window_rejected_peer_first(device, expect_error):
+@pytest.mark.parametrize("window_mode", [0, 1, 2], ids=["upfront", "cumulative-pop", "cumulative-held"])
+def test_shared_cb_staged_window_rejected_peer_first(device, expect_error, window_mode):
     inputs, program, message = _expect_chain_compile_rejection(
-        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 0], SHARED_CB_LIFECYCLE_MSG, with_input=True
+        device, SHARED_CB_LIFECYCLE_KERNEL, [2, 0, window_mode], SHARED_CB_LIFECYCLE_MSG, with_input=True
     )
     with expect_error(Exception, message):
         ttnn.generic_op(inputs, program)

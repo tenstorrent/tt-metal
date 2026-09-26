@@ -139,8 +139,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(a.device().arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -150,8 +149,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(a.device().arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute (reduce<in, scaler, out>) ----
@@ -167,13 +165,11 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-        .hw_config = ttnn::to_compute_hardware_config(
-            a.device().arch(),
-            ttnn::ComputeKernelConfig{
-                .math_fidelity = math_fidelity,
-                .math_approx_mode = false,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = false}),
+        .hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = false,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false}),
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};

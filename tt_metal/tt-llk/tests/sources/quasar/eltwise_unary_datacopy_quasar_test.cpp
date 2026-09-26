@@ -27,11 +27,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const Operand& buffer_A         = params.buffer_A;
-    const Operand& buffer_B         = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
 #endif
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(NUM_BLOCKS);
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
 
     {
         ZONE_SCOPED("INIT")
@@ -62,7 +66,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, TILE_CNT);
+            ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, tiles_in_block);
         PROFILER_SYNC();
     }
     {
@@ -94,7 +98,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, tensor_shape_A);
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
+                }
             }
         }
         PROFILER_SYNC();
@@ -123,12 +130,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
+    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_faces          = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM    = params.TEST_FACE_R_DIM;
+    const std::uint32_t DST_INDEX          = params.DST_INDEX;
 #endif
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(NUM_BLOCKS);
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
     {
         ZONE_SCOPED("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
@@ -168,9 +179,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
+                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                    {
+                        _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
+                    }
                 }
             }
         }
@@ -178,11 +192,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
+                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                    {
+                        _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
+                    }
+                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
         }
         PROFILER_SYNC();
@@ -204,11 +221,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t DST_INDEX   = params.DST_INDEX;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t DST_INDEX          = params.DST_INDEX;
+    const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    const std::uint32_t num_blocks     = static_cast<std::uint32_t>(NUM_BLOCKS);
+    const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
 
     {
         ZONE_SCOPED("INIT")
@@ -227,7 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape_A, TILE_CNT);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape_A, tiles_in_block);
         PROFILER_SYNC();
     }
     {
@@ -242,15 +262,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, tensor_shape_A);
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_pack_(DST_INDEX, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
+                }
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_(DST_INDEX, 0 /*start_l1_tile_idx*/, tensor_shape_A);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_pack_(DST_INDEX, block * tiles_in_block /*start_l1_tile_idx*/, tensor_shape_A);
+                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
             }
         }
         PROFILER_SYNC();

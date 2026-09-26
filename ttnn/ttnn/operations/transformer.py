@@ -5,6 +5,25 @@
 from typing import Optional
 
 import ttnn
+from ttnn.operations.transformer_golden import (
+    chunk_gated_delta_rule_golden,
+    chunked_flash_mla_prefill_golden,
+    chunked_scaled_dot_product_attention_golden,
+    exp_ring_joint_scaled_dot_product_attention_golden,
+    flash_mla_prefill_golden,
+    flash_multi_latent_attention_decode_golden,
+    gated_delta_attn_seq_golden,
+    joint_scaled_dot_product_attention_golden,
+    paged_flash_multi_latent_attention_decode_golden,
+    paged_scaled_dot_product_attention_decode_golden,
+    ring_distributed_scaled_dot_product_attention_golden,
+    ring_joint_scaled_dot_product_attention_golden,
+    ring_mla_golden,
+    scaled_dot_product_attention_decode_golden,
+    scaled_dot_product_attention_golden,
+    sparse_sdpa_golden,
+    sparse_sdpa_msa_golden,
+)
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
@@ -131,6 +150,114 @@ def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
 
 
 ttnn.attach_golden_function(ttnn.experimental.rotary_embedding, golden_function=_golden_function)
+
+ttnn.attach_golden_function(
+    ttnn.transformer.chunk_gated_delta_rule,
+    golden_function=chunk_gated_delta_rule_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.chunked_flash_mla_prefill,
+    golden_function=chunked_flash_mla_prefill_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.chunked_scaled_dot_product_attention,
+    golden_function=chunked_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
+    golden_function=exp_ring_joint_scaled_dot_product_attention_golden,
+    output_tensor_kwarg_names=(
+        "persistent_output_buffer_k",
+        "persistent_output_buffer_v",
+    ),
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.flash_mla_prefill,
+    golden_function=flash_mla_prefill_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.flash_multi_latent_attention_decode,
+    golden_function=flash_multi_latent_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.gated_delta_attn_seq,
+    golden_function=gated_delta_attn_seq_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.joint_scaled_dot_product_attention,
+    golden_function=joint_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.paged_flash_multi_latent_attention_decode,
+    golden_function=paged_flash_multi_latent_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.paged_scaled_dot_product_attention_decode,
+    golden_function=paged_scaled_dot_product_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.ring_distributed_scaled_dot_product_attention,
+    golden_function=ring_distributed_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.ring_joint_scaled_dot_product_attention,
+    golden_function=ring_joint_scaled_dot_product_attention_golden,
+    output_tensor_kwarg_names=(
+        "persistent_output_buffer_k",
+        "persistent_output_buffer_v",
+        "persistent_output_buffer_joint_k",
+        "persistent_output_buffer_joint_v",
+    ),
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.ring_mla,
+    golden_function=ring_mla_golden,
+    output_tensor_kwarg_names=("persistent_output_buffer_kv",),
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.scaled_dot_product_attention,
+    golden_function=scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.scaled_dot_product_attention_decode,
+    golden_function=scaled_dot_product_attention_decode_golden,
+)
+
+
+def _preprocess_sparse_sdpa_golden_inputs(function_args, function_kwargs):
+    function_args = list(function_args)
+    function_kwargs = dict(function_kwargs)
+    if function_kwargs.get("block_cyclic_sp_axis") is not None:
+        query = function_args[0] if function_args else function_kwargs["q"]
+        mesh_device = query.device()
+        if mesh_device is None:
+            raise ValueError("Block-cyclic sparse SDPA comparison requires the query's mesh device")
+        function_kwargs["_ttnn_sparse_sdpa_mesh_shape"] = tuple(int(dimension) for dimension in mesh_device.shape)
+
+    if function_kwargs.get("kv_format") == SparseKVFormat.SCALED_FP8:
+        if len(function_args) > 1:
+            packed_kv = ttnn.decorators.to_torch_for_comparison(function_args[1], preserve_fp8_bytes=True)
+            function_args[1] = packed_kv
+        elif "kv" in function_kwargs:
+            packed_kv = ttnn.decorators.to_torch_for_comparison(function_kwargs["kv"], preserve_fp8_bytes=True)
+            function_kwargs["kv"] = packed_kv
+        else:
+            raise ValueError("Scaled-FP8 sparse SDPA comparison requires a KV tensor")
+        # Global preprocessing converts the original FP8 argument independently. The wrapper's metadata merge
+        # copies this operation-scoped override into the global golden call so packed mixed-format rows stay bytes.
+        function_kwargs["_ttnn_sparse_sdpa_packed_kv"] = packed_kv
+    return ttnn.decorators.default_preprocess_golden_function_inputs(function_args, function_kwargs)
+
+
+ttnn.attach_golden_function(
+    ttnn.transformer.sparse_sdpa,
+    golden_function=sparse_sdpa_golden,
+    preprocess_golden_function_inputs=_preprocess_sparse_sdpa_golden_inputs,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.sparse_sdpa_msa,
+    golden_function=sparse_sdpa_msa_golden,
+)
 
 
 __all__ = []

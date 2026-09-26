@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 
-def check_output_sanity(frames, *, num_frames, height, width):
+def check_output_sanity(frames, *, num_frames, height, width, log=True):
     """Guard against a distributed pipeline that 'runs' but emits corrupt/blank/frozen frames.
 
     Cheap, reference-free statistical checks (shape, finiteness, range, spatial variance, temporal
@@ -46,10 +46,11 @@ def check_output_sanity(frames, *, num_frames, height, width):
         mean_frame_delta > 0.5
     ), f"Consecutive frames are near-identical (mean delta={mean_frame_delta:.3f}); video appears frozen/static"
 
-    logger.info(
-        f"Output sanity OK: shape={frames.shape}, range=[{vmin},{vmax}], "
-        f"std={global_std:.2f}, mean_frame_delta={mean_frame_delta:.2f}"
-    )
+    if log:
+        logger.info(
+            f"Output sanity OK: shape={frames.shape}, range=[{vmin},{vmax}], "
+            f"std={global_std:.2f}, mean_frame_delta={mean_frame_delta:.2f}"
+        )
 
 
 def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_floor=0.3):

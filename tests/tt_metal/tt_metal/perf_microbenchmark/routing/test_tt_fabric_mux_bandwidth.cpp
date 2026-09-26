@@ -27,6 +27,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string drainer_kernel_src =
@@ -107,7 +108,7 @@ WorkerMemoryMap create_worker_memory_map(const uint32_t base_l1_address) {
 }
 
 void create_kernel(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program_handle,
     const std::string& kernel_src,
     const CoreCoord& logical_core,
@@ -127,7 +128,7 @@ void create_kernel(
 
     for (const auto& [start_address, num_bytes] : addresses_to_clear) {
         std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, start_address, zero_vec);
+        tt::tt_metal::slow_dispatch::WriteToL1(mesh_device, logical_core, start_address, zero_vec);
     }
 }
 
@@ -135,7 +136,7 @@ void create_mux_kernel(
     const TestParams& /*test_params*/,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program_handle) {
     auto* mux_kernel_config = mux_test_config.mux_kernel_config;
     auto* drainer_kernel_config = drainer_test_config.drainer_kernel_config;
@@ -186,10 +187,11 @@ void create_mux_kernel(
         .buffer_index_semaphore_id = drainer_kernel_config->get_buffer_index_address(drainer_channel_type, 0),
         .edm_direction = tt::tt_fabric::eth_chan_directions::EAST, /* ignored, direction */
     };
+    const auto device_id = mesh_device.get_device_ids()[0];
     std::vector<uint32_t> mux_fabric_connection_rt_args;
     tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
         sender_worker_adapter_spec,
-        device->id(),
+        device_id,
         {mux_logical_core},
         worker_teardown_semaphore_id,
         worker_buffer_index_semaphore_id,
@@ -202,12 +204,12 @@ void create_mux_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
+        mesh_device, program_handle, mux_kernel_src, mux_logical_core, mux_ct_args, mux_rt_args, addresses_to_clear);
 }
 
 void create_drainer_kernel(
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program_handle,
     CoreCoord mux_virtual_coord) {
     auto* drainer_kernel_config = drainer_test_config.drainer_kernel_config;
@@ -244,7 +246,7 @@ void create_drainer_kernel(
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
-        device,
+        mesh_device,
         program_handle,
         drainer_kernel_src,
         drainer_logical_core,
@@ -258,7 +260,7 @@ void create_worker_kernel(
     const WorkerTestConfig& worker_test_config,
     const MuxTestConfig& mux_test_config,
     const DrainerTestConfig& drainer_test_config,
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::Program& program_handle) {
     auto* mux_kernel_config = mux_test_config.mux_kernel_config;
     auto channel_type = worker_test_config.channel_type;
@@ -312,7 +314,7 @@ void create_worker_kernel(
         std::make_pair(worker_memory_map->local_buffer_index_address, noc_address_padding_bytes)};
 
     create_kernel(
-        device,
+        mesh_device,
         program_handle,
         worker_kernel_src,
         worker_test_config.worker_logical_core,
@@ -379,8 +381,6 @@ int main(int argc, char** argv) {
         tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
-    // need device handle to do L1 read/writes
-    auto* device = mesh_device->get_devices()[0];
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
@@ -442,9 +442,9 @@ int main(int argc, char** argv) {
 
     auto worker_memory_map = create_worker_memory_map(l1_unreserved_base_address);
 
-    create_mux_kernel(test_params, mux_test_config, drainer_test_config, device, program);
+    create_mux_kernel(test_params, mux_test_config, drainer_test_config, *mesh_device, program);
 
-    create_drainer_kernel(drainer_test_config, device, program, mux_test_config.mux_virtual_core);
+    create_drainer_kernel(drainer_test_config, *mesh_device, program, mux_test_config.mux_virtual_core);
 
     // keep the receiver noc xy encoding same for all workers, wont matter since we are not committing any
     // packets into receiver's L1
@@ -466,7 +466,8 @@ int main(int argc, char** argv) {
             .mcast_encoding = i == 0 ? std::make_optional(mcast_encoding) : std::nullopt,
             .num_mcast_dests = i == 0 ? std::make_optional(num_mcast_dests) : std::nullopt,
         };
-        create_worker_kernel(test_params, worker_test_config, mux_test_config, drainer_test_config, device, program);
+        create_worker_kernel(
+            test_params, worker_test_config, mux_test_config, drainer_test_config, *mesh_device, program);
     }
 
     auto header_only_channel_worker_offset = worker_cores_offset + test_params.num_full_size_channels;
@@ -483,7 +484,8 @@ int main(int argc, char** argv) {
             .mcast_encoding = std::nullopt,
             .num_mcast_dests = std::nullopt,
         };
-        create_worker_kernel(test_params, worker_test_config, mux_test_config, drainer_test_config, device, program);
+        create_worker_kernel(
+            test_params, worker_test_config, mux_test_config, drainer_test_config, *mesh_device, program);
     }
 
     log_info(tt::LogTest, "Launching programs");
@@ -497,27 +499,26 @@ int main(int argc, char** argv) {
         CoreCoord core = worker_logical_cores[i];
         std::vector<uint32_t> worker_status(1, 0);
         while ((worker_status[0] & 0xFFFF) == 0) {
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core, worker_memory_map.test_results_address, 4, worker_status);
+            slow_dispatch::ReadFromL1(*mesh_device, core, worker_memory_map.test_results_address, 4, worker_status);
         }
     }
 
     log_info(tt::LogTest, "Workers done, terminating mux kernel");
     std::vector<uint32_t> termination_signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    tt::tt_metal::detail::WriteToDeviceL1(
-        device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termination_signal);
+    slow_dispatch::WriteToL1(
+        *mesh_device, mux_logical_core, mux_kernel_config.get_termination_signal_address(), termination_signal);
 
     log_info(tt::LogTest, "Waiting for mux kernel to terminate");
     // need to wait before terminating driver core otherwise the mux kernel will hang while closing connection
     std::vector<uint32_t> mux_status(1, 0);
     while (mux_status[0] != tt::tt_fabric::EDMStatus::TERMINATED) {
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device, mux_logical_core, mux_kernel_config.get_status_address(), 4, mux_status);
+        slow_dispatch::ReadFromL1(
+            *mesh_device, mux_logical_core, mux_kernel_config.get_status_address(), 4, mux_status);
     }
 
     log_info(tt::LogTest, "Terminating drainer kernel");
-    tt::tt_metal::detail::WriteToDeviceL1(
-        device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termination_signal);
+    slow_dispatch::WriteToL1(
+        *mesh_device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termination_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
     tt::tt_metal::distributed::Finish(cq);
@@ -528,8 +529,8 @@ int main(int argc, char** argv) {
     for (size_t i = worker_cores_offset; i < worker_cores_offset + num_active_workers; i++) {
         CoreCoord core = worker_logical_cores[i];
         std::vector<uint32_t> worker_status;
-        tt::tt_metal::detail::ReadFromDeviceL1(
-            device, core, worker_memory_map.test_results_address, test_results_size_bytes, worker_status);
+        slow_dispatch::ReadFromL1(
+            *mesh_device, core, worker_memory_map.test_results_address, test_results_size_bytes, worker_status);
         uint64_t worker_cycles =
             (((uint64_t)worker_status[TT_FABRIC_CYCLES_INDEX + 1]) << 32) | worker_status[TT_FABRIC_CYCLES_INDEX];
         max_elapsed_cycles = std::max(max_elapsed_cycles, worker_cycles);

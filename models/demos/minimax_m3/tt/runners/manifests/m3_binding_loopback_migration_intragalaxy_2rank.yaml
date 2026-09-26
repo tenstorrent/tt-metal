@@ -27,7 +27,7 @@ global_env:
   PREFILL_H2D_SERVICE_ID: "m3_prefill"
   # Every dst slot must exist in the table: src 0,1 -> dst 2,3.
   PREFILL_NUM_USERS: "4"
-  PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
+  PREFILL_TRACE_DIR: "/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240"
   # Only 12B of metadata transits the queue; the default 64KB clashes with the MoE FFN L1 allocation.
   PREFILL_PP_D2D_FIFO_BYTES: "32768"
 

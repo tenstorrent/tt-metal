@@ -291,14 +291,23 @@ void ring_attention_neighbor_halo_exchange_helper(
     reader_kernel.core_ranges = workers;
     reader_kernel.config = WriterConfigDescriptor{};
     reader_kernel.compile_time_args = {
-        ring_index, ring_size, data_cb, pages_per_packet, page_size, num_inputs, kPrefetchPackets, reader_meta_cb};
+        ring_index,
+        ring_size,
+        data_cb,
+        pages_per_packet,
+        page_size,
+        num_inputs,
+        kPrefetchPackets,
+        reader_meta_cb,
+        static_cast<uint32_t>(halo.collects_arrivals()),
+        halo.arrivals_expected};
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& input : input_tensors) {
         tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
     }
-    // Trace-safe halo relocation, appended after the per-input accessors so existing indices hold.
+    // Metadata accessors follow the input accessors.
     reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
         tt::tt_metal::TensorAccessorArgs(halo.slot_id->buffer()).append_to(reader_kernel.compile_time_args);
@@ -359,12 +368,18 @@ void ring_attention_neighbor_halo_exchange_helper(
         KernelDescriptor::RTArgList reader_args;
         reader_args.push_back(
             static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+        reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
-        writer_args.push_back(worker_physical.x);
-        writer_args.push_back(worker_physical.y);
+        // Every hop increments the SAME core's semaphore on the receiver, so one reader can wait for
+        // the whole halo. Sender and receiver lay out workers identically, so the sender's
+        // rendezvous core is also the receiver's.
+        writer_args.push_back(halo.has_rendezvous() ? halo.rendezvous_noc_x : worker_physical.x);
+        writer_args.push_back(halo.has_rendezvous() ? halo.rendezvous_noc_y : worker_physical.y);
         writer_args.push_back(
             static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+
+        writer_args.push_back(link);
 
         std::vector<uint32_t> halo_input_Wt;
         halo_input_Wt.reserve(num_inputs);
@@ -382,23 +397,30 @@ void ring_attention_neighbor_halo_exchange_helper(
                 input_Wt,
                 output_Wt);
             TT_FATAL(
-                output_Ht >= halo.send_to_next_count_Ht,
-                "Neighbor halo output has {} tile rows but requires {}",
+                output_Ht >= halo.dest_row_base + halo.send_to_next_count_Ht,
+                "Neighbor halo output has {} tile rows but hop {} requires {}",
                 output_Ht,
-                halo.send_to_next_count_Ht);
+                halo.hop,
+                halo.dest_row_base + halo.send_to_next_count_Ht);
+            const uint32_t tail_rows = halo.tail_rows();
             TT_FATAL(
-                halo.send_to_next_start_Ht <= input_Ht &&
-                    halo.send_to_next_count_Ht <= input_Ht - halo.send_to_next_start_Ht,
+                halo.send_to_next_start_Ht <= input_Ht && tail_rows <= input_Ht - halo.send_to_next_start_Ht,
                 "Neighbor halo [{}, {}) exceeds input Ht={}",
                 halo.send_to_next_start_Ht,
                 halo.send_to_next_start_Ht + halo.send_to_next_count_Ht,
                 input_Ht);
 
-            const uint32_t range_start_page = halo.send_to_next_start_Ht * input_Wt;
+            const uint32_t range_start_page = 0;
+            TT_FATAL(
+                halo.send_to_next_count_Ht == tail_rows ||
+                    (halo.send_second_start_Ht <= input_Ht && tail_rows <= input_Ht - halo.send_second_start_Ht),
+                "Second neighbor halo exceeds the input cache");
             const uint32_t range_page_count = halo.send_to_next_count_Ht * input_Wt;
             const uint32_t valid_pages = std::min(gather_valid_Ht.value_or(input_Ht), input_Ht) * input_Wt;
             TT_FATAL(
-                range_start_page <= valid_pages && range_page_count <= valid_pages - range_start_page,
+                (halo.send_to_next_start_Ht + tail_rows) * input_Wt <= valid_pages &&
+                    (halo.send_to_next_count_Ht == tail_rows ||
+                     (halo.send_second_start_Ht + tail_rows) * input_Wt <= valid_pages),
                 "Neighbor halo [{}, {}) exceeds the valid per-head page prefix {}",
                 range_start_page,
                 range_start_page + range_page_count,
@@ -429,6 +451,9 @@ void ring_attention_neighbor_halo_exchange_helper(
             reader_args.push_back(input_tile_start);
             reader_args.push_back(input_tile_end);
             reader_args.push_back(input_batch_base);
+            reader_args.push_back(halo.send_to_next_start_Ht * input_Wt);
+            reader_args.push_back(halo.send_second_start_Ht * input_Wt);
+            reader_args.push_back(tail_rows * input_Wt);
             if (halo.derives_cache_batch_on_device()) {
                 reader_args.push_back(input_shape[kBatchDimension]);
             }
@@ -437,17 +462,24 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(batch_head_count);
             writer_args.push_back(input_tile_start);
             writer_args.push_back(input_tile_end);
-            writer_args.push_back(range_start_page);
+            // Where this hop's block starts in the receiver's compact buffer.
+            writer_args.push_back(halo.dest_row_base * output_Wt);
             halo_input_Wt.push_back(input_Wt);
         }
 
-        // Metadata block for the on-device halo relocation. Sits between the per-input descriptors and
-        // the accessor args in BOTH kernels, so the host relocation's field offsets are unaffected.
+        // Runtime metadata follows the tensor descriptors and precedes accessor addresses.
         if (halo.derives_start_on_device()) {
             uint32_t cache_local_tile_rows = input_tensors.front().padded_shape()[2] / tt::constants::TILE_HEIGHT;
             for (const auto& input : input_tensors) {
                 cache_local_tile_rows = std::min(
                     cache_local_tile_rows, static_cast<uint32_t>(input.padded_shape()[2] / tt::constants::TILE_HEIGHT));
+            }
+            uint32_t halo_slot_count =
+                output_tensors.front().padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows;
+            for (const auto& output : output_tensors) {
+                halo_slot_count = std::min(
+                    halo_slot_count,
+                    static_cast<uint32_t>(output.padded_shape()[2] / tt::constants::TILE_HEIGHT / halo.halo_tile_rows));
             }
             const auto append_halo_meta =
                 [&](KernelDescriptor::RTArgList& args, bool with_cache_batch, bool with_ring_size) {
@@ -460,11 +492,13 @@ void ring_attention_neighbor_halo_exchange_helper(
                     args.push_back(halo.q_local_tile_rows);
                     args.push_back(halo.halo_tile_rows);
                     args.push_back(cache_local_tile_rows);
+                    args.push_back(halo_slot_count);
                     args.push_back(halo.source_device);
-                    args.push_back(halo.send_to_next_start_Ht);
                     if (with_ring_size) {
                         args.push_back(ring_size);
                     }
+                    args.push_back(num_links);
+                    args.push_back(halo.hop);
                     for (const uint32_t wt : halo_input_Wt) {
                         args.push_back(wt);
                     }
@@ -495,7 +529,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         tt::tt_fabric::append_fabric_connection_rt_args(
             mesh_device->get_fabric_node_id(target_device_coord),
             mesh_device->get_fabric_node_id(transport_device_coord),
-            link,
+            halo.link_base + link,
             desc,
             worker_cores[link],
             fabric_args);
@@ -503,6 +537,13 @@ void ring_attention_neighbor_halo_exchange_helper(
         if (!halo.send_backward) {
             writer_args.push_back(0u);
         }
+        // Link hand-off, read by the writer straight after the fabric args; both flags are 0 when
+        // this hop owns its link.
+        writer_args.push_back(static_cast<uint32_t>(halo.waits_for_predecessor));
+        writer_args.push_back(static_cast<uint32_t>(halo.signals_successor));
+        writer_args.push_back(halo.chain_semaphore_id);
+        writer_args.push_back(halo.successor_noc_x);
+        writer_args.push_back(halo.successor_noc_y);
         writer_kernel.emplace_runtime_args(worker_cores[link], writer_args);
     }
 
@@ -552,9 +593,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     if (!rank_mapping.full_mesh) {
         rank_mapping = {};
     }
+    // Linear here is a full-mesh open path; the neighbour checks below adapt to it.
     TT_FATAL(
-        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring,
-        "full-mesh ring-attention all-gather requires Ring topology");
+        !rank_mapping.full_mesh || topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+        "full-mesh ring-attention all-gather requires Ring or Linear topology");
     TT_FATAL(
         !rank_mapping.full_mesh || (rank_mapping.mesh_rows > 0 && rank_mapping.mesh_cols > 0 &&
                                     rank_mapping.mesh_rows * rank_mapping.mesh_cols == ring_size),
@@ -601,13 +643,17 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_index,
             target_device_coord,
             rank_from_coordinate);
-        const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
-                                        ? rank_mapping.mesh_rows
-                                        : rank_mapping.mesh_cols;
-        TT_FATAL(
-            lane_count % 2 == 0,
-            "full-mesh ring-attention snake closure requires an even lane count, got {}",
-            lane_count);
+        // An even lane count is what lets the walk return to rank 0; an open path never does.
+        const bool closed = topology == ttnn::ccl::Topology::Ring;
+        if (closed) {
+            const uint32_t lane_count = rank_mapping.orientation == ttnn::ccl::snake_ring::Orientation::Row
+                                            ? rank_mapping.mesh_rows
+                                            : rank_mapping.mesh_cols;
+            TT_FATAL(
+                lane_count % 2 == 0,
+                "full-mesh ring-attention snake closure requires an even lane count, got {}",
+                lane_count);
+        }
 
         const auto coordinate_for_rank = [&](uint32_t transport_rank) {
             return MeshCoordinate(
@@ -616,20 +662,37 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 ttnn::ccl::snake_ring::coordinate_col(
                     transport_rank, rank_mapping.mesh_rows, rank_mapping.mesh_cols, rank_mapping.orientation));
         };
-        const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
-        const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
-        TT_FATAL(
-            forward_device_coord.has_value() && *forward_device_coord == expected_forward,
-            "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
-            ring_index,
-            expected_forward,
-            forward_device_coord);
-        TT_FATAL(
-            backward_device_coord.has_value() && *backward_device_coord == expected_backward,
-            "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
-            ring_index,
-            expected_backward,
-            backward_device_coord);
+        // On an open path the end ranks are dead in one direction, exactly as on an axis line.
+        if (closed || ring_index + 1 < ring_size) {
+            const auto expected_forward = coordinate_for_rank((ring_index + 1) % ring_size);
+            TT_FATAL(
+                forward_device_coord.has_value() && *forward_device_coord == expected_forward,
+                "full-mesh ring-attention forward neighbor for transport rank {} must be {}, got {}",
+                ring_index,
+                expected_forward,
+                forward_device_coord);
+        } else {
+            TT_FATAL(
+                !forward_device_coord.has_value(),
+                "full-mesh open path must leave transport rank {} without a forward neighbor, got {}",
+                ring_index,
+                forward_device_coord);
+        }
+        if (closed || ring_index > 0) {
+            const auto expected_backward = coordinate_for_rank((ring_index + ring_size - 1) % ring_size);
+            TT_FATAL(
+                backward_device_coord.has_value() && *backward_device_coord == expected_backward,
+                "full-mesh ring-attention backward neighbor for transport rank {} must be {}, got {}",
+                ring_index,
+                expected_backward,
+                backward_device_coord);
+        } else {
+            TT_FATAL(
+                !backward_device_coord.has_value(),
+                "full-mesh open path must leave transport rank {} without a backward neighbor, got {}",
+                ring_index,
+                backward_device_coord);
+        }
     }
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
@@ -1069,7 +1132,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 6 == valid_pages_per_batch_head
-            tensor_descriptor_args.push_back(placement.link);  // 7 == worker_link
+            tensor_descriptor_args.push_back(placement.link);              // 7 == worker_link
             if (has_metadata) {
                 tensor_descriptor_args.push_back(input_tensor_shape[kBatchDimension]);  // 8 == input_cache_batch_extent
             }

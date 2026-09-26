@@ -35,7 +35,14 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     const auto& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
-    const bool is_height_concat = 2 == operation_attributes.dim;
+    const uint32_t rank = input_tensors[0].logical_shape().rank();
+    const bool height_concat = is_height_concat(rank, operation_attributes.dim);
+    // Height concat has to interleave per leading index (see num_leading_blocks). Width concat
+    // does not: it appends along the stick, so one block is both correct and what the kernel did
+    // before -- and for a height-sharded width concat a per-core block count is not even
+    // well-defined, since a core's rows can straddle leading indices. Pinning it to 1 there keeps
+    // width concat untouched by construction.
+    const uint32_t num_blocks = height_concat ? num_leading_blocks(input_tensors[0]) : 1u;
     ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
@@ -71,20 +78,45 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     std::vector<uint32_t> input_num_pages_per_stick;
     std::vector<uint32_t> input_num_sticks;
     std::vector<uint32_t> input_write_offsets;
+    std::vector<uint32_t> input_num_sticks_per_block;
+    std::vector<uint32_t> input_block_strides;
     input_num_pages_per_stick.reserve(num_input_tensors);
     input_num_sticks.reserve(num_input_tensors);
     input_write_offsets.reserve(num_input_tensors);
+    input_num_sticks_per_block.reserve(num_input_tensors);
+    input_block_strides.reserve(num_input_tensors);
 
     // Assume inputs and output have the same sharding grid.
     const auto all_cores = input_tensors[0].shard_spec().value().grid;
 
     // Input CBs
+    //
+    // For height concat the write offset carries only this input's *prefix within one leading
+    // block*: block b of input i starts b * output_block_stride further on, and the kernel adds
+    // that term. Advancing by the whole shard instead lays the result out as
+    // [all of input 0; all of input 1; ...] rather than interleaving per leading index (#55342).
+    // At one block the two are the same expression, which is why width concat is unaffected.
     uint32_t curr_input_write_offset = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto shard_spec = input_tensors[input_id].shard_spec().value();
         input_num_pages_per_stick.push_back(tt::div_up(shard_spec.shape[1], elements_per_page_width));
         input_num_sticks.push_back(tt::div_up(shard_spec.shape[0], elements_per_page_height));
         input_write_offsets.push_back(curr_input_write_offset);
+
+        // A width-sharded shard spans the whole flattened height, so every leading index
+        // contributes the same number of rows. Anything else is a shard spec this factory cannot
+        // describe as a strided copy. Vacuous at num_blocks == 1.
+        TT_FATAL(
+            input_num_sticks[input_id] % num_blocks == 0,
+            "Height concat: input {} has {} shard rows, which does not divide into the {} leading "
+            "indices of shape {}.",
+            input_id,
+            input_num_sticks[input_id],
+            num_blocks,
+            input_tensors[input_id].padded_shape());
+        input_num_sticks_per_block.push_back(input_num_sticks[input_id] / num_blocks);
+        input_block_strides.push_back(
+            page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_block[input_id]);
 
         const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
         desc.cbs.push_back(CBDescriptor{
@@ -98,8 +130,10 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .buffer = input_tensors[input_id].buffer(),
         });
 
+        // Height concat: this input's rows within one block. Width concat: one stick.
+        // input_block_strides is page_size * input_num_pages when num_blocks == 1.
         curr_input_write_offset +=
-            page_size * (is_height_concat ? input_num_pages : input_num_pages_per_stick[input_id]);
+            height_concat ? input_block_strides[input_id] : page_size * input_num_pages_per_stick[input_id];
     }
 
     // Output CB
@@ -118,23 +152,71 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;
+
+    TT_FATAL(
+        output_num_sticks % num_blocks == 0,
+        "Height concat: output has {} shard rows, which does not divide into the {} leading "
+        "indices of shape {}.",
+        output_num_sticks,
+        num_blocks,
+        output.padded_shape());
+    // The write offsets above were accumulated in units of each input's own pages-per-stick, but
+    // they index the output shard, so for height concat the two have to agree. They do: the inputs
+    // differ only in the concat dim, which is not the width. Checked rather than assumed, because
+    // a mismatch would skew every row silently.
+    if (height_concat) {
+        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+            TT_FATAL(
+                input_num_pages_per_stick[input_id] == output_num_pages_per_stick,
+                "Height concat: input {} is {} pages wide but the output is {}; height concat "
+                "requires equal widths.",
+                input_id,
+                input_num_pages_per_stick[input_id],
+                output_num_pages_per_stick);
+        }
+    }
+    // Rows one leading index contributes to the output shard, in bytes.
+    const uint32_t output_block_stride = output_stride * (output_num_sticks / num_blocks);
+    // Ties that back to the offsets accumulated above. curr_input_write_offset ended at
+    // sum(input_block_strides) -- the bytes one leading index actually fills -- and the kernel
+    // then steps output_block_stride to reach the next. If the output shard were taller than the
+    // inputs' combined per-block rows, the blocks would be spaced further apart than they were
+    // filled and every block after the first would leave unwritten rows inside the tensor's real
+    // height, read back as garbage rather than as a failure.
+    if (height_concat) {
+        TT_FATAL(
+            curr_input_write_offset == output_block_stride,
+            "Height concat: inputs fill {} bytes per leading index but the output shard spaces "
+            "them {} apart ({} rows over {} indices), which would leave gaps inside the tensor.",
+            curr_input_write_offset,
+            output_block_stride,
+            output_num_sticks,
+            num_blocks);
+    }
+
     const KernelDescriptor::CompileTimeArgs compile_time_args = {
-        cb_dst_id, page_size, output_stride, num_input_tensors};
+        cb_dst_id, page_size, output_stride, num_input_tensors, num_blocks, output_block_stride};
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
-    runtime_args_0.reserve(num_input_tensors * 4);
-    runtime_args_1.reserve(num_input_tensors * 4);
+    runtime_args_0.reserve(num_input_tensors * 5);
+    runtime_args_1.reserve(num_input_tensors * 5);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        const auto input_num_sticks_per_risc = tt::div_up(input_num_sticks[input_id], 2);
+        // Split this input's rows *within one block* across the two RISCs, and let each RISC walk
+        // every block. Splitting the whole shard instead would hand one RISC entire leading
+        // indices and put the block boundary in the middle of its range.
+        const uint32_t sticks_per_block = input_num_sticks_per_block[input_id];
+        const auto input_num_sticks_per_risc = tt::div_up(sticks_per_block, 2);
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);
         runtime_args_0.push_back(input_num_sticks_per_risc);
         runtime_args_0.push_back(input_write_offsets[input_id]);
         runtime_args_0.push_back(0);
+        runtime_args_0.push_back(input_block_strides[input_id]);
         runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_1.push_back(input_num_sticks[input_id] - input_num_sticks_per_risc);
+        runtime_args_1.push_back(sticks_per_block - input_num_sticks_per_risc);
         runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * input_num_sticks_per_risc));
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
+        runtime_args_1.push_back(input_block_strides[input_id]);
     }
 
     // Match the legacy CachedProgram path: SetRuntimeArgs(..., all_cores, args).

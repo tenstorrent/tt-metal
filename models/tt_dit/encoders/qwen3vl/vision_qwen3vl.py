@@ -34,7 +34,8 @@ import ttnn
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import LayerNorm
-from ...utils.tensor import bf16_tensor
+from ...utils.mochi import get_rot_transformation_mat
+from ...utils.tensor import bf16_tensor, typed_tensor
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -263,24 +264,65 @@ def vision_cu_seqlens(grid_thw: torch.Tensor) -> tuple[int, ...]:
     return tuple(bounds)
 
 
+def pad_patches_for_sp(
+    patches: torch.Tensor,
+    pos_embeds: torch.Tensor,
+    rope: tuple[torch.Tensor, torch.Tensor],
+    cu_seqlens: Sequence[int],
+    *,
+    sp_factor: int,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, ...], int]:
+    """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in a phantom window.
+
+    The pad is trimmed after the SP gather via `Qwen3VlVisionModel.forward(logical_patches=...)`.
+    """
+    total = patches.shape[0]
+    mult = sp_factor * _TILE
+    padded = -(-total // mult) * mult
+    if padded == total:
+        return patches, pos_embeds, rope, tuple(cu_seqlens), total
+    if cu_seqlens[-1] != total:
+        msg = f"cu_seqlens must span [0, {total}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
+        raise ValueError(msg)
+    npad = padded - total
+    cos, sin = rope
+    return (
+        torch.nn.functional.pad(patches, (0, 0, 0, npad)),
+        torch.nn.functional.pad(pos_embeds, (0, 0, 0, npad)),
+        (
+            torch.cat([cos, torch.ones(npad, cos.shape[-1], dtype=cos.dtype)], dim=0),
+            torch.cat([sin, torch.zeros(npad, sin.shape[-1], dtype=sin.dtype)], dim=0),
+        ),
+        (*tuple(cu_seqlens), padded),
+        total,
+    )
+
+
 def vision_rope_tensors(
     grid_thw: torch.Tensor,
     *,
     head_dim: int,
     spatial_merge_size: int,
     rope_theta: float = 10000.0,
+    padded_head_dim: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """`(cos, sin)` of shape `(total_patches, head_dim)` for the tower's rotary embedding.
+    """`(cos, sin)` of shape `(total_patches, padded_head_dim)` for the tower's rotary embedding.
 
-    The two position axes each contribute `head_dim // 4` frequencies, giving `head_dim // 2` before
-    the `rotate_half` duplication. Built on the host and uploaded, as elsewhere in this port.
+    Frequencies are **interleaved** for `rotary_embedding_llama` (matching `_rope_permute_qk`) and padded
+    with an identity tail (cos=1, sin=0). Built on the host and uploaded, as elsewhere in this port.
     """
+    padded_head_dim = padded_head_dim or math.ceil(head_dim / _TILE) * _TILE
     position_ids = vision_rope_position_ids(grid_thw, spatial_merge_size=spatial_merge_size)
     dim = head_dim // 2
     inv_freq = 1.0 / (rope_theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
     freqs = (position_ids.unsqueeze(-1) * inv_freq).flatten(1)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    return emb.cos(), emb.sin()
+    emb = torch.repeat_interleave(freqs, 2, dim=-1)
+    cos, sin = emb.cos(), emb.sin()
+    pad = padded_head_dim - head_dim
+    if pad:
+        cos = torch.nn.functional.pad(cos, (0, pad), value=1.0)
+        sin = torch.nn.functional.pad(sin, (0, pad), value=0.0)
+    return cos, sin
 
 
 def _pad_head_dim(weight: torch.Tensor, *, num_heads: int, head_dim: int, padded: int, axis: int) -> torch.Tensor:
@@ -300,6 +342,19 @@ def _pad_head_dim(weight: torch.Tensor, *, num_heads: int, head_dim: int, padded
     return torch.nn.functional.pad(shaped, (0, padded - head_dim)).reshape(weight.shape[0], num_heads * padded)
 
 
+def _rope_permute_qk(t: torch.Tensor, *, num_heads: int, head_dim: int) -> torch.Tensor:
+    """Reorder each head's output channels SPLIT-rotation -> INTERLEAVED for `rotary_embedding_llama`.
+
+    Applied to q/k only, before `_pad_head_dim`.
+    """
+    half = head_dim // 2
+    perm = torch.empty(head_dim, dtype=torch.long)
+    perm[0::2] = torch.arange(half)
+    perm[1::2] = torch.arange(half, head_dim)
+    rest = t.shape[1:]
+    return t.reshape(num_heads, head_dim, *rest).index_select(1, perm).reshape(num_heads * head_dim, *rest)
+
+
 def _with_batch_axis(x: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
     """`(x, added)` with a leading batch axis, because the CCL paths require rank >= 3.
 
@@ -317,23 +372,50 @@ def _drop_batch_axis(x: ttnn.Tensor, added: bool) -> ttnn.Tensor:
     return ttnn.reshape(x, (x.shape[-2], x.shape[-1])) if added else x
 
 
+def _trim_tokens(x: ttnn.Tensor, real_tokens: int | None) -> ttnn.Tensor:
+    """Drop the SP-alignment pad's merged garbage tokens from a gathered `(tokens, hidden)` tensor."""
+    if real_tokens is None or x.shape[-2] <= real_tokens:
+        return x
+    return x[:real_tokens, :]
+
+
 def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
     """All-gather a column-fractured activation back to full width, when TP is on."""
     if not p.tp:
         return x
     x, added = _with_batch_axis(x)
-    x = p.ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    x = p.ccl_manager.all_gather(x, dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
     return _drop_batch_axis(x, added)
 
 
 def _row_parallel_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
-    """Run a row-parallel linear on a 2-D activation and gather its fractured result to full width."""
+    """Run a row-parallel linear on a 2-D activation and gather its fractured result to full width.
+
+    Reduce-scatters on the hidden dim; used by the merger (see `_row_parallel_seq_forward`).
+    """
     if not p.tp:
         return linear.forward(x)
     x, added = _with_batch_axis(x)
-    out = p.ccl_manager.all_gather_persistent_buffer(
-        linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True
-    )
+    out = p.ccl_manager.all_gather(linear.forward(x), dim=-1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    return _drop_batch_axis(out, added)
+
+
+def _row_parallel_seq_forward(linear, x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
+    """Row-parallel linear whose all-reduce is split on the SEQUENCE dim, not the hidden dim.
+
+    Same result as `_row_parallel_forward`; rows are zero-padded internally for the collective only.
+    """
+    if not p.tp:
+        return linear.forward(x)
+    x, added = _with_batch_axis(x)
+    rows = x.shape[1]
+    npad = (-rows) % (p.tp_factor * _TILE)
+    if npad:
+        x = ttnn.pad(x, [(0, 0), (0, npad), (0, 0)], value=0.0)
+    out = linear.forward(x, reduce_scatter_dim=-2)
+    out = p.ccl_manager.all_gather(out, dim=1, mesh_axis=p.tp_axis, use_hyperparams=True)
+    if npad:
+        out = out[:, :rows, :]
     return _drop_batch_axis(out, added)
 
 
@@ -369,6 +451,7 @@ class Qwen3VlVisionMLP(Module):
         hidden_act: str,
         mesh_device,
         parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
@@ -378,19 +461,25 @@ class Qwen3VlVisionMLP(Module):
             if intermediate_size % self._p.tp_factor != 0:
                 msg = f"intermediate_size {intermediate_size} is not divisible by TP factor {self._p.tp_factor}"
                 raise ValueError(msg)
-            kw = dict(mesh_device=mesh_device, mesh_axis=self._p.tp_axis, ccl_manager=self._p.ccl_manager)
+            kw = dict(
+                mesh_device=mesh_device,
+                mesh_axis=self._p.tp_axis,
+                ccl_manager=self._p.ccl_manager,
+                compute_kernel_config=linear_compute_kernel_config,
+            )
             self.linear_fc1 = ColParallelLinear(hidden_size, intermediate_size, bias=True, **kw)
             self.linear_fc2 = RowParallelLinear(intermediate_size, hidden_size, bias=True, **kw)
         else:
-            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, mesh_device=mesh_device)
-            self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, mesh_device=mesh_device)
+            kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
+            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, **kw)
+            self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, **kw)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_fc1.forward(x)
         x = ttnn.gelu(x) if self._act.startswith("gelu") else ttnn.silu(x)
         # `RowParallelLinear` reduce-scatters, so its result is fractured on columns; the residual add
         # and the next LayerNorm both need the full width back (cf. `Qwen3VlMlp` in model_qwen3vl.py).
-        return _row_parallel_forward(self.linear_fc2, x, self._p)
+        return _row_parallel_seq_forward(self.linear_fc2, x, self._p)
 
 
 class Qwen3VlVisionAttention(Module):
@@ -409,7 +498,13 @@ class Qwen3VlVisionAttention(Module):
     """
 
     def __init__(
-        self, *, hidden_size: int, num_heads: int, mesh_device, parallel: VisionParallel | None = None
+        self,
+        *,
+        hidden_size: int,
+        num_heads: int,
+        mesh_device,
+        parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
@@ -434,12 +529,20 @@ class Qwen3VlVisionAttention(Module):
         self._sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
 
         if self._p.tp:
-            kw = dict(mesh_device=mesh_device, mesh_axis=self._p.tp_axis, ccl_manager=self._p.ccl_manager)
+            kw = dict(
+                mesh_device=mesh_device,
+                mesh_axis=self._p.tp_axis,
+                ccl_manager=self._p.ccl_manager,
+                compute_kernel_config=linear_compute_kernel_config,
+            )
             self.qkv = ColParallelLinear(hidden_size, 3 * self.inner, bias=True, **kw)
             self.proj = RowParallelLinear(self.inner, hidden_size, bias=True, **kw)
         else:
-            self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, mesh_device=mesh_device)
-            self.proj = Linear(self.inner, hidden_size, bias=True, mesh_device=mesh_device)
+            kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
+            self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, **kw)
+            self.proj = Linear(self.inner, hidden_size, bias=True, **kw)
+
+        self._rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
         # Match the decoder attention's SDPA precision (`model_qwen3vl.py::Qwen3VlAttention`):
         # HiFi4 with fp32 accumulation. The default is lower precision, and while a single block still
@@ -466,15 +569,37 @@ class Qwen3VlVisionAttention(Module):
             exp_approx_mode=False,  # False is the more accurate softmax
         )
 
+    def _windowed_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
+        """Flash tiling for windowed (block-diagonal) attention.
+
+        Large K chunk is a fidelity choice (fewer streaming-softmax rescales); (64, 960) is the largest
+        that fits the pipeline's L1.
+        """
+        tiles = -(-seq_len // _TILE) * _TILE
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=min(tiles, 64),
+            k_chunk_size=min(tiles, 960),
+            exp_approx_mode=False,
+        )
+
+    def _rope_interleave_qk(self, parts: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
+        """Permute only the q and k thirds of a `[q|k|v]` pack SPLIT->INTERLEAVED; leave v as is."""
+        q, k, v = parts
+        pk = dict(num_heads=self.num_heads, head_dim=self.head_dim)
+        return _rope_permute_qk(q, **pk), _rope_permute_qk(k, **pk), v
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         kw = dict(num_heads=self.num_heads, head_dim=self.head_dim, padded=self.padded_head_dim)
         tp = self._p.tp_factor
         if (w := state.get("qkv.weight")) is not None:
             # the reference packs [q|k|v] on the output axis; pad each third's heads independently
-            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in w.chunk(3, dim=0)])
+            parts = self._rope_interleave_qk(w.chunk(3, dim=0))
+            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in parts])
             state["qkv.weight"] = _interleave_for_col_parallel(padded, parts=3, tp_factor=tp)
         if (b := state.get("qkv.bias")) is not None:
-            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in b.chunk(3, dim=0)])
+            parts = self._rope_interleave_qk(b.chunk(3, dim=0))
+            padded = torch.cat([_pad_head_dim(part, axis=0, **kw) for part in parts])
             state["qkv.bias"] = _interleave_for_col_parallel(padded, parts=3, tp_factor=tp)
         if (w := state.get("proj.weight")) is not None:
             # `proj` is row-parallel: its INPUT axis is the one that fractures, and it fractures
@@ -493,38 +618,37 @@ class Qwen3VlVisionAttention(Module):
         seq_len = hidden_states.shape[-2]
         qkv = self.qkv.forward(hidden_states)
 
-        # Sliced rather than `ttnn.split`: split reports a *tile-padded* row count on its outputs, so
-        # a patch count that is not a multiple of 32 (784 for a 28x28 grid) would make the reshape
-        # below disagree with `seq_len`. Slicing the last dimension keeps the logical row count.
-        # Under TP the local slice is `[q_d | k_d | v_d]` of width `3 * local_inner` (see
-        # `_interleave_for_col_parallel`), so the stride and the head count are both the local ones.
-        q, k, v = (
-            ttnn.permute(
-                ttnn.reshape(
-                    qkv[..., i * self.local_inner : (i + 1) * self.local_inner],
-                    (1, seq_len, self.num_local_heads, self.padded_head_dim),
-                ),
-                (0, 2, 1, 3),
-            )
-            for i in range(3)
+        qkv = ttnn.reshape(qkv, (1, 1, seq_len, 3 * self.local_inner))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_local_heads,
+            num_kv_heads=self.num_local_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         cos, sin = pos_embeds
-        q = _apply_vision_rope(q, cos, sin, self.head_dim)
-        k = _apply_vision_rope(k, cos, sin, self.head_dim)
+        cos = ttnn.reshape(cos, (1, 1, cos.shape[-2], cos.shape[-1]))
+        sin = ttnn.reshape(sin, (1, 1, sin.shape[-2], sin.shape[-1]))
+        q = ttnn.experimental.rotary_embedding_llama(
+            q,
+            cos,
+            sin,
+            self._rope_trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
+        k = ttnn.experimental.rotary_embedding_llama(
+            k,
+            cos,
+            sin,
+            self._rope_trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
 
         single_block = cu_seqlens is None or len(cu_seqlens) <= 2
         if self._p.sp:
-            # `seq_len` here is the LOCAL shard; the logical block spans the whole SP axis.
-            if not single_block:
-                msg = (
-                    f"sequence parallelism supports a single attention block, got {len(cu_seqlens) - 1}. "
-                    "Ring SDPA takes no cu_seqlens and an even row split does not align with block "
-                    "boundaries, so multiple images/frames need a block-interleaved SP layout (device d "
-                    "holds part d of every block) plus the inverse permutation after the output gather. "
-                    "Until that lands, use sp_factor=1 for ref2va and video; TP is unaffected."
-                )
-                raise NotImplementedError(msg)
             # Ring SDPA rejects a non-tile-aligned shard deep in the device op ("Per-device Q seq
             # length must be divisible by TILE_HEIGHT"); check it here so the constraint is legible.
             # This is stricter than, and therefore subsumes, the merger's merge-group alignment.
@@ -534,7 +658,10 @@ class Qwen3VlVisionAttention(Module):
                     f"the patch count must be divisible by sp_factor * {_TILE}"
                 )
                 raise ValueError(msg)
-            attn = self._ring_attention(q, k, v, seq_len)
+            if single_block:
+                attn = self._ring_attention(q, k, v, seq_len)
+            else:
+                attn = self._windowed_sp_attention(q, k, v, seq_len, cu_seqlens)
         elif single_block:
             attn = ttnn.transformer.scaled_dot_product_attention(
                 q,
@@ -542,29 +669,32 @@ class Qwen3VlVisionAttention(Module):
                 v,
                 is_causal=False,
                 scale=self.scale,
+                program_config=self._windowed_program_config(seq_len),
                 compute_kernel_config=self._sdpa_compute_kernel_config,
             )
         else:
             if cu_seqlens[0] != 0 or cu_seqlens[-1] != seq_len:
                 msg = f"cu_seqlens must span [0, {seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
                 raise ValueError(msg)
-            attn = ttnn.concat(
-                [
-                    ttnn.transformer.scaled_dot_product_attention(
-                        q[:, :, start:end, :],
-                        k[:, :, start:end, :],
-                        v[:, :, start:end, :],
-                        is_causal=False,
-                        scale=self.scale,
-                        compute_kernel_config=self._sdpa_compute_kernel_config,
-                    )
-                    for start, end in zip(cu_seqlens[:-1], cu_seqlens[1:])
-                ],
-                dim=-2,
+            cu_window = ttnn.from_torch(
+                torch.tensor(cu_seqlens, dtype=torch.int32),
+                device=self.mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
             )
-        attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (seq_len, self.local_inner))
-        # Row-parallel `proj` consumes exactly this fractured width and reduce-scatters, so gather back.
-        return _row_parallel_forward(self.proj, attn, self._p)
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                scale=self.scale,
+                program_config=self._windowed_program_config(seq_len),
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+                cu_window_seqlens=cu_window,
+            )
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, (seq_len, self.local_inner))
+        return _row_parallel_seq_forward(self.proj, attn, self._p)
 
     def _ring_attention(self, q, k, v, local_seq_len: int) -> ttnn.Tensor:
         """Full attention over a sequence sharded on the SP axis.
@@ -604,18 +734,43 @@ class Qwen3VlVisionAttention(Module):
         )
         return attn
 
+    def _windowed_sp_attention(self, q, k, v, local_seq_len: int, cu_seqlens: Sequence[int]) -> ttnn.Tensor:
+        """Windowed (block-diagonal) attention over a sequence sharded on the SP axis.
 
-def _apply_vision_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, head_dim: int) -> ttnn.Tensor:
-    """Rotate the leading `head_dim` channels of each head, leaving the padding tail untouched.
-
-    The padded channels carry no position, so rotating them would mix zeros into the rotation and is
-    simply skipped.
-    """
-    rot, tail = x[..., :head_dim], x[..., head_dim:]
-    half = head_dim // 2
-    rotated = ttnn.concat([ttnn.neg(rot[..., half:]), rot[..., :half]], dim=-1)
-    out = ttnn.add(ttnn.mul(rot, cos), ttnn.mul(rotated, sin))
-    return ttnn.concat([out, tail], dim=-1) if tail.shape[-1] else out
+        Q stays local, K/V are all-gathered; each shard's global row offset is passed as a sharded tensor.
+        """
+        sp_axis, ccl = self._p.sp_axis, self._p.ccl_manager
+        global_seq_len = local_seq_len * self._p.sp_factor
+        if cu_seqlens[0] != 0 or cu_seqlens[-1] != global_seq_len:
+            msg = f"cu_seqlens must span [0, {global_seq_len}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
+            raise ValueError(msg)
+        k = ccl.all_gather(k, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        v = ccl.all_gather(v, dim=-2, mesh_axis=sp_axis, use_hyperparams=True)
+        cu_window = ttnn.from_torch(
+            torch.tensor(cu_seqlens, dtype=torch.int32),
+            device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+        )
+        q_offsets = typed_tensor(
+            torch.arange(self._p.sp_factor, dtype=torch.int32) * local_seq_len,
+            ttnn.uint32,
+            device=self.mesh_device,
+            mesh_axis=sp_axis,
+            shard_dim=0,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        return ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=self.scale,
+            program_config=self._windowed_program_config(local_seq_len),
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+            cu_window_seqlens=cu_window,
+            windowed_q_token_offset_tensor=q_offsets,
+        )
 
 
 class Qwen3VlVisionBlock(Module):
@@ -631,6 +786,7 @@ class Qwen3VlVisionBlock(Module):
         norm_eps: float,
         mesh_device,
         parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         parallel = parallel or VisionParallel()
@@ -639,7 +795,11 @@ class Qwen3VlVisionBlock(Module):
         # LayerNorm needs no cross-device statistics. Under SP they are row-wise and so unaffected.
         self.norm1 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
         self.attn = Qwen3VlVisionAttention(
-            hidden_size=hidden_size, num_heads=num_heads, mesh_device=mesh_device, parallel=parallel
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            mesh_device=mesh_device,
+            parallel=parallel,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
         self.norm2 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
         self.mlp = Qwen3VlVisionMLP(
@@ -648,6 +808,7 @@ class Qwen3VlVisionBlock(Module):
             hidden_act=hidden_act,
             mesh_device=mesh_device,
             parallel=parallel,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
 
     def forward(
@@ -688,6 +849,7 @@ class Qwen3VlVisionPatchMerger(Module):
         use_postshuffle_norm: bool,
         mesh_device,
         parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
@@ -701,12 +863,18 @@ class Qwen3VlVisionPatchMerger(Module):
             if self.merged_size % self._p.tp_factor != 0:
                 msg = f"merged_size {self.merged_size} is not divisible by TP factor {self._p.tp_factor}"
                 raise ValueError(msg)
-            kw = dict(mesh_device=mesh_device, mesh_axis=self._p.tp_axis, ccl_manager=self._p.ccl_manager)
+            kw = dict(
+                mesh_device=mesh_device,
+                mesh_axis=self._p.tp_axis,
+                ccl_manager=self._p.ccl_manager,
+                compute_kernel_config=linear_compute_kernel_config,
+            )
             self.linear_fc1 = ColParallelLinear(self.merged_size, self.merged_size, bias=True, **kw)
             self.linear_fc2 = RowParallelLinear(self.merged_size, out_hidden_size, bias=True, **kw)
         else:
-            self.linear_fc1 = Linear(self.merged_size, self.merged_size, bias=True, mesh_device=mesh_device)
-            self.linear_fc2 = Linear(self.merged_size, out_hidden_size, bias=True, mesh_device=mesh_device)
+            kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
+            self.linear_fc1 = Linear(self.merged_size, self.merged_size, bias=True, **kw)
+            self.linear_fc2 = Linear(self.merged_size, out_hidden_size, bias=True, **kw)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`(total_patches, hidden_size)` -> `(total_patches // merge ** 2, out_hidden_size)`."""
@@ -759,9 +927,19 @@ class Qwen3VlVisionModel(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
+        high_fidelity_linears: bool = False,
     ) -> None:
         super().__init__()
         self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)
+        linear_compute_kernel_config = None
+        if high_fidelity_linears:
+            linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         self.hidden_size = hidden_size
         self.head_dim = hidden_size // num_heads
         self.spatial_merge_size = spatial_merge_size
@@ -785,6 +963,7 @@ class Qwen3VlVisionModel(Module):
                 norm_eps=norm_eps,
                 mesh_device=mesh_device,
                 parallel=self._p,
+                linear_compute_kernel_config=linear_compute_kernel_config,
             )
             for _ in range(depth)
         )
@@ -795,6 +974,7 @@ class Qwen3VlVisionModel(Module):
             norm_eps=norm_eps,
             mesh_device=mesh_device,
             parallel=self._p,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
         self.merger = Qwen3VlVisionPatchMerger(use_postshuffle_norm=False, **merger_kwargs)
         self.deepstack_merger_list = ModuleList(
@@ -831,30 +1011,43 @@ class Qwen3VlVisionModel(Module):
         pos_embeds: ttnn.Tensor,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         cu_seqlens: Sequence[int] | None = None,
+        logical_patches: int | None = None,
     ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
         """`cu_seqlens` confines attention to one image or video frame; see [`vision_cu_seqlens`].
 
         Omitting it treats the whole input as one block, which is correct for a single image and wrong
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
+
+        `logical_patches` is the real patch count if the input was padded by [`pad_patches_for_sp`].
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
+
+        _single_block = cu_seqlens is None or len(cu_seqlens) <= 2
+        _path = (
+            ("ring" if _single_block else "windowed_sp") if self._p.sp else ("full" if _single_block else "windowed")
+        )
+        # logger.debug(
+        #     f"vision tower: path={_path} tp={self._p.tp_factor} sp={self._p.sp_factor} "
+        #     f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
+        # )
+
+        real_tokens = None if logical_patches is None else logical_patches // self.spatial_merge_size**2
 
         deepstack_features: list[ttnn.Tensor] = []
         for layer_idx, block in enumerate(self.blocks):
             hidden_states = block.forward(hidden_states, pos_embeds=rope, cu_seqlens=cu_seqlens)
             if layer_idx in self.deepstack_visual_indexes:
                 merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
-                deepstack_features.append(self._gather_tokens(merger.forward(hidden_states)))
+                deepstack_features.append(_trim_tokens(self._gather_tokens(merger.forward(hidden_states)), real_tokens))
 
-        return self._gather_tokens(self.merger.forward(hidden_states)), deepstack_features
+        return _trim_tokens(self._gather_tokens(self.merger.forward(hidden_states)), real_tokens), deepstack_features
 
     def _gather_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Reassemble merged tokens across the SP axis.
 
         The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
         token sequence, so the tower must hand back every token on every device -- SP ends here. Safe as
-        a plain concatenation only because a single attention block means device order equals token
-        order; the multi-block layout that `Qwen3VlVisionAttention` rejects would need a permutation.
+        a plain concatenation because SP shards rows contiguously, so device order equals token order.
 
         The `ttnn.clone` is load-bearing. Every CCL gather here writes into a persistent buffer that
         `CCLManager` caches by `(shape, dim, mesh_axis)`, and all four mergers emit the SAME
@@ -868,8 +1061,6 @@ class Qwen3VlVisionModel(Module):
             return x
         if self._p.sp:
             x, added = _with_batch_axis(x)
-            x = self._p.ccl_manager.all_gather_persistent_buffer(
-                x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True
-            )
+            x = self._p.ccl_manager.all_gather(x, dim=-2, mesh_axis=self._p.sp_axis, use_hyperparams=True)
             x = _drop_batch_axis(x, added)
         return ttnn.clone(x)

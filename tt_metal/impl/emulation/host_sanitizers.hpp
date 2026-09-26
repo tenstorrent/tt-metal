@@ -4,7 +4,7 @@
 
 #pragma once
 
-// Host-side emule sanitizer facade. See SANITIZER_CHECKS.md.
+// Host-side emule sanitizer facade. See tt-emule docs/SANITIZER_CHECKS.md.
 //
 // This header is included UNCONDITIONALLY by the core `tt_metal` host API
 // (tt_metal.cpp), so it must compile and link cleanly even in a non-emule build
@@ -62,7 +62,7 @@ inline bool emule_asan_enabled() {
 // Per-check opt-out for the Dirty CB sanitizer (TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB):
 // skips only `sweep_per_kernel_dirty_cbs` while every other check stays active.
 // Re-read every call (a static cache would stick across combined gtest runs). What
-// it's for and why this is the one check with its own switch: SANITIZER_CHECKS.md §11.
+// it's for and why this is the one check with its own switch: tt-emule docs/SANITIZER_CHECKS.md §11.
 inline bool dirty_cb_check_skipped() {
     const char* v = std::getenv("TT_METAL_EMULE_ASAN_SKIP_DIRTY_CB");
     return v != nullptr && v[0] != '\0' && v[0] != '0';
@@ -101,7 +101,7 @@ void report_metadata_overflow(bool is_emulated, const char* what);
 // Declares [logical_size, buffer.size()) as tensor padding for the kernel-side
 // Tensor-Padding sanitizer (registers it with LiveL1PaddingRanges); size()
 // clears it. L1/L1_SMALL only. Lives here — not on the Buffer API — because it
-// has no meaning on hardware. No-op when ASAN is off. See SANITIZER_CHECKS.md §5.
+// has no meaning on hardware. No-op when ASAN is off. See tt-emule docs/SANITIZER_CHECKS.md §5.
 void register_logical_size(const Buffer& buffer, DeviceAddr logical_size);
 
 #else  // !TT_METAL_USE_EMULE — inline no-ops so callers stay #ifdef-free.

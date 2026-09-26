@@ -4,10 +4,11 @@
 
 from typing import List
 
-import torch
 from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.sfpu.unary import unary_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
@@ -17,12 +18,14 @@ from helpers.llk_params import (
 
 
 class UnarySfpu(Sfpu):
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(unary_golden)
+
     def __init__(
         self,
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
-        dest_idx: int = 0,
         fill_const_value=5,
     ):
         if not operation in MathOperation.get_sfpu_unary_operations():
@@ -32,7 +35,6 @@ class UnarySfpu(Sfpu):
         self.iterations = iterations
         self.approx_mode = approx_mode
         self.operation = operation
-        self.dest_idx = dest_idx
         self.fill_const_value = fill_const_value
 
     def get_headers(self) -> List[str]:
@@ -41,19 +43,6 @@ class UnarySfpu(Sfpu):
             "llk_math_eltwise_unary_sfpu.h",
             "sfpu_operations_quasar.h",
         ]
-
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: SfpuNode,
-        batch_dims: tuple,
-        batch_tile_cnt: int,
-    ) -> torch.Tensor:
-        return self.unary_sfpu_golden(
-            tensor, config, operation, compute_unit, batch_dims
-        )
 
     def init(
         self,
@@ -82,13 +71,13 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        sfpu_format = config.sentinel._math_format.cpp_enum_value
+        sfpu_format = config.sentinel._sfpu_format.cpp_enum_value
         approx_mode = self.approx_mode.cpp_enum_value
         quasar_iterations = self.iterations // 4
         return (
             f"test_utils::call_unary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
-            f">({self.dest_idx}, {sfpu_format});\n"
+            f">({block.tile_id_dest}, {sfpu_format});\n"
         )
 
     def __str__(self) -> str:

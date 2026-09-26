@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DRISC test kernel: enters stream mode, reads a uint32_t from Tensix L1 into DRISC L1, restores NOC2AXI.
+// DRISC test kernel: reads a uint32_t from Tensix L1 into DRISC L1. Firmware leaves this
+// NIU in stream mode, which is what lets the DRISC initiate the read.
 
 #include "api/compile_time_args.h"
-#include "experimental/drisc_mode.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -18,9 +18,6 @@ void kernel_main() {
 
     Noc noc;
 
-    // Stream mode: required for DRISC to initiate NOC traffic and for
-    // remote cores to reach DRISC L1 over NOC.
-    experimental::drisc_set_stream_mode();
     uint32_t tensix_l1_src_addr = get_arg_val<uint32_t>(0);
 
     UnicastEndpoint src;
@@ -28,7 +25,4 @@ void kernel_main() {
     noc.async_read(
         src, dst, sizeof(uint32_t), {.noc_x = tensix_noc_x, .noc_y = tensix_noc_y, .addr = tensix_l1_src_addr}, {});
     noc.async_read_barrier();
-
-    // Always restore NOC2AXI so subsequent context observes the default.
-    experimental::drisc_set_noc2axi_mode();
 }

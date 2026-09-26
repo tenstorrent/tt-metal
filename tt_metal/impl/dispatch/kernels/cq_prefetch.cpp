@@ -27,11 +27,14 @@
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
 // FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
-// Quasar FD assumes prefetcher and dispatcher share a Tensix. A split build must resolve:
+// Quasar FD assumes all three stages share one dispatch engine. A split build must resolve:
 //   - Payload-before-credit ordering: fabric relay does not honour the NoC packet flush tag this file uses.
-//   - Credit return: NocReleasePolicy::release uses a local store, which reaches only a co-resident DM.
+//   - Credit return: fd_upstream_sem_scope is not gated on the variant, so a split build must force
+//     LOCAL_NONATOMIC and release via the remote up() overload; the seeding calls then compile out.
 //   - DispatchSRelayInlineState shares cmd buf 0 with DispatchRelayInlineState, so both inherit one
 //     DEST_COORD; valid only while dispatch_s is co-resident.
+//   - Sub-command copies pass first_line_invalidated=!cmddat_wrap_enable, which is only free because the
+//     _hd loop instantiates process_cmd with wrapping off. A _d build wraps and re-reads the full extent.
 #if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
 #error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
 #endif
@@ -73,7 +76,6 @@ constexpr uint32_t pcie_size = PCIE_SIZE;
 constexpr uintptr_t prefetch_q_base = PREFETCH_Q_BASE;
 constexpr uint32_t prefetch_q_size = PREFETCH_Q_SIZE;
 constexpr uintptr_t prefetch_q_rd_ptr_addr = PREFETCH_Q_RD_PTR_ADDR;
-constexpr uintptr_t prefetch_q_pcie_rd_ptr_addr = PREFETCH_Q_PCIE_RD_PTR_ADDR;
 
 constexpr uintptr_t cmddat_q_base = CMDDAT_Q_BASE;
 constexpr uint32_t cmddat_q_size = CMDDAT_Q_SIZE;
@@ -179,6 +181,9 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy =
     uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error "ATT fast dispatch requires DRAM-backed command queues: no ATT window maps host memory"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif
@@ -262,7 +267,8 @@ struct DispatchRelayInlineState {
         downstream_cb_sem,
         downstream_cb_base,
         downstream_cb_end,
-        downstream_cb_page_size>
+        downstream_cb_page_size,
+        fd_upstream_sem_scope>
         cb_writer{};
 };
 
@@ -288,7 +294,8 @@ struct DispatchSRelayInlineState {
         downstream_dispatch_s_cb_sem_id,
         dispatch_s_buffer_base,
         dispatch_s_buffer_end,
-        dispatch_s_cb_page_size>
+        dispatch_s_cb_page_size,
+        fd_upstream_sem_scope>
         cb_writer{};
 };
 
@@ -552,7 +559,6 @@ FORCE_INLINE uint32_t read_from_pcie(
     // so the value lands in L1 SRAM directly (otherwise it sits in DM0's L1 D$ and the host's
     // NOC poll reads stale). l1_uncached_addr/l1_cached_addr are identity on WH/BH.
     *uncached_l1_ptr<uint32_t>(prefetch_q_rd_ptr_addr) = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
-    *uncached_l1_ptr<uint32_t>(prefetch_q_pcie_rd_ptr_addr) = pcie_read_ptr;
 
     ++prefetch_q_rd_ptr;
 
@@ -1789,13 +1795,12 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     count++;
 
     WAYPOINT("PSW");
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(my_downstream_sync_sem_id));
+    // Not Semaphore::wait(): the target is a local running total, and the heartbeat must run in the spin.
+    auto sync_sem = fd_semaphore<my_downstream_sync_sem_id, fd_upstream_sem_scope>();
     uint32_t heartbeat = 0;
     do {
-        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-    } while (*sem_addr != count);
+    } while (sync_sem.value() != count);
     WAYPOINT("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -3127,6 +3132,13 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
+    // Must precede any downstream traffic. Only these three qualify for the cached pool: every writer is
+    // a co-resident DM using a local AMO. The downstream_* credits publish payload, so they must ride the
+    // NoC with it; my_upstream_cb_sem_id is host-written. A NoC write must never target the pool.
+    fd_seed_upstream_sem<my_downstream_cb_sem_id>();
+    fd_seed_upstream_sem<my_downstream_sync_sem_id>();
+    fd_seed_upstream_sem<my_dispatch_s_cb_sem_id>();
+
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
@@ -3146,6 +3158,9 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);

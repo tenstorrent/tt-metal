@@ -18,7 +18,8 @@ Tensor _addcmul(
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
     TT_FATAL(
         input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
             input_c.storage_type() == StorageType::DEVICE,
@@ -33,6 +34,10 @@ Tensor _addcmul(
     Tensor t_factor = ttnn::multiply(t_scaled, input_c, std::nullopt, output_mem_config);
     t_scaled.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
+    if (output_tensor.has_value()) {
+        ttnn::assign(result, output_tensor.value());
+        return output_tensor.value();
+    }
     return result;
 }
 
@@ -42,18 +47,27 @@ Tensor _addcdiv(
     const Tensor& input_b,
     const Tensor& input_c,
     float value,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor) {
     TT_FATAL(
         input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
+
+    auto write_output = [&](const Tensor& result) {
+        if (!output_tensor.has_value()) {
+            return result;
+        }
+        ttnn::assign(result, output_tensor.value());
+        return output_tensor.value();
+    };
 
     Tensor t_factor = ttnn::multiply(input_b, value, std::nullopt, output_mem_config);
     Tensor t_div = ttnn::div(t_factor, input_c, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::add(input_a, t_div, std::nullopt, output_mem_config);
 
     if (result.dtype() == DataType::FLOAT32) {
-        return result;
+        return write_output(result);
     }
 
     // For non-FP32: 0.5 * inf != inf but 1.7014e+3 and 0/0 = 0
@@ -67,7 +81,7 @@ Tensor _addcdiv(
     Tensor sign_or_one = ttnn::where(ttnn::eqz(input_b, output_mem_config), 1.0f, sign_b, output_mem_config);
     Tensor t_inf = ttnn::multiply(sign_or_one, signed_inf, std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::eqz(input_c, output_mem_config), t_inf, result, output_mem_config);
-    return result;
+    return write_output(result);
 }
 
 // Fallback composite implementation for lerp (with scalar weight)

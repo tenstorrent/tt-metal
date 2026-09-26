@@ -956,7 +956,7 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
         ((2, 1, 64, 7328), (2, 1, 60, 7328)),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_untilize_with_unpadding_block_per_node_cb_size(
     device, padded_shape, output_shape, dtype, isolate_program_cache
 ):
@@ -980,7 +980,10 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
         keep_alive += [tt_tiled, tt_rm]
 
         assert tt_rm.layout == ttnn.ROW_MAJOR_LAYOUT
-        torch_golden = torch_input[: output_shape[0], : output_shape[1], : output_shape[2], : output_shape[3]]
+        # bfloat8_b quantizes on the way to the device, so the reference is the device's view of the
+        # input rather than the original torch tensor.
+        device_input = ttnn.to_torch(tt_tiled)
+        torch_golden = device_input[: output_shape[0], : output_shape[1], : output_shape[2], : output_shape[3]]
         assert_equal(torch_golden, ttnn.to_torch(tt_rm))
 
         if i == 0:
@@ -990,3 +993,56 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
             assert (
                 device.num_program_cache_entries() == entries
             ), "untilize_with_unpadding must reuse the cached program on a cache hit"
+
+
+@pytest.mark.parametrize(
+    "factory", ["single_core", "multi_core_interleaved", "multi_core_sharded", "multi_core_nd_sharded"]
+)
+def test_untilize_with_unpadding_spec_factories_program_cache_addr_change(device, factory, isolate_program_cache):
+    torch.manual_seed(0)
+    shape = [1, 1, 256, 128]
+    output_end = [0, 0, 200, 100]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    def to_device(torch_tensor):
+        if factory in ("single_core", "multi_core_interleaved"):
+            return ttnn.from_torch(
+                torch_tensor,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        if factory == "multi_core_sharded":
+            shard_spec = ttnn.ShardSpec(shard_grid, (64, 128), ttnn.ShardOrientation.ROW_MAJOR)
+            memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+            host_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            return ttnn.to_device(host_tensor, device, memory_config=memory_config)
+        tensor_spec = ttnn.TensorSpec(
+            shape=shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims([2, 3], shard_grid, ttnn.ShardOrientation.ROW_MAJOR)
+        assert tensor_spec.memory_config.nd_shard_spec is not None
+        return ttnn.from_torch(torch_tensor, spec=tensor_spec, device=device)
+
+    slices = tuple(slice(0, output_end[i] + 1) for i in range(len(output_end)))
+    keep_alive = []  # retain prior tensors so each iteration allocates at a new address
+    entries = None
+    for i in range(3):
+        torch_input = torch.rand(shape, dtype=torch.bfloat16)
+        tt_input = to_device(torch_input)
+        tt_output = ttnn.untilize_with_unpadding(
+            tt_input,
+            output_tensor_end=output_end,
+            memory_config=output_memory_config,
+            use_multicore=factory != "single_core",
+        )
+        keep_alive += [tt_input, tt_output]
+
+        assert_equal(torch_input[slices], ttnn.to_torch(tt_output))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries == 1, "the first invocation should build exactly one program"
+        else:
+            assert device.num_program_cache_entries() == entries, f"{factory} must reuse the cached program on a hit"

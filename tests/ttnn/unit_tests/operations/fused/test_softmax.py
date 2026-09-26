@@ -294,6 +294,7 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [24, 32, 64])
 @pytest.mark.parametrize("w", [42, 32, 64])
@@ -325,6 +326,7 @@ def test_softmax(device, batch_size, h, w, dim):
     )
 
 
+@pytest.mark.merge_gate
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)

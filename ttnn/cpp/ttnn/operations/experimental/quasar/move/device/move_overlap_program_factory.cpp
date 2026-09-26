@@ -98,7 +98,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
-    const tt::tt_metal::IDevice* device = output.device();
+    const tt::tt_metal::distributed::MeshDevice* device = output.device();
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
@@ -171,8 +171,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
             },
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Named CTA: the stick-layout kernel needs the (unaligned) page size at compile time.
@@ -215,8 +214,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             {
                 m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
             },
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // The stick-layout writer needs the (unaligned) page size at compile time, like its reader.

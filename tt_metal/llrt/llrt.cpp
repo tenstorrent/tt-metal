@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
+#include "zone_meta.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -57,6 +58,12 @@ const ll_api::memory& get_risc_binary(
         ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
         if (update_callback) {
             update_callback(*mutable_ptr);
+        }
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so
+        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
+        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
+            ZoneMetaRegistry::instance().ingest_elf(path);
         }
 
         lock.lock();
@@ -390,6 +397,10 @@ void wait_until_cores_done(
     auto& env = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
+#ifdef DEBUG
+    const bool debug_logging_enabled =
+        tt::LoggerRegistry::instance().get(tt::LogMetal)->should_log(spdlog::level::debug);
+#endif
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = env.get_rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
@@ -424,8 +435,10 @@ void wait_until_cores_done(
         }
 
 #ifdef DEBUG
-        // Print not-done cores
-        if (loop_count % 1000 == 0) {
+        // Print not-done cores. The sleep paces this output, so it must not run when the
+        // message is filtered out: polls cost ~6 us, so 100 ms per 1000 of them slows every
+        // wait by up to 17x for a line nobody sees at the default log level.
+        if (loop_count % 1000 == 0 && debug_logging_enabled) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);

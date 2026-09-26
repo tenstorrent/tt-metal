@@ -11,7 +11,7 @@
  *
  * The header holds two:
  *
- *   calculate_recip_first_column        sfpu_reciprocal_iter<2> on an fp32 dest, else <1> plus a
+ *   calculate_sdpa_fw_recip_first_column sfpu_reciprocal_iter<2> on an fp32 dest, else <1> plus a
  *                                       round to bf16.
  *   calculate_exponential_first_column  _ckernel_sfpu_exp_accurate_ with SCALE_EN, scale as a
  *                                       uint16_t bf16 pattern.
@@ -35,7 +35,7 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 // Which body to drive. Mirrors SdpaFwOp in helpers/llk_params.py.
-constexpr int OP_FW_RECIP = 0; // calculate_recip_first_column
+constexpr int OP_FW_RECIP = 0; // calculate_sdpa_fw_recip_first_column
 constexpr int OP_FW_EXP   = 1; // calculate_exponential_first_column<EXP_SCALE_BF16>
 
 static_assert(SDPA_FW_OP == OP_FW_RECIP || SDPA_FW_OP == OP_FW_EXP, "unhandled SDPA_FW_OP");
@@ -76,9 +76,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
-// ckernel_sfpu_sdpa_fw.h needs DST_ACCUM_MODE.
+// Include both helpers to guard against namespace collisions while exercising FW numerics.
 static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
+static constexpr bool APPROX         = APPROX_MODE;
+#ifndef ALWI
+#define ALWI inline __attribute__((always_inline))
+#endif
 
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
 
 using namespace ckernel;
@@ -87,7 +92,7 @@ inline void sdpa_fw_op_init()
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)
     {
-        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en, false /* legacy_compat */>();
+        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en>();
     }
     else
     {
@@ -99,8 +104,7 @@ inline void sdpa_fw_op(const std::uint32_t dst_index)
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)
     {
-        _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_recip_first_column<is_fp32_dest_acc_en>, dst_index, VectorMode::C);
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_sdpa_fw_recip_first_column<is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
     else
     {

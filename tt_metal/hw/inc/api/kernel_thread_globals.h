@@ -89,7 +89,7 @@ inline void thread_sync_init() {
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
-inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
+inline void wait_threads(uint32_t participants, [[maybe_unused]] uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;
     }

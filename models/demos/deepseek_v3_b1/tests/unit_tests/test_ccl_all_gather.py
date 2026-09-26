@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 GATHER_CORE = ttnn.CoreCoord(0, 0)
 TRANSPORT_CORE = ttnn.CoreCoord(0, 1)
 
-NUM_DEVICES = 4
+NUM_DEVICES_4x1 = 4 * 1
 TILE_W = 32
 ALL_GATHER_NUM_LINKS = 1
 
@@ -72,23 +72,25 @@ def build_all_gather_test_inputs(
 
     Args:
         output_shape: Full gathered output shape, e.g. [1, 896].
-            output_shape[1] must be divisible by NUM_DEVICES * TILE_W.
-        input_tensors_per_device: Optional list of NUM_DEVICES tensors.
+            output_shape[1] must be divisible by NUM_DEVICES_4x1 * TILE_W.
+        input_tensors_per_device: Optional list of NUM_DEVICES_4x1 tensors.
             If None, random tensors are generated.
     """
     tile_h = output_shape[0]
     output_width = output_shape[1]
-    slice_width = output_width // NUM_DEVICES
+    slice_width = output_width // NUM_DEVICES_4x1
 
-    if output_width % NUM_DEVICES != 0:
-        raise ValueError(f"output_width={output_width} must be divisible by NUM_DEVICES={NUM_DEVICES}")
+    if output_width % NUM_DEVICES_4x1 != 0:
+        raise ValueError(f"output_width={output_width} must be divisible by NUM_DEVICES_4x1={NUM_DEVICES_4x1}")
     if slice_width % TILE_W != 0:
         raise ValueError(f"slice_width={slice_width} must be divisible by TILE_W={TILE_W}")
 
     tile = ttnn.Tile((tile_h, TILE_W))
 
     if input_tensors_per_device is None:
-        input_tensors_per_device = [torch.rand(tile_h, slice_width, dtype=torch.bfloat16) for _ in range(NUM_DEVICES)]
+        input_tensors_per_device = [
+            torch.rand(tile_h, slice_width, dtype=torch.bfloat16) for _ in range(NUM_DEVICES_4x1)
+        ]
 
     input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(GATHER_CORE, GATHER_CORE)})
     input_shard_spec = ttnn.ShardSpec(input_shard_grid, (tile_h, slice_width), ttnn.ShardOrientation.ROW_MAJOR)
@@ -112,7 +114,7 @@ def build_all_gather_test_inputs(
     )
 
     output_tensor_mesh = ttnn.from_torch(
-        torch.zeros(tile_h * NUM_DEVICES, output_width, dtype=torch.bfloat16),
+        torch.zeros(tile_h * NUM_DEVICES_4x1, output_width, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         tile=tile,
@@ -129,7 +131,7 @@ def build_all_gather_test_inputs(
     )
 
     scratch_tensor_mesh = ttnn.from_torch(
-        torch.zeros(tile_h * NUM_DEVICES, scratch_width, dtype=torch.bfloat16),
+        torch.zeros(tile_h * NUM_DEVICES_4x1, scratch_width, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         tile=tile,
@@ -171,7 +173,7 @@ def _verify_all_gather_output(submesh, ttnn_result, inputs):
     all_passed = True
     ref_device_output = output_torch[:tile_h, :]
 
-    for device_idx in range(NUM_DEVICES):
+    for device_idx in range(NUM_DEVICES_4x1):
         start_row = device_idx * tile_h
         received = output_torch[start_row : start_row + tile_h, :]
 
@@ -197,7 +199,7 @@ def _verify_all_gather_output(submesh, ttnn_result, inputs):
 def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensors):
     """Verify that each slot on each device contains exactly the expected tensor."""
     tile_h = inputs.output_shape[0]
-    slice_width = inputs.output_shape[1] // NUM_DEVICES
+    slice_width = inputs.output_shape[1] // NUM_DEVICES_4x1
 
     output_torch = ttnn.to_torch(
         ttnn_result,
@@ -205,11 +207,11 @@ def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensor
     )
 
     all_passed = True
-    for device_idx in range(NUM_DEVICES):
+    for device_idx in range(NUM_DEVICES_4x1):
         start_row = device_idx * tile_h
         device_output = output_torch[start_row : start_row + tile_h, :]
 
-        for slot_idx in range(NUM_DEVICES):
+        for slot_idx in range(NUM_DEVICES_4x1):
             col_start = slot_idx * slice_width
             slot_data = device_output[:, col_start : col_start + slice_width]
             expected = expected_slot_tensors[slot_idx]
@@ -247,6 +249,9 @@ def _verify_per_slot_identity(submesh, ttnn_result, inputs, expected_slot_tensor
     ],
     indirect=True,
 )
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
+)
 def test_ccl_all_gather_deterministic_fill(
     bh_2d_mesh_device,
     output_shape,
@@ -257,17 +262,13 @@ def test_ccl_all_gather_deterministic_fill(
     After all-gather, every device's output should have:
       slot 0 = all 1.0, slot 1 = all 2.0, slot 2 = all 3.0, slot 3 = all 4.0
     """
-    total_devices = bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]
-    if total_devices < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices, only {total_devices} available")
-
-    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES_4x1, 1)))
 
     tile_h = output_shape[0]
-    slice_width = output_shape[1] // NUM_DEVICES
+    slice_width = output_shape[1] // NUM_DEVICES_4x1
     fill_tensors = [
         torch.full((tile_h, slice_width), fill_value=float(dev_idx + 1), dtype=torch.bfloat16)
-        for dev_idx in range(NUM_DEVICES)
+        for dev_idx in range(NUM_DEVICES_4x1)
     ]
 
     inputs = build_all_gather_test_inputs(
@@ -318,6 +319,9 @@ def test_ccl_all_gather_deterministic_fill(
     ],
     indirect=True,
 )
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
+)
 def test_ccl_all_gather(
     bh_2d_mesh_device,
     output_shape,
@@ -328,15 +332,13 @@ def test_ccl_all_gather(
     if is_slow_dispatch():
         pytest.skip("CCL all-gather trace test needs fast dispatch")
 
-    total_devices = bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]
-    if total_devices < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices, only {total_devices} available")
-
-    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES_4x1, 1)))
 
     inputs = build_all_gather_test_inputs(mesh_device=submesh, output_shape=output_shape)
 
-    logger.info(f"Running CCL all-gather: {NUM_DEVICES} devices, output_shape={output_shape}, num_links={num_links}")
+    logger.info(
+        f"Running CCL all-gather: {NUM_DEVICES_4x1} devices, output_shape={output_shape}, num_links={num_links}"
+    )
 
     def run_all_gather():
         return DeepseekMinimalAllGather.op(
@@ -384,17 +386,16 @@ def test_ccl_all_gather(
     ],
     indirect=True,
 )
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
+)
 def test_ccl_all_gather_chunk_matrix(
     bh_2d_mesh_device,
     output_shape,
     num_links,
     max_chunk_size_bytes,
 ):
-    total_devices = bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]
-    if total_devices < NUM_DEVICES:
-        pytest.skip(f"Test requires {NUM_DEVICES} devices, only {total_devices} available")
-
-    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES, 1)))
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((NUM_DEVICES_4x1, 1)))
 
     inputs = build_all_gather_test_inputs(mesh_device=submesh, output_shape=output_shape)
 

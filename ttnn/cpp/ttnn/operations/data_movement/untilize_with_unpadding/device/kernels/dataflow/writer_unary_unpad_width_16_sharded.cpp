@@ -9,25 +9,29 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // Special case writer for unpad width 16 tensors
 // Skip untilize and just copy f0 and f2 from input tiles to output tiles
 void kernel_main() {
-    uint32_t num_unpadded_output_rows = get_arg_val<uint32_t>(0);
-    uint32_t num_padded_tiles_per_core = get_arg_val<uint32_t>(1);
+    auto num_unpadded_output_rows = get_arg(args::num_unpadded_output_rows);
+    auto num_padded_tiles_per_core = get_arg(args::num_padded_tiles_per_core);
 
-    constexpr uint32_t dfb_id_untilize_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-
-    constexpr uint32_t tile_size_in_bytes = get_tile_size(cb_id_out);
+    // Must stay a constant expression: it feeds a static_assert and the NOC_MAX_BURST_SIZE template
+    // arguments below, so the free-function form with the binding token is used rather than the
+    // DataflowBuffer member getter (which cannot yield a constant expression).
+    constexpr uint32_t tile_size_in_bytes = get_tile_size(dfb::out);
     constexpr uint32_t quarter_tile_size_in_bytes = tile_size_in_bytes / 4;
 
     const uint32_t batches_of_8 = num_padded_tiles_per_core / 8;
     const uint32_t remaining_tiles = num_padded_tiles_per_core % 8;
 
     Noc noc;
-    DataflowBuffer dfb_untilize_out(dfb_id_untilize_out);
-    DataflowBuffer dfb_out(cb_id_out);
+    // The tiled block the copy compute kernel packs; drained here face by face.
+    DataflowBuffer dfb_untilize_out(dfb::untilize_out);
+    // Borrowed onto the output shard itself: this kernel is its only toucher, filling it by write
+    // pointer, so nothing downstream drains it.
+    DataflowBuffer dfb_out(dfb::out);
 
     dfb_out.reserve_back(num_unpadded_output_rows);
     uint32_t l1_write_addr = dfb_out.get_write_ptr();

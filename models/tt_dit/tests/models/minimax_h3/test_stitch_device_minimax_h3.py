@@ -14,7 +14,13 @@ import ttnn
 
 from ....models.vae.minimax_h3.decoder_minimax_h3 import unpatchify
 from ....models.vae.minimax_h3.stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
-from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig, split_tiles, stitch_tiles
+from ....models.vae.minimax_h3.vae_minimax_h3 import (
+    TILE_BLEND_EXTENTS,
+    MiniMaxH3VaeConfig,
+    blend,
+    split_tiles,
+    stitch_tiles,
+)
 from ....utils.check import assert_quality
 
 SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_device")]
@@ -67,6 +73,29 @@ def test_stitch_matches_host_at_production_geometry(mesh_device, reset_seeds):
         x += 256 - overlap
         logger.info(f"vertical seam {index} at x={x}, extent {overlap}")
         assert_quality(expected[..., x : x + overlap], actual[..., x : x + overlap], pcc=0.9999)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_blend_matches_host_at_every_extent(mesh_device, reset_seeds):
+    """One seam per ramp key, device against host, on both axes."""
+    ratio = MiniMaxH3VaeConfig().spatial_compression_ratio
+    produced = {overlap for edge in range(32, 4097, 32) for overlap in split_tiles(edge, 256, 64, ratio)[2]}
+    assert produced == set(TILE_BLEND_EXTENTS), f"split_tiles yields {sorted(produced)}, bound: {TILE_BLEND_EXTENTS}"
+
+    stitcher = DeviceTileStitcher(mesh_device)
+    for dim in (-2, -1):
+        for extent in TILE_BLEND_EXTENTS:
+            a, b = (torch.randn(1, CHANNELS, PIXEL_FRAMES, 256, 256) for _ in range(2))
+            expected = blend(a, b, extent, dim)
+            device_a, device_b = (
+                ttnn.from_torch(t, dtype=ttnn.float32, device=mesh_device, layout=ttnn.TILE_LAYOUT) for t in (a, b)
+            )
+            actual = ttnn.to_torch(stitcher.blend(device_a, device_b, extent, dim))
+            logger.info(f"dim {dim}, extent {extent}")
+            assert actual.shape == expected.shape, f"{tuple(actual.shape)} != {tuple(expected.shape)}"
+            assert_quality(expected.narrow(dim, 0, extent), actual.narrow(dim, 0, extent), pcc=0.9999)
+            assert_quality(expected, actual, pcc=0.9999)
 
 
 @pytest.mark.timeout(1800)
@@ -178,7 +207,7 @@ def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
     combination and the fold is affine, so they commute -- and if they did not, every seam would
     carry the error.
     """
-    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+    from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3VaeConfig, _fold_pixel_denorm
 
     config = MiniMaxH3VaeConfig()
     channels = config.out_channels
@@ -190,9 +219,8 @@ def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
     bias = torch.randn(out_features, dtype=torch.float64) * 0.1
     hidden = torch.randn(5, in_features, dtype=torch.float64)
 
-    vae = MiniMaxH3Vae(config, mesh_device=None, pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
     state = {"proj_out.weight": weight.clone(), "proj_out.bias": bias.clone()}
-    vae._fold_pixel_denorm(state)
+    _fold_pixel_denorm(state, (MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD), channels)
 
     mean = torch.tensor(MINIMAX_H3_PIXEL_MEAN, dtype=torch.float64).view(1, channels, 1, 1, 1)
     std = torch.tensor(MINIMAX_H3_PIXEL_STD, dtype=torch.float64).view(1, channels, 1, 1, 1)

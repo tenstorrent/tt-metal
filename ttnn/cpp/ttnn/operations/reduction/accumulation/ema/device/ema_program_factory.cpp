@@ -51,14 +51,14 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
 
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
-    IDevice* device = &input.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = input.mutable_device();
 
     // Grid sizing
     // -----------
     // If empty grid size, use all cores
     auto grid_size = operation_attributes.grid_size;
     if ((grid_size.x == 0) && (grid_size.y == 0)) {
-        grid_size = device->compute_with_storage_grid_size();
+        grid_size = device.compute_with_storage_grid_size();
     }
     auto num_cores_available = grid_size.x * grid_size.y;
 
@@ -81,7 +81,7 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
 
     validate_reduce_op_program_grid(
-        "EMA", all_cores, device->compute_with_storage_grid_size(), nullptr, false, {{&tensor_return_value, "output"}});
+        "EMA", all_cores, device.compute_with_storage_grid_size(), nullptr, false, {{&tensor_return_value, "output"}});
     log_debug(
         tt::LogOp,
         "EmaProgramFactory: grid_size=({}, {}), num_cores={}, total_batch_channel_tiles={}",
@@ -133,10 +133,10 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
     // the reader on RISCV_0 and the writer on RISCV_1, which is the reverse of the conventional
     // assignment, so neither matches a role default and neither can go through the
     // architecture-agnostic reader / writer helpers without changing where they run. Spelling out
-    // the Gen1 config is therefore what preserves the placement, and it pins this whole factory to
-    // Gen1: a Gen2 build would need placement decisions that cannot be derived from these values.
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    // the Gen1 placement in config_1xx is therefore what preserves it. Only Gen1 placement is described
+    // here: a Gen2 build would need placement decisions that cannot be derived from these values.
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     KernelSpec reader{
         .unique_id = EMA_READER,
@@ -152,10 +152,14 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         }},
         .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"src_start_tile"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = reader_noc,
-        }},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = reader_noc,
+                    },
+            },
     };
 
     KernelSpec writer{
@@ -172,10 +176,14 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         }},
         .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_start_tile"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = writer_noc,
-        }},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_1,
+                        .noc = writer_noc,
+                    },
+            },
     };
 
     KernelSpec compute{
@@ -212,9 +220,9 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
              {"alpha_bits", alpha_bits},
              {"beta_bits", beta_bits}},
         // Translates the TTNN ComputeKernelConfig this op resolves into its Metal 2.0 equivalent.
-        // The helper picks the alternative matching the architecture, but that does not make the
-        // program portable: the data movement kernels above are Gen1-only, so the whole factory is.
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        // That does not make the program portable: the data movement kernels above are Gen1-only,
+        // so the whole factory is.
+        .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
 
     // Set runtime args

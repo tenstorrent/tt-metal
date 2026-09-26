@@ -218,38 +218,26 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         std::uint32_t idx8 = (meta >> 24) & 0b11111;
         std::uint32_t idx9 = (meta >> 27) & 0b11111;
 
-        std::uint32_t data0 = FMTABLE[idx0];
-        std::uint32_t data1 = FMTABLE[idx1];
-        std::uint32_t data2 = FMTABLE[idx2];
-        std::uint32_t data3 = FMTABLE[idx3];
-        std::uint32_t data4 = FMTABLE[idx4];
-        std::uint32_t data5 = FMTABLE[idx5];
-        std::uint32_t data6 = FMTABLE[idx6];
-        std::uint32_t data7 = FMTABLE[idx7];
-        std::uint32_t data8 = FMTABLE[idx8];
-        std::uint32_t data9 = FMTABLE[idx9];
-
-        ckernel::instrn_buffer[0] = data0;
-        ckernel::instrn_buffer[0] = data1;
-        ckernel::instrn_buffer[0] = data2;
-        ckernel::instrn_buffer[0] = data3;
-        ckernel::instrn_buffer[0] = data4;
-        ckernel::instrn_buffer[0] = data5;
-        ckernel::instrn_buffer[0] = data6;
-        ckernel::instrn_buffer[0] = data7;
-        ckernel::instrn_buffer[0] = data8;
-        ckernel::instrn_buffer[0] = data9;
+        TT_INSN(FMTABLE[idx0]);
+        TT_INSN(FMTABLE[idx1]);
+        TT_INSN(FMTABLE[idx2]);
+        TT_INSN(FMTABLE[idx3]);
+        TT_INSN(FMTABLE[idx4]);
+        TT_INSN(FMTABLE[idx5]);
+        TT_INSN(FMTABLE[idx6]);
+        TT_INSN(FMTABLE[idx7]);
+        TT_INSN(FMTABLE[idx8]);
+        TT_INSN(FMTABLE[idx9]);
     }
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t i = 0; i < rem_iters; ++i)
     {
         std::uint32_t idx0        = (meta >> 0) & 0b11111;
-        std::uint32_t data0       = FMTABLE[idx0];
-        ckernel::instrn_buffer[0] = data0;
+        TT_INSN(FMTABLE[idx0]);
         meta >>= 3;
     }
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    t6_semaphore_get<p_stall::UNPACK>(semaphore::UNPACK_SYNC);
 
     wait_for_next_context(1);
     reset_config_context();

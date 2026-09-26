@@ -16,6 +16,42 @@
 
 namespace ttnn::prim {
 
+namespace {
+
+// One work unit per reduction the op performs. Mirrors the num_work_units line in
+// create_program_artifacts, for the override, which has no locals to reuse.
+uint32_t welford_num_work_units(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
+    using namespace tt::tt_metal;
+    const auto& padded_shape = input.padded_shape();
+    const uint32_t H_padded = padded_shape[-2];
+    const uint32_t W_padded = padded_shape[-1];
+    const uint32_t NC = input.physical_volume() / (H_padded * W_padded);
+    const uint32_t Wt = W_padded / input.tensor_spec().tile().get_width();
+    const uint32_t Ht = H_padded / input.tensor_spec().tile().get_height();
+    return attrs.reduce_dim == ReduceOpDim::W    ? (NC * Ht)
+           : attrs.reduce_dim == ReduceOpDim::HW ? (NC / attrs.reduce_batch_size)
+                                                 : (NC * Wt);
+}
+
+// The core-group split. create_program_artifacts and the cache-hit override both call this, so
+// they cannot disagree about how many core groups the split leaves. Note the grid-size CoreCoord
+// overload: a grid size is not an inclusive end coordinate, so a CoreRange built from it is wrong.
+auto welford_split_work(
+    const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input, uint32_t num_work_units) {
+    return attrs.sub_core_grids.has_value()
+               ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_work_units)
+               : tt::tt_metal::split_work_to_cores(
+                     input.mutable_device().compute_with_storage_grid_size(), num_work_units);
+}
+
+// Whether the second compute kernel exists. override_runtime_arguments cannot see the built
+// Program, and naming a kernel it lacks is fatal, so it asks the shared split instead.
+bool welford_has_second_core_group(const WelfordReduceParams& attrs, const tt::tt_metal::MeshTensor& input) {
+    return !std::get<3>(welford_split_work(attrs, input, welford_num_work_units(attrs, input))).ranges().empty();
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts
 WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
@@ -92,7 +128,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // sqrt value straddles a bf16 rounding boundary).
     bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
 
-    tt_metal::IDevice* device = &input.mutable_device();
+    tt_metal::distributed::MeshDevice& device = input.mutable_device();
 
     // Work division:
     // - W-reduce: Work is split by rows of the tile grid (NC * Ht work units).
@@ -148,30 +184,18 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     //     (one per (dim0, dim1) pair: 3 × 4 = 12).
 
     const uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     auto num_work_units = reduce_w ? (NC * Ht) : (reduce_hw ? (NC / reduce_batch_size) : (NC * Wt));
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_work_units_per_core_group_1, num_work_units_per_core_group_2;
-    if (operation_attributes.sub_core_grids.has_value()) {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_work_units_per_core_group_1,
-            num_work_units_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_work_units);
-    } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_work_units_per_core_group_1,
-            num_work_units_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_work_units);
-    }
+    std::tie(
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_work_units_per_core_group_1,
+        num_work_units_per_core_group_2) = welford_split_work(operation_attributes, input, num_work_units);
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: this factory shares a unity-build translation unit with the reduce
@@ -207,7 +231,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     });
 
     // The reader fills one scalar entry on every reduce dim, but no welford compute kernel reads it
-    // (the user scalar is applied post-reduction via WELFORD_POST_MUL instead), so the reader is this
+    // (the user scalar is applied post-reduction by the compute kernel instead), so the reader is this
     // buffer's only toucher.
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALAR_DFB,
@@ -244,12 +268,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
 
     // Post-reduction scaling: the reduction always runs unscaled (the precise
     // UnpackToDest path), and the user scalar is applied to the small-magnitude result via
-    // SFPU mul_unary_tile inside the compute kernel, gated by the WELFORD_POST_MUL define.
+    // SFPU mul_unary_tile inside the compute kernel, which skips an identity scalar at runtime.
     // Pre-scaling the input (the old do_scale path) read the input via the FPU SrcA operand at TF32
     // precision and collapsed large-offset inputs to a constant before the multiply. The
     // post-multiplier follows var(s*x)=s^2 var(x) and std(s*x)=|s| std(x):
     //   var: scalar^2   std: |scalar|.
-    const bool use_post_mul = (operation_attributes.scalar != 1.0f);
     const float post_mul_scaler =
         is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(post_mul_scaler);
@@ -292,13 +315,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
-    // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
-    // compute kernel (see post_mul_scaler above). Only the compute kernel reads this; the
-    // reader/writer ignore it.
-    if (use_post_mul) {
-        reduce_defines["WELFORD_POST_MUL"] = "1";
-    }
-
     // --- Reader kernel ---
     uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     std::string reader_source;
@@ -318,11 +334,13 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"Ht", Ht},
             {"Wt", Wt},
             {"HtWt", HtWt},
-            {"scaler_bits", scaler_bits},
             {"use_welford", 1u},
             {"enable_fp32_sfpu", 0u},
             // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
             {"tiles_per_batch", 1u},
+            // Welford never splits the H axis; {1, Ht} selects the reader's un-split path.
+            {"num_h_slices", 1u},
+            {"slice_Ht", Ht},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     } else {
@@ -331,7 +349,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_reduce_universal_start_id.cpp";
         // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
-        reader_ct_args = {{"scaler_bits", scaler_bits}, {"tiles_per_batch", 1u}};
+        reader_ct_args = {{"tiles_per_batch", 1u}};
         reader_rta_names = {"num_tiles", "start_id"};
     }
 
@@ -363,14 +381,16 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_ct_args),
-        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .runtime_arg_schema =
+            {.runtime_arg_names = std::move(reader_rta_names), .common_runtime_arg_names = {"scaler_bits"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // --- Writer kernel ---
     std::string writer_source;
     KernelSpec::CompileTimeArgs writer_ct_args;
     Group<std::string> writer_rta_names;
+    Group<std::string> writer_common_rta_names;
     Group<DFBBinding> writer_dfb_bindings;
     KernelSpec::CompilerOptions::Defines writer_defines;
 
@@ -439,14 +459,17 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .dfb_bindings = std::move(writer_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_ct_args),
-        .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .runtime_arg_schema =
+            {.runtime_arg_names = std::move(writer_rta_names),
+             .common_runtime_arg_names = std::move(writer_common_rta_names)},
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // --- Compute kernels ---
     std::string compute_kernel;
     KernelSpec::CompileTimeArgs compute_ct_args;
     std::string compute_rta_name;
+    const Group<std::string> compute_common_rta_names = {"post_mul_scaler_bits"};
 
     if (reduce_hw) {
         compute_ct_args = {
@@ -454,7 +477,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"H", H},
             {"tile_height", tile_height},
             {"Wt", Wt},
-            {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"reduce_batch_size", reduce_batch_size},
             {"is_std", static_cast<uint32_t>(is_std)},
         };
@@ -473,7 +495,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {reduce_w ? "Wt" : "Ht", reduce_w ? Wt : Ht},
             {reduce_w ? "W" : "H", reduce_w ? W : H},
             {reduce_w ? "tile_width" : "tile_height", reduce_w ? tile_width : tile_height},
-            {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"correction", static_cast<uint32_t>(operation_attributes.correction)},
             {"is_std", static_cast<uint32_t>(is_std)},
         };
@@ -498,56 +519,48 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // into sfpu_precision_mode and the caller's dst_full_sync_en into double_buffer_dest, silently
     // changing precision / Dest buffering. (DST_SYNC_FULL is still passed as a *define*, exactly as
     // legacy did.)
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
-    // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
-    // ComputeGen2Config on Quasar, and the fields set below exist on both generations. The
-    // explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a
-    // Gen1-only branch would leave FP32 + 32-bit-Dest programs failing ProgramSpec validation there.
-    std::visit(
-        [&](auto& compute_cfg) {
-            compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            compute_cfg.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
-            // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
-            // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
-            // downcast to TF32, losing precision and even leading to large-mean fp32 variance
-            // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
-            // between nearby samples.
-            //
-            // Apply this to every Float32 buffer the compute kernel reads back via copy_tile /
-            // transpose_tile:
-            //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
-            //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
-            //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
-            //   - W-reduce only: var -- the variance tile is read back after the initial
-            //     transpose to undo it.
-            //   - HW-reduce only: combined -- the variance tile is read back after the
-            //     writer-side cross-core re-reduction.
-            if (input_cb_data_format == tt::DataFormat::Float32) {
-                compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
-            }
-            if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-                compute_cfg.unpack_modes.emplace(VAR_DFB, UnpackMode::UnpackToDest);
-            }
-            if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-                compute_cfg.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
-            }
-            // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
-            // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
-            // so state the legacy value for those.
-            auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
-                if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
-                    compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
-                }
-            };
-            require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
-            if (reduce_w) {
-                require_explicit_unpack_mode(VAR_DFB, scratch_cb_data_format);
-            }
-            if (reduce_hw) {
-                require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
-            }
-        },
-        compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    compute_hw.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
+    compute_hw.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
+    // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
+    // downcast to TF32, losing precision and even leading to large-mean fp32 variance
+    // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
+    // between nearby samples.
+    //
+    // Apply this to every Float32 buffer the compute kernel reads back via copy_tile /
+    // transpose_tile:
+    //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
+    //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
+    //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
+    //   - W-reduce only: var -- the variance tile is read back after the initial
+    //     transpose to undo it.
+    //   - HW-reduce only: combined -- the variance tile is read back after the
+    //     writer-side cross-core re-reduction.
+    if (input_cb_data_format == tt::DataFormat::Float32) {
+        compute_hw.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
+    }
+    if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+        compute_hw.unpack_modes.emplace(VAR_DFB, UnpackMode::UnpackToDest);
+    }
+    if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+        compute_hw.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
+    }
+    // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
+    // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
+    // so state the legacy value for those.
+    auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
+        if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
+        }
+    };
+    require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
+    if (reduce_w) {
+        require_explicit_unpack_mode(VAR_DFB, scratch_cb_data_format);
+    }
+    if (reduce_hw) {
+        require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id) {
         Group<DFBBinding> dfb_bindings = {
@@ -598,7 +611,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
                  .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = compute_ct_args,
-            .runtime_arg_schema = {.runtime_arg_names = {compute_rta_name}},
+            .runtime_arg_schema =
+                {.runtime_arg_names = {compute_rta_name}, .common_runtime_arg_names = compute_common_rta_names},
             .hw_config = compute_hw,
         };
     };
@@ -745,6 +759,11 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         }
     }
 
+    reader_run_args.common_runtime_arg_values = {{"scaler_bits", scaler_bits}};
+    const KernelRunArgs::CommonRuntimeArgValues compute_common_args{{"post_mul_scaler_bits", post_mul_scaler_bits}};
+    compute_g1_run_args.common_runtime_arg_values = compute_common_args;
+    compute_g2_run_args.common_runtime_arg_values = compute_common_args;
+
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
     run_args.kernel_run_args.push_back(std::move(compute_g1_run_args));
@@ -756,6 +775,49 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs
+WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_arg,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
+    const auto& input = tensor_arg.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+
+    // Names must match create_program_artifacts.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    const bool is_std = operation_attributes.math_op == ReduceOpMath::STD;
+    const float post_mul_scaler =
+        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
+
+    // compute_program_hash excludes the scalar, so a cache hit must re-apply it.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = READER,
+        .common_runtime_arg_values = {{"scaler_bits", std::bit_cast<uint32_t>(operation_attributes.scalar)}}});
+
+    const KernelRunArgs::CommonRuntimeArgValues compute_common_args{
+        {"post_mul_scaler_bits", std::bit_cast<uint32_t>(post_mul_scaler)}};
+    params.kernel_run_args.push_back(
+        KernelRunArgs{.kernel = COMPUTE_G1, .common_runtime_arg_values = compute_common_args});
+    if (welford_has_second_core_group(operation_attributes, input)) {
+        params.kernel_run_args.push_back(
+            KernelRunArgs{.kernel = COMPUTE_G2, .common_runtime_arg_values = compute_common_args});
+    }
+
+    params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{input});
+    params.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
+    return params;
 }
 
 }  // namespace ttnn::prim

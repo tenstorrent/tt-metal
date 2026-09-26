@@ -65,7 +65,7 @@ add_library(distributed OBJECT ${DISTRIBUTED_SRC})
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(distributed)
-target_precompile_headers(distributed REUSE_FROM metal_common_pch)
+tt_reuse_precompile_headers(distributed metal_common_pch)
 
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE} TARGET distributed)
@@ -95,8 +95,9 @@ endif()
 
 if(TT_METAL_USE_EMULE)
     # The slow-dispatch mesh command queue routes per-device dispatch through the emule
-    # register/run split (emulated_program_runner.hpp) — gated on this define.
+    # register/run split — gated on this define.
     target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
+    target_link_libraries(distributed PRIVATE tt_emule_runtime)
 endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
