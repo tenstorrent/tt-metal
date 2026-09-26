@@ -26,6 +26,12 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Tensor '{}' must be in DRAM, but got buffer type '{}'",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
+
+        TT_FATAL(
             tensor.layout() == required_layout,
             "Tensor '{}' must have layout '{}', but got '{}'",
             name,
@@ -49,13 +55,25 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
+    TT_FATAL(input_tensor.logical_shape().rank() == 4U, "ProfilerNoop input must be rank-4.");
+
     if (preallocated_output_tensor.has_value()) {
-        check_tensor(
-            preallocated_output_tensor.value(),
-            "Preallocated Output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+        const auto& output = preallocated_output_tensor.value();
+        check_tensor(output, "Preallocated Output", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(output.device() == input_tensor.device(), "ProfilerNoop input and output must be on the same device.");
+
+        const auto expected_spec = tt::tt_metal::TensorSpec(
+            input_tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.memory_config()));
+        TT_FATAL(
+            output.tensor_spec() == expected_spec,
+            "ProfilerNoop preallocated output must match the default output spec.");
     }
+}
+
+void ProfilerNoopOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
 }
 
 ProfilerNoopOperation::spec_return_value_t ProfilerNoopOperation::compute_output_specs(
@@ -88,9 +106,13 @@ ProfilerNoopOperation::tensor_return_value_t ProfilerNoopOperation::create_outpu
 ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
+    const auto output_spec = tt::tt_metal::TensorSpec(
+        input_tensor.logical_shape(),
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::Layout::TILE, input_tensor.memory_config()));
+    const auto& effective_output_spec =
+        tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output->tensor_spec() : output_spec;
     return tt::tt_metal::operation::hash_operation<ProfilerNoopOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
+        args, input_tensor.tensor_spec(), effective_output_spec);
 }
 
 }  // namespace ttml::metal::ops::profiler_no_op::device
