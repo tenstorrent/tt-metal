@@ -67,9 +67,7 @@ supported_formats = [
 
 
 @parametrize(
-    # enable tiny tiles tests when they're added formally to the LLKs
-    # tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
-    tile_dimensions=[[32, 32]],
+    tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
     formats=input_output_formats(supported_formats, same=True),
     broadcast_type=[
         BroadcastType.None_,
