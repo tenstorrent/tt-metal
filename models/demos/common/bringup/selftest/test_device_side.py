@@ -128,3 +128,17 @@ def test_rendered_templates(gspec, noise, monkeypatch, impl, passes):
     before = comp.read_text()
     render_component_test(s, "blk", "mlp", thr=0.5)  # never overwrites an existing (possibly frozen) test
     assert comp.read_text() == before
+
+
+def test_device_tests_outlive_the_repo_pytest_timeout(fx):
+    """F25: the ladder, contract and profile tests carry their own pytest timeout (spec box.test_timeout_s, default
+    3600 s); the repo's pytest.ini 300 s killed a full-target rung that had passed its checks."""
+    from pathlib import Path
+
+    from models.demos.common.bringup.testing.harness import DEVICE_TEST_TIMEOUT_S, device_timeout
+
+    assert device_timeout(Spec.load(fx())).args == (DEVICE_TEST_TIMEOUT_S,)
+    assert device_timeout(Spec.load(fx(box={"mesh": [1, 4], "test_timeout_s": 7}))).args == (7,)
+    tests = Path(__file__).parents[1] / "tests"
+    for name in ("test_ladder.py", "test_contract.py", "test_profile.py"):
+        assert "pytestmark = device_timeout(S)" in (tests / name).read_text(), name

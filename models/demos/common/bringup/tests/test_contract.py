@@ -5,10 +5,11 @@
 Run with --no-precompile: the precompile pass stubs comp_pcc, which the producer's read-back uses."""
 
 from models.demos.common.bringup.testing.contract import engine_env
-from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
+from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
 
 S = spec()
 engine_env(S)  # before any adapter import
+pytestmark = device_timeout(S)
 
 from models.demos.common.bringup.testing.contract import run_contract_test  # noqa: E402
 
