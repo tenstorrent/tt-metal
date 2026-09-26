@@ -775,7 +775,7 @@ OverlayTcRegs read_overlay_tc(
     constexpr uint32_t error_status_off = 0x1Cu;  // ..._ERROR_STATUS_REG_OFFSET
     const uint32_t tc_base = base + llk_if * llk_if_stride + tc * counter_stride;
     const CoreCoord virtual_core = unit_mesh.worker_core_from_logical_core(logical_core);
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = MetalContext::instance(unit_mesh.impl().get_context_id()).get_cluster();
     const auto device_id = unit_mesh.get_device_ids()[0];
     OverlayTcRegs regs;
     regs.read_posted = cluster.read_core(device_id, virtual_core, tc_base + read_posted_off, sizeof(uint32_t))[0];

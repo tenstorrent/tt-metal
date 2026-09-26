@@ -153,12 +153,15 @@ FORCE_INLINE void dfb_clear_packer_remapper_window(
     if (lo == 0xFFu) {
         return;
     }
-    // Drop packer remapper pairs only after other TRISCs have drained.
-    // Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF
+    // Drop packer remapper pairs only after the TRISCs that can issue counter updates through them have drained.
+    // Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF.
+    // Math never touches DFB tile counters.
+    using ckernel::trisc::TriscID;
     volatile tt_l1_ptr std::uint32_t* const neo_sync =
         reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(trisc_run - trisc_id);
-    const std::uint32_t other_trisc_mask = ~(std::uint32_t{0xFFu} << (trisc_id * 8));
-    while ((*neo_sync & other_trisc_mask) != 0u) {
+    constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
+                                             (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
+    while ((*neo_sync & dfb_trisc_mask) != 0u) {
     }
     for (uint32_t i = lo; i < hi; i++) {
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
