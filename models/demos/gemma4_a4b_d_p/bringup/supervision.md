@@ -19,6 +19,8 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 01:00 | C.sliding.experts | device open fails on all chips (active ethernet core timeout) twice | box | stopped the run; owner reset the board and set "always 2D fabric" (F20) |
 | 01:50 | C.global.attn_norm | skill, dashboard styles, intake sanity gate, pause, infra stop | planned framework work | stopped the just-started test agent; F21 |
 | 02:10 | S.global.04 | supervising session at 80% context | hand-off | paused before C.global.ffn_norm; hand-off below |
+| ~02:35 | C.global.ffn_norm | new session took over from the hand-off | resume | resumed run1; ffn_norm, S.global.05, mlp, S.global.06, post_mlp_norm passed |
+| 02:50 | C.global.post_mlp_norm | owner: teletext should alternate Index / Model graph every minute | framework (planned) | paused after post_mlp_norm; F24 carousel, selftest 115 passed |
 
 ## Hand-off (2026-09-26 02:10)
 
