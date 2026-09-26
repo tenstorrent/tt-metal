@@ -1095,6 +1095,13 @@ tasks:
     - attn_norm
     - attention
     layer: 5
+  frozen:
+    at: '2026-09-26T02:10:52'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py: 70f1f792c3cbc2df43c127d5bfbfe351d3b9d8d96643f548e4172dd509aa2c0a
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.global.post_attn_norm
   title: global post_attn_norm (norm) on device, layer 5
   step: implement
