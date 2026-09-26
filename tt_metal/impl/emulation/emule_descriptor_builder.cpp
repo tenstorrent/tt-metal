@@ -168,8 +168,11 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
-    const bool quasar_four_row =
-        metal_context.get_cluster().arch() == tt::ARCH::QUASAR && rtoptions.get_quasar_four_row();
+    std::string quasar_arch_include;
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_arch_variant().empty()) {
+        quasar_arch_include =
+            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_arch_variant();
+    }
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
@@ -216,8 +219,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
-            if (quasar_four_row) {
-                kd.defines["MATH_ROWS"] = "4";
+            if (!quasar_arch_include.empty()) {
+                kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
             }
             kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
             {

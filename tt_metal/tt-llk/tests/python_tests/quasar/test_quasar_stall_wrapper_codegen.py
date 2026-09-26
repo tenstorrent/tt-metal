@@ -22,6 +22,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from helpers.chip_architecture import quasar_arch_variant
 
 # The Quasar compile job selects on this marker; without it the guard would not run
 # on a change to the header it guards.
@@ -31,6 +32,12 @@ _TESTS_ROOT = Path(__file__).resolve().parents[2]
 _TT_METAL = Path(__file__).resolve().parents[4]
 _COMPILER = _TESTS_ROOT / "sfpi/compiler/bin/riscv-tt-elf-g++"
 _QUASAR_LLK = _TT_METAL / "tt-llk/tt_llk_quasar"
+
+
+def _quasar_variant_include():
+    variant = quasar_arch_variant()
+    return [f"-I{_QUASAR_LLK / 'arch' / variant}"] if variant else []
+
 
 # Each probe_* calls the wrapper; the ref_* beside it hand-writes the stall that
 # wrapper must emit. TTI_STALLWAIT takes (stall_res, idx_2, idx_1, idx_0), which
@@ -110,6 +117,7 @@ def emitted(tmp_path_factory):
             # TRISC id and the firmware guard that keeps host-only headers out.
             "-DCOMPILE_FOR_TRISC=0",
             "-DTENSIX_FIRMWARE",
+            *_quasar_variant_include(),
             f"-I{_QUASAR_LLK / 'common/inc'}",
             f"-I{_QUASAR_LLK / 'common/inc/sfpu'}",
             f"-I{_QUASAR_LLK / 'llk_lib'}",
