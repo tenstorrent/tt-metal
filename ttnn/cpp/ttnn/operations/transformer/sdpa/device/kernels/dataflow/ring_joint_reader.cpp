@@ -976,9 +976,9 @@ void kernel_main() {
             // the fixed slot count and would wait on a Q chunk the reader never re-pushed.
             const bool need_q_read = rotated_q_split_enabled || (q_per_core > 1) || !q_pushed;
 
-            ring_joint::SlidingQWorkPlan sliding_q_plan;
+            ring_joint::SlidingQWorkPlan<SLIDING_MAX_SOURCE_RANGES> sliding_q_plan;
             if constexpr (has_sliding_window) {
-                sliding_q_plan = ring_joint::build_sliding_q_work_plan(
+                sliding_q_plan = ring_joint::build_sliding_q_work_plan<SLIDING_MAX_SOURCE_RANGES>(
                     q_chunk * Sq_chunk_t,
                     Sq_chunk_t,
                     ring_index,
