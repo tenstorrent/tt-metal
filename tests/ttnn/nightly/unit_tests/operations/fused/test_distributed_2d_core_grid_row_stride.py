@@ -436,3 +436,163 @@ def test_distributed_2d_core_grid_row_stride_welford(
         expect_tpcx=expect_tpcx,
     )
     assert passing, f"Welford PCC check failed (use_2d_core_grid={use_2d_core_grid}): {pcc_msg}"
+
+
+# ============================================================================
+# Merge-race regression: skewed rows with distinct per-row partials.
+#
+# Review follow-up on tenstorrent/tt-metal#57039 (QIU-Guanzong): the 2D
+# pre-all-gather merge protocol has no consumer acknowledgement between rows.
+# Each worker NoC-writes its partial into a merge buffer sized to exactly one
+# row (cores_y tiles) at an offset depending on y but not ncht, then bumps the
+# reducer semaphore. The semaphore orders worker-write -> merge-publish and the
+# circular buffer orders merge-publish -> merge-consume, but nothing orders a
+# worker's row-(r+1) write against the merge compute's read of row r -- a worker
+# running ahead can overwrite row r's slots while the merge compute still reads
+# them.
+#
+# ============================================================================
+
+_MERGE_RACE_MIN_SEPARATION = 4.0  # min |c_r^2 - c_{r+1}^2| between consecutive rows
+
+
+def _skewed_row_constants(seq_len, lo=1.0, hi=8.0, seed=0xC0FFEE):
+    """Deterministic per-row constants with guaranteed consecutive separation.
+
+    32-bit LCG draws in [lo, hi); a draw is kept only if its square is at least
+    _MERGE_RACE_MIN_SEPARATION away from the previous row's square. Every row's
+    merged E[x^2] is therefore a distinct, exactly-known signature, and a
+    merge-buffer overwrite by the following row can never hide inside tolerance.
+    """
+    consts = []
+    prev_sq = None
+    x = seed
+    while len(consts) < seq_len:
+        x = (1103515245 * x + 12345) % 2**31
+        v = lo + (hi - lo) * x / 2**31
+        sq = v * v
+        if prev_sq is None or abs(sq - prev_sq) >= _MERGE_RACE_MIN_SEPARATION:
+            consts.append(v)
+            prev_sq = sq
+    return consts
+
+
+def _run_merge_race_case(device, seq_len, hidden_dim_total, expect_tpcx, num_repeats=3):
+    assert hidden_dim_total % NUM_SIMULATED_DEVICES == 0
+    hidden_per_dev = hidden_dim_total // NUM_SIMULATED_DEVICES
+
+    cores_x, tpcx, cores_y, tpcy = _assert_layout_exercised(
+        device, seq_len, hidden_per_dev, expect_tpcx, "merge-race"
+    )
+    # The race window needs the wide column: the merge core gathers an 8-worker
+    # semaphore and accumulates 8 partials per row while each worker's row is
+    # only a few tiles wide, making the merge core structurally the slowest core
+    # in the column. On a narrower column the skew this test hunts is absent.
+    assert cores_y == 8, (
+        f"[merge-race] LAYOUT GUARD: this case needs cores_y=8 to exercise the "
+        f"merge-core skew (got cores_y={cores_y} on this device grid). Update the "
+        f"shape table for this grid before trusting this run."
+    )
+    logger.info(
+        f"[merge-race] shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
+        f"cores_x={cores_x} tiles_per_core_x={tpcx} cores_y={cores_y} tiles_per_core_y={tpcy}"
+    )
+
+    # Row r is the constant c_r across the full row (every shard alike, since the
+    # input is chunked along the hidden dim and each shard keeps all rows).
+    row_constants = torch.tensor(_skewed_row_constants(seq_len), dtype=torch.float32)
+    torch_input = (
+        row_constants.unsqueeze(-1)
+        .expand(seq_len, hidden_dim_total)
+        .unsqueeze(0)
+        .unsqueeze(0)
+        .to(torch.bfloat16)
+    )
+    # Reference per-row E[x^2], computed from the actual bf16-rounded input so the
+    # comparison absorbs input quantization and tests only the merge.
+    ref_stats = torch_input.float().pow(2).mean(-1).squeeze(0).squeeze(0)  # (H,)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    input_chunks = torch.chunk(torch_input, NUM_SIMULATED_DEVICES, dim=-1)
+    tt_inputs = [_to_device(c, device) for c in input_chunks]
+
+    failures = []
+    for rep in range(num_repeats):
+        # NOTE: ttnn_rms_norm_pre_all_gather runs the op twice and asserts exact
+        # equality between runs -- an intermittent merge overwrite already fails
+        # there; the per-row check below names the corrupted rows.
+        tt_stats = [
+            ttnn_rms_norm_pre_all_gather(
+                t,
+                compute_kernel_config=compute_kernel_config,
+                dtype=ttnn.bfloat16,
+                use_2d_core_grid=True,
+            )
+            for t in tt_inputs
+        ]
+        for d, tt_s in enumerate(tt_stats):
+            s = ttnn.to_torch(tt_s).float()
+            if tuple(s.shape) != (1, 1, seq_len, TILE):
+                failures.append(
+                    f"rep {rep} shard {d}: unexpected stats shape {tuple(s.shape)}, "
+                    f"expected (1, 1, {seq_len}, {TILE})"
+                )
+                continue
+            got = s[0, 0, :, 0]
+            ok = torch.isclose(got, ref_stats, atol=0.5, rtol=0.02)
+            if bool(ok.all()):
+                continue
+            bad_rows = (~ok).nonzero(as_tuple=True)[0].tolist()
+            # Race signature: row r merged as row r+1's partial.
+            sig_rows = [
+                r
+                for r in bad_rows
+                if r + 1 < seq_len
+                and abs(float(got[r]) - float(ref_stats[r + 1]))
+                <= 0.5 + 0.02 * abs(float(ref_stats[r + 1]))
+            ]
+            failures.append(
+                f"rep {rep} shard {d}: {len(bad_rows)}/{seq_len} rows mismatched "
+                f"(first rows: {bad_rows[:8]}): "
+                + (
+                    f"RACE SIGNATURE -- rows {sig_rows[:8]} read row r+1's partial: "
+                    f"worker overwrote the merge buffer before the merge compute "
+                    f"consumed row r (no consumer ack between rows)"
+                    if sig_rows
+                    else "mismatch does not match the row r+1 overwrite pattern"
+                )
+            )
+    assert not failures, "merge-race regression fired:\n" + "\n".join(failures)
+
+
+@pytest.mark.parametrize(
+    "seq_len, hidden_dim_total, expect_tpcx",
+    [
+        # (2048, 4096): per-dev (H=2048, Wt=32) -> cores_x=8, tiles_per_core_x=8,
+        # cores_y=8, tiles_per_core_y=4. Eight merge iterations per core over an
+        # 8-wide column: maximal per-row merge-core lag against cheap worker rows.
+        (2048, 4096, 8),
+        # (1024, 4096): per-dev (H=1024, Wt=32) -> cores_x=8, tiles_per_core_x=4,
+        # cores_y=8, tiles_per_core_y=4. Shorter variant of the same skew shape.
+        (1024, 4096, 4),
+    ],
+)
+def test_distributed_2d_merge_race_skewed_rows(device, seq_len, hidden_dim_total, expect_tpcx):
+    """Skewed-row regression for the per-row merge race (review on #57039).
+
+    Distinct per-row partials: row r is a distinct constant, so its merged E[x^2]
+    is an exactly-known per-row signature asserted per row per shard -- not via
+    PCC, which a single corrupted row among hundreds would not move. If a worker
+    ships row r+1 while the merge compute still reads row r, row r's stat comes
+    back as row r+1's signature and the failure message names the overwrite.
+
+    Run (repo root, single Wormhole):
+        TT_METAL_OPERATION_TIMEOUT_SECONDS=45 pytest tests/ttnn/nightly/unit_tests/operations/fused/test_distributed_2d_core_grid_row_stride.py::test_distributed_2d_merge_race_skewed_rows -v
+    """
+    _run_merge_race_case(device, seq_len, hidden_dim_total, expect_tpcx)
