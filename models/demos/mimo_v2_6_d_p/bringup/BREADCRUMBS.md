@@ -408,3 +408,25 @@ Re-run
   precompile collect pass comes before the real pass and can be ignored.
 - `ffn_norm` is handled by `device_component` but is not in `DEVICE_STEPS` yet (not this step's job).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp_residual.py`
+
+## S.full_dense.06 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_dense_06_mlp_residual.py` with the
+  swap-05 body plus mlp_residual (whole dense block on device). mlp_residual's output is block `out`.
+- mlp_residual vs golden: rel L2 <= 0.01, per-token norm ratio [0.99, 1.01], also on the first 128 rows (the
+  mlp_residual component test's limits).
+- mlp_residual vs the CPU add on the same device h_mid / mlp_out (`CPU_SAME_INPUT`): rel L2 <= 0.01, ratio
+  [0.99, 1.01], worst per-token rel L2 <= 0.02 (catches a single zeroed row, which gives only 0.02 whole-chunk rel).
+- mlp check vs CPU and block-out rel L2 <= 0.01 kept from swap 05.
+
+Results
+- Device (default impl): pcc_swap_out 0.999993, out rel 0.0042 / first rows 0.0044, ratio [0.9988, 1.0064];
+  mlp_residual vs CPU rel 0.0019, ratio [1.0004, 1.0019], worst row 0.0024. PASS.
+- BRINGUP_IMPL=reference: PASS (out rel 0.0017, vs CPU 0). BRINGUP_IMPL=stub: FAIL (out PCC 0, rel 1.0).
+- The first FAIL / pcc=0 block in each log is the precompile collect pass, not the real run.
+
+Next
+- Every full_dense step is now on the device in the swap harness; the device module for mlp_residual already existed.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_06_mlp_residual.py`
