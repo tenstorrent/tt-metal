@@ -426,3 +426,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   The wrapper resets only when its dirty flag is set by a hang, so it did not reset after the failed open. Agents may not run `tt-smi -r`, and I did not touch the dirty flag to force one.
 - **A person must reset the board (`tt-smi -r`), then re-run the gate.** If the ratio check fails after that, the next thing to try is HiFi4 + fp32 dest in `tt/experts.py`.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py`
+
+## S.sliding.10 test (run1, attempt 1): swap attn_norm .. experts into the sliding block
+- Replaced the one-line template body with swap 9's checks, added `experts` to SWAPPED, and added a `moe` branch for experts. post_moe_norm runs on the CPU
+  right after experts and hides per-row scale errors, and upstream router flips move whole rows vs golden. So experts is checked vs golden with PCC >= 0.99
+  and rel L2 <= 0.05, and vs the CPU experts on the same device moe_norm and router with rel L2 <= 0.03, norm ratio in [0.97, 1.03], and worst per-token rel L2 <= 0.1
+  (the component limits). The gated metric stays `pcc_swap_out` >= 0.98.
+- Why 0.05 vs golden: the device scores 0.0266 (too close to 0.03). Most of that comes from router flips (45 rows mismatched vs golden, 16 vs iso). The iso check
+  isolates the experts module (device 0.0183). A dropped expert still scores >= 0.07 vs golden.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, experts rel 0.0031 / iso 0.0); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999954,
+  block out rel 0.0096 / 0.0087 (limit 0.02), experts pcc 0.99969, rel 0.0266 vs golden, iso rel 0.0183, ratio [0.9905, 1.0203], worst row 0.0273.
+- So the experts implementation (HiFi2 + fp32 dest GeluTanh kernel) now works on device. The board is back up after the ethernet-core outage.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py`
