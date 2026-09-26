@@ -943,3 +943,10 @@ Results
 - The first FAIL/pcc=0 block in the log comes from the precompile collect pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_02_attention.py`
+
+## C.full_moe.attn_residual.test.1 (test review)
+- Rewrote the rendered test from the sliding_moe attn_residual test (same checks) with LAYER = 5. Layer 5 is full attention with no sink, so attn_out is large: ||in|| 121.4, ||attn_out|| 78.9, ||h_mid|| 126.3 ([2048, 4096], bf16).
+- Checks: PCC >= 0.99 (gated), output size, finite, rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01], and on delta = out - in: attn coef in [0.98, 1.02] and attn rel L2 <= 0.05. These are tighter than layer 1's [0.95, 1.05] / 0.3 because bf16 output rounding is only 0.003 of this attn_out.
+- Host-measured mutation scores, PCC / rel: attn_out dropped 0.798; in + 0.5 attn_out 0.950; shift by one row 0.986 / 0.165 (attn rel 0.265); 2 * (in + attn_out) passes PCC but has rel 1.0; last row zeroed passes PCC (0.99985) but has rel 0.0176 and ratio min 0; last 32 columns zeroed 0.998 / 0.058. The PCC-passing mutations all fail the rel L2 or norm-ratio checks.
+- Runs: BRINGUP_IMPL=reference passes (pcc 0.999997, rel 0.0025); BRINGUP_IMPL=stub fails (pcc 0); default (device) passes: pcc 0.999996, rel 0.0030, ratio [0.9998, 1.0018], coef 1.0007, attn rel 0.0028.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attn_residual.py`
