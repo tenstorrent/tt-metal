@@ -6,7 +6,8 @@
 Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
-chunk_wall_ms, host_transfers_per_layer, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
+chunk_wall_ms, host_transfers_per_layer, prefill_ms_full, prefill_tok_s,
+prefill_chunk_ms_c<nn>, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
 """
 
 from __future__ import annotations
@@ -27,6 +28,51 @@ def profile_rung(s) -> str:
         return name
     cands = [r["name"] for r in s.data["ladder"] if r.get("prefix_from_golden")]
     return cands[-1] if cands else s.data["ladder"][-1]["name"]
+
+
+def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
+    """The whole target prefill, warm, with nothing read back: embed -> every layer -> final norm for every chunk, one
+    device sync at the end. A first pass compiles every position-dependent program; the second is timed
+    (prefill_ms_full, prefill_tok_s); a third syncs after each chunk for the per-chunk curve (prefill_chunk_ms_c<nn>).
+    Excludes the LM head and sampling (a host LM head would not be device time). Needs the full layer stack."""
+    if layers != list(range(s.num_layers)):
+        return None
+    seq, chunk = rung["seq"], rung["chunk"]
+    n = seq // chunk
+
+    def once(sync_each=False) -> list[float]:
+        marks, t0 = [], time.time()
+        for c in range(n):
+            s0 = c * chunk
+            h = model.embed(tokens[s0 : s0 + chunk])
+            for i in layers:
+                h2 = model.layer(i, h, s0, state)
+                model.free(h)
+                h = h2
+            if c == n - 1:
+                h2 = model.final_norm(h)
+                model.free(h)
+                h = h2
+            model.free(h)
+            if sync_each:
+                model.sync()
+                marks.append(time.time())
+        model.sync()
+        return [t0] + marks + [time.time()]
+
+    once()  # compile
+    t = once()
+    total = t[-1] - t[0]
+    metrics.record("prefill_ms_full", round(total * 1e3, 1))
+    metrics.record("prefill_tok_s", round(seq / total, 1))
+    t = once(sync_each=True)
+    per = [round((b - a) * 1e3, 1) for a, b in zip(t[:-2], t[1:-1])]
+    for c, ms in enumerate(per):
+        metrics.record(f"prefill_chunk_ms_c{c:02d}", ms)
+    print(
+        f"full prefill {seq} tokens in {n} chunks of {chunk}: {total:.2f}s warm ({seq / total:.0f} tok/s); per chunk {per}"
+    )
+    return {"tokens": seq, "chunk": chunk, "ms": total * 1e3, "chunk_ms": per}
 
 
 def run_profile(s, mesh, rung_name: str | None = None) -> dict:
@@ -69,6 +115,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     wall = time.time() - t0
     run(count=True)  # warm, apart from the timed run: host round-trips inside the forward pass (agent rule 5)
     metrics.record("host_transfers_per_layer", max(host))
+    full = full_prefill(s, model, state, layers, rung, g.tokens()) if s.get("perf.full_prefill", True) else None
 
     profiler.enable(mesh)
     run()
@@ -104,6 +151,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         "sections_ms_per_chip": {k: {str(c): v / 1e6 for c, v in d.items()} for k, d in prof["kernel_ns_dev"].items()},
         "programs": prof["programs"],
         "settings": getattr(model, "perf_settings", lambda: {})(),
+        "full_prefill": full,
     }
     path = metrics.results_dir() / f"{metrics.task_id()}_profile.json"
     path.parent.mkdir(parents=True, exist_ok=True)
