@@ -12,7 +12,8 @@ Metrics (last chunk unless noted):
     pcc_layer_L{i}       per-layer output trail
     pcc_state_min        worst state tensor over every layer and the whole sequence (and pcc_state_<name>_L{i})
     pcc_final_hidden, top1_match, top5_overlap, pcc_logits_tail     only when the stack ends at the model's last layer
-    chunk_seconds_c{c}, prefill_seconds, model_load_s, covered_layers, subset
+    chunk_seconds_c{c}, prefill_seconds, model_load_s, covered_layers, subset,
+    host_transfers_per_layer (warm chunks only: the most host round-trips inside one model.layer call)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing.harness import threshold
+from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
 def sampled_rows(chunk: int) -> torch.Tensor:
@@ -55,6 +57,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         first = last
 
     trail, t_total, hidden = {}, 0.0, None
+    host = {}  # layer -> host round-trips inside model.layer on warm chunks (after the first chunk this rung runs)
     for c in range(first, n_chunks):
         s0 = c * chunk
         t0 = time.time()
@@ -64,7 +67,13 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
                 if h is not None:
                     model.free(h)
                 h = model.embed(tokens[s0 : s0 + chunk]) if i == 0 else model.from_host(g.layer(c, i)["in"].float())
-            h2 = model.layer(i, h, s0, state)
+            if c > first:
+                with HostTransfers() as ht:
+                    h2 = model.layer(i, h, s0, state)
+                if ht.total >= host.get(i, (0, None))[0]:
+                    host[i] = (ht.total, dict(ht.calls))
+            else:
+                h2 = model.layer(i, h, s0, state)
             model.free(h)
             h = h2
             if c == last:
@@ -80,6 +89,14 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         if c != last:
             model.free(hidden)
     metrics.record("prefill_seconds", round(t_total, 3))
+    if host:
+        worst = max(n for n, _ in host.values())
+        metrics.record("host_transfers_per_layer", worst)
+        bad = {i: calls for i, (n, calls) in host.items() if n}
+        print(
+            f"host transfers per layer (warm): max {worst}"
+            + (f"; layers {sorted(bad)}: {bad[min(bad)]}" if bad else "")
+        )
 
     out = {"trail": {}, "failed": []}
     for i in layers:
