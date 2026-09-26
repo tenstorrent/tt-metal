@@ -794,3 +794,10 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0030, ratio [0.9959, 1.0021]),
   because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py`
+
+## S.global.11.test.1 (swap test, global steps 1-11, last post_moe_norm)
+- Test = global swap 10 (`test_swap_global_10_experts.py`) with `post_moe_norm` added to SWAPPED, the same way as sliding swap 11. post_moe_norm is a `norm` step, so the generic norm checks apply: vs golden PCC >= 0.99 and rel L2 <= 0.03, vs the CPU norm on the same device experts_out rel L2 <= 0.03 with per-token norm ratio in [0.97, 1.03]. No thresholds changed.
+- BRINGUP_IMPL=reference: passes (pcc_swap_out 0.999996, post_moe_norm rel 0.0069 golden / 0.0 iso). BRINGUP_IMPL=stub: fails.
+- Device (the gate): passes. pcc_swap_out 0.999972, block out rel 0.0074 / 0.0070 (first 128 rows). post_moe_norm pcc 0.99981, rel 0.0194 vs golden (mostly carried experts error, 0.0246), iso 0.0019, ratio [0.9972, 1.0017].
+- The run_safe_pytest precompile pass prints FAIL lines with pcc 0.000000. Those come from the stubbed comp pass, not the real run; read the final pass/fail line.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_11_post_moe_norm.py`
