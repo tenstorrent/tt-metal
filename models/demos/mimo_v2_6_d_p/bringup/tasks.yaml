@@ -1128,6 +1128,13 @@ tasks:
     kind: router
     layer: 5
     stateful: false
+  frozen:
+    at: '2026-09-26T22:59:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_router.py: 1883a73d6aea9e566b36f71bd41c039e9a852be0e1a96b2bfe40238bcc2a1ce8
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_moe.05
   title: 'full_moe block with steps 1-5 on device (last: router)'
   step: implement
