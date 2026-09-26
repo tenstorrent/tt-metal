@@ -69,6 +69,34 @@ def approve(spec, point: str, note: str = "", by: str | None = None) -> dict:
     return data[point]
 
 
+def shared_paths(spec, task: dict) -> list[str]:
+    """The task's allowed paths outside the model's own directories (model_dir, plus spec ``paths.own``): shared code
+    that other models use. An agent may change them only after the owner approves that task (``shared:<task id>``)."""
+    own = [str(spec.model_dir.relative_to(spec.repo))] + list(spec.get("paths.own") or [])
+    inside = lambda p: any(p == o or p.startswith(o.rstrip("/") + "/") for o in own)  # noqa: E731
+    return sorted(p for p in task.get("paths") or [] if not inside(p))
+
+
+def approve_shared(spec, task: dict, note: str = "", by: str | None = None) -> dict:
+    paths = shared_paths(spec, task)
+    if not paths:
+        raise ValueError(f"{task['id']} changes no shared code; nothing to approve")
+    data = load(spec)
+    data.setdefault("shared", {})[task["id"]] = {
+        "by": by or getpass.getuser(),
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "paths": paths,
+        "note": note,
+    }
+    _path(spec).write_text(yaml.safe_dump(data, sort_keys=False))
+    return data["shared"][task["id"]]
+
+
+def shared_approved(spec, task: dict) -> bool:
+    rec = (load(spec).get("shared") or {}).get(task["id"])
+    return bool(rec) and rec.get("paths") == shared_paths(spec, task)
+
+
 def is_approved(spec, point: str) -> bool:
     rec = load(spec).get(point)
     if not rec:

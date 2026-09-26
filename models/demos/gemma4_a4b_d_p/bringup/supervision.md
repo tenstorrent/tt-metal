@@ -23,6 +23,7 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 02:50 | C.global.post_mlp_norm | owner: teletext should alternate Index / Model graph every minute | framework (planned) | paused after post_mlp_norm; F24 carousel, selftest 115 passed |
 | 02:57 | S.global.07 | owner: carousel every 20 s, not 1 min | framework (planned) | paused after S.global.07; F24 interval 20 s, selftest 115 passed |
 | 04:04 | L.s56320 | gate FAIL: pytest-timeout at 300 s after all checks passed; fix agent started | framework | killed the orchestrator and fix agent (no edits made); F25 test timeout from spec + timeout stops for a person; selftest 117 passed; resume |
+| 04:20 | K.1 | L.s56320 passed (566b22d99d2); the contract agent started on shared adapter.py without the owner's OK | framework | killed the orchestrator and agent (no edits); F26 shared-code approval point; K.1 waits for `approve shared:K.1` |
 
 ## Hand-off (2026-09-26 02:10)
 
