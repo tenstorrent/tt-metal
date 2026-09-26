@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
+
 /*******************************************************************************
  * Header file for register addresses and fields
  *
