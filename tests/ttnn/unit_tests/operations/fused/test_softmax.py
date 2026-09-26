@@ -871,6 +871,32 @@ def test_softmax_4096x4096_fp32(device):
 
 
 @pytest.mark.parametrize(
+    "n",
+    [32, 1024, 4096],
+)
+def test_softmax_float32_default_uses_accurate_exp(device, n):
+    """Regression test for issue #57633: a float32 input must default to the accurate exp
+    (fast_and_approximate_mode=False), matching ttnn.exp's own default. Previously the default
+    compute kernel config hard-coded math_approx_mode=True for every dtype, so an all-ones row
+    (every softmax output is exactly 1/n) came back ~2.9% low and rows summed to ~0.97."""
+    torch_input_tensor = torch.ones((1, 1, 32, n), dtype=torch.float32)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.float32)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=-1)
+    output_torch = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_torch,
+        pcc_threshold=0.999,
+        rtol=0.01,
+        atol=1e-5,
+        frobenius_threshold=0.01,
+    )
+
+
+@pytest.mark.parametrize(
     "shape, dim",
     [
         ((1, 100, 6800), -1),

@@ -381,9 +381,16 @@ SoftmaxDeviceOperation::create_op_performance_model(
 static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_fidelity = (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    const auto default_fidelity =
+        (is_wormhole && is_fp32) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     verify_numerical_configuration(arch, compute_kernel_config);
-    return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
+    // Float32 inputs already get an fp32 Dest (is_fp32 -> fp32_dest_acc_en below), so default the exp
+    // approximation off for them too, matching ttnn.exp's own default (fast_and_approximate_mode=False).
+    // bfloat16 keeps the approximate default so existing model perf is unaffected. Callers who explicitly
+    // pass a compute_kernel_config are unaffected -- this only changes the default when none is supplied.
+    const auto default_approx_mode = !is_fp32;
+    return init_device_compute_kernel_config(
+        arch, compute_kernel_config, default_fidelity, default_approx_mode, is_fp32, false);
 }
 
 Tensor softmax(
