@@ -1123,6 +1123,13 @@ tasks:
     kind: norm
     layer: 5
     stateful: false
+  frozen:
+    at: '2026-09-26T02:13:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py: e0680ba0602e6000aceeeff0f61dc57fdc834ac9d1250abcd3f0d550e0ea92d3
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.global.03
   title: 'global block with steps 1-3 on device (last: post_attn_norm)'
   step: implement
