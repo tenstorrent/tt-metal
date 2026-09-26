@@ -1294,6 +1294,22 @@ def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
     assert_pooled_match(out, ref, heads, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
 
 
+@pytest.mark.parametrize("chunk_start,kv_len", [(0, 64), (128, 192), (192, 320)], ids=["2of8", "6of8", "2of8_unit1"])
+def test_indexer_score_block_pool_partial_unit_kv_len(device, chunk_start, kv_len):
+    """A block-aligned kv_len that ends MID work unit (valid blocks < k_chunk_size/block_size) must write each
+    query row's own pooled scores. The writer's row scratch is a NoC write source, so its rows must stay 16 B
+    apart; packing them at valid_blocks*2 bytes read the aligned-down address (row 1 repeated row 0, ...)."""
+    heads, dim, sq, t, block_size = 4, 64, 64, 512, 32
+    scale = dim**-0.5
+    q, k, _ = make_inputs(heads, dim, sq, t, seed=5)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=256, head_group_size=0)  # 8 blocks/unit
+    out = run_msa(q, k, chunk_start, device, scale=scale, block_size=block_size, program_config=cfg, kv_len=kv_len)
+    w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+    ref = indexer_score_msa_ref(q, k[:, :, :kv_len], w_scale, chunk_start, 1, block_size=block_size)
+    cols = kv_len // block_size
+    assert_pooled_match(out[..., :cols], ref, 1, sq, cols, pcc_floor=0.995)
+
+
 def test_indexer_score_block_pool_exact_vs_unpooled(device):
     """Pool exactness, free of matmul precision: block-max-pooling the op's OWN unpooled bf16 scores must
     equal the op's pooled output (both share the same matmul accumulator, so only the in-kernel reduce-MAX

@@ -13,6 +13,7 @@
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
 #include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "metadata_scalar_read.hpp"    // trace-safe 1-element metadata reads
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -53,14 +54,20 @@ void kernel_main() {
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
         TensorAccessorArgs<k_args.next_compile_time_args_offset(), k_args.next_common_runtime_args_offset()>();
+    // Trace-safe slot select: presence flag, landing CB, user-id accessor (q placeholder when absent).
+    constexpr uint32_t meta_ct = v_args.next_compile_time_args_offset();
+    constexpr bool meta_slot = get_compile_time_arg_val(meta_ct + 0) != 0;
+    constexpr uint32_t cb_meta = get_compile_time_arg_val(meta_ct + 1);
+    constexpr auto slot_meta_args = TensorAccessorArgs<meta_ct + 2, v_args.next_common_runtime_args_offset()>();
 
+    // Runtime-arg order == SparseSDPAMsaOperation::WriterArg.
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t work_start = get_arg_val<uint32_t>(1);
     const uint32_t work_count = get_arg_val<uint32_t>(2);
     const uint32_t k_addr = get_arg_val<uint32_t>(3);
     const uint32_t v_addr = get_arg_val<uint32_t>(4);
-    const uint32_t k_batch_tile_offset = get_arg_val<uint32_t>(5);  // cache_batch_idx slot offset (0 if not indexed)
-    const uint32_t v_batch_tile_offset = get_arg_val<uint32_t>(6);
+    uint32_t k_batch_tile_offset = get_arg_val<uint32_t>(5);  // cache_batch_idx slot offset (0 if not indexed)
+    uint32_t v_batch_tile_offset = get_arg_val<uint32_t>(6);
     uint32_t k_group_tile_stride = 0;
     uint32_t v_group_tile_stride = 0;
     if constexpr (n_kv > 1) {
@@ -69,6 +76,18 @@ void kernel_main() {
     }
 
     Noc noc;
+
+    if constexpr (meta_slot) {
+        // Same recomposition as the reader (which gathers the other half of every block), from the same word.
+        experimental::CB meta_cb(cb_meta);
+        meta_cb.reserve_back(1);
+        const uint32_t user_id = trace_metadata::read_metadata_scalar_u32(
+            noc, slot_meta_args, get_arg_val<uint32_t>(9), meta_cb.get_write_ptr());
+        const uint32_t slot = trace_metadata::bounded_cache_batch_idx(
+            user_id, get_arg_val<uint32_t>(12), get_arg_val<uint32_t>(13), get_arg_val<uint32_t>(14));
+        k_batch_tile_offset = slot * get_arg_val<uint32_t>(10);
+        v_batch_tile_offset = slot * get_arg_val<uint32_t>(11);
+    }
     experimental::CB out_cb(cb_out_rm), k_cb(cb_k_in), v_cb(cb_v_in), kreq_cb(cb_kreq), kack_cb(cb_kack);
     const auto out = TensorAccessor(out_args, out_addr);
     const auto k = TensorAccessor(k_args, k_addr);

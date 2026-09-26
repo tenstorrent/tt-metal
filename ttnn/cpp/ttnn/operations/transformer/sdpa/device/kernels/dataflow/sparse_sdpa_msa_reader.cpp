@@ -11,6 +11,8 @@
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_vertical_tile_bf16 (causal partial-column mask tile)
 #include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
+#include "block_cyclic_causal_geometry.hpp"  // per-device start / rotation, shared with the host and the indexer
+#include "metadata_scalar_read.hpp"          // trace-safe 1-element metadata reads
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -61,26 +63,77 @@ void kernel_main() {
     constexpr auto idx_args =
         TensorAccessorArgs<v_args.next_compile_time_args_offset(), v_args.next_common_runtime_args_offset()>();
 
+    // Trace-safe metadata (after the accessors, fixed width): presence flags, the landing CB, the host's
+    // rotation predicate, then the chunk-start and user-id accessors (q placeholders when absent).
+    constexpr uint32_t meta_ct = idx_args.next_compile_time_args_offset();
+    constexpr bool meta_chunk_start = get_compile_time_arg_val(meta_ct + 0) != 0;
+    constexpr bool meta_slot = get_compile_time_arg_val(meta_ct + 1) != 0;
+    constexpr uint32_t cb_meta = get_compile_time_arg_val(meta_ct + 2);
+    constexpr bool meta_rotation_exact = get_compile_time_arg_val(meta_ct + 3) != 0;
+    constexpr auto chunk_meta_args = TensorAccessorArgs<meta_ct + 4, idx_args.next_common_runtime_args_offset()>();
+    constexpr auto slot_meta_args = TensorAccessorArgs<
+        chunk_meta_args.next_compile_time_args_offset(),
+        chunk_meta_args.next_common_runtime_args_offset()>();
+    static_assert(!meta_chunk_start || CAUSAL_MASK_ENABLED, "chunk_start_idx_tensor enables the causal mask");
+
+    // Runtime-arg order == SparseSDPAMsaOperation::ReaderArg.
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
     const uint32_t v_addr = get_arg_val<uint32_t>(2);
     const uint32_t idx_addr = get_arg_val<uint32_t>(3);
     const uint32_t work_start = get_arg_val<uint32_t>(4);
     const uint32_t work_count = get_arg_val<uint32_t>(5);
-    // Indexed-cache slot offsets; zero when cache_batch_idx is unset.
-    const uint32_t k_batch_tile_offset = get_arg_val<uint32_t>(6);
-    const uint32_t v_batch_tile_offset = get_arg_val<uint32_t>(7);
+    // Indexed-cache slot offsets; zero when no slot is selected (or replaced below from the user-id tensor).
+    uint32_t k_batch_tile_offset = get_arg_val<uint32_t>(6);
+    uint32_t v_batch_tile_offset = get_arg_val<uint32_t>(7);
     uint32_t k_group_tile_stride = 0;
     uint32_t v_group_tile_stride = 0;
     if constexpr (n_kv > 1) {
         k_group_tile_stride = get_arg_val<uint32_t>(8);
         v_group_tile_stride = get_arg_val<uint32_t>(9);
     }
-    // Per-device global position of this core's query row 0 (chunk_start_idx + rank*S); patched at dispatch.
-    const uint32_t chunk_start_local = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(10) : 0;
+    // Per-device causal geometry from the host chunk_start_idx (start of query row 0, plus the boundary chip's
+    // slab straddle under a mid-slab block-cyclic start); patched at dispatch. Replaced below on the metadata path.
+    tt::block_cyclic::CausalGeometry geom{};
+    if constexpr (CAUSAL_MASK_ENABLED) {
+        geom = {get_arg_val<uint32_t>(10), get_arg_val<uint32_t>(11), get_arg_val<uint32_t>(12)};
+    }
     constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
 
     Noc noc;
+
+    if constexpr (meta_chunk_start || meta_slot) {
+        // One landing page, reserved for the kernel's lifetime (never pushed). Each read is consumed into a
+        // register before the next reuses the page.
+        experimental::CB meta_cb(cb_meta);
+        meta_cb.reserve_back(1);
+        const uint32_t meta_l1 = meta_cb.get_write_ptr();
+        if constexpr (meta_chunk_start) {
+            // Rank 0's global start -> THIS device's start and rotation, via the host's closed form. The
+            // block-cyclic compile-time args are in blocks; the geometry works in tokens.
+            const uint32_t chunk_start_idx =
+                trace_metadata::read_metadata_scalar_u32(noc, chunk_meta_args, get_arg_val<uint32_t>(13), meta_l1);
+            geom = tt::block_cyclic::causal_geometry(
+                chunk_start_idx,
+                block_cyclic,
+                meta_rotation_exact,
+                bc_sp,
+                bc_chunk_local * block_size,
+                get_arg_val<uint32_t>(14),  // device_index
+                /*tp_index=*/0,
+                S);
+        }
+        if constexpr (meta_slot) {
+            // slot = user_id * num_layers + layer_idx, bounded to the cache extent (slot 0 if out of range with
+            // device asserts disabled, keeping the read inside the allocation).
+            const uint32_t user_id =
+                trace_metadata::read_metadata_scalar_u32(noc, slot_meta_args, get_arg_val<uint32_t>(15), meta_l1);
+            const uint32_t slot = trace_metadata::bounded_cache_batch_idx(
+                user_id, get_arg_val<uint32_t>(18), get_arg_val<uint32_t>(19), get_arg_val<uint32_t>(20));
+            k_batch_tile_offset = slot * get_arg_val<uint32_t>(16);
+            v_batch_tile_offset = slot * get_arg_val<uint32_t>(17);
+        }
+    }
     experimental::CB q_cb(cb_q_rm), k_cb(cb_k_in), v_cb(cb_v_in), idx_cb(cb_idx), ctrl_cb(cb_ctrl);
     experimental::CB kreq_cb(cb_kreq), kack_cb(cb_kack);
     const auto q = TensorAccessor(q_args, q_addr);
@@ -146,7 +199,7 @@ void kernel_main() {
         uint32_t boundary_tile = 0;  // first fully-masked key-tile within the diagonal block
         uint32_t boundary_col = 0;   // within-tile column where masking starts (0 -> boundary_tile fully masked)
         if constexpr (CAUSAL_MASK_ENABLED) {
-            const uint32_t p = chunk_start_local + tok;  // global query position
+            const uint32_t p = tt::block_cyclic::query_position(geom, tok);  // global query position
             const uint32_t diag_block = p / block_size;
             for (uint32_t c = 0; c < n_active; ++c) {  // block_ids are topk-ordered (unsorted) -> linear scan
                 if (idx_ptr[c] == diag_block) {

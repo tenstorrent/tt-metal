@@ -34,6 +34,14 @@ namespace ttnn::transformer {
 // SP (chunked prefill, post-AllGather); the gather kernels remap logical block ids to physical in-kernel instead
 // of the caller reordering to natural order. sp is read from the mesh on that axis; chunk_local is the per-shard
 // chunk length (= chunk_size_global / sp), which must equal q_isl or tp*q_isl.
+// With a block-cyclic cache and `cluster_axis`, each device's causal start follows the cache writer's rotation
+// (exactly indexer_score_msa's geometry), so a mid-slab chunk_start is masked correctly on every chip.
+//
+// TRACE-SAFE metadata: `chunk_start_idx_tensor` / `cache_batch_idx_tensor` are 1-element uint32 ROW_MAJOR
+// interleaved DRAM tensors the kernels NoC-read every dispatch, replacing (and mutually exclusive with)
+// `chunk_start_idx` / `cache_batch_idx`. The chunk-start tensor holds rank 0's start (the per-device start and
+// rotation are derived in-kernel); the slot tensor holds the USER id, recomposed as
+// user * index_cache_num_layers + index_cache_layer_idx.
 ttnn::Tensor sparse_sdpa_msa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -46,6 +54,10 @@ ttnn::Tensor sparse_sdpa_msa(
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
+    uint32_t index_cache_num_layers = 1,
+    uint32_t index_cache_layer_idx = 0);
 
 }  // namespace ttnn::transformer

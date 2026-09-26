@@ -34,18 +34,6 @@ bool is_replicated_across_complete_mesh(const Tensor& tensor) {
            });
 }
 
-// Largest linearized index of q's devices along the given mesh axis (0 on a single device). Used by the
-// host-side chunk_start deduction.
-uint32_t max_linearized_rank(const Tensor& q, std::optional<uint32_t> axis) {
-    uint32_t max_rank = 0;
-    if (q.device_storage().get_coords().size() > 1) {
-        for (const auto& coord : q.device_storage().get_coords()) {
-            max_rank = std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, axis));
-        }
-    }
-    return max_rank;
-}
-
 // Miss-only checks: hash-pinned (placement, non-indexed k batch shape) so they can't differ on a hit. The
 // slot/kv_len values that do differ on a hit live in validate_runtime_values.
 // Indexed mode = a cache slot is selected, by EITHER the host scalar or the trace-safe tensor. Every
@@ -254,7 +242,7 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
     }
 }
 
-// Structural checks shared by every 1-element metadata tensor the fused reader consumes
+// Structural checks shared by every 1-element metadata tensor the reader consumes
 // (chunk_start_idx_tensor, valid_end_tensor, cache_batch_idx_tensor). Their VALUES are read
 // on-device, so only the container can be checked here -- and all three must satisfy the same
 // contract, so keep it in one place rather than three drifting copies.
@@ -286,48 +274,49 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
     if (!t.has_chunk_start_metadata()) {
         return;
     }
-    // Fused-only for now: the classic (unfused) factory still bakes the causal fields as host runtime args.
-    TT_FATAL(
-        attrs.has_fused_ring(),
-        "indexer_score: chunk_start_idx_tensor is supported only on the fused ring path "
-        "(ring_indexer_score_dsa); the classic factory has no on-device metadata read");
     // kv_len is derived from chunk_start_idx_tensor on-device.
     TT_FATAL(
         !attrs.kv_len.has_value(),
         "indexer_score: kv_len must not be set alongside chunk_start_idx_tensor -- on the metadata path it is "
-        "derived on-device as chunk_start_idx + sp*chunk_local (exactly what the scalar path passes)");
-    // The derivation needs the slab geometry, which only the block-cyclic layout carries.
+        "derived on-device as chunk_start_idx + the chunk extent (sp*chunk_local block-cyclic, seq_ring*Sq "
+        "contiguous), exactly what the scalar path passes");
+    // The fused all-gather sizes its transport from the slab geometry, which only the block-cyclic layout
+    // carries. The classic path (caller pre-gathered K) derives from the contiguous extent just as well.
     TT_FATAL(
-        attrs.has_block_cyclic(),
-        "indexer_score: chunk_start_idx_tensor requires the block-cyclic layout (block_cyclic_chunk_local), "
-        "whose sp/chunk_local are what the kernel derives kv_len and the causal rotation from");
+        !attrs.has_fused_ring() || attrs.has_block_cyclic(),
+        "indexer_score: ring_indexer_score_dsa chunk_start_idx_tensor requires the block-cyclic layout "
+        "(block_cyclic_chunk_local), whose sp/chunk_local are what the kernel derives kv_len and the causal "
+        "rotation from");
+    // Block-max-pool writes whole blocks, so the derived bound (start + extent) must stay block-aligned. The
+    // start's alignment is the caller's invariant (it is a device word); the extent is checkable here.
+    if (attrs.block_size > 0) {
+        const uint32_t extent = program::chunk_extent_for(attrs, t.q);
+        TT_FATAL(
+            extent % attrs.block_size == 0,
+            "indexer_score: the chunk extent {} the metadata path adds to chunk_start must be a multiple of "
+            "block_size {} when block-max-pooling",
+            extent,
+            attrs.block_size);
+    }
 
     validate_scalar_metadata_tensor(*t.chunk_start_idx_tensor, t.q, "chunk_start_idx_tensor");
 }
 // Structural checks for the real-token-end tensor. Mirrors validate_chunk_start_metadata; the value is
 // read on-device, so only the container and the co-requirements can be checked here.
-void validate_valid_end_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
+void validate_valid_end_metadata(const tensor_args_t& t) {
     if (!t.has_valid_end_metadata()) {
         return;
     }
     TT_FATAL(
-        attrs.has_fused_ring(),
-        "indexer_score: valid_end_tensor is supported only on the fused ring path "
-        "(ring_indexer_score_dsa); the classic factory has no on-device metadata read");
-    TT_FATAL(
         t.has_chunk_start_metadata(),
         "indexer_score: valid_end_tensor requires chunk_start_idx_tensor -- it only CAPS the bound the "
         "chunk-start derivation produces, so on its own there is nothing for it to cap");
-    TT_FATAL(
-        attrs.has_block_cyclic(),
-        "indexer_score: valid_end_tensor requires the block-cyclic layout, whose sp/chunk_local are what "
-        "the kernel derives the uncapped bound from");
     validate_scalar_metadata_tensor(*t.valid_end_tensor, t.q, "valid_end_tensor");
 }
 
 void validate_metadata_mode(const operation_attributes_t& attrs, const tensor_args_t& t) {
     validate_chunk_start_metadata(attrs, t);
-    validate_valid_end_metadata(attrs, t);
+    validate_valid_end_metadata(t);
 }
 
 // Structural checks for the trace-safe cache-slot tensor. Mirrors validate_chunk_start_metadata: the
@@ -337,18 +326,17 @@ void validate_cache_slot_metadata(const operation_attributes_t& attrs, const ten
         return;
     }
     TT_FATAL(
-        attrs.has_fused_ring(),
-        "indexer_score: cache_batch_idx_tensor is supported only on the fused ring path (the classic factory "
-        "has no indexed persistent cache to select a slot from)");
-    TT_FATAL(
         !attrs.cache_batch_idx.has_value(),
         "indexer_score: cache_batch_idx and cache_batch_idx_tensor are mutually exclusive -- pass the scalar "
         "OR the 1-element user-id tensor (the tensor is the trace-safe form)");
+    // Fused only: its all-gather derives the slot and the valid extent from the same metadata. The classic
+    // reader selects the slot on its own, so a slot tensor with a host-scalar start is legal there (eager
+    // callers can move to the slot tensor first).
     TT_FATAL(
-        t.has_chunk_start_metadata(),
-        "indexer_score: cache_batch_idx_tensor requires chunk_start_idx_tensor -- the fused all-gather "
-        "derives the slot and the valid extent from the same metadata, and a slot with a host-scalar extent "
-        "would be frozen at capture time anyway");
+        !attrs.has_fused_ring() || t.has_chunk_start_metadata(),
+        "indexer_score: ring_indexer_score_dsa cache_batch_idx_tensor requires chunk_start_idx_tensor -- the "
+        "fused all-gather derives the slot and the valid extent from the same metadata, and a slot with a "
+        "host-scalar extent would be frozen at capture time anyway");
     TT_FATAL(
         attrs.key_stripe_split == 1,
         "indexer_score: cache_batch_idx_tensor cannot be combined with a TP-split key cache "
@@ -1036,10 +1024,12 @@ ttnn::Tensor launch_indexer_score(
     TT_FATAL(
         !(chunk_start_idx.has_value() && chunk_start_idx_tensor.has_value()),
         "indexer_score: chunk_start_idx and chunk_start_idx_tensor are mutually exclusive");
+    // Metadata path: the start lives on-device, so the host value is an inert placeholder (0) -- deducing one
+    // here would also wrongly FATAL for a fixed worst-case T whose written prefix is shorter.
     uint32_t base = 0;
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
-    } else {
+    } else if (!chunk_start_idx_tensor.has_value()) {
         const uint32_t T = k.logical_shape()[2];
         if (block_cyclic.has_value()) {
             const uint32_t chunk = block_cyclic->sp * block_cyclic->chunk_local;
@@ -1056,7 +1046,7 @@ ttnn::Tensor launch_indexer_score(
             // block-cyclic permutation is stored as contiguous, so TP is the sequence-bearing axis.
             const auto seq_axis = seq_subshard_axis.has_value() ? seq_subshard_axis : cluster_axis;
             const uint32_t seq_ring =
-                ttnn::operations::experimental::indexer_score::max_linearized_rank(q, seq_axis) + 1;
+                ttnn::operations::experimental::indexer_score::program::max_linearized_rank(q, seq_axis) + 1;
             TT_FATAL(
                 T >= seq_ring * Sq,
                 "indexer_score: cannot deduce chunk_start_idx -- T={} < seq_ring({})*Sq({}). Pass chunk_start_idx "
@@ -1157,7 +1147,12 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_len,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& valid_end_tensor,
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
+    uint32_t index_cache_num_layers,
+    uint32_t index_cache_layer_idx) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
@@ -1182,7 +1177,15 @@ ttnn::Tensor indexer_score_msa(
         seq_shard_axes.value_or(std::vector<uint32_t>{}),
         /*allow_subshard=*/false,  // MSA has no TP sub-shard
         block_cyclic_sp_axis,
-        block_cyclic_chunk_local);
+        block_cyclic_chunk_local,
+        /*block_cyclic_cache_tp_sharded=*/false,
+        /*k_local=*/std::nullopt,
+        /*fused_ring=*/std::nullopt,  // classic factory: the caller pre-gathered K
+        chunk_start_idx_tensor,
+        valid_end_tensor,
+        cache_batch_idx_tensor,
+        index_cache_num_layers,
+        index_cache_layer_idx);
 }
 
 ttnn::Tensor ring_indexer_score_dsa(
