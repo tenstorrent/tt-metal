@@ -275,8 +275,8 @@ Drive this ledger with
   `box.device_params` defaults to FABRIC_2D. `agents.rules` in a spec stays for model-specific rules.
 
 ## F24 (2026-09-26): teletext carousel
-- Owner: the teletext screen should switch between Model graph and Index every minute. While page 100 or 102 is on
-  screen and hold is off, the screen rolls to the other one after 60 s. A key press restarts the count, hold stops it,
+- Owner: the teletext screen should switch between Model graph and Index every minute (then 20 s). While page 100 or 102 is on
+  screen and hold is off, the screen rolls to the other one after 20 s (`CAROUSEL_S`). A key press restarts the count, hold stops it,
   and other pages stay put. With prefers-reduced-motion, hold starts on, so it does not flip.
 - `selftest/teletext_shim.js` runs the screen script under node with a fake DOM and clock;
   `test_teletext_carousel` checks the timeline (the flip, hold, a key press, another page).
