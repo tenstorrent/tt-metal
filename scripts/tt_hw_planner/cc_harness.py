@@ -92,6 +92,46 @@ def build_mcp_config(python_bin: str, server_path: str | Path, env: dict, server
     }
 
 
+# The out-of-band gate check's wall clock.
+#
+# A WRAPPER MUST NEVER BE TIGHTER THAN WHAT IT WRAPS. This call runs the gate in a subprocess, and
+# the gate has its own budget (the server's per-pytest timeout). While the default here was a flat
+# hour and the gate's own budget was four, an honest gate that simply took longer than an hour was
+# SIGKILLed mid-run and -- because the timeout was swallowed -- came back as an ordinary "not done"
+# with no reason. On a T3K at batch 32 the e2e gate needs ~110 min, so it could never complete: four
+# consecutive rounds died at 59m41s having done real work, and the kill was indistinguishable from a
+# PCC failure. It had never surfaced before because at batch 4 the same gate takes ~15 min.
+#
+# So the budget is, in order:
+#   1. ``_GATE_STATUS_TIMEOUT_ENV`` -- an operator's explicit value wins and is used unscaled.
+#   2. ADAPTIVE: a multiple of the longest gate this process has actually observed. Sized from
+#      measured cost rather than a typed number, so it follows the box, the batch and the precision
+#      mode by itself instead of needing one constant per combination.
+#   3. The caller's own budget as the FLOOR -- what it wraps, so it can never be tighter.
+# The result only ever grows. A gate that ran long once is not evidence that the next one is hung.
+_GATE_STATUS_TIMEOUT_ENV = "E2E_GATE_STATUS_TIMEOUT"
+_GATE_STATUS_GROWTH = 4  # headroom over the longest observed gate, matching probes' ceiling multiple
+_gate_status_observed: dict = {}
+
+
+def _gate_status_budget(key: str, floor: int) -> int:
+    """Seconds this gate check may take: operator's value, else measured cost, else the floor."""
+    override = os.environ.get(_GATE_STATUS_TIMEOUT_ENV)
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            pass
+    observed = float(_gate_status_observed.get(key) or 0.0)
+    return max(int(floor), int(_GATE_STATUS_GROWTH * observed))
+
+
+def _record_gate_status_cost(key: str, seconds: float) -> None:
+    """Remember the longest this gate has taken, so later checks are sized from it."""
+    if seconds > 0 and seconds > float(_gate_status_observed.get(key) or 0.0):
+        _gate_status_observed[key] = float(seconds)
+
+
 def gate_status(
     python_bin: str,
     server_dir: str | Path,
@@ -122,6 +162,8 @@ def gate_status(
     )
     env = dict(os.environ)
     env.update(mcp_env)
+    budget = _gate_status_budget(str(server_module), timeout_s)
+    started = time.monotonic()
     try:
         r = subprocess.run(
             [str(python_bin), "-c", code, str(server_dir)],
@@ -129,10 +171,21 @@ def gate_status(
             env=env,
             capture_output=True,
             text=True,
-            timeout=timeout_s,
+            timeout=budget,
         )
+    except subprocess.TimeoutExpired:
+        # NAME IT. Swallowed, this is a verdict-shaped lie: the caller cannot tell a gate that was
+        # killed from one that ran and failed, so it retries the same work until the run is abandoned.
+        reason = (
+            f"the gate check was killed after {int(time.monotonic() - started)}s (limit {int(budget)}s) "
+            f"-- it did not report a verdict. Raise ${_GATE_STATUS_TIMEOUT_ENV} if the gate legitimately "
+            f"takes longer."
+        )
+        print(f"  [gate] {reason}", flush=True)
+        return {"can_stop": False, "halt": False, "reason": reason, "next_op": "", "next_rung": ""}
     except Exception:  # noqa: BLE001
         return {"can_stop": False, "halt": False, "reason": "", "next_op": "", "next_rung": ""}
+    _record_gate_status_cost(str(server_module), time.monotonic() - started)
     out = r.stdout or ""
 
     def pick(pfx: str) -> str:

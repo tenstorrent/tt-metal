@@ -2068,7 +2068,10 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     env["PYTHONPATH"] = str(repo_root)
 
     def gate_fn():
-        return cc_harness.gate_status(pybin, thp_dir, "e2e_mcp", mcp_env, repo_root)
+        # The gate's OWN budget is the floor: this call wraps the gate, so a tighter limit here
+        # kills honest work and reports nothing. `timeout_s` is the same value handed to the server
+        # as its per-pytest timeout above, so the two layers cannot disagree.
+        return cc_harness.gate_status(pybin, thp_dir, "e2e_mcp", mcp_env, repo_root, timeout_s=timeout_s)
 
     prompt = _build_cc_fix_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
     allowed = ["mcp__e2e-mcp__termination_check", "Read", "Edit", "Write", "Bash", "Grep", "Glob"]
