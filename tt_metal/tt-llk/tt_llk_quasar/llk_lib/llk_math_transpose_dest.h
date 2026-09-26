@@ -155,11 +155,9 @@ inline void _llk_math_transpose_dest_mop_config_()
                 _llk_math_transpose_dest_emit_face_read_<false>(32, 32);
                 _llk_math_transpose_dest_emit_face_read_<false>(48, 48);
 
-                constexpr std::uint32_t first_swap_src  = ELTWISE_MATH_ROWS == 8 ? 16 : 32;
-                constexpr std::uint32_t second_swap_src = ELTWISE_MATH_ROWS == 8 ? 32 : 16;
                 _llk_math_transpose_dest_emit_face_write_<false>(0, 0);
-                _llk_math_transpose_dest_emit_face_write_<false>(first_swap_src, second_swap_src);
-                _llk_math_transpose_dest_emit_face_write_<false>(second_swap_src, first_swap_src);
+                _llk_math_transpose_dest_emit_face_write_<false>(16, 32);
+                _llk_math_transpose_dest_emit_face_write_<false>(32, 16);
                 _llk_math_transpose_dest_emit_face_write_<false>(48, 48);
             });
 

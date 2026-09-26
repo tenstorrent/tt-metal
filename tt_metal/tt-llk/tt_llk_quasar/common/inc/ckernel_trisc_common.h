@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <ckernel_proj_params.h>
+
 #include <cstdint>
 
 #include "cfg_defines.h"
@@ -10,7 +12,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_buf_desc.h"
 #include "ckernel_instr_params.h"
-#include "ckernel_proj_params.h"
 #include "ckernel_template.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
@@ -61,7 +62,7 @@ static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE
 constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 // Mask to extract data format bits
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
-constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
+constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
 typedef struct
 {

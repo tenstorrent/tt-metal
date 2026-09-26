@@ -167,7 +167,7 @@ inline _llk_math_matmul_execution_geometry_t _llk_math_matmul_execution_geometry
         .has_next_face        = has_next_face,
         .has_next_face_row    = has_next_face_row,
         .has_next_k_face      = has_next_k_face,
-        .use_half_face_replay = ELTWISE_MATH_ROWS < MAX_FPU_ROWS && face_rows == MAX_FPU_ROWS,
+        .use_half_face_replay = FPU_SPLITS_DEST_ROW_GROUP && face_rows == MAX_FPU_ROWS,
     };
 }
 
@@ -435,7 +435,7 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
     }
     else
     {
-        if constexpr (ELTWISE_MATH_ROWS < MAX_FPU_ROWS)
+        if constexpr (FPU_SPLITS_DEST_ROW_GROUP)
         {
             if (use_half_face_replay)
             {
@@ -650,8 +650,8 @@ inline void _llk_math_matmul_init_(
             "direct-indexing and 2x matmul support exact 16x16-face, 2x2 operand shapes only");
     }
 
-    // On 4row_arch the Int8_2x matmul only has a direct-indexing path, so force DI for 2x there.
-    constexpr bool USE_DIRECT_INDEXING = ENABLE_DIRECT_INDEXING || (ELTWISE_MATH_ROWS == 4 && ENABLE_2X_FORMAT);
+    // A part without the MXFP4_2x replay image reaches 2x through direct indexing.
+    constexpr bool USE_DIRECT_INDEXING = ENABLE_DIRECT_INDEXING || (ENABLE_2X_FORMAT && !FPU_HAS_MXFP4_2X_REPLAY);
 
     if constexpr (USE_DIRECT_INDEXING)
     {
