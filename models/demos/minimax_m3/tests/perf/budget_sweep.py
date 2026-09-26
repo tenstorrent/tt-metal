@@ -30,6 +30,8 @@ Env:
   BUDGET_FILL        real | none. none skips the history fill (attends a zeroed cache)   [default real]
   BUDGET_STAGES      1, 2 or 4 (sub-mesh (8/S, 4)); BUDGET_STAGE picks which one      [default 2 / 0]
   BUDGET_TOKENS      metadata.json with token_ids, tiled to length                       [required]
+  BUDGET_ANY_LAYERS  1 -> allow BUDGET_LAYER_IDS outside the stage's own layer range     [default 0]
+  BUDGET_MEM         1 -> report per-bank DRAM in use after the last point               [default 0]
   M3_FABRIC, M3_CCL_TOPOLOGY, EXPERT_DTYPE, HF_MODEL, TT_CACHE_PATH as for profile_prefill.py.
 """
 
@@ -74,7 +76,8 @@ def build(mesh, layer_ids, W, capacity, stages, stage):
     hf_config = model_args.hf_config
     per_stage = hf_config.num_hidden_layers // stages
     first, end = stage * per_stage, (stage + 1) * per_stage
-    assert all(first <= i < end for i in layer_ids), f"layers {layer_ids} outside stage [{first}, {end})"
+    if os.getenv("BUDGET_ANY_LAYERS", "0") != "1":  # 1 -> explicit layers may straddle the carve's stage range
+        assert all(first <= i < end for i in layer_ids), f"layers {layer_ids} outside stage [{first}, {end})"
     hf_config.num_hidden_layers = len(layer_ids)
     os.environ.setdefault("M3_WEIGHTS_FROM_CACHE", "1")
     expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
@@ -173,6 +176,17 @@ def main():
                 wall_ms_median=round(statistics.median(walls), 3),
                 wall_ms_min=round(min(walls), 3),
                 wall_ms_max=round(max(walls), 3),
+            )
+        if os.getenv("BUDGET_MEM", "0") == "1":
+            # DRAM held after the deepest point: weights + KV cache + persistent gather buffers (not a true peak).
+            mv = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+            emit(
+                kind="mem",
+                **{
+                    k: getattr(mv, k)
+                    for k in dir(mv)
+                    if not k.startswith("_") and isinstance(getattr(mv, k), (int, float))
+                },
             )
         emit(kind="done")
     finally:

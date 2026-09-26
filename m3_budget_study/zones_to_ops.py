@@ -12,9 +12,9 @@ COLS = ["run_id", "layer", "layer_type", "zone", "device_ms_worst_chip", "device
 CCL = ("allgather", "all_gather", "reduce_scatter", "ag_", "dispatch", "combine", "allreduce")
 
 
-def main(res):
+def main(res, pattern="e3*_h*_n*.log"):
     rows = []
-    for log in sorted(glob.glob(os.path.join(res, "logs", "e3*_h*_n*.log"))):
+    for log in sorted(glob.glob(os.path.join(res, "logs", pattern))):
         run_id = os.path.basename(log)[:-4]
         csvs = re.findall(r"CSV: (\S+)", open(log, errors="replace").read())
         if not csvs:
@@ -54,4 +54,4 @@ def main(res):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(*sys.argv[1:3])

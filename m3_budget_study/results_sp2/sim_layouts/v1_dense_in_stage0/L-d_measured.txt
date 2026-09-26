@@ -1,0 +1,169 @@
+stages=2 pipelines=4 hop=8.45 ms prefill requests=3613 useful tokens=19,624,571 work tokens=23,207,900 (recompute 15.4%) budget_ms=497.2
+split=[30, 30]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     25214    421.5    974.4    86.3       1273       2932  100  83
+  4096    cost     24791    427.4    520.9    86.3       1291       1571  100  84
+  8192    fcfs     26517    814.4   1862.6    86.3       2452       5596  100  82
+  8192    cost     25013    457.7    521.1    86.3       1382       1572  100  83
+split=[3, 57]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     15942    697.3   1247.9    86.3       2100       3752   16 100
+  4096    cost     14094    394.4    675.5    86.3       1192       2035   14 100
+  8192    fcfs     17034   1310.3   2369.8    86.3       3939       7118   17 100
+  8192    cost     14097    394.4    675.5    86.3       1192       2035   14 100
+split=[4, 56]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     16226    685.1   1226.0    86.3       2064       3687   18 100
+  4096    cost     14353    388.2    663.6    86.3       1173       1999   16 100
+  8192    fcfs     17338   1287.3   2328.2    86.3       3870       6993   19 100
+  8192    cost     14354    388.0    663.6    86.3       1173       1999   16 100
+split=[5, 55]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     16521    672.9   1204.2    86.3       2027       3621   20 100
+  4096    cost     14625    382.5    651.8    86.3       1156       1964   18 100
+  8192    fcfs     17653   1264.3   2286.6    86.3       3801       6868   21 100
+  8192    cost     14625    382.5    651.8    86.3       1156       1964   18 100
+split=[6, 54]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     16827    660.6   1182.3    86.3       1990       3555   22 100
+  4096    cost     14909    376.8    639.9    86.3       1139       1928   21 100
+  8192    fcfs     17979   1241.3   2245.0    86.3       3732       6744   23 100
+  8192    cost     14913    376.8    639.9    86.3       1139       1928   21 100
+split=[7, 53]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     17144    648.4   1160.4    86.3       1954       3490   25 100
+  4096    cost     15221    372.1    628.8    86.3       1125       1895   23 100
+  8192    fcfs     18318   1218.3   2203.5    86.3       3663       6619   26 100
+  8192    cost     15221    371.7    628.8    86.3       1123       1895   23 100
+split=[8, 52]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     17473    636.2   1138.5    86.3       1917       3424   27 100
+  4096    cost     15555    367.8    616.9    86.3       1112       1859   25 100
+  8192    fcfs     18670   1195.3   2161.9    86.3       3594       6494   28 100
+  8192    cost     15553    367.7    616.9    86.3       1111       1859   25 100
+split=[9, 51]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     17816    623.9   1116.6    86.3       1880       3358   29 100
+  4096    cost     15925    364.4    605.0    86.3       1102       1824   28 100
+  8192    fcfs     19035   1172.3   2120.3    86.3       3525       6369   31 100
+  8192    cost     15909    364.1    605.0    86.3       1101       1824   28 100
+split=[10, 50]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     18172    611.7   1094.7    86.3       1844       3293   32 100
+  4096    cost     16323    362.8    593.8    86.3       1097       1790   30 100
+  8192    fcfs     19415   1149.4   2078.7    86.3       3457       6245   33 100
+  8192    cost     16294    362.8    593.8    86.3       1097       1790   30 100
+split=[11, 49]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     18542    599.5   1072.8    86.3       1807       3227   35 100
+  4096    cost     16781    365.2    582.6    86.3       1104       1756   33 100
+  8192    fcfs     19811   1126.4   2037.2    86.3       3388       6120   36 100
+  8192    cost     16749    365.2    582.6    86.3       1104       1756   33 100
+split=[12, 48]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     18929    587.2   1050.9    86.3       1770       3161   38 100
+  4096    cost     17273    372.2    571.3    86.3       1125       1722   36 100
+  8192    fcfs     20223   1103.4   1995.6    86.3       3319       5995   39 100
+  8192    cost     17265    371.5    570.7    86.3       1123       1721   36 100
+split=[13, 47]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     19331    575.0   1029.0    86.3       1733       3095   40 100
+  4096    cost     17799    383.5    559.4    86.3       1159       1687   39 100
+  8192    fcfs     20653   1080.4   1954.0    86.3       3250       5870   42 100
+  8192    cost     17807    384.7    559.4    86.3       1163       1687   39 100
+split=[14, 46]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     19751    562.8   1007.1    86.3       1697       3030   43 100
+  4096    cost     18356    402.4    548.1    86.3       1216       1653   42 100
+  8192    fcfs     21101   1057.4   1912.4    86.3       3181       5746   45 100
+  8192    cost     18347    402.2    548.1    86.3       1215       1653   42 100
+split=[15, 45]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     20190    550.5    985.2    86.3       1660       2964   47 100
+  4096    cost     18898    422.1    536.8    86.3       1275       1619   46 100
+  8192    fcfs     21570   1034.4   1870.9    86.3       3112       5621   48 100
+  8192    cost     18924    421.9    536.8    86.3       1274       1619   46 100
+split=[16, 44]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     20648    538.3    963.3    86.3       1623       2898   50 100
+  4096    cost     19456    439.1    525.4    86.3       1326       1585   49 100
+  8192    fcfs     22059   1011.4   1829.3    86.3       3043       5496   51 100
+  8192    cost     19514    439.6    525.4    86.3       1327       1585   49 100
+split=[17, 43]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     21128    526.1    941.4    86.3       1587       2833   53 100
+  4096    cost     20011    447.7    513.5    86.3       1351       1549   53 100
+  8192    fcfs     22571    988.5   1787.7    86.3       2974       5372   55 100
+  8192    cost     20075    447.1    513.5    86.3       1350       1549   53 100
+split=[18, 42]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     21631    513.8    919.5    86.3       1550       2767   57 100
+  4096    cost     20605    449.8    502.1    86.3       1358       1515   56 100
+  8192    fcfs     23108    965.5   1746.1    86.3       2905       5247   58 100
+  8192    cost     20671    450.5    502.1    86.3       1360       1515   56 100
+split=[19, 41]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     22158    501.6    897.6    86.3       1513       2701   61 100
+  4096    cost     21232    449.3    496.8    86.3       1356       1499   60 100
+  8192    fcfs     23670    942.5   1704.6    86.3       2836       5122   62 100
+  8192    cost     21277    450.9    496.8    86.3       1361       1499   60 100
+split=[20, 40]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     22711    489.4    875.7    86.3       1477       2636   65 100
+  4096    cost     21852    446.4    496.6    86.3       1348       1498   64 100
+  8192    fcfs     24261    919.5   1663.0    86.3       2767       4997   66 100
+  8192    cost     21900    447.3    496.7    86.3       1350       1499   64 100
+split=[21, 39]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     23293    477.1    853.9    86.3       1440       2570   69 100
+  4096    cost     22505    441.0    496.4    86.3       1331       1498   69 100
+  8192    fcfs     24882    896.5   1621.4    86.3       2698       4873   71 100
+  8192    cost     22550    443.3    496.5    86.3       1338       1498   69 100
+split=[22, 38]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     23897    464.9    830.0    86.3       1403       2498   74 100
+  4096    cost     23309    437.1    496.7    86.3       1320       1499   73 100
+  8192    fcfs     25532    874.3   1575.9    86.3       2631       4736   75 100
+  8192    cost     23180    438.3    496.6    86.3       1323       1498   73 100
+split=[23, 37]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     24555    452.9    815.3    86.3       1367       2454   78 100
+  4096    cost     23935    434.3    496.4    86.3       1311       1498   78 100
+  8192    fcfs     26212    852.4   1563.6    86.3       2566       4699   80 100
+  8192    cost     24045    435.9    496.4    86.3       1316       1498   78 100
+split=[24, 36]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     25227    440.4    841.3    86.3       1330       2532   83 100
+  4096    cost     24805    433.8    496.5    86.3       1310       1498   83 100
+  8192    fcfs     26889    830.0   1599.6    86.3       2499       4807   85 100
+  8192    cost     24813    437.3    496.6    86.3       1320       1498   83 100
+split=[25, 35]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     25911    429.1    861.8    86.3       1296       2594   89 100
+  4096    cost     25645    436.4    496.5    86.3       1318       1498   88 100
+  8192    fcfs     27582    805.0   1632.6    86.3       2423       4906   90 100
+  8192    cost     25639    443.8    496.6    86.3       1340       1498   88 100
+split=[26, 34]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     26630    416.0    886.6    86.3       1256       2668   94 100
+  4096    cost     26458    435.4    496.1    86.3       1315       1497   94 100
+  8192    fcfs     28334    783.5   1690.7    86.3       2359       5080   95  99
+  8192    cost     26501    450.1    496.7    86.3       1359       1498   94 100
+split=[27, 33]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     26980    404.4    905.7    86.3       1222       2725   99  99
+  4096    cost     26916    425.1    496.2    86.3       1284       1497   99  99
+  8192    fcfs     28681    762.1   1740.7    86.3       2295       5231   99  98
+  8192    cost     27146    446.6    496.7    86.3       1348       1499   99  99
+split=[28, 32]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     26508    395.7    927.6    86.3       1196       2791  100  94
+  4096    cost     26164    423.3    497.2    86.3       1278       1500  100  94
+  8192    fcfs     27946    766.1   1782.3    86.3       2307       5355  100  92
+  8192    cost     26531    459.4    497.6    86.3       1387       1501  100  94
+split=[29, 31]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     25902    409.1    946.5    86.3       1236       2848  100  88
+  4096    cost     25495    424.0    508.9    86.3       1280       1535  100  89
+  8192    fcfs     27241    790.6   1815.1    86.3       2380       5454  100  87
+  8192    cost     25797    461.0    509.7    86.3       1392       1537  100  89

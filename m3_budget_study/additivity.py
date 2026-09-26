@@ -6,9 +6,11 @@
 T1 = E2 single-segment W=2048 time for the same layer set, linear in h between grid points at the same n.
 T(W, all cold) = the packed all-cold composition of the same run (C1 at W=4096, C8 at W=8192).
 
-  additivity.py results/runs.csv [results/additivity.csv]
+  additivity.py results/runs.csv [results/additivity.csv] [T1_EXP PACKED_EXP]    (defaults E2 E4; SP=2: A2 A3)
 """
 import csv, json, sys
+
+T1_EXP, PACKED_EXP = "E2", "E4"
 from collections import defaultdict
 
 
@@ -19,14 +21,18 @@ def load(path):
         if r["status"] != "OK" or not r["wall_ms_median"]:
             continue
         segs = json.loads(r["segments_json"])
-        if r["exp"] == "E2" and int(r["W"]) == 2048:
+        if r["exp"] == T1_EXP and int(r["W"]) == 2048:
             t1[r["layer_set"]][(segs[0]["h"], segs[0]["n"])] = float(r["wall_ms_median"])
-        elif r["exp"] == "E4":
+        elif r["exp"] == PACKED_EXP:
             packed[(r["layer_set"], int(r["W"]), r["notes"].split()[0])] = (segs, float(r["wall_ms_median"]))
     return t1, packed
 
 
 def T1(grid, h, n):
+    ns = sorted({nn for _, nn in grid})
+    if n not in ns:  # linear in n between the measured n values (e.g. SP=2 grid has n = 256 and 2048 only)
+        lo, hi = max(x for x in ns if x < n), min(x for x in ns if x > n)
+        return T1(grid, h, lo) + (n - lo) / (hi - lo) * (T1(grid, h, hi) - T1(grid, h, lo))
     hs = sorted(hh for hh, nn in grid if nn == n)
     if h in hs:
         return grid[(h, n)]
@@ -87,4 +93,6 @@ def main(path, out=None):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 4:
+        T1_EXP, PACKED_EXP = sys.argv[3], sys.argv[4]
     main(*sys.argv[1:3])

@@ -2,3 +2,5 @@ results/phaseb_gate/
 results/phaseb_e8/
 results/profiles/*/ops_perf_results_*.csv
 results/e7_aborted/
+results_sp2/profiles/*/ops_perf_results_*.csv
+results_sp2.tar.gz

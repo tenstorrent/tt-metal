@@ -5,7 +5,8 @@
 """
 import csv, json, sys
 
-N = {"D": (3, 0), "S8": (0, 8), "S0": (3, 5)}
+N = {"D": (3, 0), "S8": (0, 8), "S0": (3, 5), "D2": (3, 0), "S8P": (0, 8)}
+PACKED_EXP = "E4"
 
 
 def stage_ms(C, n_dense, n_sparse, W, segs):
@@ -24,7 +25,7 @@ def main(runs, coeffs):
     C = json.load(open(coeffs))
     res = []
     for r in csv.DictReader(open(runs)):
-        if r["status"] != "OK" or r["exp"] != "E4":
+        if r["status"] != "OK" or r["exp"] != PACKED_EXP:
             continue
         segs = json.loads(r["segments_json"])
         pred = stage_ms(C, *N[r["layer_set"]], int(r["W"]), segs)
@@ -38,4 +39,6 @@ def main(runs, coeffs):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 3:
+        PACKED_EXP = sys.argv[3]  # A3 for the SP=2 follow-up
     main(*sys.argv[1:3])

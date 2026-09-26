@@ -1,0 +1,63 @@
+## r2_w4096_sync0
+  cold_k2      chunks  48 tokens  196608 time  15.96 s  tok/s   12319
+  cold_open    chunks  48 tokens  196608 time  14.37 s  tok/s   13682
+  h141_k2      chunks  48 tokens  196608 time  17.00 s  tok/s   11565
+  h141_open    chunks  48 tokens  196608 time  15.30 s  tok/s   12850
+  h549_k2      chunks  48 tokens  196608 time  27.85 s  tok/s    7060
+  h549_open    chunks  48 tokens  196608 time  24.94 s  tok/s    7883
+
+## r2_w4096_sync0_split24-36
+  cold_k2      chunks  48 tokens  196608 time  18.68 s  tok/s   10525
+  cold_open    chunks  48 tokens  196608 time  16.67 s  tok/s   11794
+  h549_k2      chunks  48 tokens  196608 time  27.64 s  tok/s    7113
+  h549_open    chunks  48 tokens  196608 time  24.86 s  tok/s    7909
+
+## r2_w4096_sync1
+  cold_open    chunks  24 tokens   98304 time   6.48 s  tok/s   15170
+  h549_open    chunks  24 tokens   98304 time  11.13 s  tok/s    8832
+  [cold_open] per-stage compute ms (median): s0 292.3  s1 329.4   bottleneck = stage 1
+  [cold_open] hop s0->s1: median 8.99 ms (min 8.99, n=1)
+  [h549_open] per-stage compute ms (median): s0 568.2  s1 480.0   bottleneck = stage 0
+  [h549_open] hop s0->s1: median 8.96 ms (min 8.26, n=24)
+
+## r2_w8192_sync0
+  cold_k2      chunks  48 tokens  393216 time  28.80 s  tok/s   13653
+  cold_open    chunks  48 tokens  393216 time  25.77 s  tok/s   15259
+  h141_k2      chunks  48 tokens  393216 time  29.86 s  tok/s   13169
+  h141_open    chunks  48 tokens  393216 time  26.83 s  tok/s   14656
+  h549_k2      chunks  48 tokens  393216 time  47.15 s  tok/s    8340
+  h549_open    chunks  48 tokens  393216 time  42.26 s  tok/s    9305
+
+## r4_w4096_sync0
+  cold_k4      chunks  48 tokens  196608 time  13.92 s  tok/s   14124
+  cold_open    chunks  48 tokens  196608 time  12.52 s  tok/s   15704
+  h141_k4      chunks  48 tokens  196608 time  14.67 s  tok/s   13402
+  h141_open    chunks  48 tokens  196608 time  13.19 s  tok/s   14906
+  h549_k4      chunks  48 tokens  196608 time  26.06 s  tok/s    7544
+  h549_open    chunks  48 tokens  196608 time  23.77 s  tok/s    8271
+
+## r4_w4096_sync0_split12-16-16-16
+  cold_k4      chunks  48 tokens  196608 time  14.68 s  tok/s   13393
+  cold_open    chunks  48 tokens  196608 time  13.23 s  tok/s   14861
+  h549_k4      chunks  48 tokens  196608 time  23.51 s  tok/s    8363
+  h549_open    chunks  48 tokens  196608 time  21.32 s  tok/s    9222
+
+## r4_w4096_sync1
+  cold_open    chunks  24 tokens   98304 time   5.94 s  tok/s   16549
+  h549_open    chunks  24 tokens   98304 time  11.02 s  tok/s    8921
+  [cold_open] per-stage compute ms (median): s0 218.2  s1 255.7  s2 269.6  s3 254.9   bottleneck = stage 2
+  [cold_open] hop s0->s1: median 11.57 ms (min 11.57, n=1)
+  [cold_open] hop s1->s2: median 11.14 ms (min 11.14, n=1)
+  [cold_open] hop s2->s3: median 11.28 ms (min 10.95, n=24)
+  [h549_open] per-stage compute ms (median): s0 532.4  s1 310.0  s2 310.3  s3 310.7   bottleneck = stage 0
+  [h549_open] hop s0->s1: median 11.85 ms (min 11.34, n=24)
+  [h549_open] hop s1->s2: median 11.00 ms (min 10.57, n=24)
+  [h549_open] hop s2->s3: median 11.63 ms (min 11.20, n=24)
+
+## r4_w8192_sync0
+  cold_k4      chunks  48 tokens  393216 time  25.76 s  tok/s   15265
+  cold_open    chunks  48 tokens  393216 time  23.25 s  tok/s   16913
+  h141_k4      chunks  48 tokens  393216 time  27.64 s  tok/s   14226
+  h141_open    chunks  48 tokens  393216 time  24.95 s  tok/s   15760
+  h549_k4      chunks  48 tokens  393216 time  49.41 s  tok/s    7958
+  h549_open    chunks  48 tokens  393216 time  45.21 s  tok/s    8698

@@ -5,7 +5,11 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$HERE/.." && pwd)}"
-RES="$HERE/results"
+RES="${BUDGET_RESULTS:-$HERE/results}"
+# Optional single-owner guard: BUDGET_LOCK=<file> BUDGET_LOCK_OWNER=<name> refuses to run unless the file names us.
+if [ -n "${BUDGET_LOCK:-}" ] && ! grep -q "owner=${BUDGET_LOCK_OWNER:-}" "$BUDGET_LOCK" 2>/dev/null; then
+  echo "lock $BUDGET_LOCK is not owned by ${BUDGET_LOCK_OWNER:-?}; refusing to run"; exit 3
+fi
 : "${RUN_ID:?}" "${BUDGET_LAYER_IDS:?}"; [ -n "${HARNESS:-}" ] && export HARNESS
 export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 export TT_CACHE_PATH="${TT_CACHE_PATH:-/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill}"

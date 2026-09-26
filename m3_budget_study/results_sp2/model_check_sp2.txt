@@ -1,0 +1,11 @@
+D2   4096 C1   meas    17.1 model    17.9 ( -5.0%)
+D2   4096 C4   meas   184.7 model   185.9 ( -0.6%)
+D2   4096 C7   meas   185.5 model   185.9 ( -0.2%)
+D2   8192 C8   meas    33.8 model    35.0 ( -3.7%)
+D2   8192 C9   meas   198.4 model   203.0 ( -2.3%)
+S8P  4096 C1   meas   125.9 model   126.3 ( -0.3%)
+S8P  4096 C4   meas   147.1 model   146.4 ( +0.5%)
+S8P  4096 C7   meas   146.9 model   140.0 ( +4.7%)
+S8P  8192 C8   meas   232.0 model   236.9 ( -2.1%)
+S8P  8192 C9   meas   254.3 model   257.0 ( -1.1%)
+max |resid| 5.0%  mean |resid| 2.1%

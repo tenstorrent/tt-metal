@@ -75,7 +75,8 @@ def build(mesh, layer_ids, W, seg, capacity, num_users, stages, stage):
     hf_config = model_args.hf_config
     per_stage = hf_config.num_hidden_layers // stages
     first, end = stage * per_stage, (stage + 1) * per_stage
-    assert all(first <= i < end for i in layer_ids), f"layers {layer_ids} outside stage [{first}, {end})"
+    if os.getenv("BUDGET_ANY_LAYERS", "0") != "1":  # 1 -> explicit layers may straddle the carve's stage range
+        assert all(first <= i < end for i in layer_ids), f"layers {layer_ids} outside stage [{first}, {end})"
     hf_config.num_hidden_layers = len(layer_ids)
     os.environ.setdefault("M3_WEIGHTS_FROM_CACHE", "1")
     expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
