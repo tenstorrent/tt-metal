@@ -448,3 +448,24 @@ Results
   full_dense serves this step already. The first `FAIL ... pcc=0.000000` line comes from the precompile pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attn_norm.py`
+
+## S.sliding_moe.01 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_sliding_moe_01_attn_norm.py` with the
+  body of `test_swap_full_dense_01_attn_norm.py` (BLOCK_TYPE = sliding_moe, layer 1). Gated pcc_swap_out (0.98). Asserted
+  extras: attn_norm vs golden PCC >= 0.99, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]; block out finite with
+  rel L2 <= 0.01.
+
+Why
+- CPU mutations measured with a temporary env hook, since removed: x1.05, eps 1e-2 and 5% noise all pass the 0.98 gate.
+  x1.05 gives out rel 0.0100, step rel 0.050 and ratio 1.05; eps gives step rel 2.9; noise gives step rel 0.050. Only the
+  extras catch these three. Sum-instead-of-mean, a missing weight and a zeroed last row fail the gate as well.
+- Unlike layer 0, the zero stub fails the gate here (out PCC 0, rel 16.9).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999996 / rel 0.0030, step rel 0.0024). BRINGUP_IMPL=stub: FAIL.
+- Device (default): PASS, pcc_swap_out 0.999995, out rel 0.0032, attn_norm rel 0.0030, ratio [0.9934, 1.0058]; router
+  trail PCC 0.9991, experts_out 0.9999. The first FAIL/pcc=0 block in each log is the precompile pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_01_attn_norm.py`
