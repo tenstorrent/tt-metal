@@ -1,0 +1,29 @@
+{
+ "metrics": {
+  "pcc_attention_L05": {
+   "t": "2026-09-26T22:36:54",
+   "value": 0.9999901787134443
+  },
+  "rel_l2_attention_L05": {
+   "t": "2026-09-26T22:36:54",
+   "value": 0.005086933262646198
+  },
+  "rel_l2_head_rows_attention_L05": {
+   "t": "2026-09-26T22:36:54",
+   "value": 0.005009699612855911
+  },
+  "row_norm_ratio_max_attention_L05": {
+   "t": "2026-09-26T22:36:54",
+   "value": 1.003196358680725
+  },
+  "row_norm_ratio_min_attention_L05": {
+   "t": "2026-09-26T22:36:54",
+   "value": 0.9932584166526794
+  },
+  "worst_row_rel_l2_attention_L05": {
+   "t": "2026-09-26T22:36:54",
+   "value": 0.009526588954031467
+  }
+ },
+ "task": "C.full_moe.attention"
+}
