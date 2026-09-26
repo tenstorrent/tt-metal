@@ -1952,7 +1952,9 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
         &nextafter,
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        // One ULP of the destination format is not representable in a block-float tile packed
+        // against a shared exponent: the step rounds away and the op returns its input.
+        R"doc(BFLOAT16, FLOAT32)doc");
 
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,
