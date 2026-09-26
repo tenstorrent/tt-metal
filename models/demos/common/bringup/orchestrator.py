@@ -542,6 +542,14 @@ class Orchestrator:
         task = self.led.task(tid)
         role = task.get("role") or ROLE_OF_STEP.get(task.get("step"))
         self.echo(f"[{tid}] {task['title']} (step {task.get('step')}, role {role or 'script'})")
+        shared = approvals.shared_paths(self.spec, task)
+        if shared and not approvals.shared_approved(self.spec, task):
+            return self._human(
+                task,
+                f"{tid} may change shared code outside {rel(self.spec, self.spec.model_dir)}: {', '.join(shared)}. "
+                f"Ask the owner; on their yes: python -m models.demos.common.bringup approve shared:{tid} "
+                f"--spec {self.spec.path}",
+            )
         if task.get("tests") and not task.get("frozen"):
             reason = self.freeze_tests(task)
             if reason:
