@@ -216,6 +216,64 @@ def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_de
     assert reduced_output.shape == (devices, 1, ceil(batch * seq / REDUCTION_SIZE), experts_per_device)
 
 
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize(
+    "reduction_size, error_match",
+    [
+        (0, "reduction_size must be positive"),
+        (10, "must be divisible by reduction_size"),
+    ],
+    ids=["zero_reduction_size", "batch_seq_not_divisible"],
+)
+def test_moe_expert_token_remap_invalid_reduction_size(
+    mesh_device, mesh_shape, input_memory_config, reduction_size, error_match, expect_error
+):
+    """Host validation rejects reduction_size the writer and work split cannot handle."""
+    torch.manual_seed(2005)
+    random.seed(2005)
+
+    devices = prod(mesh_shape)
+    batch = devices * 8
+    seq = 1
+    experts = devices * 8
+    selected_experts_k = 8
+
+    expert_mapping, metadata_tensor, topk_tensor, _, _ = gen_tensors(
+        devices, experts, batch, seq, selected_experts_k, mesh_shape, REDUCTION_SIZE, "random"
+    )
+
+    tt_topk = ttnn.from_torch(
+        topk_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    with expect_error(RuntimeError, error_match):
+        ttnn.moe_expert_token_remap(tt_topk, tt_expert_mapping, tt_metadata, reduction_size=reduction_size)
+
+
 # Skip this for now
 @pytest.mark.skip(reason="Issue #28376")
 @pytest.mark.parametrize(
