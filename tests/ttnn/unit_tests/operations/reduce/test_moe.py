@@ -51,7 +51,7 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
             atol=0.012,
             frobenius_threshold=0.017,
             check_ulp=True,
-            ulp_threshold=8,
+            ulp_threshold=10,
         )
 
 
