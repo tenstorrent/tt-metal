@@ -747,6 +747,13 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-26T01:21:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py: 2436c005f5b7750b0f66550d79e9b83a7ccf065b1b15b7378024b9fa405763bf
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.sliding.11
   title: 'sliding block with steps 1-11 on device (last: post_moe_norm)'
   step: implement
