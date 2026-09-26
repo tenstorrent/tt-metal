@@ -220,6 +220,27 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             prev_swap = sid
         last_swaps.append(prev_swap)
 
+    # Assemble: the swap tests run every step on the device through the hybrid harness (host in / host out per step);
+    # the ladder, the contract and the profile need one model whose hidden state stays on the device.
+    if last_swaps:
+        multi = next((r for r in ladder if not r.get("prefix_from_golden") and r["seq"] // r["chunk"] > 1), first)
+        am = {
+            "pcc_layer_L*": thr(spec, "layer"),
+            "pcc_state_min": thr(spec, "state"),
+            "host_transfers_per_layer": "== 0",
+        }
+        add(
+            "M.1",
+            "Assemble the all-device model (hidden state on the device from embedding to final norm)",
+            "assemble",
+            last_swaps,
+            f"BRINGUP_RUNG={multi['name']} {SAFE} --no-precompile models/demos/common/bringup/tests/test_ladder.py",
+            am,
+            device=True,
+            paths=impl_paths,
+        )
+        last_swaps = ["M.1"]
+
     prev = None
     for r in ladder:
         tid = f"L.{r['name']}"
