@@ -63,6 +63,22 @@ struct HDSocketDescriptor {
     uint32_t bytes_acked_device_offset = 0;  // D2H: L1 offset of bytes_acked within config buffer
     uint32_t connector_state_offset = 0;     // Offset of HDSocketConnectorState within the SHM region
 
+    // --- Owner identity ---
+    // Start time (/proc/<pid>/stat field 22) of the process that exported this descriptor
+    uint64_t owner_start_time = 0;
+
+    /**
+     * @brief Whether the process that exported this descriptor is still alive.
+     *
+     * Identity is (pid embedded in shm_name, owner_start_time). True when shm_name carries
+     * no pid, so descriptors from unknown producers are never rejected.
+     *
+     * The check is made with kill(2) and /proc, so the connector must share the owner's pid
+     * namespace (same pod with shareProcessNamespace, or hostPID); from another namespace a
+     * live owner would look dead.
+     */
+    bool owner_alive() const;
+
     /**
      * @brief Populate common fields from the owner socket's state.
      *
@@ -93,6 +109,11 @@ struct HDSocketDescriptor {
 
     /**
      * @brief Wait for a descriptor file to appear and read it.
+     *
+     * A file whose owner is no longer alive (see owner_alive()) is treated as not yet
+     * published: it is what a crashed owner leaves behind, and the owner's successor
+     * overwrites it when it exports.
+     *
      * @param descriptor_path Full path to the descriptor file.
      * @param expected_type Expected socket_type ("h2d" or "d2h").
      * @param timeout_ms Max wait time in milliseconds (default 10000).
