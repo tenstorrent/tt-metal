@@ -7,7 +7,6 @@ Runs the generic scripts on the synthetic fixture (selftest/fixture_model.py), a
 golden (read-only) to check the reader against a real golden when it is present on this machine.
 """
 
-
 import json
 
 import pytest
@@ -117,13 +116,14 @@ class ChatTok:
 
     bos_token_id = 1
 
-    def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=False):
-        return "<T" + ("G" if add_generation_prompt else "") + ">" + msgs[0]["content"]
+    def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=False, enable_thinking=True):
+        gen = ("G" if enable_thinking else "GE") if add_generation_prompt else ""
+        return "<T" + gen + ">" + msgs[0]["content"]
 
     def __call__(self, text, add_special_tokens=False):
         ids = []
         if text.startswith("<T"):
-            ids = [7] + ([8] if text[2] == "G" else [])
+            ids = [7] + ([8] if text[2] == "G" else []) + ([9] if text.startswith("<TGE>") else [])
             text = text[text.index(">") + 1 :]
         return {"input_ids": ids + [3] * len(text)}
 
@@ -133,6 +133,15 @@ def test_prompt_wraps(fx, wrap, head):
     s = Spec.load(fx(text={"wrap": wrap, "request": "Rec"}))
     ids, info = prompt.build_ids(s, ChatTok(), 16)
     assert ids[:3] == head and len(ids) == 16 and info["wrap"] == wrap
+
+
+def test_prompt_template_kwargs_reach_the_chat_template(fx):
+    """F38: a thinking model's book follows an empty think block (text.template_kwargs: {enable_thinking: false})."""
+    s = Spec.load(fx(text={"wrap": "model_turn", "request": "Rec", "template_kwargs": {"enable_thinking": False}}))
+    ids, info = prompt.build_ids(s, ChatTok(), 16)
+    assert ids[:4] == [7, 8, 9, 3] and info["template_kwargs"] == {"enable_thinking": False}
+    ids, info = prompt.build_ids(Spec.load(fx(text={"wrap": "model_turn", "request": "Rec"})), ChatTok(), 16)
+    assert ids[:3] == [7, 8, 3] and "template_kwargs" not in info
 
 
 def test_prompt_file_is_built_once_and_pinned(fx):
