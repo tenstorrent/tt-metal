@@ -524,6 +524,13 @@ tasks:
     swapped:
     - attn_norm
     layer: 1
+  frozen:
+    at: '2026-09-26T20:45:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_01_attn_norm.py: 73000aeb6ce03309ccd9c37b90d92f99745d08734b00da2c4bd9c18eb386ce4f
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.sliding_moe.attention
   title: sliding_moe attention (attention) on device, layer 1
   step: implement
