@@ -464,3 +464,21 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, post_moe_norm rel 0.0043 / iso 0.0); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999953,
   block out rel 0.0096 / 0.0087 (limit 0.02), post_moe_norm pcc 0.99981, rel 0.0195, iso 0.0019, ratio [0.9975, 1.0009]; experts iso 0.0183, ratio [0.9905, 1.0203].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py`
+
+## C.sliding.ffn_combine test (run1, attempt 1)
+- Replaced the one-line template body with the attn_residual test's checks (STEP = ffn_combine, ffn_sum = mlp_post_norm + moe_post_norm). The gated metric stays
+  `pcc_ffn_combine_L00` >= 0.99. The test also asserts rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03] and a finite output, and records `rel_l2_*` and
+  `row_norm_ratio_{min,max}_*` as informational metrics.
+- Why: on this golden PCC passes 2x (0.999999), 0.5x (0.999999), row 0 zeroed (0.99984), the last row zeroed (0.99969) and the last 32 rows zeroed (0.9917).
+  rel L2 / ratio catch all of them. The last row zeroed scores rel 0.025, so only the ratio check (min 0) catches it. CPU reference: rel 0.0022, ratio [0.9977, 1.0020];
+  a bf16 add scores rel 0.0027. Dropping an operand already fails PCC (mlp only 0.918, moe only 0.741).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999998, rel 0.0022); stub FAIL (PCC). The gate fails with NotImplementedError because there is no device module yet
+  (that is the implement step). `tt/` may already hold an add module to reuse from attn_residual.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py`
+
+## C.sliding.ffn_combine implement (run1, attempt 1)
+- Reused `tt/residual.py:TtResidualAdd` (replicated `ttnn.add`, no collective), the same module as attn_residual. The only change is in hooks.py: `ffn_combine` added to
+  `_RESIDUAL_STEPS` (so device_component and HybridDeviceModel route it through `_residual_host_fn`), and to DEVICE_STEPS["sliding"].
+- Gate PASS: pcc_ffn_combine_L00 0.999997, rel L2 0.0027, row norm ratio [0.9973, 1.0039]. The `FAIL ... pcc=0.000000` line comes from the precompile collect pass
+  (comp_pcc stub), not the real pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py`

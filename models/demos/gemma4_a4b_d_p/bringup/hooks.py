@@ -40,12 +40,13 @@ DEVICE_STEPS = {
         "moe_norm",
         "experts",
         "post_moe_norm",
+        "ffn_combine",
     },
     "global": set(),
 }
 
-# Residual steps: h_mid = in + attn_post_norm (replicated, no collective).
-_RESIDUAL_STEPS = {"attn_residual"}
+# Residual steps (replicated, no collective): h_mid = in + attn_post_norm; ffn_sum = mlp_post_norm + moe_post_norm.
+_RESIDUAL_STEPS = {"attn_residual", "ffn_combine"}
 
 # Norm steps -> checkpoint weight name (under model.language_model.layers.<i>.).
 _NORM_WEIGHTS = {
