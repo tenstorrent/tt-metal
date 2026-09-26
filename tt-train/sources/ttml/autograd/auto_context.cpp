@@ -64,13 +64,102 @@ void AutoContext::reset_graph() {
     m_graph.reset();
 }
 
+void AutoContext::enter_backward() {
+    ++m_backward_depth;
+}
+
+void AutoContext::exit_backward() {
+    TT_FATAL(m_backward_depth > 0U, "AutoContext::exit_backward called without a matching enter_backward");
+    --m_backward_depth;
+}
+
+bool AutoContext::is_backward_in_progress() const {
+    return m_backward_depth > 0U;
+}
+
+void AutoContext::enable_ccl_sub_device(uint32_t num_columns, uint32_t num_rows) {
+    TT_FATAL(!m_ccl_sub_device_id.has_value(), "AutoContext: the CCL sub-device is already enabled");
+    TT_FATAL(
+        m_num_command_queues == 2U,
+        "AutoContext: the CCL sub-device needs the device opened with two command queues (collectives on the "
+        "CCL sub-device issued from the compute queue stall the compute launches queued behind them)");
+    TT_FATAL(
+        (num_columns > 0U) != (num_rows > 0U),
+        "AutoContext: the CCL sub-device is either the rightmost columns or the bottom rows, got {} columns and {} "
+        "rows",
+        num_columns,
+        num_rows);
+    auto& device = get_device();
+    const auto grid = device.compute_with_storage_grid_size();
+    const uint32_t grid_x = static_cast<uint32_t>(grid.x);
+    const uint32_t grid_y = static_cast<uint32_t>(grid.y);
+    TT_FATAL(num_columns < grid_x && num_rows < grid_y, "AutoContext: CCL sub-device must leave compute cores");
+    // The CCL kernels take (workers + 1 mux) x 2 directions cores per link and pick 1, 2 or 4 workers
+    // by what fits: 8 cores for 1 worker, 12 for 2, 20 for 4 (full speed). On a 12x10 Blackhole grid a
+    // 10-core column gets 1 worker (measured 2.3x slower all-gather), a 12-core row 2, two columns 4.
+    const uint32_t compute_x = grid_x - num_columns;
+    const uint32_t compute_y = grid_y - num_rows;
+
+    const std::array<tt::tt_metal::CoreRangeSet, 1> compute_cores{tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+        tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{compute_x - 1U, compute_y - 1U}))};
+    const tt::tt_metal::CoreRange ccl_range =
+        num_columns > 0U
+            ? tt::tt_metal::CoreRange(
+                  tt::tt_metal::CoreCoord{compute_x, 0}, tt::tt_metal::CoreCoord{grid_x - 1U, grid_y - 1U})
+            : tt::tt_metal::CoreRange(
+                  tt::tt_metal::CoreCoord{0, compute_y}, tt::tt_metal::CoreCoord{grid_x - 1U, grid_y - 1U});
+    const std::array<tt::tt_metal::CoreRangeSet, 1> ccl_cores{tt::tt_metal::CoreRangeSet(ccl_range)};
+
+    const std::array<tt::tt_metal::SubDevice, 2> sub_devices{
+        tt::tt_metal::SubDevice(ttsl::Span<const tt::tt_metal::CoreRangeSet>(compute_cores)),
+        tt::tt_metal::SubDevice(ttsl::Span<const tt::tt_metal::CoreRangeSet>(ccl_cores))};
+    // local_l1_size 0: keep the single global allocator; the sub-devices only partition execution.
+    const auto manager_id =
+        device.create_sub_device_manager(ttsl::Span<const tt::tt_metal::SubDevice>(sub_devices), /* local_l1_size */ 0);
+    device.load_sub_device_manager(manager_id);
+    // Programs on a mesh command queue must lie inside one sub-device and nearly every op sizes its
+    // core grid from compute_with_storage_grid_size(), so make the device report the compute
+    // rectangle from now on. Leave the default stall group (all sub-devices) so host reads and
+    // synchronizes wait for both.
+    m_full_compute_grid = grid;
+    device.set_compute_with_storage_grid_size_override(tt::tt_metal::CoreCoord{compute_x, compute_y});
+    m_ccl_sub_device_id = tt::tt_metal::SubDeviceId{1};
+}
+
+bool AutoContext::has_ccl_sub_device() const {
+    return m_ccl_sub_device_id.has_value();
+}
+
+std::optional<tt::tt_metal::SubDeviceId> AutoContext::ccl_sub_device_id() const {
+    return m_ccl_sub_device_id;
+}
+
+tt::tt_metal::SubDeviceId AutoContext::compute_sub_device_id() const {
+    return tt::tt_metal::SubDeviceId{0};
+}
+
+tt::tt_metal::CoreCoord AutoContext::full_compute_grid_size() {
+    return m_full_compute_grid.value_or(get_device().compute_with_storage_grid_size());
+}
+
 void AutoContext::open_device(
-    const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::vector<int>& device_ids) {
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const std::vector<int>& device_ids,
+    size_t num_command_queues) {
     if (m_device) {
         throw std::runtime_error("open_device was called after the device was created.");
     }
+    TT_FATAL(
+        num_command_queues == 1 || num_command_queues == 2,
+        "num_command_queues must be 1 or 2, got {}",
+        num_command_queues);
     m_mesh_shape = mesh_shape;
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
+    m_num_command_queues = num_command_queues;
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids, num_command_queues);
+}
+
+size_t AutoContext::num_command_queues() const {
+    return m_num_command_queues;
 }
 
 void AutoContext::close_profiler() {

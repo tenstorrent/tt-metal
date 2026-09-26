@@ -4,6 +4,8 @@
 
 #include "tensor.hpp"
 
+#include "auto_context.hpp"
+#include "core/scoped.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -74,6 +76,8 @@ void Tensor::backward(bool retain_graph) {
     auto& graph_nodes = graph.get_graph_nodes();
     std::ranges::reverse(sorted_nodes);
     try_init_grad(/* init_ones */ true);
+    // Mark the backward pass for the whole node loop (exception-safe; nested backward calls stack).
+    auto backward_guard = core::Scoped([]() { ctx().enter_backward(); }, []() { ctx().exit_backward(); });
     for (const auto& node_id : sorted_nodes) {
         graph_nodes[node_id].grad_function();
         if (!retain_graph) {

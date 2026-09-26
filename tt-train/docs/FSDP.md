@@ -39,6 +39,20 @@ device_config:
   mesh_shape: [32, 1]
 ```
 
+Two optional knobs trade memory or a few cores for fewer exposed collectives (details in
+[Fewer collectives](#fewer-collectives-keeping-blocks-gathered) and
+[Overlapping collectives with compute](#overlapping-collectives-with-compute)):
+
+```yaml
+device_config:
+  enable_fsdp: true
+  mesh_shape: [8, 1]
+  fsdp_keep_gathered_gib: 2.0          # keep the last blocks that fit in 2 GiB gathered (.inf = all)
+  fsdp_overlap_collectives: true       # CCL sub-device + second command queue
+  fsdp_ccl_subdevice: {columns: 1}     # default; {rows: 1} has faster collectives but a 12x9 grid
+  fsdp_overlap_lookahead: 2            # blocks the collective queue may run ahead (2x that many gather slots)
+```
+
 `enable_fsdp` and `enable_ddp` are mutually exclusive on a 1D / line
 mesh — pick one. On a 2D mesh, they can coexist (HSDP, see
 [Hybrid FSDP+DDP (HSDP)](#hybrid-fsdpddp-hsdp)). `enable_fsdp` can also
@@ -53,9 +67,10 @@ In your training script (the nano_gpt example does this for you, gated on
 ```python
 # After model creation, BEFORE create_optimizer.
 if device_config.enable_fsdp:
-    for block in model.blocks:
-        ttml.fsdp.fully_shard(block)
-    ttml.fsdp.fully_shard(model)
+    keep = ttml.fsdp.blocks_to_keep_gathered(model.blocks, device_config.fsdp_keep_gathered_gib)
+    for i, block in enumerate(model.blocks):
+        ttml.fsdp.fully_shard(block, reshard_after_forward=i not in keep)
+    ttml.fsdp.fully_shard(model, reshard_after_forward=False)  # root params are live all step anyway
 
 # Optimizer state is now allocated against the sharded parameter shapes.
 optimizer = create_optimizer(model, yaml_config)
@@ -111,9 +126,9 @@ Wraps `module` in place and returns it. After the call:
 | Parameter | Default | Description |
 |---|---|---|
 | `module` | required | An `AbstractModuleBase` instance (block, root model, etc.). |
-| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights), falls back to `rank-1` if `rank-2` is already taken by another mesh axis (e.g. TP) or has size 1. Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
+| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto considers `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights) then `rank-1`, drops dims already taken by another mesh axis (e.g. TP), of size 1, or not divisible by the FSDP axis size, and prefers the dim whose per-rank shard is **tile-aligned** (a multiple of 32) — see [Tile-aligned shards](#tile-aligned-shards). Parameters with no usable dim are skipped with a warning. |
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
-| `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
+| `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — one all-gather per parameter per step fewer, more memory. See [Fewer collectives](#fewer-collectives-keeping-blocks-gathered). |
 
 ### Recommended usage pattern (FSDP2-style root)
 
@@ -171,10 +186,10 @@ FSDP splits the model state across `axis_size` ranks, then "unshards"
                         ┌───────────────────────────────────┐
                         │  backward_pre (autograd callback) │
                         │   - re-gather m_value             │
-                        │   - if m_grad initialized (i.e.   │
-                        │     carry-over from a previous    │
-                        │     micro-batch backward),        │
-                        │     all-gather it too             │
+                        │   - if m_grad initialized (shard  │
+                        │     carried over from a previous  │
+                        │     micro-batch), set it aside    │
+                        │     and clear m_grad              │
                         └───────────────────────────────────┘
                                        │
                           module's internal backward closures run
@@ -184,6 +199,7 @@ FSDP splits the model state across `axis_size` ranks, then "unshards"
                         │  backward_post (autograd callback)│
                         │   - reduce_scatter(m_grad)        │
                         │   - mean over axis_size           │
+                        │   - + the shard set aside above   │
                         │   - m_value = local shard         │
                         │   - m_grad  = local-shard grad    │
                         │   - deallocate gathered weight    │
@@ -241,11 +257,13 @@ across DP groups). The same call covers both cases, no rewrites needed.
 
 ## Gradient accumulation
 
-`fully_shard` supports `gradient_accumulation_steps > 1`. The
-`backward_pre` hook auto-detects accumulation by checking
-`is_grad_initialized()`; if it is, it gathers gradients.
-Note: if `gradient_accumulation_steps == 1`, gradients are destroyed at the end of the step,
-and created lazily in the backward pass. This removes the need for gradient all-gathering.
+`fully_shard` supports `gradient_accumulation_steps > 1` without any extra collective. The
+accumulated gradient stays **sharded**: `backward_pre` detects a carried-over shard grad via
+`is_grad_initialized()`, sets it aside and clears the parameter's grad, so the module's
+closures build a fresh full-shape grad for this micro-batch; `backward_post` reduce-scatters
+that one and adds the saved shard to the result. (Gathering the accumulated grad instead, as
+an earlier version did, cost a full-size all-gather per parameter per extra micro-batch —
+measured +45 ms per micro-batch for TinyLlama on 8 chips.)
 
 ---
 
@@ -325,6 +343,159 @@ In this layout:
   with a warning rather than sharded. They stay replicated. For the
   small norm-style parameters this is the right behavior. If `shard_dim`
   is set to `auto`, it will try to shard on dim 2, and then dim 3 before skipping.
+- <a name="tile-aligned-shards"></a>**Tile-aligned shards.** `all_gather_async` and
+  `reduce_scatter_minimal_async` only use their direct kernels when the gathered /
+  scattered dim of every per-rank shard is a multiple of the 32-element tile;
+  otherwise ttnn silently routes the call through a composite split → pad → gather →
+  slice → concat chain. On a 32-chip Blackhole galaxy that path measured 4-20x slower
+  per call and 10-50x more host time (a `[5632, 2048]` weight sharded 32-way on rows
+  gives 176-row shards: all-gather 3.7 ms vs 0.43 ms on the aligned dim, host 3.6 ms vs
+  0.16 ms), which made TinyLlama FSDP=32 host-bound: 2072 ms per step vs 1728 with the
+  aligned dim, i.e. slower than DDP instead of faster. `"auto"` therefore prefers the
+  tile-aligned dim (dim 3 for the cases above). If neither dim is aligned, `fully_shard`
+  warns (and refuses in overlap mode, whose persistent buffers need the direct kernels);
+  pad that dim to a multiple of `32 * axis_size` or pass an explicit `shard_dim`.
+- **Gradient checkpointing** (`runner_type: memory_efficient`) recomputes each block's
+  forward inside the backward pass. The wrapped forward recognises that situation
+  (`AutoContext.is_backward_in_progress()` with gradients enabled) and keeps the weights
+  gathered for the block's backward closures that follow immediately, so a checkpointed
+  step costs two all-gathers per parameter (no-grad forward, recompute) instead of three.
+- **Throughput numbers.** The batch is sharded over every data-parallel axis, `dp` and
+  `fsdp` alike, and `ThroughputCallback` counts tokens over both. (It used to count `dp`
+  only, so FSDP runs printed TPS/MFU divided by the FSDP axis size — the origin of most
+  "FSDP is slow" reports.)
+
+---
+
+## Fewer collectives: keeping blocks gathered
+
+FSDP issues three collectives per parameter per step: the forward all-gather, the backward
+all-gather (after `reshard_after_forward` freed the weights), and the reduce-scatter. A block
+wrapped with `reshard_after_forward=False` skips the second one for the price of holding its
+gathered weights from its forward to its backward. The training example decides per block with
+`ttml.fsdp.blocks_to_keep_gathered(blocks, budget_gib)`:
+
+- the **last block** is always kept — its backward starts right after the forward, so
+  resharding it would be undone by an immediate re-gather;
+- **`fsdp_keep_gathered_gib: X`** extends that to as many preceding blocks as fit in `X` GiB of
+  unsharded bf16 weights per device, counted from the end because the last blocks' gathered
+  weights live the shortest;
+- **`.inf`** keeps every block (the whole unsharded model must fit): measured −2 % step time for
+  TinyLlama on 8 chips, −2.6 % on 32;
+- the **root** is wrapped with `reshard_after_forward=False` unconditionally: its embedding is
+  the first op of the forward and its LM head's gradient the last of the backward, so the
+  interval a reshard would free is empty.
+
+## Overlapping collectives with compute
+
+By default every FSDP all-gather and reduce-scatter runs on the full core grid, serialized with
+the model's compute: the device is ~96 % busy, but the collectives are pure exposed time (about
+6 % of the step at 10k tokens per device, ~30 % at 2k). `fsdp_overlap_collectives: true` moves
+them off the critical path:
+
+```python
+ttml.open_device_mesh(mesh, num_command_queues=2)
+ttml.fsdp.enable_overlap(columns=1)     # before any fully_shard
+for block in model.blocks: ttml.fsdp.fully_shard(block, ...)
+ttml.fsdp.fully_shard(model, reshard_after_forward=False)
+```
+
+How it works:
+
+- **Two sub-devices.** Each chip's Tensix grid is split into a compute sub-device (id 0) and a
+  CCL sub-device (id 1: the rightmost `columns` columns or the bottom `rows` rows). A program
+  must lie inside one sub-device (a hard error on a mesh command queue), so the mesh device
+  reports the compute rectangle as its compute grid from then on
+  (`MeshDevice::set_compute_with_storage_grid_size_override`) and every op sizes itself inside
+  it. The CCL kernels take `(workers + 1 mux) × 2 directions` cores per link and use 4, 2 or 1
+  workers depending on what fits: on a 12×10 Blackhole grid one column (10 cores, 8 % of the
+  grid) gives 1 worker, one row (12 cores) 2 — a 2.3x faster all-gather — and two columns
+  (20 cores) 4. The shape also decides the compute grid the ops see, and that matters more:
+  one row leaves 12×9, which for TinyLlama at 6 samples per device was 11 % *slower* than no
+  overlap at all while one column (11×10) was 3 % faster, and on 32 chips the column beat the
+  row by 6 %; only at 1 sample per device on 8 chips did the row's faster collectives edge it
+  (420 vs 426 ms). One column is the default.
+- **Two command queues.** The dispatcher launches programs in order and a launch waits for the
+  previous program on the same sub-device, so a run of collective launches on the compute queue
+  would stall every compute launch behind it (measured: 8 gathers then 8 matmuls cost the sum
+  of both). FSDP collectives are therefore issued on hardware queue 1 (ttnn device operations
+  launch on the thread's current queue, `ttnn.command_queue(1)`) and run on the CCL sub-device;
+  a collective issued on queue 0 — a tensor-parallel all-gather inside a block, the
+  vocab-parallel loss — runs on the compute sub-device, because two queues launching programs
+  on the same sub-device interleave on the same cores and corrupt each other.
+- **Prefetch.** `pre_forward` of block *i* waits for its own gather and issues block *i+1*'s;
+  `backward_pre` does the same for block *i−1*; the root prefetches the first block in forward
+  and the last in backward. Compute never consumes a gather before a *CCL barrier* (record on
+  queue 1, wait on queue 0).
+- **Reduce-scatters queue behind the next prefetch.** `backward_post` of block *i* hands its
+  gathered grads to the runtime; block *i−1*'s `backward_pre` issues its own prefetch first and
+  the deferred reduce-scatters after it, behind a *compute drain* (an event recorded on queue 0
+  that queue 1 waits for, so the grads are complete). The CCL queue is in order, a gather has a
+  deadline (the compute waiting for it) and a reduce-scatter has none until the end of backward,
+  so this order matters: issuing the reduce-scatters in `backward_post` measured 447 vs 421 ms on
+  TinyLlama at 1 sample per device — every prefetch arrived late behind the previous block's
+  reduce-scatters. They write fresh shard-shaped outputs, scaled by `1/N` once at the end of
+  backward; the full-shape grads they read are freed at the next barrier.
+- **Every buffer a collective writes across devices is persistent and rotates with slack.**
+  The host frees and reallocates addresses far ahead of the device, and a collective is a
+  cross-device write: when device E starts a gather it writes into every peer's copy of the
+  output while a slower peer may still be reading. So all-gather outputs come from a pool of
+  `2 × lookahead` persistent slots per (parameter position, shape) — the root and blocks kept
+  gathered own a slot each — and a gather into a slot waits for the compute release
+  *`lookahead` units after* the slot's last reader (`ttml.fsdp.SlotSchedule`; every gather is a
+  rendezvous, so peers cannot lag by more than `lookahead` units, and with twice that many
+  slots the one being overwritten was last read at least `lookahead` units ago everywhere).
+  The same rule shapes `CCLResources`: reduce-scatter staging buffers rotate through 4 sets per
+  shape and global semaphores through 8 sets per queue, and a reduce-scatter on the CCL queue
+  refuses to run without persistent staging (its own temporaries would be freed by the host
+  while compute could be handed their addresses). Two more consequences of the same rule: a pool
+  buffer is created at first use on an address the host may have freed a moment ago, so its
+  creation is followed by a full device synchronize (once per buffer, in the first step — the
+  eager frees of the no-grad checkpointing forward made this visible); and the full-shape grads
+  a reduce-scatter read are handed back to the host only two barriers later, because the barrier
+  proves the reduce-scatter done on this device while a peer may still be reading, and the next
+  fresh allocation at that address could be a tensor-parallel all-gather that writes into every
+  peer (the source of a rare TP × FSDP drift). `fsdp_overlap_lookahead` defaults to 2 (four
+  slots); 3 measured ~1 % faster for six slots' worth of memory.
+- **Bit-exactness.** With the rules above every configuration measured — plain FSDP at 1 and 5
+  samples per device on 8 and 32 chips, gradient accumulation, gradient checkpointing — trains
+  with losses bit-identical to the non-overlapped run. `TTML_FSDP_SERIALIZE_COLLECTIVES=1`
+  follows every collective with a barrier, the first switch to flip when a run is not.
+  `tools/profiling/fsdp_bench/overlap_race_harness.py` reproduces the schedule in isolation
+  and checks every block bitwise; run it before changing any of this.
+
+Cost/benefit: the reserved column is 8 % of the grid, so overlap pays when the exposed
+collectives are a larger share of the step than that. Measured with this branch (profiler off,
+ring MGDs, mean of steps 3-12, 2048 tokens per sample; every overlapped run's losses are
+bit-identical to its reference):
+
+| configuration | no overlap | overlap, one column | one row |
+|---|---|---|---|
+| TinyLlama FSDP8, 1 sample/device | 466 ms | 426 (−9 %) | 420 (−10 %) |
+| TinyLlama FSDP8, 5 samples/device | 1662 | 1605 (−3 %) | 1625 |
+| TinyLlama FSDP8, 6 samples/device | 1980 | 1928 (−3 %) | 2206 (+11 %) |
+| TinyLlama FSDP8, 6 samples × 2 micro-batches | 3945 | 3839 (−3 %) | 4399 |
+| TinyLlama FSDP8, 1 sample, gradient checkpointing | 560 | 511 (−9 %) | 523 |
+| TinyLlama FSDP32, 1 sample/device (DDP32: 572) | 502 | 451 (−10 %) | 479 |
+| Llama-8B TP4 × FSDP8, 2 samples, checkpointing | 1574 | 1532 (−3 %) | — |
+
+HSDP (a `dp` axis next to `fsdp`) has not been run in overlap mode.
+
+## Inference / rollouts
+
+Each forward through a `fully_shard`-ed model all-gathers all weights and frees them again.
+For autoregressive generation that means one all-gather of the *whole model* per generated
+token (measured 30 ms per forward for TinyLlama 1.1B, 60 % of a decode step; ~1 s per token
+for a 32B model). Wrap gradient-free generation in
+
+```python
+with ttml.fsdp.unshard_for_inference(model) as kept_gathered:
+    tokens = generate(model, prompts)
+```
+
+which gathers every unit once, suspends `reshard_after_forward` for the block, and reshards
+on exit. It only does so when the unsharded weights fit in half of the free DRAM
+(`max_fraction_of_free_dram`); otherwise it warns and leaves per-forward gathering in place.
 
 ---
 
@@ -336,6 +507,9 @@ In this layout:
 - **`ttml.fsdp.is_fsdp_managed(param.tensor)`** returns `True` for any
   parameter `fully_shard` has touched. The marker is what
   `sync_gradients` uses to decide which axes to skip per parameter.
+- **`tools/profiling/fsdp_bench/`** has the benchmark kit (config generator, guarded runner,
+  Tracy analysis, CCL microbenchmark, overlap race harness) and the performance study behind
+  the numbers quoted in this document.
 
 ---
 
@@ -344,21 +518,15 @@ In this layout:
 These are known to be incomplete pieces of the FSDP prototype, in
 roughly the order I'd tackle them:
 
-- [ ] **Remove extra AG in FSDP with `RunnerType.MemoryEfficient`.**
-  The memory-efficient block runner re-runs the block forward inside backward (gradient
-  checkpointing). FSDP's hook placement makes it so that we all-gather and reshard weights on the second
-  forward, and then immediately all-gather and reshard on the backward, which is quite foolish since
-  we could just keep weights from the second forward AG.
+- [ ] **Bucket / flatten per unit.** One all-gather and one reduce-scatter per block instead of
+  one per parameter (FlatParam-style, with views back into the weights). FSDP issues ~700
+  collective launches per step on TinyLlama; at 32 chips the per-launch cost dominates, and the
+  4 KB RMSNorm gammas cost as much to launch as a matrix. Leaving tiny parameters replicated
+  instead was measured and is *worse* (their all-reduces in `sync_gradients` are exposed), so
+  this needs the bucketed form.
 
-- [ ] **Add prefetching / CCL-compute overlap.** The hook architecture is
-  designed for this — each FSDPState already knows its neighbors via
-  the natural module ordering. The plan is:
-    - In `pre_forward` of block `i`, kick off an *async* all-gather for
-      block `i+1` using `ttnn::experimental::all_gather_async` with ccl subdevice.
-    - In `pre_forward` of block `i+1`, wait on the prefetched future
-      instead of issuing a fresh gather.
-    - Symmetric on backward: `backward_pre` of block `i` triggers async
-      gather for block `i-1`.
+- [ ] **HSDP in overlap mode** has not been exercised (the `dp` all-reduce runs on the compute
+  sub-device from queue 0, which is correct by construction but unmeasured).
 
 - [ ] **Sharding-aware `clip_grad_norm`.** Square the per-rank shard
   grads, all-reduce the squared-sums on the FSDP axis, take the global

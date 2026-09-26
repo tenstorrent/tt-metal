@@ -415,6 +415,24 @@ def _resolve_data_path(training_cfg: TrainingConfig) -> str:
     raise FileNotFoundError(f"No data_path set and shakespeare.txt not found in any of: {candidates}")
 
 
+def count_model_params(model) -> int:
+    """Parameter count of the *unsharded* model.
+
+    ``model.parameters()`` returns per-device tensors. Under FSDP each managed parameter holds only
+    its ``1/axis_size`` local shard, so scale those back up; TP-sharded parameters are left as the
+    per-rank shape one device holds, the convention this header used before FSDP.
+    """
+    mesh = ttml.maybe_mesh()
+    total = 0
+    for p in model.parameters().values():
+        n = math.prod(p.shape())
+        axis = ttml.fsdp.fsdp_axis_of(p)
+        if axis is not None and mesh is not None:
+            n *= mesh.shape[axis]
+        total += n
+    return total
+
+
 def run_training(
     args: argparse.Namespace,
     yaml_config: dict,
@@ -471,10 +489,25 @@ def run_training(
     # Shard params before the optimizer is built so its state matches the sharded shapes (the caller
     # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
+        if device_cfg.fsdp_overlap_collectives:
+            ttml.fsdp.enable_overlap(
+                columns=device_cfg.fsdp_ccl_subdevice_columns,
+                rows=device_cfg.fsdp_ccl_subdevice_rows,
+                lookahead=device_cfg.fsdp_overlap_lookahead,
+            )
+            grid = ttml.autograd.AutoContext.get_instance().get_device().compute_with_storage_grid_size()
+            print(f"FSDP: collectives overlap compute; compute grid {grid.x}x{grid.y}", flush=True)
         print("Sharding model...", flush=True)
-        for block in model.blocks:
-            ttml.fsdp.fully_shard(block)
-        ttml.fsdp.fully_shard(model)
+        keep_gathered = ttml.fsdp.blocks_to_keep_gathered(model.blocks, device_cfg.fsdp_keep_gathered_gib)
+        for i, block in enumerate(model.blocks):
+            ttml.fsdp.fully_shard(block, reshard_after_forward=i not in keep_gathered)
+        # The root's parameters (embedding, final norm, LM head) are in use from the first op of the
+        # forward to the last op of the backward, so resharding them in between saves nothing.
+        ttml.fsdp.fully_shard(model, reshard_after_forward=False)
+        if len(keep_gathered) > 1:
+            print(
+                f"FSDP: keeping the last {len(keep_gathered)} blocks gathered between forward and backward", flush=True
+            )
 
     # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
     if lazy_init:
@@ -483,7 +516,7 @@ def run_training(
 
     if args.print_summary:
         summary(model)
-    total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    total_params = count_model_params(model)
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
@@ -725,7 +758,7 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
         build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
     )
 
-    total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    total_params = count_model_params(model)
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)
     vocab_str = (
         f"{tokenizer.vocab_size} -> {padded_vocab} padded"
@@ -882,7 +915,12 @@ def main() -> None:
 
     if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
-    ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
+    # Overlapped FSDP collectives get their own hardware command queue (see docs/FSDP.md).
+    ttml.open_device_mesh(
+        mesh,
+        tuple(device_cfg.device_ids) if device_cfg.device_ids else None,
+        num_command_queues=2 if device_cfg.enable_fsdp and device_cfg.fsdp_overlap_collectives else 1,
+    )
     ttml.autograd.AutoContext.get_instance().get_device()
     ttml.manual_seed(training_cfg.seed)
     np.random.seed(training_cfg.seed)
