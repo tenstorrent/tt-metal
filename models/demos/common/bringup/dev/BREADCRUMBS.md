@@ -273,3 +273,10 @@ Drive this ledger with
 - Owner: "always use fabric_2d" belongs in the agent definition, not in supervisor instructions or one model's spec.
   It is now rule 4 of `agents/bringup-engineer.md` (every agent, every model), and the spec template's
   `box.device_params` defaults to FABRIC_2D. `agents.rules` in a spec stays for model-specific rules.
+
+## F24 (2026-09-26): teletext carousel
+- Owner: the teletext screen should switch between Model graph and Index every minute. While page 100 or 102 is on
+  screen and hold is off, the screen rolls to the other one after 60 s. A key press restarts the count, hold stops it,
+  and other pages stay put. With prefers-reduced-motion, hold starts on, so it does not flip.
+- `selftest/teletext_shim.js` runs the screen script under node with a fake DOM and clock;
+  `test_teletext_carousel` checks the timeline (the flip, hold, a key press, another page).

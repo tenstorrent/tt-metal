@@ -88,7 +88,7 @@ body{margin:0;min-height:100vh;padding:20px 16px 32px;background:#0c0b0a radial-
       <button type="button" id="bidx">100</button>
     </div>
   </div>
-  <p class="hint">Type a page number <kbd>100</kbd>-<kbd>106</kbd> &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> pages &middot; <kbd>&uarr;</kbd><kbd>&darr;</kbd> subpages &middot; <kbd>H</kbd> hold &middot; <kbd>R</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>B</kbd> fastext</p>
+  <p class="hint">Type a page number <kbd>100</kbd>-<kbd>106</kbd> &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> pages &middot; <kbd>&uarr;</kbd><kbd>&darr;</kbd> subpages &middot; <kbd>H</kbd> hold (stops the index / graph carousel) &middot; <kbd>R</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>B</kbd> fastext</p>
   <div class="sr" aria-live="polite" id="live"></div>
 </div>
 
@@ -562,7 +562,9 @@ if (typeof document !== "undefined" && document.getElementById("grid")){
   const style = document.createElement("style"); style.textContent = mosaicCss(); document.head ? document.head.appendChild(style) : document.body.appendChild(style);
   const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const BUILT = buildAll();
-  const S = {page:100, sub:0, hold:!!reduce, entry:"", target:null, roll:null, tick:0, timer:null, shown:null};
+  const S = {page:100, sub:0, hold:!!reduce, entry:"", target:null, roll:null, tick:0, timer:null, shown:null, idle:0};
+  /* carousel: Index and Model graph take turns every CAROUSEL_S seconds while one of them is on screen (hold stops it) */
+  const CAROUSEL_S = 60, CAROUSEL = ["Index", "Graph"].map(s => (PAGES.find(p => p.short === s) || {}).n).filter(n => n != null);
   let rows = [];
   grid.innerHTML = Array.from({length:H}, (_, r) => `<div class="row" data-r="${r}"></div>`).join("");
   rows = [...grid.children];
@@ -581,7 +583,7 @@ if (typeof document !== "undefined" && document.getElementById("grid")){
   function announce(){ const s = subsOf(S.page), p = PAGES.find(q => q.n === S.page);
     live.textContent = p ? `Page ${S.page}, ${p.name}` + (s && s.length > 1 ? `, subpage ${S.sub + 1} of ${s.length}` : "") : `Page ${S.page} not in transmission`;
     glass.setAttribute("aria-label", `Teletext screen, ${live.textContent}. Type a page number, or use the arrow keys.`); }
-  function show(n, sub = 0){ S.page = n; S.sub = sub; S.tick = 0; S.target = null; S.roll = null; paint(); announce(); }
+  function show(n, sub = 0){ S.page = n; S.sub = sub; S.tick = 0; S.idle = 0; S.target = null; S.roll = null; paint(); announce(); }
   function goTo(n){
     clearInterval(S.timer); S.timer = null;
     if (reduce){ show(n); return; }
@@ -597,12 +599,14 @@ if (typeof document !== "undefined" && document.getElementById("grid")){
   function toggleHold(){ S.hold = !S.hold; S.tick = 0; paint(false); document.getElementById("bhold").setAttribute("aria-pressed", S.hold ? "true" : "false"); live.textContent = S.hold ? "Hold on" : "Hold off"; }
   function digit(d){ if (!S.entry && d === "0") return; if (!S.entry && d === "9") return; S.entry += d; paint(false);
     if (S.entry.length === 3){ const n = +S.entry; S.entry = ""; goTo(n); } }
-  setInterval(() => { if (!S.timer){ const s = subsOf(S.page);
+  setInterval(() => { if (!S.timer){ const s = subsOf(S.page), c = CAROUSEL.indexOf(S.page);
+      if (c >= 0 && CAROUSEL.length > 1 && !S.hold && !S.entry && ++S.idle >= CAROUSEL_S){ goTo(CAROUSEL[(c + 1) % CAROUSEL.length]); return; }
       if (s && s.length > 1 && !S.hold && ++S.tick >= 8){ S.sub = (S.sub + 1) % s.length; S.tick = 0; paint(); announce(); } else paint(false); } }, 1000);
   document.addEventListener("keydown", e => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const onBtn = e.target && e.target.tagName === "BUTTON";
     if (/^[0-9]$/.test(e.key)){ digit(e.key); e.preventDefault(); return; }
+    S.idle = 0;
     if (onBtn && (e.key === " " || e.key === "Enter")) return;
     const k = e.key.toLowerCase(); let used = true;
     if (e.key === "ArrowRight") pageStep(1); else if (e.key === "ArrowLeft") pageStep(-1);
