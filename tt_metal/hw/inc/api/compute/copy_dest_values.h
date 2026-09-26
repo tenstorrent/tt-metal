@@ -62,6 +62,15 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
     // Routes through the deprecated 1-template-arg `copy_dest_value<APPROXIMATE>` overload in
     // ckernel::sfpu (the format-agnostic sfpi::vFloat path). New code should use the
     // DataFormat-templated overload above.
+    //
+    // This function's own body is what triggers -Wdeprecated-declarations, and since it is an
+    // inline definition in a header, the warning fires in every translation unit that merely
+    // includes this header (via misc.inl's `CopyDest` wrapper) -- including kernels such as
+    // eltwise_typecast.cpp that never call this deprecated overload at all. Suppress it here,
+    // scoped to the single deprecated call this function exists to forward, rather than at the
+    // call site (there is none in-tree) or via a build-wide flag.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -71,6 +80,7 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
         idst_out,
         0 /*unused*/,
         VectorMode::RC)));
+#pragma GCC diagnostic pop
 }
 
 ALWI void copy_dest_values_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::copy_dest_value_init))); }
