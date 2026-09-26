@@ -52,10 +52,13 @@ bool is_native_L1_sharding(
         output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return false;
     }
-    if (input_spec.memory_config().shard_spec()->grid != output_memory_config.shard_spec()->grid) {
-        return false;
-    }
-    return true;
+    // The aliased path computes input shard k into whichever output shard lives on the same core, with
+    // no data movement in between, so the two specs must place the same tensor region on each core.
+    const auto& in_shard = *input_spec.memory_config().shard_spec();
+    const auto& out_shard = *output_memory_config.shard_spec();
+    return in_shard.grid == out_shard.grid && in_shard.shape == out_shard.shape &&
+           in_shard.orientation == out_shard.orientation &&
+           input_spec.memory_config().memory_layout() == output_memory_config.memory_layout();
 }
 
 std::optional<UnaryShardSpecs> get_shard_specs(
