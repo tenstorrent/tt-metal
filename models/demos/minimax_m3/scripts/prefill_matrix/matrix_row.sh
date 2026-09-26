@@ -7,7 +7,7 @@
 #  4. run matrix_producer.py: idle-pipeline TTFT per cell, then (USERS>0) the LOADED aggregate-throughput pass
 # WORK holds this session's mutable state (last_runner_log, last_timing_dir): one WORK per session, never shared.
 # Optional: OUT (results JSONL), CHUNK (PREFILL_CHUNK_SIZE, default 5120; CACHED is rounded DOWN to a multiple),
-# LAYER_COUNTS (layers per stage, e.g. 1,1,1,4,4,4,4,4,4,4,4,5,5,5,5,5 -> PREFILL_PP_LAYER_COUNTS; default even split),
+# LAYER_COUNTS (layers per stage, e.g. 1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4 -> PREFILL_PP_LAYER_COUNTS; default even split),
 # MAX_NEW (capacity = CACHED + MAX_NEW, default 51200), REQS (requests per user),
 # TARGET_CHUNKS (chunks per loaded stream when REQS is unset, default 240), SKIP_IDLE=1 (loaded pass only).
 # Results append to $OUT (JSONL, one line per idle iteration and one per loaded cell). See README.md.

@@ -83,11 +83,12 @@ bottlenecks on rank 0 from ~100k cached upward. Modelled on the Agent X request 
 split puts each dense layer alone on a stage:
 
 ```bash
-LAYER_COUNTS=1,1,1,4,4,4,4,4,4,4,4,5,5,5,5,5 CHUNK=2048 JOB=... HOSTS=... run_matrix.sh
+LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4 CHUNK=2048 JOB=... HOSTS=... run_matrix.sh
 ```
 
 (-20% at cached=0, 2-3x from 143k cached up, ~2x on the mix; a 2048 chunk on its own is a wash because
-the per-chunk gather does not shrink with the chunk.) Analysis and model: tracking issue #57827.
+the per-chunk gather does not shrink with the chunk. The order of the 4- and 5-layer MoE stages does not
+matter for throughput; the 4s go last so the LM-head stage is not one of the 5-layer ones.) Analysis and model: tracking issue #57827.
 
 `WORK` is per-session state (`last_runner_log` points at the live runner): never share one `WORK`
 between two concurrent sessions. `run_matrix.sh` shuts the runner down on exit and on Ctrl-C; if a
