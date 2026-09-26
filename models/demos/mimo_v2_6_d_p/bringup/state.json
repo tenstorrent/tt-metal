@@ -112,6 +112,90 @@
   "started": "2026-09-26T19:33:58",
   "status": "PASS"
  },
+ "PL.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "5e3f7979-8c4b-4e98-8f8f-fc2555f71225"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/PL.1.plan.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/PL.1.plan.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "plan",
+    "seconds": 388.2,
+    "session_id": "5e3f7979-8c4b-4e98-8f8f-fc2555f71225",
+    "t": "2026-09-26T19:40:48"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 16.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T19:34:20"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-26T19:41:13"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T19:41:31"
+   }
+  ],
+  "last_run": "2026-09-26T19:41:31",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/PL.1.log",
+  "metrics": {
+   "component_errors": 0,
+   "ledger_errors": 0,
+   "per_chip_budget_gb": 27.2,
+   "per_chip_total_gb": 14.65,
+   "plan_approved": 1,
+   "plan_errors": 0,
+   "plan_fits": 1,
+   "unplaced_tensors": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "plan",
+  "started": "2026-09-26T19:41:15",
+  "status": "PASS",
+  "waiting": null
+ },
  "R.1": {
   "attempts": 0,
   "duration_s": 8.1,
