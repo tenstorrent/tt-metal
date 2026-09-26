@@ -11,6 +11,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -74,6 +75,24 @@ inline void calculate_where(
         sfpi::dst_reg++;
     }
 }
+
+// Op class for where(condition, true_value, false_value) on tiles in Dest. Same name and leading
+// template parameters as on Wormhole/Blackhole; the kernel here does not depend on data_format.
+template <
+    bool APPROXIMATION_MODE,
+    DataFormat data_format = DataFormat::Invalid,
+    int ITERATIONS = SFPU_ITERATIONS,
+    trisc::DstTileShape SLOT = trisc::DstTileShape::Tile32x32>
+struct Where : SfpuTernaryOp<Where<APPROXIMATION_MODE, data_format, ITERATIONS, SLOT>, SLOT> {
+    static inline __attribute__((always_inline)) void calculate(
+        const std::uint32_t dst_index_in0,
+        const std::uint32_t dst_index_in1,
+        const std::uint32_t dst_index_in2,
+        const std::uint32_t dst_index_out) {
+        calculate_where<APPROXIMATION_MODE, ITERATIONS, SLOT>(
+            dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
+    }
+};
 
 }  // namespace sfpu
 }  // namespace ckernel

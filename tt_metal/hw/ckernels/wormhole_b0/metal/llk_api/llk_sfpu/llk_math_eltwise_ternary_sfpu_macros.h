@@ -55,7 +55,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
  * not side effects.
  */
 #define SFPU_TERNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),         \
+    (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE),                    \
      _llk_math_eltwise_ternary_sfpu_params_(                                                                        \
          ::ckernel::sfpu::FN<_SFPU_TERN_EXPAND TEMPLATES>,                                                          \
          DST_IN0,                                                                                                   \
@@ -66,10 +66,10 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
          ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                                                 \
-    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...)                          \
+#define SFPU_TERNARY_CALL_NO_TEMPLATE_ARGS(                                                      \
+    DST_SYNC, DST_ACCUM, FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ...)               \
     (::ckernel::_sfpu_ternary_check_<DST_SYNC>(DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE), \
-     _llk_math_eltwise_ternary_sfpu_params_(                                                                \
+     _llk_math_eltwise_ternary_sfpu_params_(                                                     \
          ::ckernel::sfpu::FN, DST_IN0, DST_IN1, DST_IN2, DST_OUT, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
@@ -97,7 +97,7 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
 
 /*
  * Init with a templated callback.
- *   SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROXIMATE));
+ *   SFPU_TERNARY_INIT_FN(where, sfpu::where_init, (APPROXIMATE));
  *   SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROXIMATE));
  */
 #define SFPU_TERNARY_INIT_FN(OP, INIT_FN, TEMPLATES) \

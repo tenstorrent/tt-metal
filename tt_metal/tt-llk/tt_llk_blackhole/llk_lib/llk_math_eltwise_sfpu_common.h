@@ -171,3 +171,69 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
         std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
     }
 }
+
+/**
+ * @brief Assert that a Dest tile index fits in Dest for the kernel's sync mode.
+ *
+ * Reads the kernel-global DST_SYNC_MODE; the accumulation mode is read at runtime by
+ * get_dest_max_tiles_rt. A build that has not defined DST_SYNC_MODE before including this header
+ * (standalone tt-llk tests that call the LLK directly) skips the check.
+ *
+ * @param dst_index: Dest tile index to check
+ */
+inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_check_dst_index_([[maybe_unused]] const std::uint32_t dst_index)
+{
+#ifdef DST_SYNC_MODE
+    _llk_math_eltwise_sfpu_assert_dst_index_<DST_SYNC_MODE>(dst_index, "dst_index exceeds max dest tiles");
+#endif
+}
+
+/**
+ * @brief Whether a TensorShape is the full 32x32 tile.
+ *
+ * @param tensor_shape: Shape to test
+ */
+constexpr bool _llk_math_eltwise_sfpu_is_full_tile_(const TensorShape tensor_shape)
+{
+    return tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim && tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
+           tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim && tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim;
+}
+
+namespace ckernel::sfpu
+{
+
+/**
+ * @brief CRTP base shared by every SFPU op class.
+ *
+ * An op class derives from one of the arity bases (SfpuUnaryOp, SfpuBinaryOp, SfpuTernaryOp) and
+ * supplies a static calculate() that delegates to its ckernel. It overrides init_op() when it needs
+ * per-op state (e.g. ADDR_MOD_6 or programmable constants), and sets walks_faces = false when
+ * calculate() walks the whole tile itself instead of processing one face per call.
+ *
+ * @tparam Op: The derived op class
+ */
+template <typename Op>
+struct SfpuOpBase
+{
+    /// calculate() processes one face per call. Set to false in ops whose calculate() walks Dest itself.
+    static constexpr bool walks_faces = true;
+
+    /**
+     * @brief Initialize the SFPU for Op: the op-agnostic SFPU init, then Op::init_op(args...).
+     *
+     * @param args: Arguments forwarded to Op::init_op
+     */
+    template <typename... Args>
+    static inline __attribute__((always_inline)) void init(Args&&... args)
+    {
+        _llk_math_eltwise_sfpu_init_();
+        Op::init_op(std::forward<Args>(args)...);
+    }
+
+    /// Default per-op init: no state beyond the op-agnostic SFPU init.
+    static inline __attribute__((always_inline)) void init_op()
+    {
+    }
+};
+
+} // namespace ckernel::sfpu
