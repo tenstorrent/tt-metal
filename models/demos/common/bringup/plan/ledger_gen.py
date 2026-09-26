@@ -68,18 +68,26 @@ def generate(spec, ref=None, early: bool = False) -> dict:
             }
         )
 
+    # HF sanity (revision, usage-example smoke, accuracy floor) runs at R.1 on the stock HF loader. A checkpoint the
+    # stock loader cannot run on this host (custom quantized storage, too big for RAM in bf16) sets hf.custom_loader:
+    # the checks then move into R.2's gate, after the reference agent has written hooks.hf_model (F39).
+    sanity = {
+        "revision_ok": "== 1",
+        "text_top1_acc": f">= {spec.get('text.min_top1', 0.4)}",
+        **({"smoke_ok": "== 1"} if spec.get("intake.smoke") else {}),
+    }
+    late = bool(spec.get("hf.custom_loader"))
     add(
         "R.1",
-        "Checkpoint, intake approval, canonical prompt, HF sanity (revision, usage-example smoke, accuracy floor)",
+        "Checkpoint, intake approval, canonical prompt"
+        + ("" if late else ", HF sanity (revision, usage-example smoke, accuracy floor)"),
         "intake",
         [],
-        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt && {PY}.intake.check_hf_sanity",
+        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt" + ("" if late else f" && {PY}.intake.check_hf_sanity"),
         {
             "intake_approved": "== 1",
             "prompt_hash_ok": "== 1",
-            "revision_ok": "== 1",
-            "text_top1_acc": f">= {spec.get('text.min_top1', 0.4)}",
-            **({"smoke_ok": "== 1"} if spec.get("intake.smoke") else {}),
+            **({} if late else sanity),
             "missing_tensors": "== 0",
             "shape_mismatches": "== 0",
             "count_mismatches": "== 0",
@@ -90,11 +98,18 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     )
     add(
         "R.2",
-        "Reference matches HF per layer and on logits (fp32)",
+        ("HF sanity on the model's loader (revision, smoke, accuracy floor); r" if late else "R")
+        + "eference matches HF per layer and on logits (fp32)",
         "reference",
         ["R.1"],
-        f"{PY}.reference.check_hf --seq {spec.get('hf.parity_seq', 512)}",
-        {"pcc_hidden_L*": ">= 0.9999", "pcc_logits": ">= 0.9999", "top1_match_frac": ">= 0.99"},
+        (f"{PY}.intake.check_hf_sanity && " if late else "")
+        + f"{PY}.reference.check_hf --seq {spec.get('hf.parity_seq', 512)}",
+        {
+            **(sanity if late else {}),
+            "pcc_hidden_L*": ">= 0.9999",
+            "pcc_logits": ">= 0.9999",
+            "top1_match_frac": ">= 0.99",
+        },
         paths=ref_paths,
     )
     add(
