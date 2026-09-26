@@ -9,7 +9,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, comp_allclose
+from models.common.utility_functions import comp_pcc, comp_allclose, is_wormhole_b0
 
 PCC_THRESHOLD = 0.97
 
@@ -496,3 +496,144 @@ def test_moe_mm(device, M, K, N, L, C, check_accuracy, dump_outputs):
             logger.info(f"Layer {layer_id}: PCC={metrics['pcc']:.6f} (Passed)")
 
     assert passing, f"Some layers did not pass the PCC/Allclose check"
+
+
+def _moe_gate_mm_layout(device):
+    """Wormhole moe_gate_mm grids for M=32, K=7168, N=256, L=1. Returns None unless there are 12 DRAM-aligned cores."""
+    m, k, n, num_layers = 32, 7168, 256, 1
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    if len(in0_core_coords) != 12:
+        return None
+
+    core2dram = {core: dram_bank_id for dram_bank_id, core in enumerate(in0_core_coords)}
+    in0_core_coords_sorted = sorted(in0_core_coords, key=lambda core: (core.y, core.x), reverse=True)
+    ring2cores = {
+        ring_pos: (core, core2dram[core], 1 if ring_pos in SEND_CORES else 0)
+        for ring_pos, core in enumerate(in0_core_coords_sorted)
+    }
+    in0_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in in0_core_coords_sorted])
+    dram_core_coords = [ttnn.CoreCoord(core2dram[core], 0) for core in in0_core_coords_sorted]
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in dram_core_coords])
+
+    in0_shard_spec = ttnn.ShardSpec(in0_core_range_set, (m, k), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+
+    w_shard_height = num_layers * (76 + 1) * ttnn.TILE_SIZE
+    w_shard_width = 2 * ttnn.TILE_SIZE
+    w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+
+    output_shard_spec = ttnn.ShardSpec(in0_core_range_set, (m, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    return {
+        "M": m,
+        "K": k,
+        "N": n,
+        "L": num_layers,
+        "in0_num_cores": len(in0_core_coords),
+        "ring2cores": ring2cores,
+        "input_mem": input_mem,
+        "w_mem": w_mem,
+        "output_mem": output_mem,
+    }
+
+
+def _allocate_moe_gate_mm(device, layout, seed):
+    m, k, n, num_layers = layout["M"], layout["K"], layout["N"], layout["L"]
+    torch.manual_seed(seed)
+    torch_input = create_torch_input(num_layers, layout["in0_num_cores"], m, k)
+    torch_w = create_torch_w(num_layers, k, n)
+    torch_bias = create_torch_bias(num_layers, n)
+    torch_w_reordered = prepare_w_tensor(torch_w, torch_bias, num_layers, k, n, layout["ring2cores"])
+    tt_input = ttnn.from_torch(
+        torch_input[0],
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=layout["input_mem"],
+    )
+    tt_w = ttnn.from_torch(
+        torch_w_reordered,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=layout["w_mem"],
+    )
+    tt_output = ttnn.empty(
+        (m, layout["in0_num_cores"] * ttnn.TILE_SIZE),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=layout["output_mem"],
+    )
+    return {
+        "torch_input": torch_input,
+        "torch_w": torch_w,
+        "torch_bias": torch_bias,
+        "tt_input": tt_input,
+        "tt_w": tt_w,
+        "tt_output": tt_output,
+    }
+
+
+def _reference_top8_values(torch_input, torch_w, torch_bias):
+    num_layers = torch_w.shape[0]
+    m = torch_input.shape[2]
+    torch_mm_out = torch_input[:, 0, ...] @ torch_w
+    torch_bias_out = torch.nn.functional.sigmoid(torch_mm_out) + torch_bias[:, None, :]
+    num_groups = 8
+    torch_bias_out = torch_bias_out.reshape(num_layers, m, num_groups, -1)
+    group_scores = torch.topk(torch_bias_out, k=2, dim=-1)[0].sum(dim=-1)
+    top4_groups = torch.topk(group_scores, k=4, dim=-1)[1]
+    group_mask = torch.zeros((num_layers, m, num_groups), dtype=torch.bool)
+    group_mask.scatter_(2, top4_groups, 1)
+    masked_scores = (torch_bias_out * group_mask.unsqueeze(-1)).flatten(2)
+    return torch.topk(masked_scores, k=8, dim=-1)[0]
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, id="dispatch_row")],
+    indirect=True,
+)
+def test_moe_gate_mm_program_cache(device):
+    """Same layer_id and column_id twice. The first weight and output stay allocated so the second call must rebind them."""
+    if not is_wormhole_b0():
+        pytest.skip("moe_gate_mm's ring is hardcoded for Wormhole's 12 DRAM views")
+
+    layout = _moe_gate_mm_layout(device)
+    if layout is None:
+        pytest.skip("moe_gate_mm requires exactly 12 DRAM-aligned cores")
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        first = _allocate_moe_gate_mm(device, layout, seed=0)
+        with device.cache_entries_counter.measure():
+            ttnn.experimental.deepseek.moe.moe_gate_mm(
+                first["tt_input"],
+                w_tensor=first["tt_w"],
+                output_tensor=first["tt_output"],
+                layer_id=0,
+                column_id=0,
+            )
+        ttnn.synchronize_device(device)
+        del first["tt_input"]
+        second = _allocate_moe_gate_mm(device, layout, seed=1)
+
+        with device.cache_entries_counter.measure():
+            ttnn.experimental.deepseek.moe.moe_gate_mm(
+                second["tt_input"],
+                w_tensor=second["tt_w"],
+                output_tensor=second["tt_output"],
+                layer_id=0,
+                column_id=0,
+            )
+
+        torch_top8 = _reference_top8_values(second["torch_input"], second["torch_w"], second["torch_bias"])
+        tt_values, _tt_indices = prepare_output_tensor(ttnn.to_torch(second["tt_output"]), layout["ring2cores"])
+        metrics = get_accuracy_metrics(torch_top8[0], tt_values)
+        assert metrics["pcc"] >= PCC_THRESHOLD, f"cache-hit moe_gate_mm PCC {metrics['pcc']:.6f}"
+        assert device.cache_entries_counter.total == 1
+    finally:
+        device.disable_and_clear_program_cache()

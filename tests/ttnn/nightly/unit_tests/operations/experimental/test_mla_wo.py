@@ -9,7 +9,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, comp_allclose
+from models.common.utility_functions import comp_pcc, comp_allclose, is_wormhole_b0
 
 PCC_THRESHOLD = 0.999
 
@@ -388,3 +388,135 @@ def test_mla_wo(device, M, K, N, L, check_accuracy, dump_outputs):
             logger.info(f"Layer {layer_id}: PCC={metrics['pcc']:.6f} (Passed)")
 
     assert passing, f"Some layers did not pass the PCC/Allclose check"
+
+
+def _mla_wo_layout(device):
+    """Wormhole matmul_wo grids for M=32, K=16384, N=896, L=1. Returns None when the device cannot host that ring."""
+    m, k, n, num_layers = 32, 16384, 896, 1
+    in0_core_coords = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    in0_num_cores = len(in0_core_coords)
+    if in0_num_cores != len(BANK2K_TILES):
+        return None
+
+    in0_core_range = [ttnn.CoreRange(core, core) for core in in0_core_coords]
+    in0_core_range_set = ttnn.CoreRangeSet(in0_core_range)
+    in0_raw_coords = [(core.x, core.y) for core in in0_core_coords]
+    all_cores = device.compute_with_storage_grid_size()
+    out_core_coords = []
+    for y, x in itertools.product(range(all_cores.y - 1, -1, -1), range(all_cores.x - 1, -1, -1)):
+        if (x, y) not in in0_raw_coords:
+            out_core_coords.append(ttnn.CoreCoord(x, y))
+            if len(out_core_coords) == 7:
+                break
+    if len(out_core_coords) != 7:
+        return None
+
+    out_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in out_core_coords])
+    dram_core_coords = [ttnn.CoreCoord(bank_id, 0) for bank_id in range(in0_num_cores)]
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in dram_core_coords])
+
+    in0_shard_spec = ttnn.ShardSpec(in0_core_range_set, (m, k), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
+
+    w_shard_height = num_layers * MAX_K_TILES_PER_BANK * n // 7
+    w_shard_width = 7 * ttnn.TILE_SIZE
+    w_shard_spec = ttnn.ShardSpec(dram_core_range_set, (w_shard_height, w_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    w_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w_shard_spec)
+
+    output_shard_spec = ttnn.ShardSpec(out_core_range_set, (m, n // 7), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    return {
+        "M": m,
+        "K": k,
+        "N": n,
+        "L": num_layers,
+        "in0_num_cores": in0_num_cores,
+        "input_mem": input_mem,
+        "w_mem": w_mem,
+        "output_mem": output_mem,
+    }
+
+
+def _allocate_mla_wo(device, layout, seed):
+    m, k, n, num_layers = layout["M"], layout["K"], layout["N"], layout["L"]
+    torch.manual_seed(seed)
+    torch_input = create_torch_input(num_layers, layout["in0_num_cores"], m, k)
+    torch_w = create_torch_w(num_layers, k, n)
+    torch_w_reordered = prepare_w_tensor(torch_w, num_layers, k, n, layout["in0_num_cores"])
+    tt_input = ttnn.from_torch(
+        torch_input[0],
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=layout["input_mem"],
+    )
+    tt_w = ttnn.from_torch(
+        torch_w_reordered,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=layout["w_mem"],
+    )
+    tt_output = ttnn.empty(
+        (m, n),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=layout["output_mem"],
+    )
+    return {
+        "torch_input": torch_input,
+        "torch_w": torch_w,
+        "tt_input": tt_input,
+        "tt_w": tt_w,
+        "tt_output": tt_output,
+    }
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, id="dispatch_row")],
+    indirect=True,
+)
+def test_mla_wo_program_cache(device):
+    """Same layer_id twice, with the first weight and output still allocated, so a stale binding fails PCC on the second call."""
+    if not is_wormhole_b0():
+        pytest.skip("matmul_wo's DRAM bank map is the Wormhole 12-bank ring")
+
+    layout = _mla_wo_layout(device)
+    if layout is None:
+        pytest.skip("matmul_wo needs 12 DRAM-aligned cores and 7 collector cores")
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        first = _allocate_mla_wo(device, layout, seed=0)
+        with device.cache_entries_counter.measure():
+            ttnn.experimental.deepseek.mla.matmul_wo(
+                first["tt_input"],
+                w_tensor=first["tt_w"],
+                output_tensor=first["tt_output"],
+                layer_id=0,
+            )
+        # The input shard is 1 MiB per core. Release it before the second input; keep the weight and output
+        # so those addresses stay taken across the cache hit.
+        ttnn.synchronize_device(device)
+        del first["tt_input"]
+        second = _allocate_mla_wo(device, layout, seed=1)
+
+        with device.cache_entries_counter.measure():
+            ttnn.experimental.deepseek.mla.matmul_wo(
+                second["tt_input"],
+                w_tensor=second["tt_w"],
+                output_tensor=second["tt_output"],
+                layer_id=0,
+            )
+
+        torch_input_ref = second["torch_input"][:, 0, ...]
+        torch_ref = (torch_input_ref @ second["torch_w"])[0]
+        tt_out = prepare_output_tensor(ttnn.to_torch(second["tt_output"]))
+        metrics = get_accuracy_metrics(torch_ref, tt_out)
+        assert metrics["pcc"] >= PCC_THRESHOLD, f"cache-hit matmul_wo PCC {metrics['pcc']:.6f}"
+        assert device.cache_entries_counter.total == 1
+    finally:
+        device.disable_and_clear_program_cache()
