@@ -276,6 +276,13 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_SHM_TRACKING_DISABLED,  // Disable shared memory tracking for tt-smi
     TT_METAL_SHM_VERBOSE,            // Enable verbose logging for SHM tracking
+
+    // ========================================
+    // HOST BFP TILIZER TUNING
+    // ========================================
+    TT_METAL_BFP_HOST_TILIZER_THREADS,       // Worker thread count for host BFP packing (0 = single-threaded)
+    TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD,  // Force the scalar path in the host BFP8 packer
+    TT_METAL_BFP_HOST_TILIZER_USE_OPENMP,    // Use the OpenMP dispatch path (requires TT_BFP_HOST_TILIZER_OPENMP build)
 };
 
 // Environment variable name for TT-Metal root directory
@@ -1981,6 +1988,42 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (disabled)
         // Usage: export TT_METAL_SHM_VERBOSE=1
         case EnvVarID::TT_METAL_SHM_VERBOSE: this->shm_verbose = is_env_enabled(value); break;
+
+        // ========================================
+        // HOST BFP TILIZER TUNING
+        // ========================================
+
+        // TT_METAL_BFP_HOST_TILIZER_THREADS
+        // Number of worker threads used by the host BFP8/4/2 tilizer (pack_as_bfp_tiles).
+        // 0 forces single-threaded packing; N >= 1 pins the thread count (capped by the tile count);
+        // negative values behave like unset.
+        // Default: unset (adaptive heuristic based on input size and hardware concurrency)
+        // Usage: export TT_METAL_BFP_HOST_TILIZER_THREADS=8
+        case EnvVarID::TT_METAL_BFP_HOST_TILIZER_THREADS: try { this->bfp_host_tilizer_threads = std::stoi(value);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("Invalid TT_METAL_BFP_HOST_TILIZER_THREADS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_BFP_HOST_TILIZER_THREADS value out of range: {}", value);
+            }
+            break;
+
+        // TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD
+        // Force the scalar fallback in the host BFP8 packer instead of the AVX2 (simde) fast path.
+        // Useful for benchmarking or debugging.
+        // Default: 0 (SIMD enabled where applicable)
+        // Usage: export TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD=1
+        case EnvVarID::TT_METAL_BFP_HOST_TILIZER_DISABLE_SIMD:
+            this->bfp_host_tilizer_disable_simd = is_env_enabled(value);
+            break;
+
+        // TT_METAL_BFP_HOST_TILIZER_USE_OPENMP
+        // Dispatch host BFP packing work via OpenMP instead of std::thread. Only takes effect when
+        // tt-metal was built with the CMake option TT_BFP_HOST_TILIZER_OPENMP=ON; ignored otherwise.
+        // Default: 0 (std::thread dispatch)
+        // Usage: export TT_METAL_BFP_HOST_TILIZER_USE_OPENMP=1
+        case EnvVarID::TT_METAL_BFP_HOST_TILIZER_USE_OPENMP:
+            this->bfp_host_tilizer_use_openmp = is_env_enabled(value);
+            break;
     }
 }
 
