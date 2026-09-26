@@ -950,3 +950,20 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Host-measured mutation scores, PCC / rel: attn_out dropped 0.798; in + 0.5 attn_out 0.950; shift by one row 0.986 / 0.165 (attn rel 0.265); 2 * (in + attn_out) passes PCC but has rel 1.0; last row zeroed passes PCC (0.99985) but has rel 0.0176 and ratio min 0; last 32 columns zeroed 0.998 / 0.058. The PCC-passing mutations all fail the rel L2 or norm-ratio checks.
 - Runs: BRINGUP_IMPL=reference passes (pcc 0.999997, rel 0.0025); BRINGUP_IMPL=stub fails (pcc 0); default (device) passes: pcc 0.999996, rel 0.0030, ratio [0.9998, 1.0018], coef 1.0007, attn rel 0.0028.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attn_residual.py`
+
+## S.full_moe.03 test (attempt 1), 2026-09-26
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_03_attn_residual.py` with the body of
+  `test_swap_full_moe_02_attention.py`, plus the attn_residual checks from `test_c_full_moe_attn_residual.py`.
+  Checks on h_mid: rel L2 <= 0.01 on the whole chunk and on the first 128 rows, and per-token norm ratio in
+  [0.99, 1.01]. On delta = h_mid - in, against the attn_out that was actually fed in: coef in [0.98, 1.02] and attn
+  rel <= 0.05. The row-norm ratio limits are now set per step (attn_norm / attention stay at [0.97, 1.03]).
+  pcc_swap_out is gated at 0.98.
+- Why: these are the same limits as the component test, where the mutations were measured. h_mid carries the device
+  attention error scaled by ||attn_out|| / ||h_mid|| ~ 0.62.
+- BRINGUP_IMPL=reference: PASS (out rel 0.0025; h_mid rel 0.0023, coef 1.0000). BRINGUP_IMPL=stub: FAIL on every check.
+  The precompile pass (zero attention) fails h_mid rel 0.62 and coef 0.
+- Device (default) gate: PASS. pcc_swap_out 0.999981, out rel 0.0062 / first rows 0.0045; attention rel 0.0056;
+  h_mid rel 0.0041 / 0.0040, ratio [0.9979, 1.0019], worst row 0.0074; coef 1.0007, attn rel 0.0028. Trail: router
+  0.9953, experts_out 0.9976.
+- Tightest margin: block out rel 0.0062 against the 0.01 limit, the same as swap 02 (CPU router flips from the attention error).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_03_attn_residual.py`
