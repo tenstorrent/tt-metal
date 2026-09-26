@@ -38,6 +38,11 @@ def records(fx, monkeypatch):
         M.record(f"pcc_layer_L{i:02d}", 0.999 - 0.001 * i, task="L.s256")
     for c in range(4):
         M.record(f"chunk_seconds_c{c:02d}", 0.5 + 0.1 * c, task="L.s256")
+        M.record(f"prefill_chunk_ms_c{c:02d}", 500 + 100 * c, task="X.1")
+    for k, v in dict(
+        prefill_ms_full=2600, prefill_seq=256, prefill_chunk=64, chunk_wall_ms=800, chunk_start=192, chunk_len=64
+    ).items():
+        M.record(k, v, task="X.1")
     for tid in ("R.1", "R.2", "R.3", "C.blk.attn_norm", "L.s256"):
         led.update(tid, status="PASS", metrics={k: v["value"] for k, v in M.load(tid, res).items()})
     led.update(
@@ -89,7 +94,10 @@ def test_data_model(records):
     g = {st["name"]: st for st in d["graphs"]["blk"]}
     assert g["attn_norm"]["state"] == "device" and g["attention"]["state"] == "cpu"
     assert [x["task"] for x in d["trails"]] == ["R.2", "L.s256"] and d["trails"][1]["device"]
-    assert tuple(d["timing"][0]["chunks"][0]) == (0, 0.5)
+    # timing is performance only: warm runs; the ladder (accuracy, reads every layer back) never appears (F36)
+    assert [(t["task"], t["headline"]) for t in d["timing"]] == [("X.1", "0->256"), ("X.1", "192->256")]
+    assert tuple(d["timing"][0]["chunks"][0]) == (0, 0.5) and d["timing"][0]["seconds"] == 2.6
+    assert not [t for t in d["timing"] if t["task"].startswith("L.") or t["how"].startswith("ladder")]
     assert d["plan"]["fits"] and len(d["plan_chips"]) == 4
     steps = {s["key"]: s for s in d["profile"]["steps"]}
     assert steps["attn.all_reduce"]["bound"] == "comm" and steps["attn.all_reduce"]["pat"] == "ring"

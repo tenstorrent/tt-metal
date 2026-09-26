@@ -75,8 +75,8 @@ def hf_arch(spec) -> str:
 def kt(n) -> str:
     """Tokens in 1024-token k: 56320 -> '55k', 51200 -> '50k'."""
     k = n / 1024
-    if n == 0:
-        return "0"
+    if n < 1024:
+        return str(int(n))
     return f"{k:.0f}k" if abs(k - round(k)) < 0.05 else f"{k:.1f}k"
 
 
@@ -231,7 +231,9 @@ def build(spec) -> dict:
             trails.append(
                 {"task": t["id"], "label": f"{t['id']} {t['title'].split(':')[0]}", "points": pts, "device": True}
             )
-        timing += timing_rows(spec, t, m)
+        timing += [
+            r for r in timing_rows(spec, t, m) if not r["how"].startswith("ladder")
+        ]  # perf only; ladder = accuracy
 
     plan_mem = res / "plan_memory.json"
     return {
