@@ -878,6 +878,13 @@ tasks:
     kind: norm
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-26T01:34:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py: 8b83cb7d483a9438ea2f80ebe9985ab6bf1dc7703cd9559eaed016b7e6e7d35e
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.sliding.13
   title: 'sliding block with steps 1-13 on device (last: post_ffn_norm)'
   step: implement
