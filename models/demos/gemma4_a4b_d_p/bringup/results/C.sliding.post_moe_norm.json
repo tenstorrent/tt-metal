@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_post_moe_norm_L00": {
+   "t": "2026-09-26T01:23:14",
+   "value": 0.9999958877471034
+  },
+  "rel_l2_post_moe_norm_L00": {
+   "t": "2026-09-26T01:23:14",
+   "value": 0.0029784555081278086
+  },
+  "row_norm_ratio_max_post_moe_norm_L00": {
+   "t": "2026-09-26T01:23:14",
+   "value": 1.0015099048614502
+  },
+  "row_norm_ratio_min_post_moe_norm_L00": {
+   "t": "2026-09-26T01:23:14",
+   "value": 0.9970203638076782
+  }
+ },
+ "task": "C.sliding.post_moe_norm"
+}
