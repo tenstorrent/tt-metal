@@ -123,18 +123,19 @@ bool SDMeshCommandQueue::write_shard_to_device(
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
-    auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return false;
     }
 
-    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    // `src` points at the region's data, matching the fast-dispatch contract.
+    auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src), region_value.size);
     if (logical_core_filter != nullptr) {
-        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
+            *device_buffer, payload, region_value, *logical_core_filter);
     } else {
-        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+        tt::tt_metal::detail::WriteToBuffer(*device_buffer, payload, region_value);
     }
     return false;  // Slow dispatch doesn't support pinned memory
 }
@@ -157,15 +158,14 @@ void SDMeshCommandQueue::read_shard_from_device(
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view =
-        device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
 
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+    tt::tt_metal::detail::ReadFromBuffer(*device_buffer, static_cast<uint8_t*>(dst), region_value);
 }
 
 void SDMeshCommandQueue::submit_memcpy_request(

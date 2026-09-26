@@ -309,6 +309,7 @@ public:
 
     ShardedBufferWriteDispatchParams(
         Buffer* buffer,
+        std::shared_ptr<const BufferPageMapping> page_mapping,
         uint32_t total_pages_to_write,
         uint32_t cq_id,
         ttsl::Span<const uint32_t> expected_num_workers_completed,
@@ -318,7 +319,7 @@ public:
         bool is_pinned,
         bool remote_chip) :
         BufferWriteDispatchParams(pinned_noc_xy, pinned_addr, is_pinned, remote_chip),
-        buffer_page_mapping(buffer->get_buffer_page_mapping()),
+        buffer_page_mapping(std::move(page_mapping)),
         buffer(buffer),
         are_pages_large(
             this->use_pinned_transfer ? false
@@ -1157,6 +1158,7 @@ void write_sharded_buffer_to_core(
 bool write_to_device_buffer(
     const void* src,
     Buffer& buffer,
+    const BufferRegion& region,
     uint32_t cq_id,
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
@@ -1164,6 +1166,7 @@ bool write_to_device_buffer(
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
     const CoreRangeSet* logical_core_filter) {
     TTZoneScopedD(DISPATCH);
+    validate_buffer_region(buffer, region);
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
@@ -1192,8 +1195,7 @@ bool write_to_device_buffer(
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
             const uint64_t pinned_size = pinned_memory->get_buffer_size();
-            auto region = buffer.impl().root_buffer_region();
-            const uint8_t* src_region_start = src_ptr + region.offset;
+            const uint8_t* src_region_start = src_ptr;
             const uint8_t* src_region_end = src_region_start + region.size;
             // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
             const uint32_t pinned_src_alignment = hal.get_read_alignment(HalMemType::L1);
@@ -1231,13 +1233,14 @@ bool write_to_device_buffer(
         }
     }
     if (is_sharded(buffer.buffer_layout())) {
+        // Host pages in this mapping are numbered relative to the start of the region, matching `src`.
+        auto buffer_page_mapping = get_buffer_page_mapping_for_region(buffer, region);
         // Check alignment for sharded buffer pinned transfer
         if (has_pinned_inputs && is_unpadded) {
             // Check if average host range size is large enough to benefit from pinned transfer.
             // Each relay-linear-packed batch handles at most CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS
             // host ranges; skip pinned if total data per batch would be < 512kB, as otherwise we can't pipeline the
             // reads well.
-            auto buffer_page_mapping = buffer.get_buffer_page_mapping();
             uint32_t total_host_range_count = 0;
             for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
                 for (const auto& core_page_mapping : buffer_page_mapping->core_page_mappings[core_id]) {
@@ -1247,7 +1250,7 @@ bool write_to_device_buffer(
             constexpr uint64_t pinned_min_batch_size = 512 * 1024;
             bool batch_large_enough =
                 total_host_range_count == 0 ||
-                static_cast<uint64_t>(buffer.size()) * CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS >=
+                static_cast<uint64_t>(region.size) * CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS >=
                     pinned_min_batch_size * total_host_range_count;
 
             if (batch_large_enough) {
@@ -1322,7 +1325,8 @@ bool write_to_device_buffer(
 
         ShardedBufferWriteDispatchParams dispatch_params(
             &buffer,
-            buffer.size() / buffer.page_size(),
+            buffer_page_mapping,
+            region.size / buffer.page_size(),
             cq_id,
             expected_num_workers_completed,
             sub_device_ids,
@@ -1365,10 +1369,8 @@ bool write_to_device_buffer(
         // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
         return false;
     }
-    auto root_buffer = buffer.impl().root_buffer(buffer);
-    auto region = buffer.impl().root_buffer_region();
     InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant = initialize_interleaved_buf_dispatch_params(
-        *root_buffer,
+        buffer,
         cq_id,
         expected_num_workers_completed,
         region,
@@ -1388,7 +1390,7 @@ bool write_to_device_buffer(
     TT_ASSERT(dispatch_params != nullptr);
 
     write_interleaved_buffer_to_device(
-        src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+        src, *dispatch_params, buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
     return use_pinned_transfer;
 }
 
@@ -1396,7 +1398,11 @@ bool write_to_device_buffer(
 
 // Initialize Dispatch Parameters - reused across write txns
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
+    Buffer& buffer,
+    const BufferRegion& region,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed) {
+    validate_buffer_region(buffer, region);
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
@@ -1406,8 +1412,10 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.padded_page_size = buffer.aligned_page_size();
     dispatch_params.src_page_index = 0;
     dispatch_params.unpadded_dst_offset = 0;
-    dispatch_params.buffer_page_mapping = buffer.get_buffer_page_mapping();
-    dispatch_params.total_pages_to_read = buffer.size() / buffer.page_size();
+    // Host pages in this mapping are numbered relative to the start of the region, so the destination
+    // pointer is expected to point at the region's data rather than at a whole-buffer host image.
+    dispatch_params.buffer_page_mapping = get_buffer_page_mapping_for_region(buffer, region);
+    dispatch_params.total_pages_to_read = region.size / buffer.page_size();
     dispatch_params.total_pages_read = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     dispatch_params.pages_per_txn = 0;
@@ -1415,21 +1423,23 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 }
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
-    auto root_buffer = buffer.impl().root_buffer(buffer);
-    const BufferRegion region = buffer.impl().root_buffer_region();
-    IDevice* device = root_buffer->device();
+    Buffer& buffer,
+    const BufferRegion& region,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed) {
+    validate_buffer_region(buffer, region);
+    IDevice* device = buffer.device();
 
     BufferReadDispatchParams dispatch_params;
-    dispatch_params.total_pages_to_read = region.size / root_buffer->page_size();
-    dispatch_params.src_page_index = region.offset / root_buffer->page_size();
+    dispatch_params.total_pages_to_read = region.size / buffer.page_size();
+    dispatch_params.src_page_index = region.offset / buffer.page_size();
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = device;
-    dispatch_params.address = root_buffer->address();
+    dispatch_params.address = buffer.address();
     dispatch_params.unpadded_dst_offset = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
-    dispatch_params.num_banks = device->allocator()->get_num_banks(root_buffer->buffer_type());
-    dispatch_params.padded_page_size = root_buffer->aligned_page_size();
+    dispatch_params.num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    dispatch_params.padded_page_size = buffer.aligned_page_size();
     dispatch_params.pages_per_txn = 0;
 
     return dispatch_params;

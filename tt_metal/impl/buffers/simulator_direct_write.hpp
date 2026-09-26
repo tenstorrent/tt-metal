@@ -29,12 +29,12 @@ bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, con
 
 // Synchronous host-to-device shard write used by the tt-sim fast path.
 void write_shard(
-    Buffer& shard_view, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter);
+    Buffer& buffer, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter);
 
 // Returns true when the tt-sim guard fired and the write completed synchronously.
 bool try_direct_write(
     const DirectWriteGuard& guard,
-    Buffer& shard_view,
+    Buffer& buffer,
     const void* src,
     const BufferRegion& region,
     const CoreRangeSet* logical_core_filter);
@@ -43,7 +43,7 @@ bool try_direct_write(
 
 inline bool try_direct_write(
     const DirectWriteGuard& /*guard*/,
-    Buffer& /*shard_view*/,
+    Buffer& /*buffer*/,
     const void* /*src*/,
     const BufferRegion& /*region*/,
     const CoreRangeSet* /*logical_core_filter*/) {
