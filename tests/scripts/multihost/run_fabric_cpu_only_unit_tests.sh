@@ -68,6 +68,18 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
   export TT_METAL_HOME="$REPO_ROOT"
 fi
 
+# These CPU-only mock runs launch many MPI ranks (up to 64) --oversubscribe'd onto
+# far fewer cores. With Open MPI's default busy-wait progression every idle rank
+# spin-polls, so on an oversubscribed box the controller (rank 0) is starved and
+# the rank exchange livelocks for the entire step budget (0 forward progress, load
+# pinned at the rank count) rather than finishing. Yielding when idle lets the CPU
+# schedule the rank that actually needs to run: the SC16 superpod intermesh stage
+# goes from an 11+ min livelock (killed) to a ~16 s pass. Harmless for the
+# non-oversubscribed groups. Only set it if the caller hasn't already chosen a value.
+if [[ -z "${OMPI_MCA_mpi_yield_when_idle:-}" ]]; then
+  export OMPI_MCA_mpi_yield_when_idle=1
+fi
+
 if [[ -z "${DONT_USE_VIRTUAL_ENVIRONMENT:-}" && -f "${REPO_ROOT}/python_env/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source "${REPO_ROOT}/python_env/bin/activate"
