@@ -562,3 +562,24 @@ Results
 - The first pcc=0 block in each log is the precompile pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_02_attention.py`
+
+## C.sliding_moe.attn_residual test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_sliding_moe_attn_residual.py` with the body
+  of `test_c_full_dense_attn_residual.py` (layer 1): gated pcc_attn_residual_L01 (0.99), asserted output size, finite,
+  rel L2 <= 0.01, per-token norm ratio [0.99, 1.01]. Added two checks on the attention term, delta = out - in:
+  coefficient <delta, attn_out> / ||attn_out||^2 in [0.95, 1.05], and ||delta - attn_out|| / ||attn_out|| <= 0.3.
+
+Why
+- At layer 1 ||in|| 79.05, ||attn_out|| 0.88 (sink-dominated). Measured on the golden (PCC / rel): attn_out dropped
+  0.99993 / 0.0113 (it only fails rel by 0.0013); in + 0.5 attn_out 0.99996 / 0.0060 and ratio [0.989, 0.999]: passes every
+  full_dense check; attn_out shifted one row 0.99996 / 0.0059: passes. The delta checks catch all three (coef 0 / 0.5 / 0.88,
+  rel 1.0 / 0.5 / 0.49). The bf16 add gives coef 0.9986 and rel 0.15, from output rounding only.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00236, coef 1.0000, attn rel 0.0000). BRINGUP_IMPL=stub: FAIL (PCC).
+- Default (device): PASS already, because `TtResidualAdd` is generic: pcc 0.999996, rel 0.00291, ratio [0.9990, 1.0015],
+  coef 1.0200, attn rel 0.1554. The coef margin is 0.03. Keep the add bf16 or fp32 (fp8-like rounding gives rel 0.032).
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attn_residual.py`
