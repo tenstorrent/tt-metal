@@ -8,13 +8,13 @@
 
 #include <array>
 #include <core/xtensor_utils.hpp>
-#include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -23,9 +23,7 @@
 
 namespace {
 
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
+const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {
     for (const auto& [name, parameter] : parameters) {
@@ -38,15 +36,13 @@ ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& nam
 
 }  // namespace
 
-class N300TensorParallelLinearTest : public ::testing::Test {
+class Mesh1x2TensorParallelLinearTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
 
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+        ttml::autograd::ctx().open_device(kMeshShape);
         ttml::autograd::ctx().set_seed(42);
     }
 
@@ -55,7 +51,7 @@ protected:
     }
 };
 
-TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
+TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -104,7 +100,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
+TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -147,7 +143,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
+TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -192,7 +188,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
+TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -232,7 +228,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
+TEST_F(Mesh1x2TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     // Test failing with watcher enabled, github issue #36312
     SKIP_FOR_WATCHER();
 
@@ -279,7 +275,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
+TEST_F(Mesh1x2TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     // Test failing with watcher enabled, github issue #36312
     SKIP_FOR_WATCHER();
 
@@ -320,7 +316,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
+TEST_F(Mesh1x2TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = true;
@@ -372,7 +368,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
         /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
+TEST_F(Mesh1x2TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = false;
@@ -419,7 +415,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
         /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
+TEST_F(Mesh1x2TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -502,7 +498,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         replicate_layer_weight_gradients, row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
+TEST_F(Mesh1x2TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
@@ -593,7 +589,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
         /* atol */ 5e-2));
 };
 
-TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
+TEST_F(Mesh1x2TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 

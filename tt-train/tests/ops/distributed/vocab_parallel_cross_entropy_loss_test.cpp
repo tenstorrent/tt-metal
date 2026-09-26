@@ -6,21 +6,19 @@
 
 #include <cstdint>
 #include <random>
-#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
+const tt::tt_metal::distributed::MeshShape kMeshShape(1, 2);
 
 // Reference: standard cross-entropy loss = mean_over_positions( log_normalizer − target_logit )
 //   log_normalizer = global_max + log(sum(exp(x − global_max)))
@@ -144,11 +142,10 @@ xt::xarray<float> cross_entropy_grad_reference_per_position(
 class ShardedCrossEntropyLossTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
+
+        ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+        ttml::autograd::ctx().open_device(kMeshShape);
         ttml::autograd::ctx().set_seed(42);
     }
 

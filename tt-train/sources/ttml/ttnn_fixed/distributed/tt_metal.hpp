@@ -26,4 +26,10 @@ void enable_fabric(uint32_t num_devices);
 // during the failure path of open_device_mesh().
 void disable_fabric();
 
+// Destroy the process-global MetalContext (and the MetalEnv it owns) via
+// tt::tt_metal::detail::ReleaseOwnership(), so the next device access rebuilds
+// both from the current environment (e.g. updated env vars or fabric config).
+// All devices must be closed before calling this.
+void release_metal_env();
+
 }  // namespace ttml::ttnn_fixed::distributed
