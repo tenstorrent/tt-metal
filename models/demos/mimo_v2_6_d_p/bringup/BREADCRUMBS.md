@@ -321,3 +321,40 @@ Measured
 - The first metric block in the log with pcc=0.000000 comes from the precompile collect pass (comp_pcc stubbed), not the real run.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_04_ffn_norm.py`
+
+## C.full_dense.mlp test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_full_dense_mlp.py` with the explicit body
+  (as `test_c_full_dense_ffn_norm.py`): gated PCC (spec 0.99) plus finite output, rel L2 <= 0.015, per-token norm ratio
+  in [0.98, 1.02], worst per-token rel L2 <= 0.05. Records `rel_l2_mlp_L00`, `row_norm_ratio_{min,max}_mlp_L00`,
+  `worst_row_rel_l2_mlp_L00`.
+
+Why (CPU mutations on the golden, ffn_norm [2048, 4096] -> mlp_out, row norms 0.59-1.31)
+- Device-like noise: fp32 ref rel 0.0017; bf16 0.0019; bfp8 weights + activations 0.0064 / ratio [0.9905, 1.0082] /
+  worst row 0.0126; HiFi2-like 5-bit mantissa weights 0.0141 / [0.981, 1.004].
+- Bugs that pass PCC 0.99: 1.02x output (rel 0.020), 2x, all_reduce x4, row 0 or last row zeroed (rel 0.021 / 0.019:
+  the Gemma limit of 0.03 would pass them, the norm ratio catches them), one row x1.1 (only worst-row and ratio catch
+  it), one TP shard missing / doubled (rel 0.26), last 32 rows zeroed (0.125).
+- Tighter than the Gemma template (0.03, [0.97, 1.03]) because this MLP's noise floor is lower; a HiFi2-style build
+  sits near the rel limit (known issue: use HiFi4 + fp32 acc, as components.yaml says).
+
+Results
+- BRINGUP_IMPL=reference: pass (rel 0.0017, ratio [0.9986, 1.0015], worst row 0.0024). BRINGUP_IMPL=stub: fail (PCC).
+- Default (device): fails with NotImplementedError "no device module for mlp yet" (implement step next).
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp.py`
+
+## C.full_dense.mlp implement (attempt 1), 2026-09-26
+
+What was done
+- `tt/mlp.py:TtDenseMLP` (from gemma4_a4b_d_p TtDenseMLP): gate/up column-parallel (ShardTensorToMesh dim -1 of
+  [H, 16384], 4096 per chip, no pad), `ttnn.linear(..., activation="silu")` for gate, `ttnn.mul`, down row-parallel
+  (dim -2 of [16384, H]), one `ttnn.all_reduce(cluster_axis=1)`. bf16 weights (plan.yaml), HiFi4 + fp32 acc.
+- hooks.py: `_mlp_module` (fp8 + block scale dequantized via `reference.weights.fp8_weight`), `device_component`
+  step "mlp", and "mlp" added to `DEVICE_STEPS["full_dense"]` so the hybrid `device_model` runs it too.
+
+Results (gate): pcc_mlp_L00 0.999995, rel L2 0.0038, row norm ratio [1.0001, 1.0046], worst row rel 0.0055.
+The pcc=0.000000 line in the log is the precompile collect pass (comp_pcc stub), not the real run.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp.py`
