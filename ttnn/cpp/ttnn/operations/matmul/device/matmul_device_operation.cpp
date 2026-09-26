@@ -173,7 +173,13 @@ void validate_matmul_optional_tensors(
         "Must have exactly 1 optional input tensor, got: {}",
         optional_input_tensors.size());
 
-    const auto output_tensor_spec = MatmulDeviceOperation::compute_output_specs(attributes, args).at(0);
+    // compute_output_specs echoes the optional output tensor's own spec when one is present in
+    // args, so computing it from the full args would make the shape check below compare that tensor
+    // against itself. Clear the optional output first so the spec is derived from the inputs.
+    auto args_without_optional_output = args;
+    args_without_optional_output.optional_output_tensors.clear();
+    const auto output_tensor_spec =
+        MatmulDeviceOperation::compute_output_specs(attributes, args_without_optional_output).at(0);
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();

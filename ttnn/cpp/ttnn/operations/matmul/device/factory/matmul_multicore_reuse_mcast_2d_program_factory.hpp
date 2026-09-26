@@ -21,6 +21,7 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         std::vector<CoreCoord> in1_receiver_cores;
         tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id{};
         std::vector<CoreCoord> in1_receiver_other_cores;
+        tt::tt_metal::CBHandle cb_src0{};
         tt::tt_metal::CBHandle cb_src2{};
         tt::tt_metal::CBHandle cb_output{};
         uint32_t num_cores_with_work_r{};
