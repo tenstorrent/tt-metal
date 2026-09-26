@@ -577,3 +577,35 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (0.999996, rel 0.0029, step rel 0.0024); stub FAIL (block PCC 0.962, rel 0.274, step rel 1.0). The device gate already PASSES:
   block PCC 0.999996, rel 0.0028, step PCC 0.999996, rel 0.0030. The `FAIL ... pcc=0.000000` / rel 0.3139 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py`
+
+## C.global.attention test (run1, attempt 1)
+- Replaced the one-line template body with the sliding attention test's structure (STEP = attention, LAYER = 5). The gated metric stays `pcc_attention_L05` >= 0.99.
+  The test also asserts rel L2 <= 0.03 on the whole chunk and on the first 128 rows, a per-token norm ratio in [0.95, 1.05], and a finite output (informational metrics
+  `rel_l2_*`, `rel_l2_head_rows_*`, `row_norm_ratio_{min,max}_*`).
+- Why: measured on the CPU (layer 5, s4096 chunk 1; PCC / rel whole / rel first 128 rows). RoPE positions counted from 0 pass PCC (0.9991 / 0.042 / 0.062, ratio [0.85, 1.22]).
+  PCC already fails the others: no prefix 0.849, V = roped K 0.922, V with k_norm weight 0.929, window 1024 0.877, scale 1/sqrt(512) 0.759, RoPE on all dims 0.929,
+  interleaved RoPE 0.972, no q norm 0.973, non-causal 0.943. Accuracy budget: reference 0.0028, bf16 0.0030, bf16 act + emulated bfp8 q/k/o weights 0.0076 (ratio
+  [0.996, 1.005]). I used the first 128 rows instead of the sliding test's first `sliding_window` rows because a global layer has no window, and the RoPE error is largest on the
+  earliest rows (32: 0.10, 128: 0.062, 1024: 0.044). The measurement script was /tmp/g5att/variants.py (CPU only, not kept).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0028, first 128 rows 0.0027, ratio [0.9992, 1.0038]); stub FAIL (PCC 0.0). The device gate fails with
+  `NotImplementedError: implement step: no device attention for global layer 5 yet` (hooks.py:207). That is expected, because there is no device module yet.
+- Note for implement: global = 16 q heads x 512, 2 KV heads x 512 (fewer KV heads than the 4 chips), no v_proj. V = rms_norm(k_proj(x)) without a weight, and K = RoPE(k_norm(k_proj(x))).
+  RoPE is proportional, theta 1e6, rotating only dims [0:64] + [256:320] (the other inv_freq entries are 0). Scale is 1.0, and there is no window.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py`
+
+## C.global.attention implement (run1, attempt 1)
+- Added `tt/attention.py:TtGlobalAttention` (subclasses TtSlidingAttention to reuse `_shard`, `_replicate`, `_head_norm`, `_rope_tables`) and `TtKVCacheGlobal`.
+  Chip c holds Q heads 4c..4c+3 and KV head c // 2. The fused per-chip weight is `[Wq_c | Wk_h | Wk_h]` ([H, 3072]), so `nlp_create_qkv_heads(num_heads=4, num_kv_heads=1)`
+  returns raw K twice: q = rope(q_norm(q)), k = rope(k_norm(k_raw)), v = rms(k_raw) without a weight. RoPE uses the rotate-half `rotary_embedding` with the proportional
+  inv_freq (zeros past 64, so cos = 1 and sin = 0 there, which matches the reference exactly). Scale 1.0, no window. o_proj is row-parallel [2048, H] per chip, then `all_reduce(cluster_axis=1)`.
+- Cache: per chip a paged-shaped [max_seq/64, 1, 64, 512] bf16 tensor. With one head per chip this is bit-identical to a contiguous cache, and it uses an identity page table (ERNIE pattern).
+  The host [2, S, D] layout is repeat_interleaved to 4 chips on load. `to_torch` reads chips 0 and 2. Writes go through `paged_fill_cache` with a per-chunk page table.
+  Chunk 0 runs `scaled_dot_product_attention(is_causal)`, and later chunks run `chunked_scaled_dot_product_attention` over the whole cache, all keyword arguments, `scale=1.0`.
+- SDPA q/k chunk 128 (head dim 512; I did not try larger), HiFi4 + fp32 acc, exact exp. Projections HiFi2 + fp32 acc. HiFi4 projections were measured and were *worse*
+  (rel 0.0092, ratio max 1.0145 vs 0.0079 / 1.0111), so I kept HiFi2. The error seems to come from bf16 q/k/probabilities, not from matmul fidelity.
+- hooks.py: `_attention_module` builds either class (global: no v_proj, asserts `attention_k_eq_v`). The new `_new_kv_cache(mesh, cfg, layer, max_seq)` picks the cache class by layer type
+  (used by `device_component` and `_HybridState`). `DEVICE_STEPS["global"] = {attn_norm, attention}`. attn_norm was already device-verified for global (C.global.attn_norm, S.global.01)
+  but had not been added yet.
+- Gate PASS: pcc_attention_L05 0.999975, rel L2 0.00795, first 128 rows 0.00696, row-norm ratio [0.9952, 1.0111]. The `FAIL ... pcc=0.000000` line is the precompile stub.
+- Not covered by this gate: the chunk-0 path (plain SDPA) and the K/V read-back (`to_torch`). The ladder's state metrics exercise both.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py`

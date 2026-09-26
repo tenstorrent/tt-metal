@@ -44,7 +44,7 @@ DEVICE_STEPS = {
         "post_ffn_norm",
         "ffn_residual",
     },
-    "global": set(),
+    "global": {"attn_norm", "attention"},
 }
 
 # Residual steps (replicated, no collective): h_mid = in + attn_post_norm; ffn_sum = mlp_post_norm + moe_post_norm.
@@ -193,27 +193,40 @@ def _experts_host_fn(mesh, module):
 
 
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
-    """TtSlidingAttention for a sliding layer, loading only its attention weights (not the experts)."""
+    """TtSlidingAttention / TtGlobalAttention for one layer, loading only its attention weights (not the experts)."""
     import os
     from types import SimpleNamespace
 
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, Gemma4TextConfig, WeightLoader, rope_inv_freq
-    from models.demos.gemma4_a4b_d_p.tt.attention import TtSlidingAttention
+    from models.demos.gemma4_a4b_d_p.tt.attention import TtGlobalAttention, TtSlidingAttention
 
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or Gemma4TextConfig.from_json(os.path.join(loader.model_path, "config.json"))
-    if not cfg.is_sliding(layer):
-        raise NotImplementedError(f"implement step: no device attention for global layer {layer} yet")
+    sliding = cfg.is_sliding(layer)
     p = f"{PREFIX}layers.{layer}.self_attn."
-    names = {"wq": "q_proj", "wk": "k_proj", "wv": "v_proj", "wo": "o_proj", "q_norm": "q_norm", "k_norm": "k_norm"}
+    names = {"wq": "q_proj", "wk": "k_proj", "wo": "o_proj", "q_norm": "q_norm", "k_norm": "k_norm"}
+    if sliding:
+        names["wv"] = "v_proj"
     w = SimpleNamespace(**{k: loader.get(p + n + ".weight").float() for k, n in names.items()})
-    inv_freq, _ = rope_inv_freq(cfg, True)
-    return TtSlidingAttention(mesh, cfg, w, inv_freq, cfg.sliding_window, eps=cfg.rms_norm_eps), cfg
+    inv_freq, _ = rope_inv_freq(cfg, sliding)
+    if sliding:
+        return TtSlidingAttention(mesh, cfg, w, inv_freq, cfg.sliding_window, eps=cfg.rms_norm_eps), cfg
+    assert cfg.attention_k_eq_v and not loader.has(p + "v_proj.weight")
+    return TtGlobalAttention(mesh, cfg, w, inv_freq, eps=cfg.rms_norm_eps), cfg
+
+
+def _new_kv_cache(mesh, cfg, layer, max_seq):
+    """Empty device KV cache for one layer (sliding: 8 heads x 256 by head; global: 2 heads x 512, each on 2 chips)."""
+    from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheGlobal, TtKVCacheSliding
+
+    hkv, d = cfg.attn_dims(layer)
+    seq = -(-max_seq // 32) * 32
+    return (TtKVCacheSliding if cfg.is_sliding(layer) else TtKVCacheGlobal)(mesh, hkv, d, seq)
 
 
 def _attention_host_fn(mesh, module, cfg, cache_of):
-    """fn(ctx, x_host [S, H]) -> host [S, H]; cache_of(ctx) returns the layer's TtKVCacheSliding."""
+    """fn(ctx, x_host [S, H]) -> host [S, H]; cache_of(ctx) returns the layer's device KV cache."""
     import ttnn
     from models.demos.gemma4_a4b_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
 
@@ -242,8 +255,6 @@ def device_component(mesh, spec, layer, step):
     if step == "experts":
         return _experts_host_fn(mesh, _experts_module(mesh, spec, layer))
     if step == "attention":
-        from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
-
         module, cfg = _attention_module(mesh, spec, layer)
         caches = {}
 
@@ -251,10 +262,9 @@ def device_component(mesh, spec, layer, step):
             # Component/swap tests: a fresh device cache holding the golden prefix [0, prefix_len).
             ex = ctx.extra or {}
             max_seq = int(ex.get("max_seq", ctx.start + ctx.length))
-            max_seq = -(-max_seq // 32) * 32
             if "c" in caches:
                 caches.pop("c").free()
-            c = TtKVCacheSliding(mesh, cfg.num_key_value_heads, cfg.head_dim, max_seq)
+            c = _new_kv_cache(mesh, cfg, layer, max_seq)
             n = int(ex.get("prefix_len", ctx.start))
             if n:
                 c.load_prefix(ex["state_prefix"]["key"], ex["state_prefix"]["value"], n)
@@ -269,15 +279,8 @@ class _HybridState:
     """CPU reference state, except layers whose attention runs on the device: their K/V live in a device cache."""
 
     def __init__(self, ref, max_seq, mesh=None, device_attn_layers=(), cfg=None):
-        from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
-
         self.ref, self.s = ref, ref.new_state(max_seq)
-        self.dev = {}
-        if device_attn_layers:
-            seq = -(-max_seq // 32) * 32
-            self.dev = {
-                i: TtKVCacheSliding(mesh, cfg.num_key_value_heads, cfg.head_dim, seq) for i in device_attn_layers
-            }
+        self.dev = {i: _new_kv_cache(mesh, cfg, i, max_seq) for i in device_attn_layers}
 
     def load_prefix(self, layer, tensors, length):
         if layer in self.dev:
