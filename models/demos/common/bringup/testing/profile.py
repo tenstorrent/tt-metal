@@ -6,13 +6,14 @@
 Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
-chunk_wall_ms, host_transfers_per_layer, prefill_ms_full, prefill_tok_s,
+chunk_wall_ms, host_transfers_per_layer, pcc_chunk_out (last layer's output vs the golden), prefill_ms_full (opt-in), prefill_tok_s,
 prefill_chunk_ms_c<nn>, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections import defaultdict
 
@@ -107,6 +108,9 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             model.free(h)
             h = h2
         model.sync()
+        if count:  # the counting run is untimed: also check this chunk is still right (cheap accuracy for perf work)
+            got = model.to_host(h).float()
+            metrics.record("pcc_chunk_out", metrics.pcc(got, g.layer(g.n_chunks - 1, layers[-1])["out"].float()))
         model.free(h)
 
     run()  # compile and fill the program cache: performance is measured warm only
@@ -115,7 +119,10 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     wall = time.time() - t0
     run(count=True)  # warm, apart from the timed run: host round-trips inside the forward pass (agent rule 5)
     metrics.record("host_transfers_per_layer", max(host))
-    full = full_prefill(s, model, state, layers, rung, g.tokens()) if s.get("perf.full_prefill", True) else None
+    # The full-target prefill takes minutes; it is for a final number, not for every perf iteration (spec perf.full_prefill
+    # or BRINGUP_FULL_PREFILL=1).
+    want_full = s.get("perf.full_prefill", False) or os.environ.get("BRINGUP_FULL_PREFILL") == "1"
+    full = full_prefill(s, model, state, layers, rung, g.tokens()) if want_full else None
 
     profiler.enable(mesh)
     run()
