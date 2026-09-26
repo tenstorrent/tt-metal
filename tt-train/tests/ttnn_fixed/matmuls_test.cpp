@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <xtensor-blas/xlinalg.hpp>
@@ -188,6 +189,36 @@ TEST_F(MatmulsTest, MatMulBackwardTransposeA) {
 
     EXPECT_TRUE(xt::allclose(grad_a, expected_grad_a));
     EXPECT_TRUE(xt::allclose(grad_b, expected_grad_b));
+}
+
+TEST_F(MatmulsTest, MatMulBackwardTransposeARectangular) {
+    constexpr std::size_t K = 64U;
+    constexpr std::size_t M = 96U;
+    constexpr std::size_t N = 32U;
+
+    xt::xarray<float> a = xt::empty<float>({K, M});
+    xt::xarray<float> b = xt::empty<float>({K, N});
+    xt::xarray<float> out_grad = xt::empty<float>({M, N});
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        a.data()[i] = static_cast<float>(static_cast<int32_t>(i % 7U) - 3) * 0.125F;
+    }
+    for (std::size_t i = 0; i < b.size(); ++i) {
+        b.data()[i] = static_cast<float>(static_cast<int32_t>(i % 5U) - 2) * 0.125F;
+    }
+    for (std::size_t i = 0; i < out_grad.size(); ++i) {
+        out_grad.data()[i] = static_cast<float>(static_cast<int32_t>(i % 3U) - 1) * 0.25F;
+    }
+
+    auto t_a = core::from_xtensor(a, &autograd::ctx().get_device());
+    auto t_b = core::from_xtensor(b, &autograd::ctx().get_device());
+    auto t_out_grad = core::from_xtensor(out_grad, &autograd::ctx().get_device());
+
+    auto [t_grad_a, t_grad_b] = matmul_backward(t_a, t_b, t_out_grad, true, false);
+    auto expected_grad_a = xt::linalg::dot(b, xt::transpose(out_grad));
+    auto expected_grad_b = xt::linalg::dot(a, out_grad);
+
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(t_grad_a), expected_grad_a, 1e-2F, 1e-2F));
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(t_grad_b), expected_grad_b, 1e-2F, 1e-2F));
 }
 
 TEST_F(MatmulsTest, MatMulBackwardTransposeB) {
