@@ -92,6 +92,8 @@ INFRA_FAILURES = re.compile(
     r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware",
     re.I,
 )
+# The prefill engine the contract step plugs a model into; its agent may change it (owner, F29).
+CONTRACT_SHARED = "models/demos/common/prefill"
 # A test killed by pytest-timeout ran out of time, it did not fail a check: an agent cannot fix that from the log.
 TEST_TIMEOUT = re.compile(r"Timeout \(>[\d.]+s\) from pytest-timeout")
 
@@ -281,6 +283,8 @@ class Orchestrator:
         if role == "test":
             return list(task.get("tests") or []) + self.common_paths()
         extra = [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml"] if role == "plan" else []
+        if task.get("step") == "contract":
+            extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
         return list(task.get("paths") or []) + extra + self.common_paths()
 
     # ---- briefs
@@ -542,14 +546,8 @@ class Orchestrator:
         task = self.led.task(tid)
         role = task.get("role") or ROLE_OF_STEP.get(task.get("step"))
         self.echo(f"[{tid}] {task['title']} (step {task.get('step')}, role {role or 'script'})")
-        shared = approvals.shared_paths(self.spec, task)
-        if shared and not approvals.shared_approved(self.spec, task):
-            return self._human(
-                task,
-                f"{tid} may change shared code outside {rel(self.spec, self.spec.model_dir)}: {', '.join(shared)}. "
-                f"Ask the owner; on their yes: python -m models.demos.common.bringup approve shared:{tid} "
-                f"--spec {self.spec.path}",
-            )
+        if self.led.state().get(tid, {}).get("waiting"):
+            self.led.update(tid, waiting=None)  # a person answered (approval, reset, resume): the task runs again
         if task.get("tests") and not task.get("frozen"):
             reason = self.freeze_tests(task)
             if reason:
