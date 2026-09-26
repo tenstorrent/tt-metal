@@ -1,0 +1,712 @@
+{
+  "decoder": "optimized",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_expmerge_residualnorm_shardedtail_kvnorm_expertbatch64_mixmatmul_mixsharded_qkvl1_projectsharded_sharedshard_directtail",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": false,
+  "prefill_cache_entries": 137,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 4096,
+  "real_weights": true,
+  "pcc": 0.9994333084581669,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9997548281131458,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 128,
+    "min_pcc": 0.9995565971718191,
+    "positions": [
+      4096,
+      4223
+    ],
+    "checks": [
+      {
+        "position": 4096,
+        "pcc": 0.9997548281131458,
+        "passed": true
+      },
+      {
+        "position": 4096,
+        "pcc": 0.9997548281131458,
+        "passed": true
+      },
+      {
+        "position": 4097,
+        "pcc": 0.9997469483193088,
+        "passed": true
+      },
+      {
+        "position": 4098,
+        "pcc": 0.9998046547889871,
+        "passed": true
+      },
+      {
+        "position": 4099,
+        "pcc": 0.9997359465396521,
+        "passed": true
+      },
+      {
+        "position": 4100,
+        "pcc": 0.9996979412780714,
+        "passed": true
+      },
+      {
+        "position": 4101,
+        "pcc": 0.9998352828335632,
+        "passed": true
+      },
+      {
+        "position": 4102,
+        "pcc": 0.9997523669894551,
+        "passed": true
+      },
+      {
+        "position": 4103,
+        "pcc": 0.9997227689941839,
+        "passed": true
+      },
+      {
+        "position": 4104,
+        "pcc": 0.9997841019617083,
+        "passed": true
+      },
+      {
+        "position": 4105,
+        "pcc": 0.9997546617299645,
+        "passed": true
+      },
+      {
+        "position": 4106,
+        "pcc": 0.999769702033491,
+        "passed": true
+      },
+      {
+        "position": 4107,
+        "pcc": 0.999680036965199,
+        "passed": true
+      },
+      {
+        "position": 4108,
+        "pcc": 0.9996746712217927,
+        "passed": true
+      },
+      {
+        "position": 4109,
+        "pcc": 0.9996564860266388,
+        "passed": true
+      },
+      {
+        "position": 4110,
+        "pcc": 0.9997575834433359,
+        "passed": true
+      },
+      {
+        "position": 4111,
+        "pcc": 0.9997317810127019,
+        "passed": true
+      },
+      {
+        "position": 4112,
+        "pcc": 0.9997738538506307,
+        "passed": true
+      },
+      {
+        "position": 4113,
+        "pcc": 0.9998084619725913,
+        "passed": true
+      },
+      {
+        "position": 4114,
+        "pcc": 0.9996972945217004,
+        "passed": true
+      },
+      {
+        "position": 4115,
+        "pcc": 0.9997245426933652,
+        "passed": true
+      },
+      {
+        "position": 4116,
+        "pcc": 0.9997713343683127,
+        "passed": true
+      },
+      {
+        "position": 4117,
+        "pcc": 0.9997635270793275,
+        "passed": true
+      },
+      {
+        "position": 4118,
+        "pcc": 0.9997891879017028,
+        "passed": true
+      },
+      {
+        "position": 4119,
+        "pcc": 0.9997127179144444,
+        "passed": true
+      },
+      {
+        "position": 4120,
+        "pcc": 0.9997280906336432,
+        "passed": true
+      },
+      {
+        "position": 4121,
+        "pcc": 0.9997765906559791,
+        "passed": true
+      },
+      {
+        "position": 4122,
+        "pcc": 0.9997727859275262,
+        "passed": true
+      },
+      {
+        "position": 4123,
+        "pcc": 0.9997604769850726,
+        "passed": true
+      },
+      {
+        "position": 4124,
+        "pcc": 0.9997244551656529,
+        "passed": true
+      },
+      {
+        "position": 4125,
+        "pcc": 0.9997041247871061,
+        "passed": true
+      },
+      {
+        "position": 4126,
+        "pcc": 0.9997418299832029,
+        "passed": true
+      },
+      {
+        "position": 4127,
+        "pcc": 0.9996829302981635,
+        "passed": true
+      },
+      {
+        "position": 4128,
+        "pcc": 0.9997735073723786,
+        "passed": true
+      },
+      {
+        "position": 4129,
+        "pcc": 0.999676313346755,
+        "passed": true
+      },
+      {
+        "position": 4130,
+        "pcc": 0.9997546275887786,
+        "passed": true
+      },
+      {
+        "position": 4131,
+        "pcc": 0.9997613542142939,
+        "passed": true
+      },
+      {
+        "position": 4132,
+        "pcc": 0.9997603369611286,
+        "passed": true
+      },
+      {
+        "position": 4133,
+        "pcc": 0.9997795749526198,
+        "passed": true
+      },
+      {
+        "position": 4134,
+        "pcc": 0.9997158182863137,
+        "passed": true
+      },
+      {
+        "position": 4135,
+        "pcc": 0.9997122436736741,
+        "passed": true
+      },
+      {
+        "position": 4136,
+        "pcc": 0.9997536434111187,
+        "passed": true
+      },
+      {
+        "position": 4137,
+        "pcc": 0.9996424867553704,
+        "passed": true
+      },
+      {
+        "position": 4138,
+        "pcc": 0.9997519098762925,
+        "passed": true
+      },
+      {
+        "position": 4139,
+        "pcc": 0.9997713153722684,
+        "passed": true
+      },
+      {
+        "position": 4140,
+        "pcc": 0.9997884364023613,
+        "passed": true
+      },
+      {
+        "position": 4141,
+        "pcc": 0.9997560803511004,
+        "passed": true
+      },
+      {
+        "position": 4142,
+        "pcc": 0.9998030299634725,
+        "passed": true
+      },
+      {
+        "position": 4143,
+        "pcc": 0.9997396475408434,
+        "passed": true
+      },
+      {
+        "position": 4144,
+        "pcc": 0.9997745036757465,
+        "passed": true
+      },
+      {
+        "position": 4145,
+        "pcc": 0.9998236417279928,
+        "passed": true
+      },
+      {
+        "position": 4146,
+        "pcc": 0.9997833676250485,
+        "passed": true
+      },
+      {
+        "position": 4147,
+        "pcc": 0.9997391246021287,
+        "passed": true
+      },
+      {
+        "position": 4148,
+        "pcc": 0.9997266654105701,
+        "passed": true
+      },
+      {
+        "position": 4149,
+        "pcc": 0.9998100183823874,
+        "passed": true
+      },
+      {
+        "position": 4150,
+        "pcc": 0.9997839133536622,
+        "passed": true
+      },
+      {
+        "position": 4151,
+        "pcc": 0.9997596123418974,
+        "passed": true
+      },
+      {
+        "position": 4152,
+        "pcc": 0.9997321130471003,
+        "passed": true
+      },
+      {
+        "position": 4153,
+        "pcc": 0.9998232167112033,
+        "passed": true
+      },
+      {
+        "position": 4154,
+        "pcc": 0.9997851485001351,
+        "passed": true
+      },
+      {
+        "position": 4155,
+        "pcc": 0.9997848255297098,
+        "passed": true
+      },
+      {
+        "position": 4156,
+        "pcc": 0.9995565971718191,
+        "passed": true
+      },
+      {
+        "position": 4157,
+        "pcc": 0.9997766335846454,
+        "passed": true
+      },
+      {
+        "position": 4158,
+        "pcc": 0.9998461733403595,
+        "passed": true
+      },
+      {
+        "position": 4159,
+        "pcc": 0.9997198279316384,
+        "passed": true
+      },
+      {
+        "position": 4160,
+        "pcc": 0.999705356690863,
+        "passed": true
+      },
+      {
+        "position": 4161,
+        "pcc": 0.9997789753063185,
+        "passed": true
+      },
+      {
+        "position": 4162,
+        "pcc": 0.9997987016487355,
+        "passed": true
+      },
+      {
+        "position": 4163,
+        "pcc": 0.9997335790338201,
+        "passed": true
+      },
+      {
+        "position": 4164,
+        "pcc": 0.9997323911479952,
+        "passed": true
+      },
+      {
+        "position": 4165,
+        "pcc": 0.9997673140190348,
+        "passed": true
+      },
+      {
+        "position": 4166,
+        "pcc": 0.9997626539753082,
+        "passed": true
+      },
+      {
+        "position": 4167,
+        "pcc": 0.9996998772252481,
+        "passed": true
+      },
+      {
+        "position": 4168,
+        "pcc": 0.9997819921578996,
+        "passed": true
+      },
+      {
+        "position": 4169,
+        "pcc": 0.9997159141510482,
+        "passed": true
+      },
+      {
+        "position": 4170,
+        "pcc": 0.9997640134330537,
+        "passed": true
+      },
+      {
+        "position": 4171,
+        "pcc": 0.9997683423995319,
+        "passed": true
+      },
+      {
+        "position": 4172,
+        "pcc": 0.999810199253823,
+        "passed": true
+      },
+      {
+        "position": 4173,
+        "pcc": 0.9997666879479967,
+        "passed": true
+      },
+      {
+        "position": 4174,
+        "pcc": 0.9997386323559356,
+        "passed": true
+      },
+      {
+        "position": 4175,
+        "pcc": 0.9997264847207397,
+        "passed": true
+      },
+      {
+        "position": 4176,
+        "pcc": 0.9996989954501212,
+        "passed": true
+      },
+      {
+        "position": 4177,
+        "pcc": 0.9998061034878554,
+        "passed": true
+      },
+      {
+        "position": 4178,
+        "pcc": 0.9997541588735543,
+        "passed": true
+      },
+      {
+        "position": 4179,
+        "pcc": 0.9997653005999042,
+        "passed": true
+      },
+      {
+        "position": 4180,
+        "pcc": 0.9997180984596739,
+        "passed": true
+      },
+      {
+        "position": 4181,
+        "pcc": 0.9998029418568039,
+        "passed": true
+      },
+      {
+        "position": 4182,
+        "pcc": 0.9997819665946801,
+        "passed": true
+      },
+      {
+        "position": 4183,
+        "pcc": 0.9997370690014329,
+        "passed": true
+      },
+      {
+        "position": 4184,
+        "pcc": 0.9997285055295703,
+        "passed": true
+      },
+      {
+        "position": 4185,
+        "pcc": 0.9997346543597914,
+        "passed": true
+      },
+      {
+        "position": 4186,
+        "pcc": 0.9997730094758772,
+        "passed": true
+      },
+      {
+        "position": 4187,
+        "pcc": 0.9997693850210575,
+        "passed": true
+      },
+      {
+        "position": 4188,
+        "pcc": 0.9997837505226899,
+        "passed": true
+      },
+      {
+        "position": 4189,
+        "pcc": 0.9996998305167594,
+        "passed": true
+      },
+      {
+        "position": 4190,
+        "pcc": 0.9998444045226156,
+        "passed": true
+      },
+      {
+        "position": 4191,
+        "pcc": 0.9998235668375841,
+        "passed": true
+      },
+      {
+        "position": 4192,
+        "pcc": 0.9997851409282883,
+        "passed": true
+      },
+      {
+        "position": 4193,
+        "pcc": 0.999727683035085,
+        "passed": true
+      },
+      {
+        "position": 4194,
+        "pcc": 0.9997230429417485,
+        "passed": true
+      },
+      {
+        "position": 4195,
+        "pcc": 0.999848038206304,
+        "passed": true
+      },
+      {
+        "position": 4196,
+        "pcc": 0.9997301509734268,
+        "passed": true
+      },
+      {
+        "position": 4197,
+        "pcc": 0.9996959943774789,
+        "passed": true
+      },
+      {
+        "position": 4198,
+        "pcc": 0.9997975952517745,
+        "passed": true
+      },
+      {
+        "position": 4199,
+        "pcc": 0.999710807823786,
+        "passed": true
+      },
+      {
+        "position": 4200,
+        "pcc": 0.9997605621031104,
+        "passed": true
+      },
+      {
+        "position": 4201,
+        "pcc": 0.9997746415590691,
+        "passed": true
+      },
+      {
+        "position": 4202,
+        "pcc": 0.9997281979146388,
+        "passed": true
+      },
+      {
+        "position": 4203,
+        "pcc": 0.9998075478366587,
+        "passed": true
+      },
+      {
+        "position": 4204,
+        "pcc": 0.9998199276142584,
+        "passed": true
+      },
+      {
+        "position": 4205,
+        "pcc": 0.999652536836648,
+        "passed": true
+      },
+      {
+        "position": 4206,
+        "pcc": 0.9997296619665051,
+        "passed": true
+      },
+      {
+        "position": 4207,
+        "pcc": 0.9997978578601482,
+        "passed": true
+      },
+      {
+        "position": 4208,
+        "pcc": 0.9997404882743247,
+        "passed": true
+      },
+      {
+        "position": 4209,
+        "pcc": 0.9997641280518546,
+        "passed": true
+      },
+      {
+        "position": 4210,
+        "pcc": 0.9997886816461096,
+        "passed": true
+      },
+      {
+        "position": 4211,
+        "pcc": 0.999788493710032,
+        "passed": true
+      },
+      {
+        "position": 4212,
+        "pcc": 0.9996481844176652,
+        "passed": true
+      },
+      {
+        "position": 4213,
+        "pcc": 0.9998153324645317,
+        "passed": true
+      },
+      {
+        "position": 4214,
+        "pcc": 0.9997173085166667,
+        "passed": true
+      },
+      {
+        "position": 4215,
+        "pcc": 0.9998302140972972,
+        "passed": true
+      },
+      {
+        "position": 4216,
+        "pcc": 0.9998098181777897,
+        "passed": true
+      },
+      {
+        "position": 4217,
+        "pcc": 0.9997720979988263,
+        "passed": true
+      },
+      {
+        "position": 4218,
+        "pcc": 0.9996036218692262,
+        "passed": true
+      },
+      {
+        "position": 4219,
+        "pcc": 0.9997665043861863,
+        "passed": true
+      },
+      {
+        "position": 4220,
+        "pcc": 0.9998054271355395,
+        "passed": true
+      },
+      {
+        "position": 4221,
+        "pcc": 0.9997650187161379,
+        "passed": true
+      },
+      {
+        "position": 4222,
+        "pcc": 0.9998205673781441,
+        "passed": true
+      },
+      {
+        "position": 4223,
+        "pcc": 0.9998057011332672,
+        "passed": true
+      }
+    ]
+  },
+  "traced_decode_host_us": [
+    4875.3121,
+    4878.238,
+    4878.188566666667,
+    4878.1445,
+    4877.592466666667
+  ],
+  "candidate": {
+    "expert_gate_dtype": "bfloat8_b",
+    "expert_down_dtype": "bfloat8_b",
+    "expert_block_w": 11,
+    "expert_fidelity": "LoFi",
+    "prefill_grid": [
+      11,
+      4
+    ],
+    "prefill_block_w": 11,
+    "active_prefill": true,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "compensated_qkv": false,
+    "shared_dtype": "bfloat8_b",
+    "shared_down_dtype": null,
+    "shared_fidelity": "LoFi",
+    "shared_dram": true,
+    "shared_readers": 1,
+    "shared_split": false,
+    "prefill_dtype": "bfloat8_b",
+    "prefill_fidelity": "HiFi2",
+    "prefill_l1": true,
+    "sharded_norms": true,
+    "shared_block": 11,
+    "expert_split": false,
+    "sharded_norm_site": "common"
+  },
+  "runtime_sha256": "6be3f53b2d9f557ffc6a7052d7b7666df032e7e226ddf9db0de373d63202a659"
+}

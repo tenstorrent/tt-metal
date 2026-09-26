@@ -1,0 +1,54 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "long_context",
+      "--default-overrides",
+      "{}",
+      "--layer",
+      "5",
+      "--length",
+      "262144",
+      "--threads",
+      "4",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer5_262144_0.pt",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer5_262144_reference.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_long_attention_k256_layer5.json"
+    ],
+    "environment": {
+      "GEMMA4_PREFILL_SDPA_KCHUNK": "256"
+    },
+    "returncode": 1
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_contract",
+      "--contract",
+      "long_context",
+      "--default-overrides",
+      "{\"prefill_attention_fidelity\": \"HiFi2\"}",
+      "--layer",
+      "5",
+      "--length",
+      "262144",
+      "--threads",
+      "4",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer5_262144_0.pt",
+      "--reference-file",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_long/actual_text_layer5_262144_reference.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_long_attention_hifi2_layer5.json"
+    ],
+    "environment": {},
+    "returncode": 0
+  }
+]

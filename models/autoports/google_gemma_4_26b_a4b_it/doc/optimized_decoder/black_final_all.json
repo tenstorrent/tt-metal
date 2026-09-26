@@ -1,0 +1,5 @@
+{
+  "command": "Black23.10.1 --check all stage-owned Python files",
+  "file_count": 85,
+  "returncode": 0
+}

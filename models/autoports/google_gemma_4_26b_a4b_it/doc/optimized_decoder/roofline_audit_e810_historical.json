@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "scope": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "mode": "source and saved-artifact audit; CPU arithmetic only",
+    "input_tokens": 4096,
+    "decode_positions_inclusive": [
+      4096,
+      4223
+    ],
+    "decode_replays": 128,
+    "batch": 1,
+    "devices": 1,
+    "hardware_run_by_auditor": false,
+    "final_profile_totals_verified": false
+  },
+  "conclusion": "No numerical accounting correction required for the current runtime. Final profiler totals require the final CSV; this audit validates the formulas and supported source path.",
+  "runtime_sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370",
+  "sources": [
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_perf.py",
+      "anchors": "element_bytes:35; native_sdpa_cache_reads:63; traffic:144; useful_prefill_flops:189; complete windows:241; peak/ratios:318",
+      "sha256": "370e73a619900fa7908d7e41ad0ed342c51d6d51852e4c665827f84e029c07be"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/reconcile_perf.py",
+      "anchors": "profile_command:23; decode_signposts:47; reconcile:76",
+      "sha256": "c705b0ad0db8bdb630660c97a4283b852a4bcfc906b6b97048a48f7a40da5b4a"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/run_decoder.py",
+      "anchors": "successive-position profile loop:360; fixed-position host batches:385",
+      "sha256": "000c22fd1ccf4b6f17b8429467e26ab5993921618d7c1b4b1ea566b0bb094d97"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/config.json",
+      "anchors": "text_config model dimensions, sliding_window, top_k_experts",
+      "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+      "anchors": "GeneralizedRouter:718, BF16 projection_weight:745, native_linear:832; NativePagedAttention:1011",
+      "sha256": "e81018299b722aa81eae0e4e9ec3ec638520adcb3bdd85d3c2c8b429dfa0e370"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py",
+      "anchors": "TiedQKV:711",
+      "sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/roofline_native_basis.md",
+      "anchors": "native SDPA chunk/traffic source derivation",
+      "sha256": "b490640018bb3670cbd68de8757f904283c69aa314626d80ae813114c2e813b2"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp",
+      "anchors": "get_workload_for_core:35; get_dynamic_Sk_chunk_t:95",
+      "sha256": "1b52c60d78ada6f08effd326c2ed2407b3a74cf0db2353fadbe51b088610aec8"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp",
+      "anchors": "non-MLA q_heads_parallel_factor:110; FP32 dynamic chunk cap:387",
+      "sha256": "05708e6d9ddeddfdf13303d8f8fa391941d73b742ea3a380beeb0883ce8d4792"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
+      "anchors": "assigned KV head/chunk reads:279",
+      "sha256": "49a05926b437e2ca90d7e01c60e85a6b11f333375a6159fa02c9ff6f78af764e"
+    },
+    {
+      "path": "tt_metal/impl/data_format/tile.cpp",
+      "anchors": "Tile::get_tile_size:70",
+      "sha256": "e0fe57c9f7a23286d2241d9c6585a3ffa287f5cd633bdd3d517dc964b6fee842"
+    },
+    {
+      "path": "tests/nightly/sdpa_perf_utils.py",
+      "anchors": "Blackhole 1.35GHz and 4096/2 HiFi2 peak:26",
+      "sha256": "2b675690cbf937f02e166f327c2c103ba7d50d10c608f0970614837c48c9fc05"
+    },
+    {
+      "path": "tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py",
+      "anchors": "Blackhole fidelity-specific peak table:807",
+      "sha256": "3e685cd3e5e39edc5b71708d59d04184a23292c3662d2c1be0638ac7df3f0090"
+    }
+  ],
+  "useful_prefill_flops": {
+    "dimensions": {
+      "S": 4096,
+      "H": 2816,
+      "Q": 16,
+      "shared_width": 2112,
+      "expert_width": 704,
+      "active_experts": 8,
+      "total_experts": 128,
+      "window": 1024
+    },
+    "formulas": {
+      "projection_sliding": "2*S*H*(2*Q*256 + 2*8*256)",
+      "projection_full_tied_kv": "2*S*H*(2*Q*512 + 2*512)",
+      "shared_mlp": "6*S*H*2112",
+      "active_experts_top8": "6*S*H*704*8",
+      "router_projection": "2*S*H*128",
+      "sliding_pairs": "S*1024 - 1024*1023/2",
+      "full_pairs": "S*(S+1)/2",
+      "causal_attention_qk_and_pv": "4*Q*head_width*pairs"
+    },
+    "calculated": {
+      "sliding_attention": {
+        "terms": {
+          "qkv_and_output_projections": 283467841536,
+          "shared_mlp": 146163105792,
+          "active_experts_top8": 389768282112,
+          "router_projection": 2952790016,
+          "causal_attention_qk_and_pv": 60137930752
+        },
+        "total": 882489950208
+      },
+      "full_attention": {
+        "terms": {
+          "qkv_and_output_projections": 401579442176,
+          "shared_mlp": 146163105792,
+          "active_experts_top8": 389768282112,
+          "router_projection": 2952790016,
+          "causal_attention_qk_and_pv": 274945015808
+        },
+        "total": 1215408635904
+      }
+    },
+    "exclusions": "Padding, masked attention, extra prefill expert work, normalization/scalar/transcendental work are excluded from useful numerator; all their device time remains in the denominator."
+  },
+  "native_decode_kv": {
+    "source_path": "Batch-one non-MLA GQA, DRAM interleaved query, separate K/V, FP32 destination accumulation; dynamic chunk capped at four 32-token tiles.",
+    "chunk_tokens": 128,
+    "formula": "2 * (ceil((position+1)/128)*128 - floor(logical_start/128)*128) * kv_heads * head_width * 1088/1024",
+    "logical_start": "max(0, position+1-1024) sliding; 0 full",
+    "sliding_attention": {
+      "kv_heads": 8,
+      "head_width": 256,
+      "read_tokens_first_127": 1152,
+      "read_tokens_last": 1024,
+      "mean_read_tokens": 1151,
+      "mean_bfp8_kv_bytes": 5009152
+    },
+    "full_attention": {
+      "kv_heads": 2,
+      "head_width": 512,
+      "read_tokens_each": 4224,
+      "mean_read_tokens": 4224,
+      "mean_bfp8_kv_bytes": 9191424
+    },
+    "scope": "K/V input reads only, not complete-layer traffic or allocated-pool size."
+  },
+  "other_dram_accounting": {
+    "formula": "Sum padded DRAM operand elements * metadata dtype storage per native op, with existing sparse/gather/cache-update corrections.",
+    "dtype_bytes": {
+      "BF16": 2,
+      "FP32": 4,
+      "BFP8": 1.0625,
+      "BFP4": 0.5625
+    },
+    "direct_router_weight": {
+      "shape": [
+        1,
+        1,
+        2816,
+        128
+      ],
+      "dtype": "BF16",
+      "bytes_per_generic_read": 720896,
+      "formula": "2816*128*2",
+      "same_shape_fp32_bytes": 1441792,
+      "scope": "Weight operand only; no whole-router speedup or full traffic claim."
+    },
+    "native_sdpa_output": "Actual BF16 output metadata is counted automatically; removed conversion ops disappear from CSV accounting.",
+    "sparse_weights": "INPUT_1 padded bytes * recorded nnz/128; current decode nnz=8. Current sparse activation/output are L1.",
+    "cache_updates": "One 32-token cache page across KV heads is read and written per updated cache.",
+    "metadata": "Index/page-table tensor operands receive one generic read/write from CSV metadata.",
+    "exclusions": "Extra per-worker operand/table rereads, NOC/reduction and profiler traffic. Estimated operand traffic, not controller counters."
+  },
+  "denominator_and_reconciliation": {
+    "device_window": "(max firmware end cycle - min firmware start cycle) * median(FW duration ns / FW cycle span) / 1000",
+    "decode_aggregation": "Mean of all 128 individual complete layer windows; includes intra-layer gaps and all native operations, excludes inter-replay host/input refresh gaps.",
+    "prefill_pct": "100 * useful_prefill_flops / (peak_flops_per_s * complete_prefill_device_us/1e6)",
+    "decode_pct": "100 * mean_estimated_dram_bytes / (peak_dram_bytes_per_s * mean_complete_decode_device_us/1e6)",
+    "reconcile": "Successful profiled command journal, matching raw CSV hash and runner geometry; refreshed host signpost loop and fixed-final-position host timing kept separate. Compare elapsed durations only; arithmetic gaps do not isolate causes."
+  },
+  "peak_basis": {
+    "cores_per_asic": 120,
+    "clock_hz": 1350000000,
+    "lofi_flops_per_core_cycle": 4096,
+    "common_fidelity_cycles": 4,
+    "peak_flops_per_s": 165888000000000,
+    "peak_dram_bytes_per_s": 512000000000,
+    "formula": "120 * 4096 * 1.35e9 / 4",
+    "official_topology_source": "https://docs.tenstorrent.com/aibs/blackhole/p300.html",
+    "topology_interpretation": "Official card has two 120-core ASICs at 1.35GHz, total 1024GB/s; per-ASIC 512GB/s is half the dual-ASIC card bandwidth.",
+    "compute_source": "tests/nightly/sdpa_perf_utils.py:26 and tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py:807",
+    "interpretation": "Stated common theoretical peak for mixed fidelity/SFPU implementation, not measured FPU utilization or measured memory-controller bandwidth; no clamping."
+  },
+  "minor_docstring_issue": "At original review traffic() incorrectly said metadata excluded; current source at artifact creation includes the parent-applied wording correction. No numerical change.",
+  "cpu_verification": {
+    "command": "python3 - <<'PY'\nimport json\nfrom pathlib import Path\naudit = json.loads(Path('models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/final_roofline_audit.json').read_text())\nexec(compile(audit['cpu_verification']['python_source'], '<roofline_cpu_check>', 'exec'))\nPY",
+    "python_source": "import importlib.util\nimport sys\nfrom pathlib import Path\nsys.dont_write_bytecode = True\npath = Path(\"models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_perf.py\")\nspec = importlib.util.spec_from_file_location(\"roofline_cpu_check\", path)\nm = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\nfor kind, expected in [(\"sliding_attention\", 882489950208), (\"full_attention\", 1215408635904)]:\n    assert sum(m.useful_prefill_flops(kind).values()) == expected\nassert m.element_bytes(\"BFLOAT8_B\") == 1088 / 1024\nassert m.element_bytes(\"BFLOAT4_B\") == 576 / 1024\n\ndef operand(row, prefix, shape, dtype):\n    row[prefix + \"_MEMORY\"] = \"DRAM INTERLEAVED\"\n    row[prefix + \"_DATATYPE\"] = dtype\n    for axis, extent in zip(\"WZYX\", shape):\n        row[prefix + \"_\" + axis + \"_PAD[LOGICAL]\"] = str(extent)\n\nrow = {\"OP CODE\": \"Matmul\", \"ATTRIBUTES\": \"\"}\noperand(row, \"INPUT_1\", (1, 1, 2816, 128), \"BFLOAT16\")\nassert m.traffic(row) == 720896\nrow[\"INPUT_1_DATATYPE\"] = \"FLOAT32\"\nassert m.traffic(row) == 1441792\nfor dtype in (\"BFLOAT8_B\", \"BFLOAT4_B\"):\n    sparse = {\"OP CODE\": \"SparseMatmulDeviceOperation\", \"ATTRIBUTES\": \"{'nnz': '8'}\"}\n    operand(sparse, \"INPUT_1\", (1, 128, 2816, 1408), dtype)\n    assert m.traffic(sparse) == 8 * 2816 * 1408 * m.element_bytes(dtype)\nfor kind, heads, width, expected, first_tokens, last_tokens in [\n    (\"sliding_attention\", 8, 256, 5009152, 1152, 1024),\n    (\"full_attention\", 2, 512, 9191424, 4224, 4224),\n]:\n    row = {\"OP CODE\": \"SDPADecode\", \"ATTRIBUTES\": \"{'k_chunk_size': '0', 'fp32_dest_acc_en': '1'}\"}\n    operand(row, \"INPUT_0\", (1, 1, 16, width), \"BFLOAT16\")\n    for prefix in (\"INPUT_1\", \"INPUT_2\"):\n        operand(row, prefix, (160, heads, 32, width), \"BFLOAT8_B\")\n    reads = [m.native_sdpa_cache_reads(row, pos, kind)[1] for pos in range(4096, 4224)]\n    assert all(r[\"chunk_tokens\"] == 128 for r in reads)\n    assert sum(r[\"kv_dram_bytes\"] for r in reads) / 128 == expected\n    assert (reads[0][\"read_tokens\"], reads[-1][\"read_tokens\"]) == (first_tokens, last_tokens)\nassert 120 * 4096 * 1350000000 // 4 == 165888000000000\nprint(\"PASS: useful FLOPs, dtype storage, router bytes, sparse weights, 128 native KV positions, peak arithmetic\")\n",
+    "status": "passed",
+    "scope": "stdlib-only synthetic operand metadata and arithmetic; imports summarizer only, no TTNN/device access."
+  },
+  "artifact_status": "historical_source_only_e810_not_current_v4_profile_evidence"
+}

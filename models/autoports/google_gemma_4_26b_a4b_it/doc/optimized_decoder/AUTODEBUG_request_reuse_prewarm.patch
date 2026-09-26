@@ -1,0 +1,69 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/request_reuse.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/request_reuse.py
+@@ -91,7 +91,33 @@
+         cp = torch.zeros(1, dtype=torch.int32)
+         rp = device(p, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+         dp = device(cp, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
++        # Program binaries introduced after capture can outlive the prefill call.
++        # Initialize this test's exact catalog before keeping a decode trace alive.
++        prefill_warmup = []
++        for request_index, length in enumerate(lengths):
++            if input_fixture is not None:
++                start = input_fixture["windows"][request_index]["prefill_start"]
++                warm_input = values[:, start : start + length].contiguous()
++            else:
++                warm_input = torch.zeros(1, length, cfg.hidden_size)
++            entries_before = mesh.num_program_cache_entries()
++            warm_xt = device(warm_input[None])
++            with device_only():
++                warm_out = layer.prefill_forward(warm_xt, rope_mats=rt, page_table=pt, kv_cache=cache)
++            warm_out.deallocate(True)
++            warm_xt.deallocate(True)
++            prefill_warmup.append(
++                dict(
++                    request=request_index,
++                    length=length,
++                    entries_before=entries_before,
++                    entries_after=mesh.num_program_cache_entries(),
++                )
++            )
++        ttnn.synchronize_device(mesh)
++        # The validated requests below refill their own pages and refresh inputs.
+         trace = None
++        captured_program_entries = None
+         for request_index, length in enumerate(lengths):
+             if input_fixture is not None:
+                 start = input_fixture["windows"][request_index]["prefill_start"]
+@@ -146,6 +172,9 @@
+                 with device_only():
+                     traced = decode()
+                 ttnn.end_trace_capture(mesh, trace, cq_id=0)
++                captured_program_entries = mesh.num_program_cache_entries()
++                mesh.set_program_cache_misses_allowed(False)
++            assert mesh.num_program_cache_entries() == captured_program_entries
+             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+             got = ttnn.to_torch(traced).squeeze(0).float()
+             dpass, dpcc = comp_pcc(dref, got, 0.995)
+@@ -160,6 +189,14 @@
+                         requests=results,
+                         runtime_audit="clean",
+                         trace_reused=True,
++                        prefill_warmup=prefill_warmup,
++                        program_cache_entries_at_capture=captured_program_entries,
++                        program_cache_entries=mesh.num_program_cache_entries(),
++                        program_cache_misses_while_trace_live="forbidden",
++                        trace_allocation_contract=(
++                            "All catalog prefill signatures and the decode signature initialized before capture; "
++                            "this test does not admit unseen prefill signatures while the trace is live"
++                        ),
+                     ),
+                     indent=2,
+                 )
+@@ -167,6 +204,7 @@
+             )
+             print(row, flush=True)
+         ttnn.release_trace(mesh, trace)
++        mesh.set_program_cache_misses_allowed(True)
+         assert all(row["passed"] for row in results), results
+     finally:
+         ttnn.close_mesh_device(mesh)

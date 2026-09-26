@@ -11,6 +11,7 @@ from transformers import AutoConfig
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
 import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests.create_optimized_long_reference import load_input_fixture
 from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import load_layer
 from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
 from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import FunctionalDecoder
@@ -21,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--input-fixture", type=Path)
     parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
     parser.add_argument("--fusion")
     parser.add_argument("--group-size", type=int)
@@ -41,7 +43,12 @@ def main():
     config._attn_implementation = "eager"
     hf = load_layer(config, args.layer, True)
     length, extent, block, slot = 65, 128, 32, 1
-    x = torch.randn(1, length, config.hidden_size).bfloat16().float()
+    input_fixture = None
+    if args.input_fixture:
+        x, input_fixture = load_input_fixture(args.input_fixture, config, args.layer, length)
+        input_fixture["position_policy"] = "Recorded positions 0..64, split across the original continuation boundaries"
+    else:
+        x = torch.randn(1, length, config.hidden_size).bfloat16().float()
     cos, sin = Gemma4TextRotaryEmbedding(config)(
         x, torch.arange(extent)[None], layer_type=config.layer_types[args.layer]
     )
@@ -63,7 +70,13 @@ def main():
         pages = 2 * extent // block
         table = torch.randperm(pages).int().reshape(2, -1)
         page_table = device(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        cache = [device(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim)) for _ in range(2)]
+        cache = [
+            device(
+                torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim),
+                getattr(decoder, "kv_cache_dtype", ttnn.bfloat16),
+            )
+            for _ in range(2)
+        ]
         ropes = tuple(device(t[None]) for t in (cos, sin))
         outputs, preservation = [], []
 
@@ -99,6 +112,7 @@ def main():
             length=length,
             slot=slot,
             real_weights=True,
+            input_fixture=input_fixture,
             pcc=float(pcc),
             passed=bool(passed),
             runtime_audit="clean",

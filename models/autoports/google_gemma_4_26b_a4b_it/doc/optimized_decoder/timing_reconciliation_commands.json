@@ -1,0 +1,36 @@
+[
+  {
+    "command": [
+      "python_env/bin/python",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/reconcile_perf.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer0/whole_layer.json",
+      "--runner-json",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_fused_layer0.json",
+      "--profile-command-journal",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_fused_profile_commands.json",
+      "--unprofiled-runner-json",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_fused_layer0_4096.json",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer0/timing_reconciliation.json"
+    ],
+    "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer0/timing_reconciliation.console.log",
+    "returncode": 0
+  },
+  {
+    "command": [
+      "python_env/bin/python",
+      "models/autoports/google_gemma_4_26b_a4b_it/tests/reconcile_perf.py",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/whole_layer.json",
+      "--runner-json",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_fused_layer5.json",
+      "--profile-command-journal",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_fused_profile_commands.json",
+      "--unprofiled-runner-json",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_fused_layer5_4096.json",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/timing_reconciliation.json"
+    ],
+    "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_fused_layer5/timing_reconciliation.console.log",
+    "returncode": 0
+  }
+]

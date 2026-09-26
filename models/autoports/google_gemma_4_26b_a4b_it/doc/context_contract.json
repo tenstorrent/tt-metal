@@ -6,7 +6,7 @@
   "largest_tested_prefill_context": 262144,
   "largest_tested_decode_context": 262144,
   "capability_reduction": false,
-  "status": "validated_clean_pass",
+  "status": "functional_fused_and_optimized_validated_review_pending",
   "layer_types": [
     "full_attention",
     "sliding_attention"
@@ -19,11 +19,14 @@
         "functional_decoder/long_sliding_262144_final.json",
         "functional_decoder/long_sliding_262143_final.json",
         "fused_decoder/verified_long_sliding_262144.json",
-        "fused_decoder/verified_long_sliding_262143.json"
+        "fused_decoder/verified_long_sliding_262143.json",
+        "optimized_decoder/validated_v5_long_262144_layer0.json",
+        "optimized_decoder/validated_v5_long_262143_layer0.json"
       ],
-      "status": "Final policy passes maximum and non-aligned near-maximum context",
+      "status": "V5 maximum/nonaligned runs pass all291 sampled rows. Current v8 keeps sliding M4, HiFi4, original producer placement and arithmetic/configuration fields; source_delta_v6/v7/v8 preserves the explicit inherited mapping. Current headline/Watcher/stress and inherited allocation-tracked lifecycle pass; independent final review pending.",
       "non_aligned_prefill_tokens": 262143,
-      "non_aligned_traced_decode_context": 262143
+      "non_aligned_traced_decode_context": 262143,
+      "optimized_evidence_runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b"
     },
     "full_attention": {
       "passing_prefill_tokens": 262144,
@@ -32,11 +35,136 @@
         "functional_decoder/long_full_262144_fixed.json",
         "functional_decoder/long_full_262143_fixed.json",
         "fused_decoder/verified_long_full_262144.json",
-        "fused_decoder/verified_long_full_262143.json"
+        "fused_decoder/verified_long_full_262143.json",
+        "optimized_decoder/validated_v8_long_262144_layer5.json",
+        "optimized_decoder/validated_v8_long_262143_layer5.json"
       ],
-      "status": "Final policy passes maximum and non-aligned near-maximum context",
+      "status": "Current v8 M2/producer-L1 full minimal-QKV maximum/nonaligned runs pass all291 sampled rows plus final tails/decode; minimum sampled-row PCC0.996029643684647. Independent final review pending.",
       "non_aligned_prefill_tokens": 262143,
-      "non_aligned_traced_decode_context": 262143
+      "non_aligned_traced_decode_context": 262143,
+      "optimized_evidence_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
     }
+  },
+  "optimized_decoder": {
+    "status": "validated_independent_review_pending",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_dtype": "bfloat8_b",
+    "page_size_tokens": 32,
+    "prefill_chunk_tokens": 1024,
+    "expert_batch_tokens": 32,
+    "kv_cache_bytes_per_request_at_max_context": {
+      "sliding_attention": 1140850688,
+      "full_attention": 570425344
+    },
+    "changed_expert_weight_storage_bytes": {
+      "fused_bf16": 1522532352,
+      "selected_sliding_resident": 681967616,
+      "selected_full_resident": 428212224
+    },
+    "allocation_notes": [
+      "BFP8/BFP4 32x32 tiles occupy1088/576 bytes including exponent storage. Sliding shares BFP8 gate/up and BFP4 down across phases; full shares BFP4 expert weights. Sliding prefill gate BFP8 repairs recorded maximum-context query regressions and removes the extra BFP4 gate copy.",
+      "Packed direct QKV shares its BFP8 prefill/decode weight and drops unused FP32 rows and lane mask. QKV payload:24,510,464 bytes sliding;27,574,272 full.",
+      "Shared MLP retains BF16 prefill weights plus padded DRAM-sharded decode weights. Total shared payload:56,365,056 bytes sliding;46,632,960 full. See optimized_decoder/final_memory_accounting.md for role breakdown and exclusions.",
+      "The cache contract retains absolute32-token paged storage, including sliding attention. Nonaligned262143 rounds to the same allocation as262144. No context capability is reduced.",
+      "B1 maximum context and B32 short-context correctness are distinct validations;32 simultaneous maximum contexts require aggregate capacity beyond the tested allocation. Tensor payload estimates exclude allocator alignment,trace buffers,norm/router/rope state and transient workspaces. Maximum-context execution validates total feasibility.",
+      "Selected minimal prefill QKV K8 sliding/K16 full and minimal full output K8 reuse existing weights and add no persistent tensor payload. Integrated v5 maximum-context runs retain all291 sampled-row gates; source-derived transient CB accounting is in optimized_decoder/final_memory_accounting.md.",
+      "Final sliding chunk retains no temporary K/V tail. Decode uses the paged cache. Full attention selects a setup-built Q64/K128 boundary program when a K256 read would exceed 128-rounded logical page-table capacity. The advertised context and persistent allocation sizes are unchanged.",
+      "V7 changes only full minimal-prefill QKV math fidelity (HiFi4 to HiFi2), preserving FP32 accumulation/output, BFP8 weights and all cache/weight/layout payloads. Source-derived resident-byte delta is zero.",
+      "V8 selects full minimal-QKV M2/K16/N8 and directly emits the existing final FP32 weighted input-normalization result into L1. Resident checkpoint/cache/RoPE delta remains zero; a1024-row input payload is11,534,336bytes and per-compute-core QKV CB payload decreases1,196,032\u2192737,280bytes. These are transient source-derived sizes, not allocator peaks. Sliding remains M4 with its original placement.",
+      "Native v8 full minimal-QKV output also inheritsL1 from its input when output_mem_config isNone. Packed[1024,9216]FP32 payload37,748,736bytes and tiedKV slice[1024,1024]4,194,304bytes areL1; concat[1024,10240]41,943,040bytes returnsDRAM. These individual transient payloads are not summed live/peak estimates. Current max-context and native profiles verify the selected capacity and placement."
+    ],
+    "evidence": [
+      "optimized_decoder/validated_v5_long_262144_layer0.json",
+      "optimized_decoder/validated_v5_long_262143_layer0.json",
+      "optimized_decoder/validated_v8_long_262144_layer5.json",
+      "optimized_decoder/validated_v8_long_262143_layer5.json"
+    ],
+    "runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+    "full_attention_paged_prefill_program": {
+      "q_chunk_size": 64,
+      "k_chunk_size": 256,
+      "fidelity": "HiFi2",
+      "first_bf16_chunk": "unchanged legal128/128",
+      "tight_capacity_boundary": {
+        "q_chunk_size": 64,
+        "k_chunk_size": 128,
+        "selection": "Use only when the main program rounded read end exceeds the logical page-table capacity."
+      }
+    },
+    "validation_summary": "optimized_decoder/validated_v8_validation_summary.json",
+    "policy": "optimized_decoder/final_policy.json",
+    "memory_accounting": "optimized_decoder/final_memory_accounting.md",
+    "decode_expert_slots": 8,
+    "decode_rope_setup_layout": "ROW_MAJOR; TILE remains accepted",
+    "evidence_status": "Current v8 twelve primary plus five boundary commands pass, including full262144/262143 all291 sampled rows and allocation-tracked9-request reuse at379 stable program entries. Unchanged sliding broad contexts retain v5/v6 hashes through v7/v8 source proof. Current native profiles and CPU accounting pass; independent review remains separate.",
+    "prefill_output_projection": {
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": {
+        "sliding_attention": 16,
+        "full_attention": 8
+      },
+      "fidelity": "LoFi",
+      "input_memory": "DRAM",
+      "output_dtype": "float32",
+      "output_memory": "DRAM",
+      "backend": {
+        "sliding_attention": "2D multicast linear",
+        "full_attention": "minimal_matmul"
+      }
+    },
+    "sharded_norm_sites": "all for both layer kinds",
+    "prefill_expert_gate_dtype": {
+      "sliding_attention": "bfloat8_b",
+      "full_attention": "bfloat4_b"
+    },
+    "decode_fused_gelu": true,
+    "prefill_qkv_projection": {
+      "backend": "minimal_matmul",
+      "grid": [
+        11,
+        8
+      ],
+      "k_block": {
+        "sliding_attention": 8,
+        "full_attention": 16
+      },
+      "fidelity": {
+        "sliding_attention": "HiFi4",
+        "full_attention": "HiFi2"
+      },
+      "weight_dtype": "bfloat8_b",
+      "output_dtype": "float32",
+      "m_block": {
+        "sliding_attention": 4,
+        "full_attention": 2
+      },
+      "input_memory": {
+        "sliding_attention": "unchanged DRAM path",
+        "full_attention": "L1 from final weighted input normalization"
+      },
+      "resident_payload_delta_bytes": 0,
+      "output_memory": {
+        "sliding_attention": "DRAM",
+        "full_attention": "L1 inherited from input"
+      },
+      "full_tied_kv_boundary": {
+        "slice_memory": "L1",
+        "concat_output_memory": "DRAM"
+      }
+    },
+    "source_delta": "optimized_decoder/source_delta_v8.json",
+    "paged_capacity_rounding_tokens": 128,
+    "source_delta_chain": [
+      "optimized_decoder/source_delta_v6.json",
+      "optimized_decoder/source_delta_v7.json",
+      "optimized_decoder/source_delta_v8.json"
+    ],
+    "native_profile_audit": "optimized_decoder/final_roofline_audit.json",
+    "native_profile_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
   }
 }

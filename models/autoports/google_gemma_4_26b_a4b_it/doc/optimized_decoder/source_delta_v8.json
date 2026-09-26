@@ -1,0 +1,809 @@
+{
+  "current_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "ancestor_runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+  "ancestor_source": "runtime_v7_before_placement.py.txt",
+  "ancestor_manifest": "validated_v7_validation_summary.json",
+  "ancestor_manifest_sha256": "9e51328bdc645fb509c4e07ead44ad666fafe1b259f24b527a97bbcdb4f6f683",
+  "generator_sha256": "0d11cc0a75a2a4fc349658a7b63f255842238eb1e0c7d42a394e9eb6c866c6d6",
+  "method_count": 40,
+  "changed_methods": [
+    "OptimizedDecoder.from_state_dict",
+    "OptimizedDecoder.normalize",
+    "MinimalPrefillProjection.__init__",
+    "MinimalPrefillQKV.__init__"
+  ],
+  "exact_delta_reversal_proof": [
+    {
+      "method": "OptimizedDecoder.from_state_dict",
+      "remaining_ast_exactly_matches_v7": true
+    },
+    {
+      "method": "OptimizedDecoder.normalize",
+      "remaining_ast_exactly_matches_v7": true
+    },
+    {
+      "method": "MinimalPrefillProjection.__init__",
+      "remaining_ast_exactly_matches_v7": true
+    },
+    {
+      "method": "MinimalPrefillQKV.__init__",
+      "remaining_ast_exactly_matches_v7": true
+    }
+  ],
+  "unchanged_methods": {
+    "OptimizedExperts.__init__": "dd23316703bc4702dc1d79ae975f648f7a8ce7382ae87d7cd352fc2f843fc76f",
+    "OptimizedExperts.enable_indexed_decode": "428a20d59c78058fc790e756bbb1a114a270ed89aeca6908602cda954a512a8f",
+    "OptimizedExperts._chunk": "0c79bbec8604e53c35257aa26ae9d232b3dccf8cd0f0c48e0f154e711f1fc38b",
+    "OptimizedExperts._active_prefill": "f6104fc290d6bed2190c1fbbe987d19dfc9df33f7025fd306f940abdbecd0f91",
+    "OptimizedDecoder._validate_kv_cache": "673391af8160e724941a1abea1e0dd34944a3853858dde7fde55e5b5cbe9c3e4",
+    "OptimizedDecoder.prefill_forward": "8ed8cf7682c8cbe6f322825ca1510e1ca85eed9bc1ab06ef85be17dd3e09c142",
+    "OptimizedDecoder.decode_forward": "21015be5f453c35c9e31cf1410d9325a5c010033878bdf4985dd763d3c1c6521",
+    "OptimizedDecoder._forward": "6ac39f5586902023b802c974f93468803c1f17ad6c809f6ee51ebc9701693ff6",
+    "GeneralizedRouter.__init__": "fe3dbdd1afb51b123269462062da102aeca32fe775a38209464fe53cfbd6cbc7",
+    "GeneralizedRouter.__getattr__": "a37e957c09b77a126cfa8bc83a238c29f12ad8f60a3631e34f244d31efd96097",
+    "GeneralizedRouter.__call__": "4e8d42333470a59a35f4a5adf52a1b6d99b773f053a06e7969e1a250954d7987",
+    "GeneralizedRouter.decode_indices": "2a38efd8938dc51196c923ed4dab041ce3268564e71e2fcd115c5b273c2bd2b3",
+    "LanePartitionRouter.__init__": "3360b257a8cba3199bb3180d494fe1f34ab3f76d81a21aab09e0fb6aeb2adadf",
+    "LanePartitionRouter.__call__": "d585e82379956bc45ba0ddb438a7dd8ff0ce13f2f9423ba71e21498e11e4b6f2",
+    "ConfiguredChunkedPrefillAttention.__init__": "bae6fcdbe36c55114a761c22cf27ec5b776f2ed87aa34edce37af027fbfb7a37",
+    "ConfiguredChunkedPrefillAttention.__call__": "a66ffedb1fefa18f7d0eb1432e0b4e784fdc7d2b26966d4c1da39ce4a0a7fcee",
+    "NativePagedAttention.__init__": "6511d709bde91f3efbb869cc364eaad9a5d02638c1f69319b378142a458e5c0a",
+    "NativePagedAttention.__call__": "438b4521682289806ba6599779cb18b7457c8881a54b5548ccffa41959da8402",
+    "OptimizedAttention.from_existing": "73c1d182e47ccfd91084f4ceefb00f48a4a8157b6bff247b29213479cd8e609b",
+    "OptimizedAttention.configure_prefill_output": "683e1432e2d26a01c7bf4364abc1985acd7df40711cecd461f87a6fbe92a6a03",
+    "OptimizedAttention.project": "a825d44092b4ad775f2bd46bb07d4e11ebd75d4ce0ea316a96741927ffb8b33c",
+    "OptimizedAttention.cache_cast": "54e96a4aeb9cc93e7109c55d73f6326efc79e9ee8913c3ca51a17d9bb1e12443",
+    "OptimizedAttention.prefill": "3169dee1c6ef711a78001a89e85b5e20e9b02e3d8343870e0cc2ad83f430d355",
+    "MinimalPrefillProjection.__call__": "973a2ccdc8ee88a68f104cf8c5ce5ee246731f0987db659261eee1460b9f193c",
+    "MinimalPrefillQKV.__call__": "5b35dba04a9209a02175d69949a6b5a04d85ff52d39ab0a93cc47642e4b6d71f",
+    "DirectQKV.__init__": "d01c3fc14a5b06c7f4eaca8abf89b848076e8c2ac896d850b75ef4deb05242d0",
+    "DirectQKV.__call__": "32a7dedf860faebf2ef98d1dcd5517c4dc0f8d5c5c77dd3509edc7b88656bb0a",
+    "LanePartitionQKV.__init__": "50591bb9dd064295dc610a1d99bcfd8830903e02b69d333b324f5579f109b46f",
+    "LanePartitionQKV._init_dram": "ab40317ad9593313548c59f65c49b3fbe87b22b799f9f90d94bd7f626b7c7b5d",
+    "LanePartitionQKV.__call__": "f64bfe912ecbe397b477f8d2a4d3f7267067d1a53ba4b0071cf120ab21d547db",
+    "CompensatedQKV.__init__": "797edb05afb201759761ec2fad231b17619696ac7f1440db58b2715140550740",
+    "CompensatedQKV.__call__": "2b38f56c866de93220d9c95a595dadbebc1f73e268ee562f0ac80c7ddcf4f578",
+    "DecodeLinear.__init__": "0a3fad12ab68102117118b4a25c16c6d84dec93f3f222153dba73fde3ec3235d",
+    "DecodeLinear.__call__": "5379f3a95eb2d42790a11fab4703d97afa8a69da3e0d0a4311066fed0fd505df",
+    "OptimizedSharedMLP.__init__": "2462e6e6a1e370f164bd33cac1f3ccff76b439457e6cbaaf6387bf6fba2cba57",
+    "OptimizedSharedMLP.__call__": "82f8b240b301b964d088f894ba95dc7196a4d6e503430b5dc9b821363035c963"
+  },
+  "unified_diff": "--- v7\n+++ v8\n@@ -299,6 +299,8 @@\n         qkv_direct_cleanup=\"auto\",\n         prefill_qkv_minimal=True,\n         prefill_qkv_minimal_block_w=\"auto\",\n+        prefill_qkv_minimal_block_h=\"auto\",\n+        prefill_qkv_input_l1=\"auto\",\n         prefill_qkv_fidelity=\"auto\",\n         output_weight_dtype=ttnn.bfloat8_b,\n         output_grid=\"auto\",\n@@ -366,6 +368,10 @@\n         \"\"\"\n         config = getattr(kwargs[\"hf_config\"], \"text_config\", kwargs[\"hf_config\"])\n         sliding = config.layer_types[kwargs[\"layer_idx\"]] == \"sliding_attention\"\n+        if prefill_qkv_minimal_block_h == \"auto\":\n+            prefill_qkv_minimal_block_h = 4 if sliding else 2\n+        if prefill_qkv_input_l1 == \"auto\":\n+            prefill_qkv_input_l1 = bool(prefill_qkv_minimal and not sliding)\n         if prefill_qkv_fidelity == \"auto\":\n             prefill_qkv_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.HiFi2\n         if prefill_qkv_minimal_block_w == \"auto\":\n@@ -431,6 +437,7 @@\n         if kv_cache_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):\n             raise ValueError(\"Optimized decoder supports BF16 or BFP8 caches\")\n         self = super().from_state_dict(state_dict, **kwargs)\n+        self.prefill_qkv_input_l1 = bool(prefill_qkv_input_l1)\n         self.kv_cache_dtype = kv_cache_dtype\n         if prefill_down_dtype is None:\n             prefill_down_dtype = ttnn.bfloat4_b if sliding else ttnn.bfloat8_b\n@@ -575,9 +582,13 @@\n                 attention.weights.wqkv,\n                 kwargs[\"mesh_device\"],\n                 block_w=prefill_qkv_minimal_block_w,\n+                block_h=prefill_qkv_minimal_block_h,\n                 fidelity=prefill_qkv_fidelity,\n             )\n             attention.weights = replace(attention.weights, wqkv=projection)\n+            projection.projection.precision_policy[\"input_memory\"] = (\n+                \"L1 from input normalization\" if self.prefill_qkv_input_l1 else \"unchanged\"\n+            )\n             self.precision_policy[\"prefill_qkv_projection\"] = projection.projection.precision_policy\n         if output_weight_dtype is not None:\n             attention.weights = replace(\n@@ -799,6 +810,9 @@\n             return result if weight is None else ttnn.mul(result, weight, memory_config=ttnn.L1_MEMORY_CONFIG)\n         if value.is_sharded():\n             value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)\n+        if getattr(self, \"prefill_qkv_input_l1\", False) and site == \"input\" and value.shape[-2] > 1:\n+            result = super().normalize(value, epsilon, weight=None)\n+            return ttnn.mul(result, weight, memory_config=ttnn.L1_MEMORY_CONFIG)\n         return super().normalize(value, epsilon, weight)\n \n \n@@ -1433,7 +1447,9 @@\n class MinimalPrefillProjection:\n     \"\"\"Reuse the selected weight/compute policy with setup-time minimal-matmul blocks.\"\"\"\n \n-    def __init__(self, weight, compute, mesh, *, block_w=16):\n+    def __init__(self, weight, compute, mesh, *, block_w=16, block_h=4):\n+        if block_h not in (1, 2, 3, 4):\n+            raise ValueError(\"Minimal prefill M block must be 1, 2, 3, or 4 tiles\")\n         if block_w not in (4, 8, 16):\n             raise ValueError(\"Minimal prefill K block must be 4, 8, or 16 tiles\")\n         available = mesh.compute_with_storage_grid_size()\n@@ -1443,7 +1459,7 @@\n         self.compute = compute\n         self.programs = tuple(\n             ttnn.MinimalMatmulConfig(\n-                M_block_size=rows,\n+                M_block_size=min(rows, block_h),\n                 K_block_size=block_w,\n                 N_block_size=8,\n                 subblock_h=1,\n@@ -1456,7 +1472,7 @@\n             backend=\"minimal_matmul\",\n             grid=(11, 8),\n             k_block=block_w,\n-            m_block=\"min(4, padded_M_tiles)\",\n+            m_block=f\"min({block_h}, padded_M_tiles)\",\n             n_block=8,\n             subblock=(1, 4),\n             weight_dtype=str(weight.dtype),\n@@ -1485,7 +1501,7 @@\n class MinimalPrefillQKV:\n     \"\"\"Replace only the packed prefill projection; retain the configured decode callable.\"\"\"\n \n-    def __init__(self, source, mesh, *, block_w=16, fidelity=None):\n+    def __init__(self, source, mesh, *, block_w=16, block_h=4, fidelity=None):\n         self.decode_source = source\n         while isinstance(source, (DirectQKV, LanePartitionQKV, CompensatedQKV)):\n             source = source.source\n@@ -1503,7 +1519,7 @@\n                 dst_full_sync_en=compute.dst_full_sync_en,\n                 throttle_level=compute.throttle_level,\n             )\n-        self.projection = MinimalPrefillProjection(source.weight, compute, mesh, block_w=block_w)\n+        self.projection = MinimalPrefillProjection(source.weight, compute, mesh, block_w=block_w, block_h=block_h)\n \n     def __call__(self, hidden_states, compute_kernel_config=None, out_memory_config=None):\n         if hidden_states.shape[-2] == 1:\n",
+  "auto_resolution_checks": [
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": "auto",
+      "input_l1": "auto",
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": "auto",
+      "input_l1": false,
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": "auto",
+      "input_l1": true,
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 1,
+      "input_l1": "auto",
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 1,
+      "input_l1": false,
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 1,
+      "input_l1": true,
+      "resolved_h": 1,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 2,
+      "input_l1": "auto",
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 2,
+      "input_l1": false,
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 2,
+      "input_l1": true,
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 4,
+      "input_l1": "auto",
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 4,
+      "input_l1": false,
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": false,
+      "block_h": 4,
+      "input_l1": true,
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": "auto",
+      "input_l1": "auto",
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": "auto",
+      "input_l1": false,
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": "auto",
+      "input_l1": true,
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 1,
+      "input_l1": "auto",
+      "resolved_h": 1,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 1,
+      "input_l1": false,
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 1,
+      "input_l1": true,
+      "resolved_h": 1,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 2,
+      "input_l1": "auto",
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 2,
+      "input_l1": false,
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 2,
+      "input_l1": true,
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 4,
+      "input_l1": "auto",
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 4,
+      "input_l1": false,
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": false,
+      "minimal": true,
+      "block_h": 4,
+      "input_l1": true,
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": "auto",
+      "input_l1": "auto",
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": "auto",
+      "input_l1": false,
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": "auto",
+      "input_l1": true,
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 1,
+      "input_l1": "auto",
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 1,
+      "input_l1": false,
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 1,
+      "input_l1": true,
+      "resolved_h": 1,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 2,
+      "input_l1": "auto",
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 2,
+      "input_l1": false,
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 2,
+      "input_l1": true,
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 4,
+      "input_l1": "auto",
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 4,
+      "input_l1": false,
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": false,
+      "block_h": 4,
+      "input_l1": true,
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": "auto",
+      "input_l1": "auto",
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": "auto",
+      "input_l1": false,
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": "auto",
+      "input_l1": true,
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 1,
+      "input_l1": "auto",
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 1,
+      "input_l1": false,
+      "resolved_h": 1,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 1,
+      "input_l1": true,
+      "resolved_h": 1,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 2,
+      "input_l1": "auto",
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 2,
+      "input_l1": false,
+      "resolved_h": 2,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 2,
+      "input_l1": true,
+      "resolved_h": 2,
+      "resolved_l1": true,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 4,
+      "input_l1": "auto",
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 4,
+      "input_l1": false,
+      "resolved_h": 4,
+      "resolved_l1": false,
+      "passed": true
+    },
+    {
+      "sliding": true,
+      "minimal": true,
+      "block_h": 4,
+      "input_l1": true,
+      "resolved_h": 4,
+      "resolved_l1": true,
+      "passed": true
+    }
+  ],
+  "projection_setup_checks": [
+    {
+      "block_h": 1,
+      "block_w": 8,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 1,
+      "block_w": 16,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 2,
+      "block_w": 8,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        2,
+        2,
+        2
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 2,
+      "block_w": 16,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        2,
+        2,
+        2
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 3,
+      "block_w": 8,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        2,
+        3,
+        3
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 3,
+      "block_w": 16,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        2,
+        3,
+        3
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 4,
+      "block_w": 8,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "passed": true
+    },
+    {
+      "block_h": 4,
+      "block_w": 16,
+      "same_compute_and_weight": true,
+      "effective_M": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "passed": true
+    }
+  ],
+  "normalization_checks": [
+    {
+      "enabled": false,
+      "rows": 1,
+      "site": "input",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 1,
+      "site": "post",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 1,
+      "site": "common",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 32,
+      "site": "input",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 32,
+      "site": "post",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 32,
+      "site": "common",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 1024,
+      "site": "input",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 1024,
+      "site": "post",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": false,
+      "rows": 1024,
+      "site": "common",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 1,
+      "site": "input",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 1,
+      "site": "post",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 1,
+      "site": "common",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 32,
+      "site": "input",
+      "final_mul_memory_only": true,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 32,
+      "site": "post",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 32,
+      "site": "common",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 1024,
+      "site": "input",
+      "final_mul_memory_only": true,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 1024,
+      "site": "post",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    },
+    {
+      "enabled": true,
+      "rows": 1024,
+      "site": "common",
+      "final_mul_memory_only": false,
+      "arithmetic_call_order_preserved": true,
+      "passed": true
+    }
+  ],
+  "source_claim": "Full minimal QKV uses M2 and input normalization writes its final weighted result directly to L1. Sliding keeps M4 and skips the new normalization branch. All decode branches, QKV compute values/weight aliases, full public lifecycle and cache-capacity methods remain unchanged. M2 may change numerical evaluation and requires fresh full-path gates.",
+  "resident_tensor_payload_delta_bytes": 0,
+  "new_setup_tensors": false,
+  "temporary_full_input": {
+    "shape": [
+      1,
+      1,
+      1024,
+      2816
+    ],
+    "dtype": "FP32",
+    "payload_bytes": 11534336,
+    "movement": "existing final weighted-normalization tensor goes to L1 instead of DRAM; no extra copy"
+  },
+  "downstream_temporary_placement": {
+    "output_spec_source": "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:297",
+    "output_spec_rule": "output_mem_config.value_or(in0_input_tensor.memory_config())",
+    "minimal_output": {
+      "shape": [
+        1,
+        1,
+        1024,
+        9216
+      ],
+      "dtype": "FP32",
+      "memory": "L1",
+      "payload_bytes": 37748736
+    },
+    "tied_kv_slice": {
+      "shape": [
+        1,
+        1,
+        1024,
+        1024
+      ],
+      "dtype": "FP32",
+      "memory": "L1",
+      "payload_bytes": 4194304
+    },
+    "tied_concat": {
+      "shape": [
+        1,
+        1,
+        1024,
+        10240
+      ],
+      "dtype": "FP32",
+      "memory": "DRAM",
+      "payload_bytes": 41943040
+    },
+    "scope": "Individual temporary payloads, not summed live allocations or allocator peaks. None output request inherits input memory, so full QKV output and slice also move into L1."
+  },
+  "workspace": {
+    "scope": "Per compute core QKV CB payload, excludes runtime allocator/other kernels and metadata",
+    "prior_M4_bytes": 1196032,
+    "selected_M2_bytes": 737280,
+    "delta_bytes": -458752
+  },
+  "source_proof_only": true
+}

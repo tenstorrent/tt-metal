@@ -1,0 +1,585 @@
+{
+  "scope": "CPU-only exact host view selection and source-AST capability resolution. No TTNN import, device accuracy, trace, or performance test.",
+  "runtime_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a",
+  "probe_sha256": "64c815148923aa9d3dbb7e67f086edc5425fd6b3fdb8c6188b4332d6b56400b2",
+  "upload_cases": [
+    {
+      "context": 5120,
+      "head_dim": 256,
+      "requested_layout": "TILE_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 5120,
+      "head_dim": 512,
+      "requested_layout": "TILE_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 2048,
+      "head_dim": 256,
+      "requested_layout": "TILE_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 2048,
+      "head_dim": 512,
+      "requested_layout": "TILE_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 5120,
+      "head_dim": 256,
+      "requested_layout": "ROW_MAJOR_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            5120,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 5120,
+      "head_dim": 512,
+      "requested_layout": "ROW_MAJOR_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            5120,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 2048,
+      "head_dim": 256,
+      "requested_layout": "ROW_MAJOR_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "context": 2048,
+      "head_dim": 512,
+      "requested_layout": "ROW_MAJOR_LAYOUT",
+      "exact_host_view_identity": true,
+      "prefill_unchanged": true,
+      "unrelated_uploads_unchanged": true,
+      "observed_uploads": [
+        {
+          "role": "cos",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "prefill",
+          "shape": [
+            1,
+            1,
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "TILE_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "cos",
+          "phase": "decode",
+          "shape": [
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        },
+        {
+          "role": "sin",
+          "phase": "decode",
+          "shape": [
+            2048,
+            512
+          ],
+          "dtype": "bfloat16",
+          "layout": "ROW_MAJOR_LAYOUT",
+          "memory": "DRAM interleaved",
+          "setup_only": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "capability_checks": [
+    {
+      "harness": "tests/run_decoder.py",
+      "optimized_capability": true,
+      "resolved_layout": "ROW_MAJOR_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/run_decoder.py",
+      "optimized_capability": false,
+      "resolved_layout": "TILE_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/batched.py",
+      "optimized_capability": true,
+      "resolved_layout": "ROW_MAJOR_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/batched.py",
+      "optimized_capability": false,
+      "resolved_layout": "TILE_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/request_reuse.py",
+      "optimized_capability": true,
+      "resolved_layout": "ROW_MAJOR_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/request_reuse.py",
+      "optimized_capability": false,
+      "resolved_layout": "TILE_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/long_context.py",
+      "optimized_capability": true,
+      "resolved_layout": "ROW_MAJOR_LAYOUT",
+      "passed": true
+    },
+    {
+      "harness": "tests/long_context.py",
+      "optimized_capability": false,
+      "resolved_layout": "TILE_LAYOUT",
+      "passed": true
+    }
+  ],
+  "unapplied_patch": "decode_rope_producer_layout.patch",
+  "patch_sources": {
+    "tt/optimized_decoder.py": {
+      "before_sha256": "0aabcac2109a35b436c78ca6322ba4e88331abdab39e8271e14ea5235af9938a",
+      "candidate_sha256": "abebf3d5c2608eaaecab6f54af789bd0fcf2bf09ea3b2ac9f9a52a681fe8ad81"
+    },
+    "tests/run_decoder.py": {
+      "before_sha256": "000c22fd1ccf4b6f17b8429467e26ab5993921618d7c1b4b1ea566b0bb094d97",
+      "candidate_sha256": "13e23a8beeb5c3aa436079a3b8c68827e22defc74e061189c9891846caaaffe5"
+    },
+    "tests/batched.py": {
+      "before_sha256": "69cb7a0d27209f92ab5e01c772c9bae4267478451c0b3b7fa2ecbe5acecf9fd1",
+      "candidate_sha256": "e445e4f04e0a9c0b5c8f699995632b1c4637c9f99e350e247190d3c990369b51"
+    },
+    "tests/request_reuse.py": {
+      "before_sha256": "3717aa0fe00f44761abe9f1704bb1a5a695c602c65190a75981389aa67188707",
+      "candidate_sha256": "3fd1c7f31b0acf8947c0644f7c1f76e0d36ef25edceb48b8735745058b2c2292"
+    },
+    "tests/long_context.py": {
+      "before_sha256": "27fffef25bf756c8cac5c0a9848ae2b4a542be02d66f283deb55b90e3ac9090b",
+      "candidate_sha256": "5264166028018aa885d659507ad0ac9d6fcd84d9152e7e153871ea41501c1412"
+    }
+  },
+  "passed": true
+}

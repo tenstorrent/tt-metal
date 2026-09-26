@@ -1,0 +1,70 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_perf.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_perf.py
+@@ -141,6 +141,38 @@
+     )
+ 
+ 
++def sparse_weight_groups(row):
++    """Read active expert counts from native metadata without assuming top-k."""
++    attrs = row.get("ATTRIBUTES", "")
++    indexed = bool(re.search(r"\buse_indices(?:['\"]\s*:\s*['\"]?|\s*=\s*)(?:true|1)", attrs))
++    shape = tensor_shape(row, "INPUT_1", logical=True)
++    if len(shape) != 4 or shape[0] != 1:
++        raise ValueError("Sparse traffic requires one expert-group dimension in input B")
++    groups = shape[1]
++    if indexed:
++        if attribute_integer(row, "nnz") is not None:
++            raise ValueError("Indexed sparse metadata must not also declare nnz")
++        output = tensor_shape(row, "OUTPUT_0", logical=True)
++        if len(output) != 4 or output[0] != 1:
++            raise ValueError("Indexed sparse traffic requires the compact output group axis")
++        active = output[1]
++        basis = "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
++        # Optional tensor flattening may expose the indices as INPUT_3. When
++        # present, require its count to agree with the compact output contract.
++        if row.get("INPUT_3_DATATYPE") == "UINT16":
++            ids = tensor_shape(row, "INPUT_3", logical=True)
++            if math.prod(ids) != active or ids[-1] != active:
++                raise ValueError("Indexed sparse ID count disagrees with compact output")
++    else:
++        active = attribute_integer(row, "nnz")
++        if active is None:
++            raise ValueError("Sparse traffic requires actual nnz or indexed compact-output metadata")
++        basis = "CSV nnz"
++    if not 0 < active <= groups:
++        raise ValueError(f"Invalid sparse active/group count: {active}/{groups}")
++    return dict(active=active, groups=groups, indexed=indexed, basis=basis)
++
++
+ def traffic(row, native_cache_elements=None):
+     """One operand read/output write per native op, with sparse/gather corrections.
+ 
+@@ -164,9 +196,8 @@
+         if native_cache_elements is not None and prefix in native_cache_elements:
+             count = native_cache_elements[prefix]
+         if "sparsematmul" in op and prefix == "INPUT_1":
+-            nnz = re.search(r"['\"]nnz['\"]\s*:\s*['\"]?(\d+)", row["ATTRIBUTES"])
+-            assert nnz, "Sparse traffic requires the actual nnz metadata"
+-            count *= int(nnz[1]) / 128
++            sparse = sparse_weight_groups(row)
++            count *= sparse["active"] / sparse["groups"]
+         if "pagedupdatecache" in op and (prefix == "INPUT_0" or prefix.startswith("OUTPUT_")):
+             # One active decode lane updates one tile row in each KV head.
+             # Reader and writer transfer num_heads * width_tiles cache tiles.
+@@ -344,10 +375,15 @@
+         assumptions=[
+             "Time is first native firmware start to last native firmware end, including all intervening layer operations and gaps. Decode is mean of128 individual trace replay windows; inter-replay input-copy/host gaps are excluded.",
+             "Useful FLOPs count logical projection/MLP/router and causal attention work, with only8 active experts. Padding, masked attention, extra prefill expert computation, scalar normalization and transcendental work are excluded from numerator; their time remains in denominator.",
+-            "Estimated DRAM bytes sum one padded DRAM input read/output write per native operation. Sparse weights use recorded nnz/128; cache updates read/write one 32-token page across KV heads; embedding/slices count selected inputs; whole-cache conversions count the full pool. Native decode SDPA K/V reads use per-position causal/sliding spans rounded to its effective read chunk, not allocated cache capacity. Other operands, including index/page-table tensors, keep generic one-read/write counts. Extra per-core operand/table rereads, NOC/reduction and profiler traffic are excluded. This is an estimate, not hardware counters.",
++            "Estimated DRAM bytes sum one padded DRAM input read/output write per native operation. Sparse weights use recorded nnz divided by the weight expert count, or use_indices=true plus the compact output expert dimension; cache updates read/write one 32-token page across KV heads; embedding/slices count selected inputs; whole-cache conversions count the full pool. Native decode SDPA K/V reads use per-position causal/sliding spans rounded to its effective read chunk, not allocated cache capacity. Other operands, including index/page-table tensors, keep generic one-read/write counts. Extra per-core operand/table rereads, NOC/reduction and profiler traffic are excluded. This is an estimate, not hardware counters.",
+             "Storage dtypes come from each CSV operand, including BFP8/BFP4 tile exponent storage. Specify measured math-fidelity and precision interpretation with --precision-policy. No percentages are clamped.",
+         ],
+     )
++    result["sparse_weight_reads"] = [
++        dict(global_call_count=row.get("GLOBAL CALL COUNT"), **sparse_weight_groups(row))
++        for row in windows["decode"]
++        if "sparsematmul" in row["OP CODE"].lower()
++    ]
+     if args.precision_policy:
+         result["assumptions"][-1] = args.precision_policy + " No percentages are clamped."
+     if native_reads:

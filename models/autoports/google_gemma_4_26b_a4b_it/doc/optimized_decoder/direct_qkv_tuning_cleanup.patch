@@ -1,0 +1,122 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -9,10 +9,12 @@
+ import ttnn
+ 
+ from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import (
++    BroadcastQKV,
+     BroadcastRouter,
+     FusedAttention,
+     FusedDecoder,
+     PackedExperts,
++    TiedQKV,
+ )
+ from models.demos.gemma4.tt.attention.operations import (
+     PREFILL_CHUNK_SIZE,
+@@ -257,6 +259,7 @@
+         qkv_fidelity=None,
+         qkv_weight_dtype=None,
+         qkv_direct_dtype=None,
++        qkv_direct_cleanup=False,
+         output_weight_dtype=None,
+         qkv_dram=False,
+         qkv_dram_readers=1,
+@@ -305,6 +308,8 @@
+             raise ValueError("Router score centering requires generalized_router=True")
+         if generalized_router and router_lanes:
+             raise ValueError("Generalized routing and lane-router projection are separate candidates")
++        if qkv_direct_cleanup and qkv_direct_dtype is None:
++            raise ValueError("QKV setup cleanup requires the direct backend")
+         if qkv_direct_dtype is not None and (not qkv_lanes or qkv_direct_dtype not in (ttnn.float32, ttnn.bfloat16)):
+             raise ValueError("Direct QKV requires lane setup and FP32 or BF16 input dtype")
+         if qkv_dram and (not qkv_lanes or qkv_separate):
+@@ -352,6 +357,7 @@
+             qkv_terms=None if qkv_direct_dtype is not None else qkv_terms,
+             qkv_lanes=0 if qkv_direct_dtype is not None else qkv_lanes,
+             qkv_direct_dtype=str(qkv_direct_dtype) if qkv_direct_dtype is not None else None,
++            qkv_direct_cleanup=qkv_direct_cleanup,
+             router_lanes=router_lanes,
+             qkv_dram=qkv_dram,
+             qkv_dram_readers=qkv_dram_readers if qkv_dram else None,
+@@ -441,7 +447,7 @@
+             projection.weight = ttnn.typecast(projection.weight, qkv_weight_dtype)
+             projection.rows = ttnn.transpose(ttnn.typecast(projection.weight, ttnn.float32), -2, -1)
+         if qkv_direct_dtype is not None:
+-            projection = DirectQKV(attention.weights.wqkv, qkv_direct_dtype)
++            projection = DirectQKV(attention.weights.wqkv, qkv_direct_dtype, cleanup=qkv_direct_cleanup)
+             attention.weights = replace(attention.weights, wqkv=projection)
+             self.precision_policy["qkv_decode"] = projection.precision_policy
+             if qkv_dram:
+@@ -1004,13 +1010,34 @@
+ class DirectQKV:
+     """Use native one-token projections while retaining the configured prefill path."""
+ 
+-    def __init__(self, source, input_dtype):
++    def __init__(self, source, input_dtype, *, cleanup=False):
+         if not isinstance(source, LanePartitionQKV):
+             raise ValueError("Direct QKV requires the configured lane projection for setup")
+         if input_dtype not in (ttnn.float32, ttnn.bfloat16):
+             raise ValueError("Direct QKV input dtype must be FP32 or BF16")
+         self.prefill_source = source
+         self.source = source.source
++        cleanup_policy = dict(requested=cleanup, shared_phase_weight=False, released_rows=False, released_lane_mask=False)
++        if cleanup:
++            if type(self.source) not in (BroadcastQKV, TiedQKV):
++                raise ValueError("Direct cleanup requires the known broadcast prefill implementation")
++            # The factory quantizes packed interleaved decode/prefill weights
++            # from the same source. Reuse the prefill copy only at that boundary.
++            if not source.dram and len(source.weights) == 1:
++                weight, prefill_weight = source.weights[0], self.source.weight
++                if (
++                    weight.dtype == prefill_weight.dtype
++                    and tuple(weight.shape) == tuple(prefill_weight.shape)
++                    and weight.layout == prefill_weight.layout
++                    and weight.memory_config() == prefill_weight.memory_config()
++                ):
++                    source.weights = (prefill_weight,)
++                    cleanup_policy["shared_phase_weight"] = True
++            # M=1 is handled here; delegated M>1 prefill never reads these.
++            # Drop references without forcing deallocation of aliased storage.
++            self.source.rows = None
++            source.lane_mask = None
++            cleanup_policy.update(released_rows=True, released_lane_mask=True)
+         self.weights = source.weights
+         self.compute = source.compute
+         self.input_dtype = input_dtype
+@@ -1078,6 +1105,7 @@
+             packer_l1_acc=self.compute.packer_l1_acc,
+             dram=self.dram,
+             programs=geometry,
++            setup_cleanup=cleanup_policy,
+             activation_decomposition=False,
+             lane_mask=False,
+             partial_row_reduce=False,
+@@ -1185,8 +1213,8 @@
+                 raise ValueError("QKV grid must fit the device compute grid")
+             if k % 32 or block_w <= 0 or (k // 32) % block_w:
+                 raise ValueError("QKV K block must divide the tiled input width")
+-            if subblock_w not in (1, 2, 3, 4):
+-                raise ValueError("FP32 QKV output subblock width must be between 1 and 4")
++            if subblock_w not in (0, 1, 2, 3, 4):
++                raise ValueError("FP32 QKV output subblock width must be 0 for automatic selection or 1 through 4")
+ 
+         mask = torch.arange(k)[None, :] % lanes == torch.arange(lanes)[:, None]
+         self.lane_mask = ttnn.from_torch(
+@@ -1221,14 +1249,15 @@
+             if weight.shape[-1] % 32:
+                 raise ValueError("Explicit QKV configurations require tiled projection widths")
+             per_core_n = (weight.shape[-1] // 32 + gx * gy - 1) // (gx * gy)
+-            if per_core_n % subblock_w:
++            weight_subblock_w = subblock_w or next(v for v in (4, 3, 2, 1) if per_core_n % v == 0)
++            if per_core_n % weight_subblock_w:
+                 raise ValueError("QKV output subblock width must divide per-core N")
+             self.programs.append(
+                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                     compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                     in0_block_w=block_w,
+                     out_subblock_h=1,
+-                    out_subblock_w=subblock_w,
++                    out_subblock_w=weight_subblock_w,
+                     per_core_M=(lanes * terms + 31) // 32,
+                     per_core_N=per_core_n,
+                     fuse_batch=True,

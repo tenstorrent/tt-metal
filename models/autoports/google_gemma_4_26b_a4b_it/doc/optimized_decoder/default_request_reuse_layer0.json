@@ -1,0 +1,66 @@
+{
+  "layer_type": "sliding_attention",
+  "real_weights": true,
+  "requests": [
+    {
+      "length": 31,
+      "prefill_pcc": 0.9977403419538222,
+      "decode_pcc": 0.9978075592812609,
+      "passed": true
+    },
+    {
+      "length": 32,
+      "prefill_pcc": 0.9996659034922336,
+      "decode_pcc": 0.9987010059794098,
+      "passed": true
+    },
+    {
+      "length": 33,
+      "prefill_pcc": 0.9988983042988095,
+      "decode_pcc": 0.9996104302955368,
+      "passed": true
+    },
+    {
+      "length": 1023,
+      "prefill_pcc": 0.9983028518224641,
+      "decode_pcc": 0.9993862659832994,
+      "passed": true
+    },
+    {
+      "length": 1024,
+      "prefill_pcc": 0.9985680974158522,
+      "decode_pcc": 0.9989013908565291,
+      "passed": true
+    },
+    {
+      "length": 1025,
+      "prefill_pcc": 0.9986401001973148,
+      "decode_pcc": 0.9973789239029947,
+      "passed": true
+    },
+    {
+      "length": 2049,
+      "prefill_pcc": 0.9986751917703369,
+      "decode_pcc": 0.9977519410190087,
+      "passed": true
+    },
+    {
+      "length": 33,
+      "prefill_pcc": 0.9989053093725258,
+      "decode_pcc": 0.996657640305034,
+      "passed": true
+    },
+    {
+      "length": 2047,
+      "prefill_pcc": 0.9985120384864752,
+      "decode_pcc": 0.9960871574444248,
+      "passed": true
+    }
+  ],
+  "runtime_audit": "clean",
+  "trace_reused": true,
+  "decoder": "optimized",
+  "runtime_sha256": "9fb650ad97e124dcee102e697542e3dba342d469af1b58ceb20eeda0c6e05088",
+  "contract": "request_reuse",
+  "functional_fallback": "forbidden"
+}

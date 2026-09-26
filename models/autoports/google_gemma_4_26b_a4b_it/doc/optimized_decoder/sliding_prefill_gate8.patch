@@ -1,0 +1,35 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -296,7 +296,7 @@
+         active_prefill=True,
+         prefill_grid=(11, 4),
+         prefill_block_w=11,
+-        prefill_dtype=ttnn.bfloat4_b,
++        prefill_dtype="auto",
+         prefill_down_dtype=ttnn.bfloat4_b,
+         prefill_fidelity=ttnn.MathFidelity.LoFi,
+         prefill_l1=True,
+@@ -322,6 +322,8 @@
+         """
+         config = getattr(kwargs["hf_config"], "text_config", kwargs["hf_config"])
+         sliding = config.layer_types[kwargs["layer_idx"]] == "sliding_attention"
++        if prefill_dtype == "auto":
++            prefill_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+         if expert_gate_dtype == "auto":
+             expert_gate_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+         if qkv_fidelity == "auto":
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/long_context.py
+@@ -138,6 +138,12 @@
+         result["prefill_aggregate_passed"] = bool(passed)
+         result["prefill_tail_checks"] = tail_checks
+         passed = passed and all(check["passed"] for check in tail_checks)
++        if input_fixture is not None:
++            # Recorded text must pass each sampled row; aggregate PCC can hide
++            # activation-sensitive expert projection errors.
++            sampled_passed = all(check["passed"] for check in row_checks)
++            result["prefill_sampled_rows_passed"] = sampled_passed
++            passed = passed and sampled_passed
+         result["passed"] = bool(passed)
+         args.output.write_text(json.dumps(result, indent=2) + "\n")
+         print(result, flush=True)

@@ -1,0 +1,23 @@
+[
+  {
+    "command": [
+      "python",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/run_tight_cache_regressions.py"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "python",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/run_validated_v6.py"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "python",
+      "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/run_profiles_v6.py"
+    ],
+    "returncode": 1
+  }
+]

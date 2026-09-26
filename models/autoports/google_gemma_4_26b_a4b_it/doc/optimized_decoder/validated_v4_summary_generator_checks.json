@@ -1,0 +1,61 @@
+{
+  "generator_sha256": "cf02860ef1062c8bca23501bd8e0d463ed2fbd7599e0826b6a86610a41a8b3e6",
+  "checks": [
+    {
+      "case": "historical_runtime_hash",
+      "passed": true,
+      "rejected_because": "Runtime hash differs"
+    },
+    {
+      "case": "historical_aggregate_only_gate",
+      "passed": true,
+      "rejected_because": "Strict recorded-input sampled-row gate missing/failed"
+    },
+    {
+      "case": "contradictory_passing_row_flag",
+      "passed": true,
+      "rejected_because": "Failed or contradictory position PCC checks"
+    },
+    {
+      "case": "incomplete_sample_set",
+      "passed": true,
+      "rejected_because": "Unexpected position coverage"
+    },
+    {
+      "case": "unexpected_candidate",
+      "passed": true,
+      "rejected_because": "Unexpected report override"
+    },
+    {
+      "case": "profiler_enabled_during_watcher",
+      "passed": true,
+      "rejected_because": "Profiler separation not established"
+    },
+    {
+      "case": "stress_nested_process_failure",
+      "passed": true,
+      "rejected_because": "Incomplete/failed stress subprocess journal"
+    },
+    {
+      "case": "stress_direct_row_below_threshold",
+      "passed": true,
+      "rejected_because": "Failed or contradictory position PCC checks"
+    },
+    {
+      "case": "failed_public_process",
+      "passed": true,
+      "rejected_because": "Nonzero process result for validated_v4_batched_layer5.json"
+    },
+    {
+      "case": "pending_final_command",
+      "passed": true,
+      "rejected_because": "completed stress command"
+    },
+    {
+      "case": "watcher_error_line",
+      "passed": true,
+      "rejected_because": "Watcher failure lines: ['ERROR: watcher reported bad NoC transaction']"
+    }
+  ],
+  "all_passed": true
+}

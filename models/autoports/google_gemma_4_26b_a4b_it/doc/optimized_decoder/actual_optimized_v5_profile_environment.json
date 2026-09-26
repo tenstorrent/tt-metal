@@ -1,0 +1,25 @@
+{
+  "environment": {
+    "TT_METAL_DEVICE_PROFILER": null,
+    "TT_METAL_DEVICE_PROFILER_DISPATCH": null,
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_WATCHER_DISABLE": null,
+    "TT_METAL_WATCHER_DISABLE_NOC_SANITIZE": null,
+    "TT_METAL_WATCHER_DISABLE_ASSERT": null,
+    "TT_METAL_WATCHER_DISABLE_PAUSE": null,
+    "TT_METAL_WATCHER_DISABLE_RING_BUFFER": null,
+    "TT_METAL_WATCHER_DISABLE_STACK_USAGE": null,
+    "TT_METAL_DEVICE_PROFILER_NOC_EVENTS": null,
+    "TT_METAL_PROFILE_PERF_COUNTERS": null,
+    "TT_METAL_WATCHER_SKIP_LOGGING": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_NOC": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1": null,
+    "TT_METAL_WATCHER_DISABLE_WAYPOINT": null,
+    "TT_METAL_WATCHER_TEST_MODE": null
+  },
+  "captured_at_utc": "2026-09-26T18:23:30.357309+00:00",
+  "driver": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/run_profiles_v5.py",
+  "driver_sha256": "7a3dbde985a3ed7a7fd302fe64fcdba622f687c8c1072e088e7595cff8d91e75",
+  "scope": "Profile subprocess inherited environment before Tracy enables profiling; Watcher disabled"
+}

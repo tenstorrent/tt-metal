@@ -1,0 +1,671 @@
+{
+  "position": 4149,
+  "harness_qkv": "split2",
+  "scope": "Same-input component comparison; instrumented layer timing is not a performance claim",
+  "candidates": [
+    {
+      "candidate": "broadcast",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999999999799,
+        "max_abs": 9.524520343973109e-06,
+        "rms_error": 1.5663185910270916e-06,
+        "relative_l2": 1.9910744698550366e-07,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999999999999,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "output_dtype": "DataType.FLOAT32",
+      "replay_equal": true,
+      "traced_component_host_us": 2544.0834,
+      "traced_component_samples_us": [
+        2544.2868,
+        2543.9672,
+        2544.0834
+      ]
+    },
+    {
+      "candidate": "plain_fp32",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999072978466,
+        "max_abs": 0.0444430796818267,
+        "rms_error": 0.004256553428401268,
+        "relative_l2": 0.0005410849944203404,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999072976634,
+        "max_abs": 0.04444313049316406,
+        "rms_error": 0.00425653744929267,
+        "relative_l2": 0.0005410829653347955,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "output_dtype": "DataType.FLOAT32",
+      "replay_equal": true,
+      "traced_component_host_us": 124.5409,
+      "traced_component_samples_us": [
+        125.2783,
+        124.5409,
+        124.3616
+      ]
+    },
+    {
+      "candidate": "split2_default",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "None",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 267.6211,
+      "traced_component_samples_us": [
+        269.2893,
+        267.6211,
+        267.3976
+      ]
+    },
+    {
+      "candidate": "split2_1d_8x8_k1",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=1,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 259.6549,
+      "traced_component_samples_us": [
+        260.8713,
+        259.2913,
+        259.6549
+      ]
+    },
+    {
+      "candidate": "split2_1d_8x8_k4",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 270.5527,
+      "traced_component_samples_us": [
+        272.8039,
+        270.4084,
+        270.5527
+      ]
+    },
+    {
+      "candidate": "split2_1d_8x8_k8",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 286.9759,
+      "traced_component_samples_us": [
+        288.7563,
+        286.3557,
+        286.9759
+      ]
+    },
+    {
+      "candidate": "split2_1d_8x8_k11",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=11,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 292.6066,
+      "traced_component_samples_us": [
+        292.7929,
+        291.5196,
+        292.6066
+      ]
+    },
+    {
+      "candidate": "split2_1d_8x8_k22",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=22,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 300.722,
+      "traced_component_samples_us": [
+        302.2469,
+        300.722,
+        300.5407
+      ]
+    },
+    {
+      "candidate": "split3_default",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "None",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 402.2952,
+      "traced_component_samples_us": [
+        402.9555,
+        402.2952,
+        401.8244
+      ]
+    },
+    {
+      "candidate": "split3_1d_8x8_k1",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=1,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 392.0037,
+      "traced_component_samples_us": [
+        393.0036,
+        392.0037,
+        391.4296
+      ]
+    },
+    {
+      "candidate": "split3_1d_8x8_k4",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 408.5572,
+      "traced_component_samples_us": [
+        408.5682,
+        407.0713,
+        408.5572
+      ]
+    },
+    {
+      "candidate": "split3_1d_8x8_k8",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 431.5349,
+      "traced_component_samples_us": [
+        432.7151,
+        431.3535,
+        431.5349
+      ]
+    },
+    {
+      "candidate": "split3_1d_8x8_k11",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=11,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 440.5069,
+      "traced_component_samples_us": [
+        441.3736,
+        440.5069,
+        439.0892
+      ]
+    },
+    {
+      "candidate": "split3_1d_8x8_k22",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x77538e8e6550>",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=22,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=4,per_core_M=1,per_core_N=4,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "replay_equal": true,
+      "traced_component_host_us": 454.3864,
+      "traced_component_samples_us": [
+        454.3864,
+        454.4755,
+        453.9765
+      ]
+    }
+  ],
+  "captured": true,
+  "layer_check": {
+    "passed": false,
+    "pcc": 0.9933229629506902
+  },
+  "activation_shape": [
+    1,
+    1,
+    1,
+    2816
+  ],
+  "activation_dtype": "DataType.FLOAT32",
+  "weight_shape": [
+    1,
+    1,
+    2816,
+    8192
+  ],
+  "weight_dtype": "DataType.BFLOAT16",
+  "weight_values_exactly_bf16": true,
+  "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+  "broadcast_vs_cpu_fp64": {
+    "pcc": 0.9999999999999799,
+    "max_abs": 9.524520343973109e-06,
+    "rms_error": 1.5663185910270916e-06,
+    "relative_l2": 1.9910744698550366e-07,
+    "finite": true,
+    "exact_equal": false
+  },
+  "harness_error": "AssertionError: {'decoder': 'fused', 'fusion': 'broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm_shardedtail_preciseheads_expmerge_residualnorm_rsqrt_expertbatch64_mixmatmul_mixsharded_mixfp32_qkvl1_projectsharded_sharedshard_unarycastshard_directtail', 'runtime_prefill_audit': 'clean', 'program_cache_miss_guard': False, 'prefill_cache_entries': 132, 'prefix_length': 0, 'layer_type': 'sliding_attention', 'phase': 'prefill', 'length': 4096, 'real_weights': True, 'pcc': 0.9985529033274025, 'passed': True, 'decode': {'pcc': 0.9997915497055685, 'passed': False, 'traced': True, 'runtime_decode_audit': 'clean', 'repeated_equal': True, 'steps': 54, 'min_pcc': 0.9933229629506902, 'positions': [4096, 4149], 'checks': [{'position': 4096, 'pcc': 0.9997915497055685, 'passed': True}, {'position': 4096, 'pcc': 0.9997915497055685, 'passed': True}, {'position': 4097, 'pcc': 0.9998146693604476, 'passed': True}, {'position': 4098, 'pcc': 0.9999139214673453, 'passed': True}, {'position': 4099, 'pcc': 0.9999219790416812, 'passed': True}, {'position': 4100, 'pcc': 0.9998908902482354, 'passed': True}, {'position': 4101, 'pcc': 0.9997243266628099, 'passed': True}, {'position': 4102, 'pcc': 0.9996854849300538, 'passed': True}, {'position': 4103, 'pcc': 0.9998342298586553, 'passed': True}, {'position': 4104, 'pcc': 0.9997897238233135, 'passed': True}, {'position': 4105, 'pcc': 0.999700110753977, 'passed': True}, {'position': 4106, 'pcc': 0.9998384299167246, 'passed': True}, {'position': 4107, 'pcc': 0.9996350381518496, 'passed': True}, {'position': 4108, 'pcc': 0.9997358063565694, 'passed': True}, {'position': 4109, 'pcc': 0.999849078384932, 'passed': True}, {'position': 4110, 'pcc': 0.9998506273538473, 'passed': True}, {'position': 4111, 'pcc': 0.9998288506698896, 'passed': True}, {'position': 4112, 'pcc': 0.9998431707474911, 'passed': True}, {'position': 4113, 'pcc': 0.9998682586737293, 'passed': True}, {'position': 4114, 'pcc': 0.9998435744484276, 'passed': True}, {'position': 4115, 'pcc': 0.9998256824276806, 'passed': True}, {'position': 4116, 'pcc': 0.9998100314440492, 'passed': True}, {'position': 4117, 'pcc': 0.9997700522156399, 'passed': True}, {'position': 4118, 'pcc': 0.9998959355704704, 'passed': True}, {'position': 4119, 'pcc': 0.9997913596828613, 'passed': True}, {'position': 4120, 'pcc': 0.9999365276115406, 'passed': True}, {'position': 4121, 'pcc': 0.999849867981892, 'passed': True}, {'position': 4122, 'pcc': 0.9997866346804352, 'passed': True}, {'position': 4123, 'pcc': 0.9998045566506208, 'passed': True}, {'position': 4124, 'pcc': 0.9996999346031696, 'passed': True}, {'position': 4125, 'pcc': 0.9999287644654111, 'passed': True}, {'position': 4126, 'pcc': 0.9997247415456154, 'passed': True}, {'position': 4127, 'pcc': 0.9998041804883141, 'passed': True}, {'position': 4128, 'pcc': 0.9998830746125656, 'passed': True}, {'position': 4129, 'pcc': 0.9998489102680596, 'passed': True}, {'position': 4130, 'pcc': 0.9998206266147635, 'passed': True}, {'position': 4131, 'pcc': 0.9999152312709189, 'passed': True}, {'position': 4132, 'pcc': 0.9996002707205867, 'passed': True}, {'position': 4133, 'pcc': 0.9997558960502867, 'passed': True}, {'position': 4134, 'pcc': 0.9997315780606965, 'passed': True}, {'position': 4135, 'pcc': 0.9998389442058241, 'passed': True}, {'position': 4136, 'pcc': 0.9998884766394609, 'passed': True}, {'position': 4137, 'pcc': 0.9997266687574844, 'passed': True}, {'position': 4138, 'pcc': 0.9997037330893086, 'passed': True}, {'position': 4139, 'pcc': 0.9997761826982794, 'passed': True}, {'position': 4140, 'pcc': 0.9997554655116947, 'passed': True}, {'position': 4141, 'pcc': 0.999789650748174, 'passed': True}, {'position': 4142, 'pcc': 0.9999411430561158, 'passed': True}, {'position': 4143, 'pcc': 0.9997831743690077, 'passed': True}, {'position': 4144, 'pcc': 0.9998611502050939, 'passed': True}, {'position': 4145, 'pcc': 0.9997688090281711, 'passed': True}, {'position': 4146, 'pcc': 0.9998713096708636, 'passed': True}, {'position': 4147, 'pcc': 0.9997381582312096, 'passed': True}, {'position': 4148, 'pcc': 0.9998408335072757, 'passed': True}, {'position': 4149, 'pcc': 0.9933229629506902, 'passed': False}]}}"
+}

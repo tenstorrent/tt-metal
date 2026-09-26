@@ -1,0 +1,266 @@
+{
+  "layer_type": "full_attention",
+  "real_weights": true,
+  "input_fixture": {
+    "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+    "sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+    "available_length": 4096,
+    "used_length": 3072,
+    "slice_start": 0,
+    "source": {
+      "kind": "recorded_real_text_hf_layer_inputs",
+      "text_files": [
+        {
+          "path": "/workspace/tt-metal/README.md",
+          "sha256": "7fdc0eca06ec1762c883745af52d022aabf154c09ac14035fdadc45f44a5648e"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/realtime_profiler_architecture.md",
+          "sha256": "c82373c5d2b278773ab41af8d0aff21d9bdc0da9e82a5645873fd7d08fd3f857"
+        },
+        {
+          "path": "/workspace/tt-metal/docs/L1_ACCUMULATION_FP32_ANALYSIS.md",
+          "sha256": "00c228fd4e95c4d5d1b65c5b66e9d8ebabe6b9a7a379bec59894508b44ee9184"
+        }
+      ],
+      "corpus_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_source.txt",
+      "corpus_sha256": "75ee9ef41b9c66e2f5619f02d1de3c56c58cf7759489892616794ccb799e5002",
+      "tokens_path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_tokens.json",
+      "tokens_sha256": "11e130cdfd2ff0ebdc0dd8ae8bfcc837a082a3192aa45b74d887089d28f46bf3",
+      "tokenizer": "GemmaTokenizer",
+      "tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+      "transformers_version": "5.12.1",
+      "hf_source_sha256": "90bb5dbd9f78208ef07851e099311603e9f185f8fac2ef588df823f3df96b776",
+      "config_sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3",
+      "weight_index_sha256": "907826a6e46ff454272bd6db1fee629d5531a2303be22986d825a0871d7dc7a7",
+      "preceding_computation": "HF FP32 eager, FP32 checkpoint weights and KV, original scaled embedding and layer scalars",
+      "embedding_scale_fp32": 53.06599807739258,
+      "embedding_scale_bfloat16_control": 53.0,
+      "per_layer_embeddings": false,
+      "shared_kv_layers": 0,
+      "sampling": "Actual corpus token continuation; no generated or random activations"
+    },
+    "windows": [
+      {
+        "request": 0,
+        "prefill_start": 0,
+        "length": 31,
+        "decode_row": 31
+      },
+      {
+        "request": 1,
+        "prefill_start": 128,
+        "length": 32,
+        "decode_row": 160
+      },
+      {
+        "request": 2,
+        "prefill_start": 256,
+        "length": 33,
+        "decode_row": 289
+      },
+      {
+        "request": 3,
+        "prefill_start": 384,
+        "length": 1023,
+        "decode_row": 1407
+      },
+      {
+        "request": 4,
+        "prefill_start": 512,
+        "length": 1024,
+        "decode_row": 1536
+      },
+      {
+        "request": 5,
+        "prefill_start": 640,
+        "length": 1025,
+        "decode_row": 1665
+      },
+      {
+        "request": 6,
+        "prefill_start": 768,
+        "length": 2049,
+        "decode_row": 2817
+      },
+      {
+        "request": 7,
+        "prefill_start": 896,
+        "length": 33,
+        "decode_row": 929
+      },
+      {
+        "request": 8,
+        "prefill_start": 1024,
+        "length": 2047,
+        "decode_row": 3071
+      }
+    ],
+    "position_policy": "Each recorded window is rebased to positions 0..length for HF and TT"
+  },
+  "requests": [
+    {
+      "length": 31,
+      "prefill_pcc": 0.998684638425569,
+      "decode_pcc": 0.9989292805420711,
+      "passed": true
+    },
+    {
+      "length": 32,
+      "prefill_pcc": 0.9986329427774896,
+      "decode_pcc": 0.9979930228094174,
+      "passed": true
+    },
+    {
+      "length": 33,
+      "prefill_pcc": 0.9987074366283453,
+      "decode_pcc": 0.9986912158560601,
+      "passed": true
+    },
+    {
+      "length": 1023,
+      "prefill_pcc": 0.9990414801900122,
+      "decode_pcc": 0.998778435245071,
+      "passed": true
+    },
+    {
+      "length": 1024,
+      "prefill_pcc": 0.9990283421670342,
+      "decode_pcc": 0.9984091187819585,
+      "passed": true
+    },
+    {
+      "length": 1025,
+      "prefill_pcc": 0.9990017225801034,
+      "decode_pcc": 0.9990562373520416,
+      "passed": true
+    },
+    {
+      "length": 2049,
+      "prefill_pcc": 0.9990028786153986,
+      "decode_pcc": 0.9948247973191795,
+      "passed": false
+    },
+    {
+      "length": 33,
+      "prefill_pcc": 0.9987726879170022,
+      "decode_pcc": 0.9974830017797723,
+      "passed": true
+    },
+    {
+      "length": 2047,
+      "prefill_pcc": 0.9990273014623943,
+      "decode_pcc": 0.9992628006415866,
+      "passed": true
+    }
+  ],
+  "runtime_audit": "clean",
+  "trace_reused": true,
+  "decoder": "optimized",
+  "runtime_sha256": "373afe87025f3bd33160cd80ea0930412ceaa1e1c51ce03d84dfb42957811f6a",
+  "contract": "request_reuse",
+  "functional_fallback": "forbidden",
+  "precision_policy": {
+    "attention_weights": {
+      "qkv": "DataType.BFLOAT8_B",
+      "output": "DataType.BFLOAT8_B"
+    },
+    "kv_cache": "bfloat8_b",
+    "native_sdpa": true,
+    "native_sdpa_grid": [
+      8,
+      8
+    ],
+    "native_sdpa_fidelity": "MathFidelity.LoFi",
+    "prefill_attention_fidelity": "MathFidelity.LoFi",
+    "decode_expert_activation": "DataType.BFLOAT8_B",
+    "router_selection": "generalized_moe_gate",
+    "generalized_router_center": false,
+    "native_sdpa_dst_full_sync": true,
+    "residual": "float32",
+    "expert_gate": "DataType.BFLOAT4_B",
+    "decode_expert_down": "DataType.BFLOAT4_B",
+    "prefill_expert_gate": "DataType.BFLOAT4_B",
+    "prefill_expert_down": "DataType.BFLOAT4_B",
+    "decode_expert_fidelity": "MathFidelity.LoFi",
+    "decode_expert_fused_gelu": false,
+    "prefill_expert_fidelity": "MathFidelity.LoFi",
+    "shared_decode_weights": "DataType.BFLOAT4_B",
+    "shared_decode_fidelity": "MathFidelity.LoFi",
+    "qkv_fidelity": "MathFidelity.LoFi",
+    "qkv_grid": [
+      11,
+      10
+    ],
+    "qkv_terms": null,
+    "qkv_lanes": 0,
+    "qkv_direct_dtype": "DataType.FLOAT32",
+    "qkv_direct_cleanup": true,
+    "router_lanes": 0,
+    "qkv_dram": false,
+    "qkv_dram_readers": null,
+    "qkv_dram_block": null,
+    "expert_grid": [
+      11,
+      4
+    ],
+    "expert_k_block": 22,
+    "prefill_batch_tokens": 32,
+    "qkv_decode": {
+      "backend": "native_packed_linear",
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtypes": [
+        "DataType.BFLOAT8_B"
+      ],
+      "weight_shapes": [
+        [
+          1,
+          1,
+          2816,
+          9216
+        ]
+      ],
+      "weight_memory": [
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+      ],
+      "output_dtype": "float32",
+      "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": true,
+      "packer_l1_acc": false,
+      "dram": false,
+      "programs": [
+        {
+          "grid": [
+            11,
+            10
+          ],
+          "in0_block_w": 11,
+          "out_subblock_h": 1,
+          "out_subblock_w": 3,
+          "per_core_M": 1,
+          "per_core_N": 3
+        }
+      ],
+      "setup_cleanup": {
+        "requested": true,
+        "shared_phase_weight": true,
+        "released_rows": true,
+        "released_lane_mask": true
+      },
+      "activation_decomposition": false,
+      "lane_mask": false,
+      "partial_row_reduce": false
+    },
+    "output_projection": {
+      "grid": [
+        11,
+        10
+      ],
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=16,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "fidelity": "MathFidelity.LoFi",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+      "weight_dtype": "DataType.BFLOAT8_B"
+    }
+  }
+}

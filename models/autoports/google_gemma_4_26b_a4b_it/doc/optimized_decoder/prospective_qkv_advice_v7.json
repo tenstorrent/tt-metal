@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "status": "source_predicates_and_matched_grid_control_verified",
+  "scope": "CPU AST-isolated installed advice functions and source geometry; no hardware by author; hypothetical rows are not measured native data",
+  "sources": [
+    {
+      "path": "python_env/lib/python3.10/site-packages/tt_perf_report/perf_report.py",
+      "sha256": "4a73ba4cb93cf84a8f6f5d2efde25c09ad71a120a878f169713f67dee6773983"
+    },
+    {
+      "path": "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_program_factory.cpp",
+      "sha256": "9e7b469c57b65359094384896942ae354fc230861709d4cbcc46f74ac9c658ae"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_qkv_m2_grid.py",
+      "sha256": "d77feeab80d1a9e253d68183726b34319a60291df12159b97336296ec02c0c6d"
+    },
+    {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py",
+      "sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b"
+    }
+  ],
+  "fidelity_evaluation": [
+    "sufficient",
+    null
+  ],
+  "predicate_cases": [
+    {
+      "bound": "SLOW",
+      "input_memory": "DEV_0_DRAM_INTERLEAVED",
+      "hypothetically_parsed_minimal_fields": false,
+      "advice": [
+        "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)",
+        "No program_config specified, try using one to override in0_block_w and out_subblock_h/w"
+      ]
+    },
+    {
+      "bound": "SLOW",
+      "input_memory": "DEV_0_L1_INTERLEAVED",
+      "hypothetically_parsed_minimal_fields": false,
+      "advice": [
+        "No program_config specified, try using one to override in0_block_w and out_subblock_h/w"
+      ]
+    },
+    {
+      "bound": "SLOW",
+      "input_memory": "DEV_0_L1_INTERLEAVED",
+      "hypothetically_parsed_minimal_fields": true,
+      "advice": [
+        "in0_block_w=16 and output subblock 1x4 look good \ud83e\udd37"
+      ]
+    },
+    {
+      "bound": "FLOP",
+      "input_memory": "DEV_0_L1_INTERLEAVED",
+      "hypothetically_parsed_minimal_fields": false,
+      "advice": [
+        "Increase grid size (currently using 88 of 110)"
+      ]
+    },
+    {
+      "bound": "DRAM",
+      "input_memory": "DEV_0_L1_INTERLEAVED",
+      "hypothetically_parsed_minimal_fields": false,
+      "advice": [
+        "Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further"
+      ]
+    },
+    {
+      "bound": "BOTH",
+      "input_memory": "DEV_0_L1_INTERLEAVED",
+      "hypothetically_parsed_minimal_fields": false,
+      "advice": [
+        "Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further"
+      ]
+    }
+  ],
+  "thresholds": {
+    "shape_MKN": [
+      1024,
+      2816,
+      9216
+    ],
+    "cores": 88,
+    "available_cores": 110,
+    "flops": 53150220288,
+    "flops65pct_duration_us": 336.0820512820513,
+    "l1_input_dram65pct_duration_us": 77.98153846153846,
+    "dram_scope": "Report get_datatype_size uses nominal1byte for BFP8, omitting exponent overhead; this is its recommendation predicate, not final traffic accounting.",
+    "output_memory": "L1 inherited from input when output_mem_config isNone; only BFP8 weight contributes to this operator DRAM heuristic"
+  },
+  "geometry": [
+    {
+      "grid": [
+        11,
+        8
+      ],
+      "padded_M_tiles": 32,
+      "padded_N_tiles": 297,
+      "M_tiles_per_core": 4,
+      "N_tiles_per_core": 27,
+      "K_tiles_padded": 96,
+      "M_blocks_per_core": 2,
+      "N_blocks_per_core": 4,
+      "K_blocks": 6
+    },
+    {
+      "grid": [
+        11,
+        10
+      ],
+      "padded_M_tiles": 40,
+      "padded_N_tiles": 297,
+      "M_tiles_per_core": 4,
+      "N_tiles_per_core": 27,
+      "K_tiles_padded": 96,
+      "M_blocks_per_core": 2,
+      "N_blocks_per_core": 4,
+      "K_blocks": 6
+    }
+  ],
+  "prepared_control": {
+    "probe": "../../tests/probe_optimized_prefill_qkv_m2_grid.py",
+    "baseline": "M2/K16/N8/sub1x4/grid11x8/copied FP32 L1 input",
+    "candidate": "M2/K16/N8/sub1x4/grid11x10/copied FP32 L1 input",
+    "unchanged": [
+      "compute object and all flags",
+      "BFP8 weight object",
+      "FP32 input and output",
+      "output requestNone, inheriting L1 from input",
+      "decode callable",
+      "whole-prefill input-copy cost"
+    ],
+    "pairs": 8,
+    "cache_guard": "both variants warm twice; program-cache misses forbidden across16 alternating samples and final candidate prefill",
+    "acceptance": "Candidate prefill and unchanged128-step actual HF decode checks; baseline passing evidence retained separately",
+    "cpu_mock_passed": true,
+    "pinned_formatting_and_precommit_passed": true
+  },
+  "matched_grid_result": {
+    "status": "passed_no_resolved_latency_gain",
+    "decision": "Retain11x8 at matched copied-inputL1 M2/K16/N8; producer-layout selection remains separate.",
+    "runtime_sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b",
+    "runtime_snapshot": {
+      "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/runtime_v7_before_placement.py.txt",
+      "sha256": "daa82a4a5197a007ccd5d29d912f082e695fd37a596578f25fba96a6694e625b"
+    },
+    "evidence": [
+      {
+        "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_qkv_m2_grid_v7_command.json",
+        "sha256": "46eaa1d94b939d5a3dd79644cfa17f58ad66dba06732d70a424626899ddf476c"
+      },
+      {
+        "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_qkv_m2_grid_v7_layer5.json",
+        "sha256": "2b9e844dc4592a76f0982a6ee277258652f43708d75958078bd61fad9df890ee"
+      }
+    ],
+    "probe_sha256": "d77feeab80d1a9e253d68183726b34319a60291df12159b97336296ec02c0c6d",
+    "baseline_median_us": 185784.6665,
+    "candidate_median_us": 185816.13650000002,
+    "median_paired_delta_us": 2.8355000000155997,
+    "candidate_faster_pairs": 4,
+    "pairs": 8,
+    "prefill_pcc": 0.999122336916838,
+    "min_decode_pcc": 0.9951056876047375,
+    "decode_steps": 128,
+    "raw_decode_checks": 129,
+    "repeat_equal": true,
+    "program_cache_entries": 176,
+    "cache_misses_forbidden": true,
+    "actual_dtype_and_configs_verified": true,
+    "source_hashes_verified": true,
+    "hardware_run_by": "parent; author only checked saved artifacts",
+    "timing_scope": "Synchronous whole-prefill host calls; setup, selection, warmup, initial sync and output deallocation excluded; final sync included. Final candidate output/cache feeds the unchanged HF/decode gate. Baseline accuracy remains separately measured by the matched screen control."
+  },
+  "memory_metadata_correction": {
+    "reason": "Frozen probe narrative said DRAM output, but recorded output request wasNone; backend output specification inherits input memory. Both matched grid variants therefore outputL1.",
+    "source": "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:297",
+    "source_sha256": "1c1bc2643f262a6466fcffbe1ed21a1960d41e5024602b940f17ac6c915fe4b5",
+    "scope": "Frozen test/report bytes are retained. This corrects interpretation, not operands, measurements, or selection.",
+    "native_confirmation": "tracy/actual_optimized_v8_layer5/ops.csv",
+    "native_sha256": "feede5ed9c2a2036baf669cb50b26c58494dd1fe453cce476814c18d6863d020"
+  }
+}

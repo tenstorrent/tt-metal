@@ -1,0 +1,103 @@
+{
+  "profile_source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/raw/reports/headline/2026_09_26_14_19_34/ops_perf_results_headline_2026_09_26_14_19_34.csv",
+  "summary_command": [
+    "python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_perf",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/ops.csv",
+    "--layer-type",
+    "full_attention",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/whole_layer.json",
+    "--peak-fidelity-cycles",
+    "1",
+    "--precision-policy",
+    "Selected default sparse top8 decode and active-union prefill; dominant expert prefill BFP4/LoFi, mixed attention fidelity. Single ASIC theoretical LoFi peak; useful work excludes padded/inactive experts. Runtime policy: {\"attention_weights\": {\"qkv\": \"DataType.BFLOAT8_B\", \"output\": \"DataType.BFLOAT8_B\"}, \"kv_cache\": \"bfloat8_b\", \"native_sdpa\": true, \"native_sdpa_grid\": [8, 8], \"native_sdpa_fidelity\": \"MathFidelity.LoFi\", \"prefill_attention_fidelity\": \"MathFidelity.HiFi2\", \"decode_expert_activation\": \"DataType.BFLOAT8_B\", \"router_selection\": \"generalized_moe_gate\", \"generalized_router_center\": true, \"native_sdpa_dst_full_sync\": true, \"residual\": \"float32\", \"expert_gate\": \"DataType.BFLOAT4_B\", \"decode_expert_down\": \"DataType.BFLOAT4_B\", \"prefill_expert_gate\": \"DataType.BFLOAT4_B\", \"prefill_expert_down\": \"DataType.BFLOAT4_B\", \"decode_expert_fidelity\": \"MathFidelity.LoFi\", \"decode_expert_fused_gelu\": false, \"prefill_expert_fidelity\": \"MathFidelity.LoFi\", \"shared_decode_weights\": \"DataType.BFLOAT4_B\", \"shared_decode_fidelity\": \"MathFidelity.LoFi\", \"qkv_fidelity\": \"MathFidelity.LoFi\", \"qkv_grid\": [11, 10], \"qkv_terms\": null, \"qkv_lanes\": 0, \"qkv_direct_dtype\": \"DataType.FLOAT32\", \"qkv_direct_cleanup\": true, \"router_lanes\": 0, \"qkv_dram\": false, \"qkv_dram_readers\": null, \"qkv_dram_block\": null, \"expert_grid\": [11, 4], \"expert_k_block\": 22, \"prefill_batch_tokens\": 32, \"expert_gate_k_block\": 44, \"expert_down_k_block\": 22, \"qkv_decode\": {\"backend\": \"native_packed_linear\", \"input_dtype\": \"DataType.FLOAT32\", \"weight_dtypes\": [\"DataType.BFLOAT8_B\"], \"weight_shapes\": [[1, 1, 2816, 9216]], \"weight_memory\": [\"MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)\"], \"output_dtype\": \"float32\", \"output_memory\": \"MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)\", \"math_fidelity\": \"MathFidelity.LoFi\", \"fp32_dest_acc_en\": true, \"packer_l1_acc\": false, \"dram\": false, \"programs\": [{\"grid\": [11, 10], \"in0_block_w\": 11, \"out_subblock_h\": 1, \"out_subblock_w\": 3, \"per_core_M\": 1, \"per_core_N\": 3}], \"setup_cleanup\": {\"requested\": true, \"shared_phase_weight\": true, \"released_rows\": true, \"released_lane_mask\": true}, \"activation_decomposition\": false, \"lane_mask\": false, \"partial_row_reduce\": false}, \"router_projection\": {\"backend\": \"native_linear\", \"input_dtype\": \"float32\", \"weight_dtype\": \"DataType.BFLOAT16\", \"output_dtype\": \"float32\", \"output_memory\": \"L1 interleaved\", \"grid\": [4, 1], \"k_block\": 44, \"fidelity\": \"MathFidelity.LoFi\", \"fp32_dest_acc_en\": true, \"packer_l1_acc\": false, \"program\": \"MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=4-1,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)\"}, \"output_projection\": {\"grid\": [11, 10], \"program\": \"MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=16,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)\", \"fidelity\": \"MathFidelity.LoFi\", \"memory\": \"MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)\", \"weight_dtype\": \"DataType.BFLOAT8_B\"}}",
+    "--native-sdpa-read-chunk-size",
+    "128"
+  ],
+  "report_commands": [
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/prefill_perf_report.txt",
+      "returncode": 0,
+      "advice_enabled": true
+    },
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode",
+        "--csv",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/prefill_perf_report.csv"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/prefill_perf_report.console.log",
+      "returncode": 0,
+      "advice_enabled": true
+    },
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/decode_one_replay.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/decode_perf_report.txt",
+      "returncode": 0,
+      "advice_enabled": true
+    },
+    {
+      "argv": [
+        "python_env/bin/tt-perf-report",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/decode_one_replay.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-color",
+        "--no-summary",
+        "--tracing-mode",
+        "--csv",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/decode_perf_report.csv"
+      ],
+      "stdout": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/decode_perf_report.console.log",
+      "returncode": 0,
+      "advice_enabled": true
+    }
+  ],
+  "reconciliation_command": [
+    "python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.reconcile_perf",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/whole_layer.json",
+    "--runner-json",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/profile_actual_optimized_layer5.json",
+    "--profile-command-journal",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_optimized_profile_commands.json",
+    "--unprofiled-runner-json",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/verified_headline_layer5.json",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/tracy/actual_optimized_layer5/timing_reconciliation.json"
+  ]
+}

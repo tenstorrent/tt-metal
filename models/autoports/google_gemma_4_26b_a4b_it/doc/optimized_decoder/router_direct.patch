@@ -1,0 +1,154 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -279,6 +279,10 @@
+         expert_activation_dtype="auto",
+         generalized_router="auto",
+         generalized_router_center="auto",
++        router_direct="auto",
++        router_direct_grid=(4, 1),
++        router_direct_block_w="auto",
++        router_direct_fidelity="auto",
+         router_lanes=0,
+         router_terms=2,
+         router_grid=(4, 1),
+@@ -340,12 +344,20 @@
+             expert_activation_dtype = None if sliding else ttnn.bfloat8_b
+         if generalized_router == "auto":
+             generalized_router = not router_lanes
++        if router_direct == "auto":
++            router_direct = bool(generalized_router)
++        if router_direct_block_w == "auto":
++            router_direct_block_w = 22 if sliding else 44
++        if router_direct_fidelity == "auto":
++            router_direct_fidelity = ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi
+         if generalized_router_center == "auto":
+             generalized_router_center = generalized_router
+         if sharded_norm_site == "auto":
+             sharded_norm_site = "all" if sliding else "post_common"
+         if shared_dtype == "auto":
+             shared_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
++        if router_direct and not generalized_router:
++            raise ValueError("Direct router projection requires generalized_router=True")
+         if generalized_router_center and not generalized_router:
+             raise ValueError("Router score centering requires generalized_router=True")
+         if generalized_router and router_lanes:
+@@ -502,8 +514,15 @@
+             )
+         if generalized_router:
+             self.layer.moe.router = GeneralizedRouter(
+-                self.layer.moe.router, kwargs["mesh_device"], center_logits=generalized_router_center
+-            )
++                self.layer.moe.router,
++                kwargs["mesh_device"],
++                center_logits=generalized_router_center,
++                direct_projection=router_direct,
++                projection_grid=router_direct_grid,
++                projection_block_w=router_direct_block_w,
++                projection_fidelity=router_direct_fidelity,
++            )
++            self.precision_policy["router_projection"] = self.layer.moe.router.projection_policy
+         if router_lanes:
+             self.layer.moe.router = LanePartitionRouter(
+                 self.layer.moe.router,
+@@ -699,7 +718,17 @@
+ class GeneralizedRouter:
+     """Native top-8/softmax gate with optional centering before BF16 score conversion."""
+ 
+-    def __init__(self, original, mesh, *, center_logits=False):
++    def __init__(
++        self,
++        original,
++        mesh,
++        *,
++        center_logits=False,
++        direct_projection=False,
++        projection_grid=(4, 1),
++        projection_block_w=22,
++        projection_fidelity=ttnn.MathFidelity.HiFi4,
++    ):
+         import torch
+ 
+         if type(original) is not BroadcastRouter:
+@@ -708,6 +737,57 @@
+             raise ValueError("Generalized router requires 128 experts and top-8 routing")
+         self.original = original
+         self.center_logits = center_logits
++        self.direct_projection = direct_projection
++        self.projection_weight = original.source.source.proj_weight
++        self.projection_program = None
++        self.projection_compute = original.source.compute
++        if direct_projection:
++            weight = self.projection_weight
++            if tuple(weight.shape) != (1, 1, 2816, 128) or weight.dtype != ttnn.bfloat16:
++                raise ValueError("Direct router requires the original BF16 [1,1,2816,128] projection weight")
++            if weight.layout != ttnn.TILE_LAYOUT or weight.is_sharded():
++                raise ValueError("Direct router requires a tiled interleaved projection weight")
++            gx, gy = projection_grid
++            available = mesh.compute_with_storage_grid_size()
++            if not (0 < gx <= available.x and 0 < gy <= available.y) or 4 % (gx * gy):
++                raise ValueError("Direct router grid must fit the device and divide four output tiles")
++            if projection_block_w <= 0 or 88 % projection_block_w:
++                raise ValueError("Direct router K block must divide 88 tiles")
++            per_n = 4 // (gx * gy)
++            self.projection_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
++                in0_block_w=projection_block_w,
++                out_subblock_h=1,
++                out_subblock_w=per_n,
++                out_block_h=1,
++                out_block_w=per_n,
++                per_core_M=1,
++                per_core_N=per_n,
++                fuse_batch=True,
++                fused_activation=None,
++                mcast_in0=True,
++            )
++            self.projection_compute = ttnn.init_device_compute_kernel_config(
++                mesh.arch(),
++                math_fidelity=projection_fidelity,
++                math_approx_mode=False,
++                fp32_dest_acc_en=True,
++                packer_l1_acc=False,
++                dst_full_sync_en=False,
++            )
++        self.projection_policy = dict(
++            backend="native_linear" if direct_projection else "fp32_broadcast",
++            input_dtype="float32",
++            weight_dtype=str(self.projection_weight.dtype) if direct_projection else "float32",
++            output_dtype="float32",
++            output_memory="L1 interleaved" if direct_projection else "inherited broadcast",
++            grid=tuple(projection_grid) if direct_projection else None,
++            k_block=projection_block_w if direct_projection else None,
++            fidelity=str(self.projection_compute.math_fidelity) if direct_projection else None,
++            fp32_dest_acc_en=True if direct_projection else None,
++            packer_l1_acc=False if direct_projection else None,
++            program=str(self.projection_program),
++        )
+ 
+         core = ttnn.CoreCoord(0, 0)
+         grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
+@@ -744,8 +824,22 @@
+             source.scale,
+             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+         )
+-        products = ttnn.mul(source.projection_rows, scaled)
+-        scores = ttnn.transpose(ttnn.sum(products, dim=-1, keepdim=True), -2, -1)
++        if self.direct_projection:
++            if scaled.dtype != ttnn.float32:
++                raise ValueError("Direct router requires the existing FP32 scaled activation")
++            if scaled.is_sharded():
++                scaled = ttnn.to_memory_config(scaled, ttnn.L1_MEMORY_CONFIG)
++            scores = ttnn.linear(
++                scaled,
++                self.projection_weight,
++                dtype=ttnn.float32,
++                program_config=self.projection_program,
++                compute_kernel_config=self.projection_compute,
++                memory_config=ttnn.L1_MEMORY_CONFIG,
++            )
++        else:
++            products = ttnn.mul(source.projection_rows, scaled)
++            scores = ttnn.transpose(ttnn.sum(products, dim=-1, keepdim=True), -2, -1)
+         if tuple(scores.shape) != (1, 1, 1, 128):
+             raise ValueError("Generalized router supports one decode token with 128 logits")
+         if self.center_logits:

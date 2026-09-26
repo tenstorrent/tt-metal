@@ -1,0 +1,1791 @@
+{
+  "status": "isolated_controls_complete_whole_layer_controls_complete_defaults_retained",
+  "runtime_sha256": "169c0d97d7d0e9f35d97633f133305f1088b987ef625693d3faa100d25c3e67b",
+  "provenance": "dram_readers_v5/provenance_incident.json",
+  "commands": "dram_readers_v5/reconstructed_execution_plan.json",
+  "whole_layer_plan": "reader_layer_v5/plan.json",
+  "scope": "Same padded geometry and production precision within each K family; one actual captured continuation input per kind; six orders x20 native replays; not whole-layer timing",
+  "rows": [
+    {
+      "layer": 0,
+      "role": "qkv",
+      "block": 1,
+      "precision": {
+        "input_dtype": "float32",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "float32",
+        "compute": {
+          "math_fidelity": "HiFi2",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": true,
+          "packer_l1_acc": false,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          8192
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          9216
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          1152
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          1152
+        ],
+        "per_bank_N_tiles": 36,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 3,
+        "logical_weight_bytes": 24510464,
+        "physical_weight_bytes": 27574272,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 36,
+            "per_reader_row_bytes": 39168,
+            "in1_triple_buffer_bytes": 117504,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 18,
+            "per_reader_row_bytes": 19584,
+            "in1_triple_buffer_bytes": 58752,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 39168,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 235.9875,
+          "min_us": 235.895,
+          "max_us": 236.43,
+          "round_medians_us": [
+            235.9835,
+            235.976,
+            235.9795,
+            236.006,
+            235.986,
+            236.004
+          ],
+          "round_median_spread_us": 0.030000000000001137,
+          "physical_weight_GBps": 116.8463244875258,
+          "logical_weight_GBps": 103.8633995444674,
+          "physical_percent_declared_peak": 22.821547751469883
+        },
+        "2": {
+          "median_us": 134.7765,
+          "min_us": 134.261,
+          "max_us": 135.204,
+          "round_medians_us": [
+            134.77499999999998,
+            134.7215,
+            134.77949999999998,
+            134.79500000000002,
+            134.74400000000003,
+            134.84050000000002
+          ],
+          "round_median_spread_us": 0.1190000000000282,
+          "physical_weight_GBps": 204.59258105085087,
+          "logical_weight_GBps": 181.86007204520075,
+          "physical_percent_declared_peak": 39.95948848649431
+        },
+        "3": {
+          "median_us": 90.63900000000001,
+          "min_us": 89.272,
+          "max_us": 91.382,
+          "round_medians_us": [
+            90.5885,
+            90.65899999999999,
+            90.60300000000001,
+            90.585,
+            90.777,
+            90.6885
+          ],
+          "round_median_spread_us": 0.19200000000000728,
+          "physical_weight_GBps": 304.22083209214577,
+          "logical_weight_GBps": 270.4185174152406,
+          "physical_percent_declared_peak": 59.41813126799722
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.9999927244853493,
+          "pcc_production": 0.9999932750870445,
+          "max_abs_diff_production": 10.7738037109375,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.9999927244853493,
+          "pcc_production": 0.9999932750870445,
+          "max_abs_diff_production": 10.7738037109375,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999927244853493,
+          "pcc_production": 0.9999932750870445,
+          "max_abs_diff_production": 10.7738037109375,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 235.94425,
+          "NCRISC": 229.463,
+          "TRISC0": 233.70775,
+          "TRISC1": 233.70875,
+          "TRISC2": 233.89049999999997
+        },
+        "2": {
+          "BRISC": 134.72875,
+          "NCRISC": 130.7615,
+          "TRISC0": 132.82625000000002,
+          "TRISC1": 132.83825000000002,
+          "TRISC2": 132.96025000000003
+        },
+        "3": {
+          "BRISC": 90.5895,
+          "NCRISC": 87.47149999999999,
+          "TRISC0": 88.44200000000001,
+          "TRISC1": 88.45075,
+          "TRISC2": 88.62425
+        }
+      },
+      "isolated_fastest_reader": 3,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer0.json",
+      "source_sha256": "38a588f504c6877f6a46be2da63bc071c4e1e4571c74e7388f0cd76742631e8e"
+    },
+    {
+      "layer": 0,
+      "role": "qkv",
+      "block": 11,
+      "precision": {
+        "input_dtype": "float32",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "float32",
+        "compute": {
+          "math_fidelity": "HiFi2",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": true,
+          "packer_l1_acc": false,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          8192
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          9216
+        ],
+        "in0_block_w": 11,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          1152
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          1152
+        ],
+        "per_bank_N_tiles": 36,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 33,
+        "logical_weight_bytes": 24510464,
+        "physical_weight_bytes": 27574272,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 36,
+            "per_reader_row_bytes": 39168,
+            "in1_triple_buffer_bytes": 1292544,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 18,
+            "per_reader_row_bytes": 19584,
+            "in1_triple_buffer_bytes": 646272,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 430848,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "2": {
+          "median_us": 77.747,
+          "min_us": 75.965,
+          "max_us": 79.596,
+          "round_medians_us": [
+            77.7445,
+            77.534,
+            78.2435,
+            78.045,
+            77.343,
+            77.9075
+          ],
+          "round_median_spread_us": 0.9004999999999939,
+          "physical_weight_GBps": 354.6667009659537,
+          "logical_weight_GBps": 315.25928974751434,
+          "physical_percent_declared_peak": 69.27084003241283
+        },
+        "3": {
+          "median_us": 93.56800000000001,
+          "min_us": 92.744,
+          "max_us": 94.501,
+          "round_medians_us": [
+            93.5015,
+            93.4185,
+            93.63300000000001,
+            93.5635,
+            93.49799999999999,
+            93.629
+          ],
+          "round_median_spread_us": 0.21450000000001523,
+          "physical_weight_GBps": 294.69767441860466,
+          "logical_weight_GBps": 261.953488372093,
+          "physical_percent_declared_peak": 57.55813953488372
+        }
+      },
+      "accuracy": {
+        "2": {
+          "pcc_fp32_dot": 0.999999114843397,
+          "pcc_production": 0.9999998896346922,
+          "max_abs_diff_production": 0.54205322265625,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.999999114843397,
+          "pcc_production": 0.9999998896346922,
+          "max_abs_diff_production": 0.54205322265625,
+          "passed": true
+        }
+      },
+      "invalid": {
+        "1": "TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 7-9] grow to 1641728 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x247a37a) [0x75526fa7a37a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x75526e7782c9]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1186758) [0x75526e786758]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x75526e776bef]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x75526e774465]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x75526e758a28]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x10e5e90) [0x75526e6e5e90]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x75526e6e73d4]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7945eb) [0x7552709945eb]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7942e3) [0x7552709942e3]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x374d3d) [0x755270574d3d]\n --- /workspace/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5b2090629c65]\n --- /workspace/tt-metal/python_env/bin/python(+0x3a2b46) [0x5b209065db46]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0xa16c) [0x5b209058b87c]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5b2090629c65]\n --- /workspace/tt-metal/python_env/bin/python(+0x3a2b46) [0x5b209065db46]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd2a2) [0x5b20905b82a2]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x5b20905855ff]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d4a54) [0x5b209068fa54]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d27c9) [0x5b209068d7c9]\n --- /workspace/tt-metal/python_env/bin/python(+0x29259f) [0x5b209054d59f]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x5b20905855ff]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d4a54) [0x5b209068fa54]\n --- /workspace/tt-metal/python_env/bin/python(+0x40a643) [0x5b20906c5643]\n --- /workspace/tt-metal/python_env/bin/python(PyRun_StringFlags+0x76) [0x5b20906c5916]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d28a5) [0x5b209068d8a5]\n --- /workspace/tt-metal/python_env/bin/python(+0x29259f) [0x5b209054d59f]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d4a54) [0x5b209068fa54]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d27c9) [0x5b209068d7c9]\n --- /workspace/tt-metal/python_env/bin/python(+0x29259f) [0x5b209054d59f]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5b20905b80b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5b2090585778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5b209052c352]\n --- /workspace/tt-metal/python_env/bin/python(+0x1bc738) [0x5b2090477738]\n --- /workspace/tt-metal/python_env/bin/python(Py_RunMain+0x673) [0x5b20906d1023]\n --- /workspace/tt-metal/python_env/bin/python(+0x148028) [0x5b2090403028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x75529a6b3d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x75529a6b3e40]\n --- /workspace/tt-metal/python_env/bin/python(+0x34616b) [0x5b209060116b]\n"
+      },
+      "pairwise_pcc": {
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "2": {
+          "BRISC": 77.79225,
+          "NCRISC": 60.896,
+          "TRISC0": 75.9765,
+          "TRISC1": 75.9705,
+          "TRISC2": 76.29825
+        },
+        "3": {
+          "BRISC": 93.48725,
+          "NCRISC": 73.8665,
+          "TRISC0": 92.13275,
+          "TRISC1": 92.19825,
+          "TRISC2": 92.5575
+        }
+      },
+      "isolated_fastest_reader": 2,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer0.json",
+      "source_sha256": "38a588f504c6877f6a46be2da63bc071c4e1e4571c74e7388f0cd76742631e8e"
+    },
+    {
+      "layer": 0,
+      "role": "output",
+      "block": 16,
+      "precision": {
+        "input_dtype": "bfloat16",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "float32",
+        "compute": {
+          "math_fidelity": "HiFi4",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": true,
+          "packer_l1_acc": false,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          4096,
+          2816
+        ],
+        "physical_MKN": [
+          32,
+          4096,
+          3072
+        ],
+        "in0_block_w": 16,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          512
+        ],
+        "output_shard_shape": [
+          32,
+          384
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          4096,
+          384
+        ],
+        "per_bank_N_tiles": 12,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 16,
+        "logical_weight_bytes": 12255232,
+        "physical_weight_bytes": 13369344,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 626688,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 6,
+            "per_reader_row_bytes": 6528,
+            "in1_triple_buffer_bytes": 313344,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 4,
+            "per_reader_row_bytes": 4352,
+            "in1_triple_buffer_bytes": 208896,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 85.07300000000001,
+          "min_us": 84.696,
+          "max_us": 85.404,
+          "round_medians_us": [
+            85.0995,
+            85.1025,
+            84.9925,
+            84.975,
+            85.0975,
+            85.00450000000001
+          ],
+          "round_median_spread_us": 0.12750000000001194,
+          "physical_weight_GBps": 157.15143465024155,
+          "logical_weight_GBps": 144.0554817627214,
+          "physical_percent_declared_peak": 30.693639580125303
+        },
+        "2": {
+          "median_us": 52.317,
+          "min_us": 49.238,
+          "max_us": 53.124,
+          "round_medians_us": [
+            52.531,
+            52.159,
+            51.976,
+            51.6065,
+            52.3565,
+            52.215999999999994
+          ],
+          "round_median_spread_us": 0.9245000000000019,
+          "physical_weight_GBps": 255.5449280348644,
+          "logical_weight_GBps": 234.24951736529235,
+          "physical_percent_declared_peak": 49.91111875680945
+        },
+        "3": {
+          "median_us": 47.443,
+          "min_us": 46.945,
+          "max_us": 48.442,
+          "round_medians_us": [
+            47.3815,
+            47.4715,
+            47.4105,
+            47.474500000000006,
+            47.5095,
+            47.41
+          ],
+          "round_median_spread_us": 0.1280000000000001,
+          "physical_weight_GBps": 281.7980313217967,
+          "logical_weight_GBps": 258.3148620449803,
+          "physical_percent_declared_peak": 55.03867799253842
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.9999997436086884,
+          "pcc_production": 0.9999997530302616,
+          "max_abs_diff_production": 0.018388748168945312,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.9999997436086884,
+          "pcc_production": 0.9999997530302616,
+          "max_abs_diff_production": 0.018388748168945312,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999997436086884,
+          "pcc_production": 0.9999997530302616,
+          "max_abs_diff_production": 0.018388748168945312,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 85.0095,
+          "NCRISC": 65.30975000000001,
+          "TRISC0": 83.23475,
+          "TRISC1": 83.42675,
+          "TRISC2": 84.05375000000001
+        },
+        "2": {
+          "BRISC": 52.136250000000004,
+          "NCRISC": 42.69825,
+          "TRISC0": 50.884750000000004,
+          "TRISC1": 51.006750000000004,
+          "TRISC2": 51.599500000000006
+        },
+        "3": {
+          "BRISC": 47.393249999999995,
+          "NCRISC": 40.78075,
+          "TRISC0": 45.9935,
+          "TRISC1": 46.2055,
+          "TRISC2": 46.81925
+        }
+      },
+      "isolated_fastest_reader": 3,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer0.json",
+      "source_sha256": "38a588f504c6877f6a46be2da63bc071c4e1e4571c74e7388f0cd76742631e8e"
+    },
+    {
+      "layer": 0,
+      "role": "shared_gate_up",
+      "block": 11,
+      "precision": {
+        "input_dtype": "bfloat16",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "bfloat16",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": false,
+          "packer_l1_acc": true,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          4224
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          4608
+        ],
+        "in0_block_w": 11,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          576
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          576
+        ],
+        "per_bank_N_tiles": 18,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 11968,
+        "blackhole_one_reader_pages_per_K_block": 18,
+        "logical_weight_bytes": 12638208,
+        "physical_weight_bytes": 13787136,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 18,
+            "per_reader_row_bytes": 19584,
+            "in1_triple_buffer_bytes": 646272,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 9,
+            "per_reader_row_bytes": 9792,
+            "in1_triple_buffer_bytes": 323136,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 6,
+            "per_reader_row_bytes": 6528,
+            "in1_triple_buffer_bytes": 215424,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 32.9655,
+          "min_us": 32.579,
+          "max_us": 33.467,
+          "round_medians_us": [
+            32.9405,
+            32.9925,
+            32.896,
+            32.961,
+            32.974500000000006,
+            32.9595
+          ],
+          "round_median_spread_us": 0.09649999999999892,
+          "physical_weight_GBps": 418.2292396596442,
+          "logical_weight_GBps": 383.3768030213405,
+          "physical_percent_declared_peak": 81.68539837102425
+        },
+        "2": {
+          "median_us": 38.269000000000005,
+          "min_us": 37.743,
+          "max_us": 40.684,
+          "round_medians_us": [
+            38.173,
+            38.323499999999996,
+            38.3675,
+            38.4465,
+            38.2635,
+            38.314
+          ],
+          "round_median_spread_us": 0.2734999999999985,
+          "physical_weight_GBps": 360.26904282839894,
+          "logical_weight_GBps": 330.246622592699,
+          "physical_percent_declared_peak": 70.36504742742167
+        },
+        "3": {
+          "median_us": 45.6635,
+          "min_us": 45.186,
+          "max_us": 46.245,
+          "round_medians_us": [
+            45.668,
+            45.72,
+            45.6055,
+            45.6105,
+            45.697,
+            45.7115
+          ],
+          "round_median_spread_us": 0.1144999999999996,
+          "physical_weight_GBps": 301.929024275406,
+          "logical_weight_GBps": 276.76827225245546,
+          "physical_percent_declared_peak": 58.970512553790236
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.999929905203374,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.999929905203374,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.999929905203374,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 32.92075,
+          "NCRISC": 25.762749999999997,
+          "TRISC0": 31.87175,
+          "TRISC1": 31.883,
+          "TRISC2": 32.151250000000005
+        },
+        "2": {
+          "BRISC": 38.27525,
+          "NCRISC": 33.874750000000006,
+          "TRISC0": 37.566500000000005,
+          "TRISC1": 37.511,
+          "TRISC2": 37.7585
+        },
+        "3": {
+          "BRISC": 45.6305,
+          "NCRISC": 37.41625,
+          "TRISC0": 44.86125,
+          "TRISC1": 44.879999999999995,
+          "TRISC2": 45.136250000000004
+        }
+      },
+      "isolated_fastest_reader": 1,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer0.json",
+      "source_sha256": "38a588f504c6877f6a46be2da63bc071c4e1e4571c74e7388f0cd76742631e8e"
+    },
+    {
+      "layer": 0,
+      "role": "shared_down",
+      "block": 11,
+      "precision": {
+        "input_dtype": "bfloat16",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "bfloat16",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": false,
+          "packer_l1_acc": true,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2112,
+          2816
+        ],
+        "physical_MKN": [
+          32,
+          2112,
+          3072
+        ],
+        "in0_block_w": 11,
+        "input_storage_cores": 6,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          512
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2112,
+          384
+        ],
+        "per_bank_N_tiles": 12,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 11,
+        "logical_weight_bytes": 6319104,
+        "physical_weight_bytes": 6893568,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 430848,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 6,
+            "per_reader_row_bytes": 6528,
+            "in1_triple_buffer_bytes": 215424,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 4,
+            "per_reader_row_bytes": 4352,
+            "in1_triple_buffer_bytes": 143616,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 18.2145,
+          "min_us": 17.787,
+          "max_us": 18.697,
+          "round_medians_us": [
+            18.236,
+            18.216,
+            18.211,
+            18.206000000000003,
+            18.2145,
+            18.2475
+          ],
+          "round_median_spread_us": 0.04149999999999565,
+          "physical_weight_GBps": 378.4659474594416,
+          "logical_weight_GBps": 346.92711850448813,
+          "physical_percent_declared_peak": 73.91913036317219
+        },
+        "2": {
+          "median_us": 21.433,
+          "min_us": 19.764,
+          "max_us": 23.488,
+          "round_medians_us": [
+            21.9205,
+            21.552,
+            21.163,
+            21.2185,
+            21.1265,
+            21.533
+          ],
+          "round_median_spread_us": 0.7940000000000005,
+          "physical_weight_GBps": 321.63336910371856,
+          "logical_weight_GBps": 294.8305883450754,
+          "physical_percent_declared_peak": 62.819017403070035
+        },
+        "3": {
+          "median_us": 23.4375,
+          "min_us": 23.035,
+          "max_us": 23.844,
+          "round_medians_us": [
+            23.4415,
+            23.415,
+            23.427,
+            23.4865,
+            23.429000000000002,
+            23.451999999999998
+          ],
+          "round_median_spread_us": 0.07150000000000034,
+          "physical_weight_GBps": 294.12556800000004,
+          "logical_weight_GBps": 269.615104,
+          "physical_percent_declared_peak": 57.44640000000001
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.9999191368630052,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.9999191368630052,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999191368630052,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 18.1805,
+          "NCRISC": 13.4275,
+          "TRISC0": 17.23,
+          "TRISC1": 17.243499999999997,
+          "TRISC2": 17.50125
+        },
+        "2": {
+          "BRISC": 21.32275,
+          "NCRISC": 19.31025,
+          "TRISC0": 20.563,
+          "TRISC1": 20.56575,
+          "TRISC2": 20.81725
+        },
+        "3": {
+          "BRISC": 23.38325,
+          "NCRISC": 19.352249999999998,
+          "TRISC0": 22.802249999999997,
+          "TRISC1": 22.7475,
+          "TRISC2": 22.96
+        }
+      },
+      "isolated_fastest_reader": 1,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer0.json",
+      "source_sha256": "38a588f504c6877f6a46be2da63bc071c4e1e4571c74e7388f0cd76742631e8e"
+    },
+    {
+      "layer": 5,
+      "role": "qkv",
+      "block": 1,
+      "precision": {
+        "input_dtype": "float32",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "float32",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": true,
+          "packer_l1_acc": false,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          9216
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          9216
+        ],
+        "in0_block_w": 1,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          1152
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          1152
+        ],
+        "per_bank_N_tiles": 36,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 3,
+        "logical_weight_bytes": 27574272,
+        "physical_weight_bytes": 27574272,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 36,
+            "per_reader_row_bytes": 39168,
+            "in1_triple_buffer_bytes": 117504,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 18,
+            "per_reader_row_bytes": 19584,
+            "in1_triple_buffer_bytes": 58752,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 39168,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 209.6375,
+          "min_us": 208.463,
+          "max_us": 210.094,
+          "round_medians_us": [
+            209.66649999999998,
+            209.6625,
+            208.565,
+            209.687,
+            209.6445,
+            208.566
+          ],
+          "round_median_spread_us": 1.122000000000014,
+          "physical_weight_GBps": 131.53310834178046,
+          "logical_weight_GBps": 131.53310834178046,
+          "physical_percent_declared_peak": 25.690060223003996
+        },
+        "2": {
+          "median_us": 124.62,
+          "min_us": 124.185,
+          "max_us": 125.306,
+          "round_medians_us": [
+            124.65700000000001,
+            124.621,
+            124.5625,
+            124.65350000000001,
+            124.5955,
+            124.57499999999999
+          ],
+          "round_median_spread_us": 0.09450000000001069,
+          "physical_weight_GBps": 221.26682715454982,
+          "logical_weight_GBps": 221.26682715454982,
+          "physical_percent_declared_peak": 43.21617717862301
+        },
+        "3": {
+          "median_us": 90.3315,
+          "min_us": 89.192,
+          "max_us": 91.562,
+          "round_medians_us": [
+            90.5575,
+            90.354,
+            90.2585,
+            90.3545,
+            90.45,
+            90.271
+          ],
+          "round_median_spread_us": 0.2990000000000066,
+          "physical_weight_GBps": 305.25643878381294,
+          "logical_weight_GBps": 305.25643878381294,
+          "physical_percent_declared_peak": 59.62039819996347
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.9999656573698033,
+          "pcc_production": 0.9999902218636716,
+          "max_abs_diff_production": 0.5093898773193359,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.9999656573698033,
+          "pcc_production": 0.9999902218636716,
+          "max_abs_diff_production": 0.5093898773193359,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999656573698033,
+          "pcc_production": 0.9999902218636716,
+          "max_abs_diff_production": 0.5093898773193359,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 209.61525,
+          "NCRISC": 203.65075000000002,
+          "TRISC0": 207.3735,
+          "TRISC1": 207.353,
+          "TRISC2": 207.49725
+        },
+        "2": {
+          "BRISC": 124.56775,
+          "NCRISC": 120.866,
+          "TRISC0": 122.71950000000001,
+          "TRISC1": 122.69399999999999,
+          "TRISC2": 122.81925000000001
+        },
+        "3": {
+          "BRISC": 90.3095,
+          "NCRISC": 87.3265,
+          "TRISC0": 88.286,
+          "TRISC1": 88.262,
+          "TRISC2": 88.413
+        }
+      },
+      "isolated_fastest_reader": 3,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer5.json",
+      "source_sha256": "8bc36532e8f03f6fd629761b3f11891ef521a96a853fc8d4bb9379728e3dfb66"
+    },
+    {
+      "layer": 5,
+      "role": "qkv",
+      "block": 11,
+      "precision": {
+        "input_dtype": "float32",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "float32",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": true,
+          "packer_l1_acc": false,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          9216
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          9216
+        ],
+        "in0_block_w": 11,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          1152
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          1152
+        ],
+        "per_bank_N_tiles": 36,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 33,
+        "logical_weight_bytes": 27574272,
+        "physical_weight_bytes": 27574272,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 36,
+            "per_reader_row_bytes": 39168,
+            "in1_triple_buffer_bytes": 1292544,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 18,
+            "per_reader_row_bytes": 19584,
+            "in1_triple_buffer_bytes": 646272,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 2
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 430848,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "2": {
+          "median_us": 75.4375,
+          "min_us": 73.905,
+          "max_us": 77.737,
+          "round_medians_us": [
+            75.7425,
+            74.927,
+            75.4435,
+            75.23949999999999,
+            75.502,
+            75.648
+          ],
+          "round_median_spread_us": 0.8155000000000001,
+          "physical_weight_GBps": 365.5247323943662,
+          "logical_weight_GBps": 365.5247323943662,
+          "physical_percent_declared_peak": 71.39154929577465
+        },
+        "3": {
+          "median_us": 92.167,
+          "min_us": 91.15,
+          "max_us": 93.076,
+          "round_medians_us": [
+            92.0945,
+            92.204,
+            92.174,
+            92.054,
+            92.134,
+            92.19749999999999
+          ],
+          "round_median_spread_us": 0.14999999999999147,
+          "physical_weight_GBps": 299.1772760315514,
+          "logical_weight_GBps": 299.1772760315514,
+          "physical_percent_declared_peak": 58.433061724912385
+        }
+      },
+      "accuracy": {
+        "2": {
+          "pcc_fp32_dot": 0.9999769906872498,
+          "pcc_production": 0.999999869009802,
+          "max_abs_diff_production": 0.049961090087890625,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999769906872498,
+          "pcc_production": 0.999999869009802,
+          "max_abs_diff_production": 0.049961090087890625,
+          "passed": true
+        }
+      },
+      "invalid": {
+        "1": "TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception\ninfo:\nStatically allocated circular buffers on core range [0-0 - 7-9] grow to 1641728 B which is beyond max L1 size of 1572864 B\nbacktrace:\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x247a37a) [0x77ce0607a37a]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x77ce04d782c9]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1186758) [0x77ce04d86758]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x77ce04d76bef]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b5) [0x77ce04d74465]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x77ce04d58a28]\n --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x10e5e90) [0x77ce04ce5e90]\n --- /workspace/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x264) [0x77ce04ce73d4]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7945eb) [0x77ce06f945eb]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x7942e3) [0x77ce06f942e3]\n --- /workspace/tt-metal/ttnn/ttnn/_ttnn.so(+0x374d3d) [0x77ce06b74d3d]\n --- /workspace/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5ee6f1333c65]\n --- /workspace/tt-metal/python_env/bin/python(+0x3a2b46) [0x5ee6f1367b46]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0xa16c) [0x5ee6f129587c]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x5ee6f1333c65]\n --- /workspace/tt-metal/python_env/bin/python(+0x3a2b46) [0x5ee6f1367b46]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd2a2) [0x5ee6f12c22a2]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x5ee6f128f5ff]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d4a54) [0x5ee6f1399a54]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d27c9) [0x5ee6f13977c9]\n --- /workspace/tt-metal/python_env/bin/python(+0x29259f) [0x5ee6f125759f]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x3eef) [0x5ee6f128f5ff]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d4a54) [0x5ee6f1399a54]\n --- /workspace/tt-metal/python_env/bin/python(+0x40a643) [0x5ee6f13cf643]\n --- /workspace/tt-metal/python_env/bin/python(PyRun_StringFlags+0x76) [0x5ee6f13cf916]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d28a5) [0x5ee6f13978a5]\n --- /workspace/tt-metal/python_env/bin/python(+0x29259f) [0x5ee6f125759f]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d4a54) [0x5ee6f1399a54]\n --- /workspace/tt-metal/python_env/bin/python(+0x3d27c9) [0x5ee6f13977c9]\n --- /workspace/tt-metal/python_env/bin/python(+0x29259f) [0x5ee6f125759f]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x2fd0b9) [0x5ee6f12c20b9]\n --- /workspace/tt-metal/python_env/bin/python(_PyEval_EvalFrameDefault+0x4068) [0x5ee6f128f778]\n --- /workspace/tt-metal/python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x5ee6f1236352]\n --- /workspace/tt-metal/python_env/bin/python(+0x1bc738) [0x5ee6f1181738]\n --- /workspace/tt-metal/python_env/bin/python(Py_RunMain+0x673) [0x5ee6f13db023]\n --- /workspace/tt-metal/python_env/bin/python(+0x148028) [0x5ee6f110d028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x77ce30d52d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x77ce30d52e40]\n --- /workspace/tt-metal/python_env/bin/python(+0x34616b) [0x5ee6f130b16b]\n"
+      },
+      "pairwise_pcc": {
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "2": {
+          "BRISC": 75.41925,
+          "NCRISC": 58.53175,
+          "TRISC0": 73.59400000000001,
+          "TRISC1": 73.55675,
+          "TRISC2": 73.79225
+        },
+        "3": {
+          "BRISC": 92.10725,
+          "NCRISC": 72.42824999999999,
+          "TRISC0": 91.0075,
+          "TRISC1": 90.98325,
+          "TRISC2": 91.19274999999999
+        }
+      },
+      "isolated_fastest_reader": 2,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer5.json",
+      "source_sha256": "8bc36532e8f03f6fd629761b3f11891ef521a96a853fc8d4bb9379728e3dfb66"
+    },
+    {
+      "layer": 5,
+      "role": "output",
+      "block": 16,
+      "precision": {
+        "input_dtype": "bfloat16",
+        "weight_dtype": "bfloat8_b",
+        "output_dtype": "float32",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": true,
+          "packer_l1_acc": false,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          8192,
+          2816
+        ],
+        "physical_MKN": [
+          32,
+          8192,
+          3072
+        ],
+        "in0_block_w": 16,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          1024
+        ],
+        "output_shard_shape": [
+          32,
+          384
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          8192,
+          384
+        ],
+        "per_bank_N_tiles": 12,
+        "stored_tile_bytes": 1088,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 13056,
+        "blackhole_one_reader_pages_per_K_block": 16,
+        "logical_weight_bytes": 24510464,
+        "physical_weight_bytes": 26738688,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 13056,
+            "in1_triple_buffer_bytes": 626688,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 6,
+            "per_reader_row_bytes": 6528,
+            "in1_triple_buffer_bytes": 313344,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 4,
+            "per_reader_row_bytes": 4352,
+            "in1_triple_buffer_bytes": 208896,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 58.137,
+          "min_us": 57.551,
+          "max_us": 58.945,
+          "round_medians_us": [
+            57.945,
+            58.25,
+            58.1075,
+            58.165,
+            58.166,
+            58.116
+          ],
+          "round_median_spread_us": 0.3049999999999997,
+          "physical_weight_GBps": 459.92548635120494,
+          "logical_weight_GBps": 421.5983624886045,
+          "physical_percent_declared_peak": 89.82919655296972
+        },
+        "2": {
+          "median_us": 70.2175,
+          "min_us": 69.93,
+          "max_us": 70.654,
+          "round_medians_us": [
+            70.1505,
+            70.26650000000001,
+            70.253,
+            70.19149999999999,
+            70.227,
+            70.2255
+          ],
+          "round_median_spread_us": 0.11600000000001387,
+          "physical_weight_GBps": 380.7980631608929,
+          "logical_weight_GBps": 349.06489123081855,
+          "physical_percent_declared_peak": 74.3746217111119
+        },
+        "3": {
+          "median_us": 84.796,
+          "min_us": 84.292,
+          "max_us": 85.21,
+          "round_medians_us": [
+            84.81,
+            84.8415,
+            84.703,
+            84.7485,
+            84.8105,
+            84.75800000000001
+          ],
+          "round_median_spread_us": 0.1384999999999934,
+          "physical_weight_GBps": 315.3295910184442,
+          "logical_weight_GBps": 289.0521251002406,
+          "physical_percent_declared_peak": 61.58781074578988
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.999954239949095,
+          "pcc_production": 0.9999992089408295,
+          "max_abs_diff_production": 0.04887962341308594,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.999954239949095,
+          "pcc_production": 0.9999992089408295,
+          "max_abs_diff_production": 0.04887962341308594,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.999954239949095,
+          "pcc_production": 0.9999992089408295,
+          "max_abs_diff_production": 0.04887962341308594,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 58.094,
+          "NCRISC": 51.73575,
+          "TRISC0": 56.9285,
+          "TRISC1": 56.907250000000005,
+          "TRISC2": 57.12575
+        },
+        "2": {
+          "BRISC": 70.1765,
+          "NCRISC": 64.37424999999999,
+          "TRISC0": 69.29,
+          "TRISC1": 69.224,
+          "TRISC2": 69.41425
+        },
+        "3": {
+          "BRISC": 84.7365,
+          "NCRISC": 80.416,
+          "TRISC0": 83.99225000000001,
+          "TRISC1": 83.95474999999999,
+          "TRISC2": 84.16875
+        }
+      },
+      "isolated_fastest_reader": 1,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer5.json",
+      "source_sha256": "8bc36532e8f03f6fd629761b3f11891ef521a96a853fc8d4bb9379728e3dfb66"
+    },
+    {
+      "layer": 5,
+      "role": "shared_gate_up",
+      "block": 11,
+      "precision": {
+        "input_dtype": "bfloat16",
+        "weight_dtype": "bfloat4_b",
+        "output_dtype": "bfloat16",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": false,
+          "packer_l1_acc": true,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2816,
+          4224
+        ],
+        "physical_MKN": [
+          32,
+          2816,
+          4608
+        ],
+        "in0_block_w": 11,
+        "input_storage_cores": 8,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          576
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2816,
+          576
+        ],
+        "per_bank_N_tiles": 18,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 9,
+        "logical_weight_bytes": 6690816,
+        "physical_weight_bytes": 7299072,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 18,
+            "per_reader_row_bytes": 10368,
+            "in1_triple_buffer_bytes": 342144,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 9,
+            "per_reader_row_bytes": 5184,
+            "in1_triple_buffer_bytes": 171072,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": 1
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 6,
+            "per_reader_row_bytes": 3456,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": false,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 26.8005,
+          "min_us": 26.502,
+          "max_us": 27.141,
+          "round_medians_us": [
+            26.761499999999998,
+            26.801499999999997,
+            26.787,
+            26.812,
+            26.7555,
+            26.810000000000002
+          ],
+          "round_median_spread_us": 0.05649999999999977,
+          "physical_weight_GBps": 272.34835170985616,
+          "logical_weight_GBps": 249.6526557340348,
+          "physical_percent_declared_peak": 53.19303744333128
+        },
+        "2": {
+          "median_us": 21.930500000000002,
+          "min_us": 21.222,
+          "max_us": 24.466,
+          "round_medians_us": [
+            21.695500000000003,
+            22.106,
+            21.758,
+            21.930500000000002,
+            22.137500000000003,
+            22.4045
+          ],
+          "round_median_spread_us": 0.7089999999999961,
+          "physical_weight_GBps": 332.82743211509086,
+          "logical_weight_GBps": 305.0918127721666,
+          "physical_percent_declared_peak": 65.00535783497868
+        },
+        "3": {
+          "median_us": 25.0795,
+          "min_us": 24.76,
+          "max_us": 25.786,
+          "round_medians_us": [
+            25.1055,
+            25.086,
+            25.125,
+            25.060000000000002,
+            25.064999999999998,
+            24.985
+          ],
+          "round_median_spread_us": 0.14000000000000057,
+          "physical_weight_GBps": 291.0373811280129,
+          "logical_weight_GBps": 266.78426603401186,
+          "physical_percent_declared_peak": 56.84323850156502
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.9999598719737657,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.9999598719737657,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999598719737657,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 26.756,
+          "NCRISC": 21.1465,
+          "TRISC0": 25.7295,
+          "TRISC1": 25.739,
+          "TRISC2": 26.00325
+        },
+        "2": {
+          "BRISC": 21.9625,
+          "NCRISC": 19.2355,
+          "TRISC0": 21.19875,
+          "TRISC1": 21.13275,
+          "TRISC2": 21.37275
+        },
+        "3": {
+          "BRISC": 25.02475,
+          "NCRISC": 22.4795,
+          "TRISC0": 24.280749999999998,
+          "TRISC1": 24.28875,
+          "TRISC2": 24.5455
+        }
+      },
+      "isolated_fastest_reader": 2,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer5.json",
+      "source_sha256": "8bc36532e8f03f6fd629761b3f11891ef521a96a853fc8d4bb9379728e3dfb66"
+    },
+    {
+      "layer": 5,
+      "role": "shared_down",
+      "block": 11,
+      "precision": {
+        "input_dtype": "bfloat16",
+        "weight_dtype": "bfloat4_b",
+        "output_dtype": "bfloat16",
+        "compute": {
+          "math_fidelity": "LoFi",
+          "math_approx_mode": false,
+          "fp32_dest_acc_en": false,
+          "packer_l1_acc": true,
+          "dst_full_sync_en": false
+        }
+      },
+      "geometry": {
+        "logical_MKN": [
+          1,
+          2112,
+          2816
+        ],
+        "physical_MKN": [
+          32,
+          2112,
+          3072
+        ],
+        "in0_block_w": 11,
+        "input_storage_cores": 6,
+        "input_shard_shape": [
+          32,
+          352
+        ],
+        "output_shard_shape": [
+          32,
+          512
+        ],
+        "weight_banks": 8,
+        "weight_shard_shape": [
+          2112,
+          384
+        ],
+        "per_bank_N_tiles": 12,
+        "stored_tile_bytes": 576,
+        "blackhole_noc_burst_bytes": 16384,
+        "blackhole_one_reader_page_bytes": 12672,
+        "blackhole_one_reader_pages_per_K_block": 6,
+        "logical_weight_bytes": 3345408,
+        "physical_weight_bytes": 3649536,
+        "readers": {
+          "1": {
+            "compute_workers": 8,
+            "per_reader_N_tiles": 12,
+            "per_reader_row_bytes": 6912,
+            "in1_triple_buffer_bytes": 228096,
+            "row_at_least_4KiB": true,
+            "blackhole_split_reader_bursts_per_row": null
+          },
+          "2": {
+            "compute_workers": 16,
+            "per_reader_N_tiles": 6,
+            "per_reader_row_bytes": 3456,
+            "in1_triple_buffer_bytes": 114048,
+            "row_at_least_4KiB": false,
+            "blackhole_split_reader_bursts_per_row": 1
+          },
+          "3": {
+            "compute_workers": 24,
+            "per_reader_N_tiles": 4,
+            "per_reader_row_bytes": 2304,
+            "in1_triple_buffer_bytes": 76032,
+            "row_at_least_4KiB": false,
+            "blackhole_split_reader_bursts_per_row": 1
+          }
+        },
+        "multicast_at_least_64_cores": false,
+        "estimates_scope": "Weight payload/header bytes only; not total CB/L1 allocation. Screening flags are heuristics."
+      },
+      "device": {
+        "1": {
+          "median_us": 15.006,
+          "min_us": 14.755,
+          "max_us": 15.673,
+          "round_medians_us": [
+            15.0225,
+            14.986,
+            14.988,
+            14.970500000000001,
+            15.001000000000001,
+            15.0165
+          ],
+          "round_median_spread_us": 0.0519999999999996,
+          "physical_weight_GBps": 243.20511795281885,
+          "logical_weight_GBps": 222.93802479008397,
+          "physical_percent_declared_peak": 47.50099960015993
+        },
+        "2": {
+          "median_us": 13.9585,
+          "min_us": 12.084,
+          "max_us": 15.33,
+          "round_medians_us": [
+            14.1415,
+            13.943999999999999,
+            14.0465,
+            13.9585,
+            14.0825,
+            14.004999999999999
+          ],
+          "round_median_spread_us": 0.19750000000000156,
+          "physical_weight_GBps": 261.45617365762797,
+          "logical_weight_GBps": 239.66815918615896,
+          "physical_percent_declared_peak": 51.065658917505466
+        },
+        "3": {
+          "median_us": 13.615,
+          "min_us": 13.279,
+          "max_us": 14.471,
+          "round_medians_us": [
+            13.5555,
+            13.6075,
+            13.579,
+            13.5705,
+            13.6175,
+            13.679
+          ],
+          "round_median_spread_us": 0.12349999999999994,
+          "physical_weight_GBps": 268.052589056188,
+          "logical_weight_GBps": 245.7148733015057,
+          "physical_percent_declared_peak": 52.35402130003672
+        }
+      },
+      "accuracy": {
+        "1": {
+          "pcc_fp32_dot": 0.9999770688603018,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "2": {
+          "pcc_fp32_dot": 0.9999770688603018,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        },
+        "3": {
+          "pcc_fp32_dot": 0.9999770688603018,
+          "pcc_production": 1.0,
+          "max_abs_diff_production": 0.0,
+          "passed": true
+        }
+      },
+      "invalid": {},
+      "pairwise_pcc": {
+        "1_vs_2": 1.0,
+        "1_vs_3": 1.0,
+        "2_vs_3": 1.0
+      },
+      "risc_median_us": {
+        "1": {
+          "BRISC": 14.962250000000001,
+          "NCRISC": 11.322500000000002,
+          "TRISC0": 14.0055,
+          "TRISC1": 14.01475,
+          "TRISC2": 14.27375
+        },
+        "2": {
+          "BRISC": 13.972000000000001,
+          "NCRISC": 12.0185,
+          "TRISC0": 13.06325,
+          "TRISC1": 13.057,
+          "TRISC2": 13.315999999999999
+        },
+        "3": {
+          "BRISC": 13.546000000000001,
+          "NCRISC": 11.495750000000001,
+          "TRISC0": 12.99475,
+          "TRISC1": 12.922,
+          "TRISC2": 13.1425
+        }
+      },
+      "isolated_fastest_reader": 3,
+      "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/dram_readers_v5/layer5.json",
+      "source_sha256": "8bc36532e8f03f6fd629761b3f11891ef521a96a853fc8d4bb9379728e3dfb66"
+    }
+  ],
+  "whole_layer_results": "reader_layer_results.json"
+}

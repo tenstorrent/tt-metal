@@ -1,0 +1,10 @@
+{
+  "command": [
+    "black23.10.1",
+    "--check",
+    "stage-owned Python files"
+  ],
+  "file_count": 85,
+  "returncode": 1,
+  "exception": "Historical hash-bound probe_optimized_prefill_pairs.py retained byte-for-byte. Repository Black excludes autoports; all other explicit checked source files pass."
+}

@@ -1,0 +1,140 @@
+[
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--default-overrides",
+      "{}",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_reuse_failure_2049_1.pt",
+      "--layer",
+      "5",
+      "--length",
+      "2049",
+      "--real",
+      "--decode",
+      "--steps",
+      "1",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/reuse_control_fresh.json"
+    ],
+    "returncode": 1
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--default-overrides",
+      "{\"output_fidelity\": \"HiFi4\"}",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_reuse_failure_2049_1.pt",
+      "--layer",
+      "5",
+      "--length",
+      "2049",
+      "--real",
+      "--decode",
+      "--steps",
+      "1",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/reuse_control_output_hifi4.json"
+    ],
+    "returncode": 1
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--default-overrides",
+      "{\"shared_readers\": 1}",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_reuse_failure_2049_1.pt",
+      "--layer",
+      "5",
+      "--length",
+      "2049",
+      "--real",
+      "--decode",
+      "--steps",
+      "1",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/reuse_control_shared_readers1.json"
+    ],
+    "returncode": 1
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--default-overrides",
+      "{\"generalized_router_center\": true}",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_reuse_failure_2049_1.pt",
+      "--layer",
+      "5",
+      "--length",
+      "2049",
+      "--real",
+      "--decode",
+      "--steps",
+      "1",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/reuse_control_router_center.json"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--default-overrides",
+      "{\"generalized_router\": false}",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_reuse_failure_2049_1.pt",
+      "--layer",
+      "5",
+      "--length",
+      "2049",
+      "--real",
+      "--decode",
+      "--steps",
+      "1",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/reuse_control_router_fp32.json"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_decoder",
+      "--defaults",
+      "--default-overrides",
+      "{\"expert_activation_dtype\": \"bfloat16\"}",
+      "--input-fixture",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_reuse_failure_2049_1.pt",
+      "--layer",
+      "5",
+      "--length",
+      "2049",
+      "--real",
+      "--decode",
+      "--steps",
+      "1",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/reuse_control_expert_activation16.json"
+    ],
+    "returncode": 1
+  }
+]

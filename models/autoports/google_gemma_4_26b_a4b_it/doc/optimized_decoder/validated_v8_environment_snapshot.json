@@ -1,0 +1,25 @@
+{
+  "environment": {
+    "TT_METAL_DEVICE_PROFILER": null,
+    "TT_METAL_DEVICE_PROFILER_DISPATCH": null,
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_WATCHER_DISABLE": null,
+    "TT_METAL_WATCHER_DISABLE_NOC_SANITIZE": null,
+    "TT_METAL_WATCHER_DISABLE_ASSERT": null,
+    "TT_METAL_WATCHER_DISABLE_PAUSE": null,
+    "TT_METAL_WATCHER_DISABLE_RING_BUFFER": null,
+    "TT_METAL_WATCHER_DISABLE_STACK_USAGE": null,
+    "TT_METAL_DEVICE_PROFILER_NOC_EVENTS": null,
+    "TT_METAL_PROFILE_PERF_COUNTERS": null,
+    "TT_METAL_WATCHER_SKIP_LOGGING": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_NOC": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1": null,
+    "TT_METAL_WATCHER_DISABLE_WAYPOINT": null,
+    "TT_METAL_WATCHER_TEST_MODE": null
+  },
+  "recorded_at_utc": "2026-09-26T19:44:43.638813+00:00",
+  "driver_sha256": "032966f73f3ab7128235ce6c7c115e21199a90141419800eb8042259e4090f31",
+  "runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "note": "Watcher children add interval10; request reuse adds full allocation tracking and tracebacks. No exclusions."
+}

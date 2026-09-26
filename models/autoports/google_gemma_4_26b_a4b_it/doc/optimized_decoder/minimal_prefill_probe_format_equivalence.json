@@ -1,0 +1,8 @@
+{
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_minimal_prefill.py",
+  "old_sha256": "61cdf4e912063abdecf5aa0a358b610cc9a1165521a2e0bfa920989cf5604dc9",
+  "new_sha256": "12e16aa535f6cb67d3d20ccfc2f40a1f369ff5048a30c1d97352f034de2a1623",
+  "ast_equal": true,
+  "formatter": "repository-pinned Black23.10.1",
+  "scope": "test-only formatting after all minimal candidate runs; no runtime changes"
+}

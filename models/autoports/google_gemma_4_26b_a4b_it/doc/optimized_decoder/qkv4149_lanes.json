@@ -1,0 +1,536 @@
+{
+  "position": 4149,
+  "harness_qkv": "split2",
+  "scope": "Same-input component comparison; instrumented layer timing is not a performance claim",
+  "candidates": [
+    {
+      "candidate": "broadcast",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999999999799,
+        "max_abs": 9.524520343973109e-06,
+        "rms_error": 1.5663185910270916e-06,
+        "relative_l2": 1.9910744698550366e-07,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999999999999,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "output_dtype": "DataType.FLOAT32",
+      "replay_equal": true,
+      "traced_component_host_us": 2544.9889,
+      "traced_component_samples_us": [
+        3063.789,
+        2543.0041,
+        2544.9889
+      ]
+    },
+    {
+      "candidate": "plain_fp32",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999072978466,
+        "max_abs": 0.0444430796818267,
+        "rms_error": 0.004256553428401268,
+        "relative_l2": 0.0005410849944203404,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999072976634,
+        "max_abs": 0.04444313049316406,
+        "rms_error": 0.00425653744929267,
+        "relative_l2": 0.0005410829653347955,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "output_dtype": "DataType.FLOAT32",
+      "replay_equal": true,
+      "traced_component_host_us": 124.4839,
+      "traced_component_samples_us": [
+        124.5289,
+        124.4839,
+        124.3105
+      ]
+    },
+    {
+      "candidate": "split2_default",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346006185,
+        "max_abs": 0.030111555412702273,
+        "rms_error": 0.0028581788358716972,
+        "relative_l2": 0.0003633262698269086,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346019754,
+        "max_abs": 0.030115127563476562,
+        "rms_error": 0.0028581522586723124,
+        "relative_l2": 0.00036332289282636234,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_input_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "False"
+      },
+      "program_config": "None",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "product_details": [
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999346280143,
+            "max_abs": 0.030030488967895508,
+            "rms_error": 0.0028575972279113794,
+            "relative_l2": 0.0003632305708804821,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999115124072,
+            "max_abs": 0.031366586685180664,
+            "rms_error": 0.004510241655312329,
+            "relative_l2": 0.0005735022507842523,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.0001220703125,
+          "mean_signed_error": 1.758001837058598e-05
+        },
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999498693577,
+            "max_abs": 2.9934521080576815e-05,
+            "rms_error": 4.230556214604187e-06,
+            "relative_l2": 0.00031799245182938203,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999251524652,
+            "max_abs": 7.019937038421631e-05,
+            "rms_error": 7.165220635418231e-06,
+            "relative_l2": 0.0005387645078267769,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.000244140625,
+          "mean_signed_error": 2.895126099042956e-08
+        }
+      ],
+      "replay_equal": true,
+      "traced_component_host_us": 267.4248,
+      "traced_component_samples_us": [
+        268.9016,
+        267.4248,
+        267.4148
+      ]
+    },
+    {
+      "candidate": "split2_lanes16",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999999968979,
+        "max_abs": 0.0002049891666899839,
+        "rms_error": 2.0092810656487457e-05,
+        "relative_l2": 2.5541599617693253e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999999968836,
+        "max_abs": 0.00020503997802734375,
+        "rms_error": 2.0133907895470577e-05,
+        "relative_l2": 2.5593841749634318e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_input_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "False"
+      },
+      "program_config": "None",
+      "lane_count": 16,
+      "lane_mask_dtype": "DataType.BFLOAT16",
+      "packed_matmul_rows": 32,
+      "lane_partition_rule": "Row r retains K indices k with k % lane_count == r",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999972343,
+        "max_abs": 0.0001201629638671875,
+        "rms_error": 1.1798868255221983e-05,
+        "relative_l2": 2.3541766384819736e-06,
+        "finite": true,
+        "exact_equal": false
+      },
+      "product_details": [
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999999999684,
+            "max_abs": 2.4488545022904873e-05,
+            "rms_error": 4.5030997814868255e-06,
+            "relative_l2": 5.723911992862428e-07,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999763624671,
+            "max_abs": 0.018276214599609375,
+            "rms_error": 0.003270849009364682,
+            "relative_l2": 0.00041590659929200357,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.0006103515625,
+          "mean_signed_error": 4.023676060546655e-06
+        },
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999999999434,
+            "max_abs": 7.733399343123892e-08,
+            "rms_error": 1.1253117063732919e-08,
+            "relative_l2": 8.458477099220584e-07,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999763165681,
+            "max_abs": 5.383789539337158e-05,
+            "rms_error": 5.43280808005868e-06,
+            "relative_l2": 0.00040850161080898843,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.000244140625,
+          "mean_signed_error": 1.0298139276533234e-08
+        }
+      ],
+      "replay_equal": true,
+      "traced_component_host_us": 292.0616,
+      "traced_component_samples_us": [
+        292.4394,
+        291.2892,
+        292.0616
+      ]
+    },
+    {
+      "candidate": "split3_default",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999346150439,
+        "max_abs": 0.03005147393076868,
+        "rms_error": 0.002857716169579401,
+        "relative_l2": 0.00036326745656580514,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999346163971,
+        "max_abs": 0.03005504608154297,
+        "rms_error": 0.002857689655932194,
+        "relative_l2": 0.00036326408764365755,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_input_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32",
+        "DataType.FLOAT32",
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "False"
+      },
+      "program_config": "None",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "product_details": [
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999346280143,
+            "max_abs": 0.030030488967895508,
+            "rms_error": 0.0028575972279113794,
+            "relative_l2": 0.0003632305708804821,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999115124072,
+            "max_abs": 0.031366586685180664,
+            "rms_error": 0.004510241655312329,
+            "relative_l2": 0.0005735022507842523,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.0001220703125,
+          "mean_signed_error": 1.758001837058598e-05
+        },
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999498693577,
+            "max_abs": 2.9934521080576815e-05,
+            "rms_error": 4.230556214604187e-06,
+            "relative_l2": 0.00031799245182938203,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999251524652,
+            "max_abs": 7.019937038421631e-05,
+            "rms_error": 7.165220635418231e-06,
+            "relative_l2": 0.0005387645078267769,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.000244140625,
+          "mean_signed_error": 2.895126099042956e-08
+        },
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999615609586,
+            "max_abs": 4.79178723367113e-08,
+            "rms_error": 5.435409012071038e-09,
+            "relative_l2": 0.0002773904424746421,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999377136402,
+            "max_abs": 7.034395821392536e-08,
+            "rms_error": 9.865641372084704e-09,
+            "relative_l2": 0.000503659497486638,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.0008544921875,
+          "mean_signed_error": 9.047044512317941e-12
+        }
+      ],
+      "replay_equal": true,
+      "traced_component_host_us": 401.7263,
+      "traced_component_samples_us": [
+        402.8474,
+        401.1342,
+        401.7263
+      ]
+    },
+    {
+      "candidate": "split3_lanes16",
+      "versus_cpu_fp64": {
+        "pcc": 0.9999999999999685,
+        "max_abs": 2.5800017880328596e-05,
+        "rms_error": 4.5004081303372764e-06,
+        "relative_l2": 5.720833413824682e-07,
+        "finite": true,
+        "exact_equal": false
+      },
+      "versus_broadcast": {
+        "pcc": 0.9999999999999503,
+        "max_abs": 2.6702880859375e-05,
+        "rms_error": 4.721658597221345e-06,
+        "relative_l2": 6.002082832626321e-07,
+        "finite": true,
+        "exact_equal": false
+      },
+      "input_dtype": "DataType.FLOAT32",
+      "weight_dtype": "DataType.BFLOAT16",
+      "component_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_input_dtypes": [
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16",
+        "DataType.BFLOAT16"
+      ],
+      "matmul_output_dtypes": [
+        "DataType.FLOAT32"
+      ],
+      "output_dtype": "DataType.FLOAT32",
+      "compute_config": {
+        "math_fidelity": "MathFidelity.HiFi4",
+        "math_approx_mode": "False",
+        "fp32_dest_acc_en": "True",
+        "packer_l1_acc": "False"
+      },
+      "program_config": "None",
+      "lane_count": 16,
+      "lane_mask_dtype": "DataType.BFLOAT16",
+      "packed_matmul_rows": 48,
+      "lane_partition_rule": "Row r retains K indices k with k % lane_count == r",
+      "activation_reconstruction": {
+        "pcc": 0.9999999999999998,
+        "max_abs": 0.0,
+        "rms_error": 0.0,
+        "relative_l2": 0.0,
+        "finite": true,
+        "exact_equal": true
+      },
+      "product_details": [
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999999999684,
+            "max_abs": 2.4488545022904873e-05,
+            "rms_error": 4.5030997814868255e-06,
+            "relative_l2": 5.723911992862428e-07,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999763624671,
+            "max_abs": 0.018276214599609375,
+            "rms_error": 0.003270849009364682,
+            "relative_l2": 0.00041590659929200357,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.0006103515625,
+          "mean_signed_error": 4.023676060546655e-06
+        },
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999999999434,
+            "max_abs": 7.733399343123892e-08,
+            "rms_error": 1.1253117063732919e-08,
+            "relative_l2": 8.458477099220584e-07,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999763165681,
+            "max_abs": 5.383789539337158e-05,
+            "rms_error": 5.43280808005868e-06,
+            "relative_l2": 0.00040850161080898843,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.000244140625,
+          "mean_signed_error": 1.0298139276533234e-08
+        },
+        {
+          "versus_cpu": {
+            "pcc": 0.9999999999999967,
+            "max_abs": 2.2879476091475226e-11,
+            "rms_error": 2.1725196095807785e-12,
+            "relative_l2": 1.1087227740324708e-07,
+            "finite": true,
+            "exact_equal": false
+          },
+          "versus_cpu_tf32_output": {
+            "pcc": 0.9999999765707343,
+            "max_abs": 5.959009286016226e-08,
+            "rms_error": 8.080002740044807e-09,
+            "relative_l2": 0.00041249929591568826,
+            "finite": true,
+            "exact_equal": false
+          },
+          "zero_low_13_bit_fraction": 0.000732421875,
+          "mean_signed_error": 9.693948520526896e-13
+        }
+      ],
+      "replay_equal": true,
+      "traced_component_host_us": 347.977,
+      "traced_component_samples_us": [
+        347.977,
+        349.3557,
+        346.9762
+      ]
+    }
+  ],
+  "captured": true,
+  "activation_input": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/qkv4149.pt",
+  "standalone_component_only": true,
+  "layer": 0,
+  "activation_shape": [
+    1,
+    1,
+    1,
+    2816
+  ],
+  "activation_dtype": "DataType.FLOAT32",
+  "weight_shape": [
+    1,
+    1,
+    2816,
+    8192
+  ],
+  "weight_dtype": "DataType.BFLOAT16",
+  "weight_values_exactly_bf16": true,
+  "output_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+  "broadcast_vs_cpu_fp64": {
+    "pcc": 0.9999999999999799,
+    "max_abs": 9.524520343973109e-06,
+    "rms_error": 1.5663185910270916e-06,
+    "relative_l2": 1.9910744698550366e-07,
+    "finite": true,
+    "exact_equal": false
+  }
+}

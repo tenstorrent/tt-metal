@@ -1,0 +1,70 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -267,6 +267,7 @@
+         kv_cache_dtype=ttnn.bfloat16,
+         expert_activation_dtype=None,
+         generalized_router=False,
++        generalized_router_center=False,
+         router_lanes=0,
+         router_terms=2,
+         router_grid=(4, 1),
+@@ -299,6 +300,8 @@
+         residual_sharded=True,
+         **kwargs,
+     ):
++        if generalized_router_center and not generalized_router:
++            raise ValueError("Router score centering requires generalized_router=True")
+         if generalized_router and router_lanes:
+             raise ValueError("Generalized routing and lane-router projection are separate candidates")
+         if qkv_dram and (not qkv_lanes or qkv_separate):
+@@ -329,6 +332,7 @@
+                 str(expert_activation_dtype) if expert_activation_dtype is not None else "unchanged"
+             ),
+             router_selection="generalized_moe_gate" if generalized_router else "fp32_topk",
++            generalized_router_center=generalized_router_center,
+             native_sdpa_dst_full_sync=native_sdpa,
+             residual="float32",
+             expert_gate=str(expert_gate_dtype),
+@@ -437,7 +441,9 @@
+                 attention.weights, o_proj=ttnn.typecast(attention.weights.o_proj, output_weight_dtype)
+             )
+         if generalized_router:
+-            self.layer.moe.router = GeneralizedRouter(self.layer.moe.router, kwargs["mesh_device"])
++            self.layer.moe.router = GeneralizedRouter(
++                self.layer.moe.router, kwargs["mesh_device"], center_logits=generalized_router_center
++            )
+         if router_lanes:
+             self.layer.moe.router = LanePartitionRouter(
+                 self.layer.moe.router,
+@@ -624,9 +630,9 @@
+ 
+ 
+ class GeneralizedRouter:
+-    """Native top-8/softmax gate with fixed face packing and Gemma expert scales."""
+-
+-    def __init__(self, original, mesh):
++    """Native top-8/softmax gate with optional centering before BF16 score conversion."""
++
++    def __init__(self, original, mesh, *, center_logits=False):
+         import torch
+ 
+         if type(original) is not BroadcastRouter:
+@@ -634,6 +640,7 @@
+         if original.source.source.num_experts != 128 or original.source.source.top_k != 8:
+             raise ValueError("Generalized router requires 128 experts and top-8 routing")
+         self.original = original
++        self.center_logits = center_logits
+ 
+         core = ttnn.CoreCoord(0, 0)
+         grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
+@@ -674,6 +681,10 @@
+         scores = ttnn.transpose(ttnn.sum(products, dim=-1, keepdim=True), -2, -1)
+         if tuple(scores.shape) != (1, 1, 1, 128):
+             raise ValueError("Generalized router supports one decode token with 128 logits")
++        if self.center_logits:
++            if scores.dtype != ttnn.float32:
++                raise ValueError("Score-centering control requires FP32 scores before subtraction")
++            scores = ttnn.subtract(scores, ttnn.max(scores, dim=-1, keepdim=True))
+         rounded = ttnn.typecast(scores, ttnn.bfloat16)
+ 
+         padded = ttnn.pad(rounded, [(0, 0), (0, 0), (0, 0), (0, 128)], float("-inf"))

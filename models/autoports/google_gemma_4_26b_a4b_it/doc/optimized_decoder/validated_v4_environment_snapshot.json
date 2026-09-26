@@ -1,0 +1,30 @@
+{
+  "pid": 218578,
+  "command": [
+    "python",
+    "/tmp/gemma_validate_v4.py"
+  ],
+  "environment": {
+    "TT_METAL_DEVICE_PROFILER": null,
+    "TT_METAL_DEVICE_PROFILER_DISPATCH": null,
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_WATCHER_DISABLE": null,
+    "TT_METAL_WATCHER_DISABLE_NOC_SANITIZE": null,
+    "TT_METAL_WATCHER_DISABLE_ASSERT": null,
+    "TT_METAL_WATCHER_DISABLE_PAUSE": null,
+    "TT_METAL_WATCHER_DISABLE_RING_BUFFER": null,
+    "TT_METAL_WATCHER_DISABLE_STACK_USAGE": null,
+    "TT_METAL_DEVICE_PROFILER_NOC_EVENTS": null,
+    "TT_METAL_PROFILE_PERF_COUNTERS": null,
+    "TT_METAL_WATCHER_SKIP_LOGGING": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_NOC": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1": null,
+    "TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1": null,
+    "TT_METAL_WATCHER_DISABLE_WAYPOINT": null,
+    "TT_METAL_WATCHER_TEST_MODE": null
+  },
+  "captured_at_utc": "2026-09-26T14:56:14.816683+00:00",
+  "orchestrator_sha256": "154406059296fd03caf7afe8db6ce14ed61c33f762fbb3c55727c060d649f579",
+  "capture_scope": "whitelisted inherited environment from live validation orchestrator; watcher children add TT_METAL_WATCHER=10 per saved driver",
+  "orchestrator_source": "validated_v4_driver_snapshot.txt"
+}

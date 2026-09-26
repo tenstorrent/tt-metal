@@ -1,0 +1,2223 @@
+{
+  "scope": "Completed candidate host-timing/accuracy evidence; final selected-default device profiles and signoff pending",
+  "pcc_threshold": 0.995,
+  "selected_runtime_sha256": "d6f4d858d7358f6d52332d9d1747a8bdb25cfa359f5c6f5aedde2f2e4f5d9f93",
+  "records": [
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i64k16_layer0.json",
+      "result_sha256": "eb0f8c64c4ef09fcc01fb9c0ffb3f0ce29d6a56c4780de760f127f6310105143",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953367541074596,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1076.1943666666666,
+      "traced_host_samples_us": [
+        1076.0958333333333,
+        1076.1559666666667,
+        1076.52,
+        1076.1943666666666,
+        1077.0266
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i110k16_layer0.json",
+      "result_sha256": "8c3341e663e5239f797dc00ffdb935795e16b87f4a4b50cce2ab8280d645235c",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953367541074596,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1079.6318333333334,
+      "traced_host_samples_us": [
+        1079.2561333333333,
+        1079.6014333333333,
+        1079.6318333333334,
+        1079.9086666666667,
+        1080.4527
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_d1k16_layer0.json",
+      "result_sha256": "a5b6e4338450dbc3cbe31e0317e07e23d38b31544fb9b68942c5017fb44ca3ef",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953647556436336,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1128.5085666666666,
+      "traced_host_samples_us": [
+        1127.7214,
+        1128.5085666666666,
+        1128.5840666666666,
+        1128.5363,
+        1128.1235
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_d2k16_layer0.json",
+      "result_sha256": "97031ab146aae8fda4b1f5603424a1383a4b6ce4d7cf0866284e8b77793b5cb8",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953647556436336,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1103.956,
+      "traced_host_samples_us": [
+        1105.2478,
+        1104.2923,
+        1103.956,
+        1102.7720666666667,
+        1103.1595
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_d1k16_shard_layer0.json",
+      "result_sha256": "a978fe1fb1713e8b0671fd39e515d962c38d4221b7afb9bd0258bcca368ec8c4",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953647556436336,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1122.3780333333334,
+      "traced_host_samples_us": [
+        1121.7966,
+        1122.3780333333334,
+        1122.4368333333334,
+        1121.9495666666667,
+        1122.3947333333333
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i110k16_lofi_layer0.json",
+      "result_sha256": "63bfc1bcd3b3a7b540675147558f6dd1b605f88b3155e659be50af507ac3ca4c",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9952866909155984,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1079.1241333333332,
+      "traced_host_samples_us": [
+        1079.1131,
+        1079.5145333333332,
+        1079.2600666666667,
+        1079.0166,
+        1079.1241333333332
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i110k16_hifi2_layer0.json",
+      "result_sha256": "a7601e2c5246e80f5d8a043d423b40432583fcfdca6abecf22baab06b22cb0fb",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953592218082088,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1078.9600666666668,
+      "traced_host_samples_us": [
+        1078.6174333333333,
+        1078.1792666666668,
+        1079.3408,
+        1078.9600666666668,
+        1079.3588333333332
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_qkv_hifi2_layer0.json",
+      "result_sha256": "e6591be86c1ec3e3cf31a5897b7bcbbd7f44f35f040f880edcbf00f707be32c0",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi2",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953419568746218,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1090.4849666666667,
+      "traced_host_samples_us": [
+        1090.6947,
+        1090.4793,
+        1090.4849666666667,
+        1090.0481333333332,
+        1091.0557333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i64k16_layer5.json",
+      "result_sha256": "780ac835c9efadf2c7452d7491859596b183f28c950db9627efb488e6960a175",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1162.4570666666666,
+      "traced_host_samples_us": [
+        1162.1628666666666,
+        1162.2269666666666,
+        1163.0862666666667,
+        1162.4570666666666,
+        1163.2272
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i110k16_layer5.json",
+      "result_sha256": "11c3b8e8747578e12a20894836d93b0275c47cb0829df5292157831944bceffa",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1161.8892333333333,
+      "traced_host_samples_us": [
+        1161.8892333333333,
+        1161.6962,
+        1161.2029,
+        1162.0569,
+        1162.6624
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_d1k16_layer5.json",
+      "result_sha256": "f0c3d6f30e82d5e155c55277925bed75151b46c18195580b1afaa9032bf013d4",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9953176769466417,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1256.5268666666666,
+      "traced_host_samples_us": [
+        1256.9881,
+        1256.5268666666666,
+        1256.5322333333334,
+        1256.0736666666667,
+        1256.0880333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_d2k16_layer5.json",
+      "result_sha256": "b78abf8602ee28180cca167891f498622c5b532c37088a4b2f8c25df7aaeed85",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9953176769466417,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1199.5475,
+      "traced_host_samples_us": [
+        1200.0177333333334,
+        1199.0809333333334,
+        1198.0225666666668,
+        1199.5475,
+        1200.0207333333333
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_d1k16_shard_layer5.json",
+      "result_sha256": "cb13fceb576d1a7ff228adc48d34a3e056c6b5d14e8c9ee171637a4a536d3553",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9953176769466417,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1249.8239,
+      "traced_host_samples_us": [
+        1249.1944,
+        1249.8239,
+        1250.0476666666666,
+        1250.0957666666666,
+        1249.7648
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i110k16_lofi_layer5.json",
+      "result_sha256": "ffe09ff9c6e988fe589f31305db5e3d94bc36ec7a99a487b451dd191e0504d25",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952069096588076,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1161.5576,
+      "traced_host_samples_us": [
+        1161.8374333333334,
+        1160.7213333333334,
+        1161.5576,
+        1161.9423333333334,
+        1159.8453333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_i110k16_hifi2_layer5.json",
+      "result_sha256": "1a8e21bc65eb08679eba4a7ab257c1004295e11860ae6019220c214e8d77c5da",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952810128043733,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1161.0565333333334,
+      "traced_host_samples_us": [
+        1161.3017,
+        1160.8438333333334,
+        1160.8141,
+        1161.0882666666666,
+        1161.0565333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_direct_output_commands.json",
+      "journal_sha256": "406956ac522ed8b9357e91abfa4a066bcaef2a5256251dd6aa19a405b430d574",
+      "result": "actual_direct_output_qkv_hifi2_layer5.json",
+      "result_sha256": "154a363eda6583e5f71ba77b7e47a3a7f08ba3f7e541b0ffab1185d30a696bf4",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi2",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22
+      },
+      "runtime_sha256": "4a9050497d5d4734eb40715d8942adfc33413b958358a209dbbd31c9132a146e",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9953192070094833,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1180.6401333333333,
+      "traced_host_samples_us": [
+        1180.8629333333333,
+        1180.6401333333333,
+        1180.0800666666667,
+        1181.7088333333334,
+        1180.5416
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_base_layer0.json",
+      "result_sha256": "30790e1542e66ffa35477db258cc7e247df245ea978c7c88303b33bbd9b64a88",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ]
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953367541074596,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1076.4916666666666,
+      "traced_host_samples_us": [
+        1076.8523333333333,
+        1076.5922,
+        1076.1026,
+        1076.4916666666666,
+        1076.2669
+      ],
+      "prefill_host_median_us": 224043.243,
+      "prefill_host_samples_us": [
+        224724.722,
+        223707.433,
+        224043.243
+      ]
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_out_k32_layer0.json",
+      "result_sha256": "d7fd14b03d5a7ae553bf9d01efdced664da1ae9a64908149c71ae4dc6626b26b",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_block_w": 32
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953367541074596,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1079.6155333333334,
+      "traced_host_samples_us": [
+        1079.7194333333334,
+        1079.322,
+        1079.7939,
+        1079.6155333333334,
+        1079.5738
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_out_l1_layer0.json",
+      "result_sha256": "b2d6eae4ddc1c8d51d8099a3d349611735b3296d80b72eb0de1d2ab4f585d0e2",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_l1": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953367541074596,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1074.7906333333333,
+      "traced_host_samples_us": [
+        1074.4740666666667,
+        1074.7906333333333,
+        1075.1309666666666,
+        1074.9576333333334,
+        1074.6791
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_out_lofi_layer0.json",
+      "result_sha256": "2c7d13ab15b94e20e7a3769f0dbfc9953db0047343dd91a4fec6c584c0314493",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_fidelity": "LoFi"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9952866909155984,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1075.5420666666666,
+      "traced_host_samples_us": [
+        1075.5420666666666,
+        1075.165,
+        1075.6973333333333,
+        1075.6813,
+        1075.3439666666666
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_expert_hifi2_layer0.json",
+      "result_sha256": "cf04abe3b40e7383647e736b05a022b965125ba7ef897ff2afebb0f6bfae2575",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "expert_fidelity": "HiFi2"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9952746517209107,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1081.5744666666667,
+      "traced_host_samples_us": [
+        1081.851,
+        1081.5744666666667,
+        1081.7574666666667,
+        1081.2595333333334,
+        1081.2658666666666
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_shared_hifi2_layer0.json",
+      "result_sha256": "75a152fa5761e9ba59f72290792f1a413aaf03ac3de1d8723fdd4b4d5b78e6b3",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "shared_fidelity": "HiFi2"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.99548332053303,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1100.7673666666667,
+      "traced_host_samples_us": [
+        1100.5599666666667,
+        1099.3893666666668,
+        1100.9977666666666,
+        1101.1851333333334,
+        1100.7673666666667
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_prefill_2d_layer0.json",
+      "result_sha256": "6e57cad2ba36a2e48634076e26fff2a518b10253c4c19151e843b15921267d53",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "dense_prefill_2d": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "prefill_pcc": 0.9986693851431688,
+      "decode_min_pcc": 0.9953367541074596,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1076.2673,
+      "traced_host_samples_us": [
+        1076.8647333333333,
+        1076.7645333333332,
+        1075.6110333333334,
+        1076.2673,
+        1076.2636
+      ],
+      "prefill_host_median_us": 224777.072,
+      "prefill_host_samples_us": [
+        225232.45,
+        224777.072,
+        224647.976
+      ]
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_base_layer5.json",
+      "result_sha256": "d5c34337f8b6722bf14ee1be67385ef3a3872caa437092ac03d3e1d5b2197e88",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ]
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1162.2684,
+      "traced_host_samples_us": [
+        1161.5504,
+        1162.2684,
+        1162.5623,
+        1161.9304333333334,
+        1162.7687
+      ],
+      "prefill_host_median_us": 194209.884,
+      "prefill_host_samples_us": [
+        194603.344,
+        194106.096,
+        194209.884
+      ]
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_out_k32_layer5.json",
+      "result_sha256": "0d6c3ed785bf45bc095feb541a6d0d67c9a798a0411bbe3aa96ecd1bb87dba18",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_block_w": 32
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1165.9984666666667,
+      "traced_host_samples_us": [
+        1165.7159333333334,
+        1167.1276333333333,
+        1165.917,
+        1166.2255666666667,
+        1165.9984666666667
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_out_l1_layer5.json",
+      "result_sha256": "5825145662b8ec01f8bab6d22b4e4c8aec35f8b9aa7e50caeb06209b876f3b1c",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_l1": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1160.9534666666666,
+      "traced_host_samples_us": [
+        1161.2046333333333,
+        1160.7995333333333,
+        1161.4006666666667,
+        1160.9534666666666,
+        1160.9047
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_out_lofi_layer5.json",
+      "result_sha256": "155fa3c5e19e06ee46fa2c1fcfad96dbadd6d34cceecb0d10e362b05dffd4d3f",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_fidelity": "LoFi"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952069096588076,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1161.6518,
+      "traced_host_samples_us": [
+        1160.5419666666667,
+        1161.7379666666666,
+        1161.9660333333334,
+        1161.1338,
+        1161.6518
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_expert_hifi2_layer5.json",
+      "result_sha256": "101b1d056d895ab1ce2767fae5baa1eced33fb3188bcd493eb9aa44df3feb818",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "expert_fidelity": "HiFi2"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1167.0319666666667,
+      "traced_host_samples_us": [
+        1166.9805666666666,
+        1167.3786333333333,
+        1167.4310666666668,
+        1166.5457,
+        1167.0319666666667
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_shared_hifi2_layer5.json",
+      "result_sha256": "074a60ac2ef3bf4c39e1c5197ec61aa199aae3a48220c79cfd0e5b3006dbc798",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "shared_fidelity": "HiFi2"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1190.4869666666666,
+      "traced_host_samples_us": [
+        1190.4869666666666,
+        1190.0467666666666,
+        1190.8987333333334,
+        1191.0477,
+        1190.3119666666666
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_prefill_2d_layer5.json",
+      "result_sha256": "9a3ae67f8af6f0e5b7bcdb3885eee6cb9b64e28c379114b97e3e44a77ae8659d",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "dense_prefill_2d": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1162.2751666666666,
+      "traced_host_samples_us": [
+        1161.8339666666666,
+        1162.4956,
+        1161.9829333333332,
+        1162.6802666666667,
+        1162.2751666666666
+      ],
+      "prefill_host_median_us": 194071.815,
+      "prefill_host_samples_us": [
+        194420.319,
+        194071.815,
+        193963.94
+      ]
+    },
+    {
+      "journal": "actual_static_tune_commands.json",
+      "journal_sha256": "620d245d126d495e61bba9d9ba3aca020d91af115f8ecbf9c49401f04b792323",
+      "result": "actual_static_tune_shared_r2_layer5.json",
+      "result_sha256": "7a730ff16c146f467a2d534cb567a52cd57bf8e66ee99d95bfd69fa03a241dde",
+      "returncode": 0,
+      "workload": {
+        "length": 4096,
+        "steps": 128
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "shared_readers": 2
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "prefill_pcc": 0.9988463594264674,
+      "decode_min_pcc": 0.9952219617392226,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1158.4368,
+      "traced_host_samples_us": [
+        1159.9153,
+        1158.4368,
+        1158.3506666666667,
+        1159.2373666666667,
+        1157.8841
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_base_layer0.json",
+      "result_sha256": "6048cf966682013e7efd0b33199bd6ae5e4db93c393b1c6c1ddd029643160289",
+      "returncode": 0,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_l1": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_1025_512.pt",
+      "input_fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "prefill_pcc": 0.998591960372716,
+      "decode_min_pcc": 0.9955467814517811,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1065.6646666666666,
+      "traced_host_samples_us": [
+        1066.3279333333332,
+        1066.7414,
+        1065.1680666666666,
+        1065.6646666666666,
+        1065.5177333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_out_lofi_layer0.json",
+      "result_sha256": "fc2a52cdc713b2210aecdfa5d696542c899f555daf560047fc585b7a4e403eb9",
+      "returncode": 0,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_l1": true,
+        "output_fidelity": "LoFi"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_1025_512.pt",
+      "input_fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "prefill_pcc": 0.998591960372716,
+      "decode_min_pcc": 0.9954903770052473,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1066.5456333333334,
+      "traced_host_samples_us": [
+        1067.3074333333334,
+        1067.1835333333333,
+        1066.3312333333333,
+        1065.8827,
+        1066.5456333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_qkv_hifi2_layer0.json",
+      "result_sha256": "a56437614dba3c91a22ac45bd68536d49f88508d75b506222d8f0f032dd4d905",
+      "returncode": 0,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi2",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_l1": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_1025_512.pt",
+      "input_fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "prefill_pcc": 0.998591960372716,
+      "decode_min_pcc": 0.9955236049581246,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1064.9806333333333,
+      "traced_host_samples_us": [
+        1064.2986666666666,
+        1064.9806333333333,
+        1065.8713,
+        1065.1109,
+        1064.7375
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_qkv4_layer0.json",
+      "result_sha256": "99fce180d36e43116702b8304e6a4dadc4a0b4f130b3ad17862b2f6b913e9ef1",
+      "returncode": 1,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat4_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_l1": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_1025_512.pt",
+      "input_fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "prefill_pcc": 0.997491403073955,
+      "decode_min_pcc": 0.9938316991877765,
+      "decode_failure_positions": [
+        1082,
+        1118,
+        1241,
+        1348,
+        1386,
+        1511
+      ],
+      "passed": false,
+      "traced_host_median_us": 1050.2953,
+      "traced_host_samples_us": [
+        1050.4659333333334,
+        1049.8254,
+        1050.8650333333333,
+        1050.2953,
+        1050.1283333333333
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_out4_layer0.json",
+      "result_sha256": "195ccb4361f9de1fa9c35fb8bdcb323a4df57533d9e4d397173f283acfb17960",
+      "returncode": 1,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat4_b",
+        "expert_gate_dtype": "bfloat8_b",
+        "sharded_norm_site": "all",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "HiFi4",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "generalized_router_center": true,
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          8,
+          8
+        ],
+        "output_l1": true
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_1025_512.pt",
+      "input_fixture_sha256": "12820c41eb01a5be411eaef4a6a69273cf78f107af5c3e7304c9ac1daee62ad2",
+      "prefill_pcc": 0.9979087956154628,
+      "decode_min_pcc": 0.9931181607174075,
+      "decode_failure_positions": [
+        1082,
+        1118,
+        1192,
+        1348,
+        1386,
+        1459
+      ],
+      "passed": false,
+      "traced_host_median_us": 1063.0455333333334,
+      "traced_host_samples_us": [
+        1063.0455333333334,
+        1063.5341333333333,
+        1062.7697,
+        1062.8051,
+        1063.3287333333333
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_base_layer5.json",
+      "result_sha256": "cc789338f598a97d3c177e5b806849cb099077c8b651b4659157275c386bcd77",
+      "returncode": 0,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_l1": true,
+        "shared_readers": 2
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_1025_512.pt",
+      "input_fixture_sha256": "df7b191402921a23224be6a3e1913b9a81a5c765dab713c5c053eb155d48eb46",
+      "prefill_pcc": 0.9989762661875508,
+      "decode_min_pcc": 0.9962269530486224,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1105.7745666666667,
+      "traced_host_samples_us": [
+        1105.5143666666668,
+        1106.3827,
+        1105.3855,
+        1105.7745666666667,
+        1105.7862333333333
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_out_lofi_layer5.json",
+      "result_sha256": "254b763db61684bc921111b32457933d91455448395998f184177b9012c64356",
+      "returncode": 0,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_l1": true,
+        "shared_readers": 2,
+        "output_fidelity": "LoFi"
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_1025_512.pt",
+      "input_fixture_sha256": "df7b191402921a23224be6a3e1913b9a81a5c765dab713c5c053eb155d48eb46",
+      "prefill_pcc": 0.9989762661875508,
+      "decode_min_pcc": 0.9963322651759046,
+      "decode_failure_positions": [],
+      "passed": true,
+      "traced_host_median_us": 1104.5655666666667,
+      "traced_host_samples_us": [
+        1104.7105,
+        1105.1556666666668,
+        1104.5655666666667,
+        1104.2469333333333,
+        1104.106
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_qkv4_layer5.json",
+      "result_sha256": "602d89da54d969e2d62ef020ab250b9e44c9452c4443def5069dfa6364d974ea",
+      "returncode": 1,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat4_b",
+        "output_weight_dtype": "bfloat8_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_l1": true,
+        "shared_readers": 2
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_1025_512.pt",
+      "input_fixture_sha256": "df7b191402921a23224be6a3e1913b9a81a5c765dab713c5c053eb155d48eb46",
+      "prefill_pcc": 0.997669516354997,
+      "decode_min_pcc": 0.9892035132389655,
+      "decode_failure_positions": [
+        1027,
+        1050,
+        1059,
+        1104,
+        1119,
+        1137,
+        1156,
+        1176,
+        1234,
+        1248,
+        1291,
+        1316,
+        1378,
+        1406,
+        1409,
+        1507
+      ],
+      "passed": false,
+      "traced_host_median_us": 1088.0798,
+      "traced_host_samples_us": [
+        1087.0271333333333,
+        1087.5928666666666,
+        1088.0798,
+        1088.5633666666668,
+        1088.1018666666666
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    },
+    {
+      "journal": "actual_final_precision_commands.json",
+      "journal_sha256": "005cdf6420b4ea3385f325fcdab8261a8890909e49959ff002390614d68934b9",
+      "result": "actual_final_precision_out4_layer5.json",
+      "result_sha256": "97339befead5f8948a7746e9f6f3f99cfdc7112bcd3f6f69708a09d95b258843",
+      "returncode": 1,
+      "workload": {
+        "length": 1025,
+        "steps": 512
+      },
+      "requested_overrides": {
+        "native_sdpa": true,
+        "kv_cache_dtype": "bfloat8_b",
+        "qkv_weight_dtype": "bfloat8_b",
+        "output_weight_dtype": "bfloat4_b",
+        "expert_gate_dtype": "bfloat4_b",
+        "qkv_direct_dtype": "float32",
+        "qkv_fidelity": "LoFi",
+        "generalized_router": true,
+        "prefill_dtype": "bfloat4_b",
+        "prefill_down_dtype": "bfloat4_b",
+        "prefill_attention_fidelity": "LoFi",
+        "expert_activation_dtype": "bfloat8_b",
+        "shared_dtype": "bfloat4_b",
+        "shared_down_dtype": "bfloat4_b",
+        "native_sdpa_fidelity": "LoFi",
+        "qkv_direct_cleanup": true,
+        "qkv_grid": [
+          11,
+          10
+        ],
+        "qkv_subblock_w": 0,
+        "expert_block_w": 22,
+        "output_grid": [
+          11,
+          10
+        ],
+        "output_l1": true,
+        "shared_readers": 2
+      },
+      "runtime_sha256": "51d24cd52a136a4095dfd74977dc4dda626437752f97a814cd79c6359ec4b868",
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_1025_512.pt",
+      "input_fixture_sha256": "df7b191402921a23224be6a3e1913b9a81a5c765dab713c5c053eb155d48eb46",
+      "prefill_pcc": 0.9978580510595935,
+      "decode_min_pcc": 0.9921206682039142,
+      "decode_failure_positions": [
+        1104,
+        1234,
+        1267,
+        1291
+      ],
+      "passed": false,
+      "traced_host_median_us": 1088.7263333333333,
+      "traced_host_samples_us": [
+        1089.9276,
+        1088.6455,
+        1088.1933,
+        1088.7263333333333,
+        1089.0212333333334
+      ],
+      "prefill_host_median_us": null,
+      "prefill_host_samples_us": []
+    }
+  ]
+}

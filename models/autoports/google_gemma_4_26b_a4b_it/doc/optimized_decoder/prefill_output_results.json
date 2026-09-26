@@ -1,0 +1,3182 @@
+{
+  "status": "candidate selection evidence on b513; selected prefill projection subsequently integrated in 3d51014f; cumulative validation and maximum-context all-sampled-row validation pending",
+  "scope": "Recorded actual-input decoder-layer 4096 prefill plus 128 traced decode positions. Host timing is full prefill, not isolated output projection or device time.",
+  "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+  "model": "google/gemma-4-26B-A4B-it",
+  "weight_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "probe": {
+    "path": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_optimized_prefill_output.py",
+    "sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd"
+  },
+  "candidate_patch": {
+    "path": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_projection.patch",
+    "sha256": "8a011638a61c0cf92c3a0d88ad23456da699d90eb329fd94af0c8ee5e5239371",
+    "status": "Opt-in proposal used for integration; initial proposal defaults do not themselves select K16 LoFi. Current runtime 3d51014f selects grid11x8/K16/LoFi/DRAM; do not reapply."
+  },
+  "selected_policy_plan": {
+    "attention_kinds": [
+      "sliding_attention",
+      "full_attention"
+    ],
+    "grid": [
+      11,
+      8
+    ],
+    "k_block": 16,
+    "fidelity": "LoFi",
+    "input_memory": "inherit DRAM interleaved",
+    "input_l1": false,
+    "output_dtype": "float32",
+    "output_memory": "DRAM interleaved",
+    "weight_dtype": "bfloat8_b",
+    "fp32_dest_acc_en": true,
+    "math_approx_mode": false,
+    "packer_l1_acc": false,
+    "dst_full_sync_en": false,
+    "decode_path": "unchanged"
+  },
+  "timing_method": {
+    "source": "tests/run_decoder.py:179-189",
+    "samples_per_case": 3,
+    "statistic": "median",
+    "measurement": "perf_counter_ns around complete device-only prefill plus final synchronize; prior synchronization and output deallocation are outside timed interval",
+    "warmup": "initial prefill and program-cache-guard prefill precede samples",
+    "limitations": [
+      "sequential short sample sets; not randomized or interleaved replicate experiments",
+      "range/MAD describe samples, not confidence intervals",
+      "does not establish absolute optimum or device-only speedup",
+      "nearby K16/K32 and DRAM/L1 differences can be smaller than within-case spread"
+    ]
+  },
+  "journals": [
+    {
+      "artifact": "prefill_output_commands.json",
+      "sha256": "adf3a7561a8971f12d8c0434547268c4f510dc5ba3cb2f59be650f940259b52c",
+      "command_count": 18,
+      "all_returncodes_zero": true
+    },
+    {
+      "artifact": "prefill_output_cross_commands.json",
+      "sha256": "c4ebac0da9abf2aecc6bde5ecbaa2d532feaa23623df555c1f3c2814bb7c83c8",
+      "command_count": 8,
+      "all_returncodes_zero": true
+    },
+    {
+      "artifact": "prefill_output_l1_commands.json",
+      "sha256": "19054a8c9955da9036518b5370f1016526c2767491a8ed257a2d2826df80e263",
+      "command_count": 2,
+      "all_returncodes_zero": true
+    }
+  ],
+  "journal_command_count": 28,
+  "all_recorded_cases_pass": true,
+  "matched_comparisons": {
+    "0": {
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "selected_dram": "prefill_output_k16_lofi_layer0.json",
+      "l1_control": "prefill_output_selected_l1_layer0.json",
+      "selected_vs_auto_savings_us": 2442.872000000003,
+      "selected_vs_auto_reduction_percent": 1.085080517770523,
+      "l1_minus_dram_median_us": -15.195999999996275,
+      "l1_minus_dram_percent": -0.00682383846086369,
+      "dram_sample_range_us": [
+        222338.546,
+        223275.888
+      ],
+      "l1_sample_range_us": [
+        222598.864,
+        223356.976
+      ],
+      "sample_ranges_overlap": true,
+      "unmodified_policy_fields_match_auto": true,
+      "all_decode_position_checks_equal_auto": true,
+      "maximum_context_gate": "pending"
+    },
+    "5": {
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "selected_dram": "prefill_output_k16_lofi_layer5.json",
+      "l1_control": "prefill_output_selected_l1_layer5.json",
+      "selected_vs_auto_savings_us": 5027.71100000001,
+      "selected_vs_auto_reduction_percent": 2.5767470147146603,
+      "l1_minus_dram_median_us": 232.40299999999115,
+      "l1_minus_dram_percent": 0.12225892672366996,
+      "dram_sample_range_us": [
+        189985.102,
+        190994.18
+      ],
+      "l1_sample_range_us": [
+        190142.923,
+        191011.375
+      ],
+      "sample_ranges_overlap": true,
+      "unmodified_policy_fields_match_auto": true,
+      "all_decode_position_checks_equal_auto": true,
+      "maximum_context_gate": "pending"
+    }
+  },
+  "cases": [
+    {
+      "artifact": "prefill_output_baseline_auto_layer0.json",
+      "artifact_sha256": "fa3884b183c49f44932ee6492c4007489ecf0f2fc01ca91caa12abfdf2f798e0",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 0,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-mode",
+        "auto",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_baseline_auto_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "auto",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        225341.113,
+        225132.786,
+        225116.475
+      ],
+      "prefill_host_statistics_us": {
+        "median": 225132.786,
+        "minimum": 225116.475,
+        "maximum": 225341.113,
+        "range": 224.6380000000063,
+        "median_absolute_deviation": 16.31099999998696
+      },
+      "traced_decode_host_us": [
+        796.4280666666667,
+        796.1859333333333,
+        796.3896666666667,
+        796.3055,
+        796.1879666666666
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "None"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": 0.0,
+      "host_reduction_vs_auto_percent": 0.0
+    },
+    {
+      "artifact": "prefill_output_k2_hifi4_layer0.json",
+      "artifact_sha256": "59409ee0254ebc5aa6864bab0e1b9f31c0eb5d2ed73ca4b5e30f36e3d489313e",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 1,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "2",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k2_hifi4_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 2,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        225016.654,
+        223893.165,
+        224074.701
+      ],
+      "prefill_host_statistics_us": {
+        "median": 224074.701,
+        "minimum": 223893.165,
+        "maximum": 225016.654,
+        "range": 1123.4890000000014,
+        "median_absolute_deviation": 181.53599999999278
+      },
+      "traced_decode_host_us": [
+        796.9450666666667,
+        797.2676333333334,
+        795.9875666666667,
+        796.4504333333333,
+        796.0359666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1058.0849999999919,
+      "host_reduction_vs_auto_percent": 0.46998263504809645
+    },
+    {
+      "artifact": "prefill_output_k4_hifi4_layer0.json",
+      "artifact_sha256": "67a6803f7e7cdc019dddb99c5645eb40c1cf0f8f8ef25635f078df8d414996b3",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 2,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_hifi4_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        224426.5,
+        223806.149,
+        223656.604
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223806.149,
+        "minimum": 223656.604,
+        "maximum": 224426.5,
+        "range": 769.8960000000079,
+        "median_absolute_deviation": 149.5450000000128
+      },
+      "traced_decode_host_us": [
+        795.7103666666667,
+        796.3405333333334,
+        796.0770666666666,
+        796.7734,
+        797.1267
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1326.636999999988,
+      "host_reduction_vs_auto_percent": 0.5892686816392828
+    },
+    {
+      "artifact": "prefill_output_k8_hifi4_layer0.json",
+      "artifact_sha256": "ead44517a0bbd180ec85b60be3466f30a7a5ca27f7ac86262993792c59472d60",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 3,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "8",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k8_hifi4_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 8,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        224186.503,
+        223556.383,
+        223147.063
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223556.383,
+        "minimum": 223147.063,
+        "maximum": 224186.503,
+        "range": 1039.4400000000023,
+        "median_absolute_deviation": 409.320000000007
+      },
+      "traced_decode_host_us": [
+        795.9354666666667,
+        797.0402333333334,
+        797.1788333333334,
+        796.5997333333333,
+        796.3395666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1576.4029999999912,
+      "host_reduction_vs_auto_percent": 0.7002103194334348
+    },
+    {
+      "artifact": "prefill_output_k16_hifi4_layer0.json",
+      "artifact_sha256": "1b4b389781f8dacfcef3787bebba93664e446442552b936ae382308021ebf1c9",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 4,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k16_hifi4_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        224237.03,
+        223320.102,
+        223181.238
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223320.102,
+        "minimum": 223181.238,
+        "maximum": 224237.03,
+        "range": 1055.7919999999867,
+        "median_absolute_deviation": 138.8640000000014
+      },
+      "traced_decode_host_us": [
+        796.1034666666667,
+        796.0807,
+        795.7464333333334,
+        796.7864,
+        795.4946333333334
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1812.6839999999793,
+      "host_reduction_vs_auto_percent": 0.8051621588336669
+    },
+    {
+      "artifact": "prefill_output_k32_hifi4_layer0.json",
+      "artifact_sha256": "4501d08ffe61f2812824fe47ff1007389af1e682c1f3a7e97f3375e5b925a8d1",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 5,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "32",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k32_hifi4_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 32,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223596.689,
+        223338.428,
+        223259.116
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223338.428,
+        "minimum": 223259.116,
+        "maximum": 223596.689,
+        "range": 337.57300000000396,
+        "median_absolute_deviation": 79.31200000000536
+      },
+      "traced_decode_host_us": [
+        796.2731,
+        797.1220666666667,
+        795.8175666666667,
+        796.0764,
+        796.3839666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=32,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1794.3579999999783,
+      "host_reduction_vs_auto_percent": 0.7970220738973035
+    },
+    {
+      "artifact": "prefill_output_k4_lofi_layer0.json",
+      "artifact_sha256": "8783915b0e08195771c0954e139bd04db231f16e773d177dbdf7337318041bd0",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 6,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_lofi_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.99915285133721,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223730.924,
+        223032.645,
+        222799.42
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223032.645,
+        "minimum": 222799.42,
+        "maximum": 223730.924,
+        "range": 931.5039999999863,
+        "median_absolute_deviation": 233.22499999997672
+      },
+      "traced_decode_host_us": [
+        796.0723666666667,
+        796.1405,
+        796.1662,
+        796.4424,
+        796.7971
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -2100.1410000000033,
+      "host_reduction_vs_auto_percent": 0.9328454719162953
+    },
+    {
+      "artifact": "prefill_output_k4_hifi2_layer0.json",
+      "artifact_sha256": "91a8207eb1f71e2c3682a859b163e90c132145f3514f36c318e02874ec823581",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 7,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--prefill-output-fidelity",
+        "HiFi2",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_hifi2_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi2",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991603933468373,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        224202.582,
+        223512.959,
+        223535.893
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223535.893,
+        "minimum": 223512.959,
+        "maximum": 224202.582,
+        "range": 689.6229999999923,
+        "median_absolute_deviation": 22.934000000008382
+      },
+      "traced_decode_host_us": [
+        795.9437666666666,
+        796.0092333333333,
+        796.0543333333334,
+        797.1878333333333,
+        796.9704333333333
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi2",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1596.8929999999818,
+      "host_reduction_vs_auto_percent": 0.7093116148795768
+    },
+    {
+      "artifact": "prefill_output_k4_hifi4_l1_layer0.json",
+      "artifact_sha256": "f006728a7a5fe2fb3644ab8a1b74feb72b2424befbfc8a04c788ef6f705b6923",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 8,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--prefill-output-input-memory",
+        "l1",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_hifi4_l1_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "l1"
+      },
+      "prefill_pcc": 0.9991598414846561,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        224481.674,
+        223681.099,
+        223746.935
+      ],
+      "prefill_host_statistics_us": {
+        "median": 223746.935,
+        "minimum": 223681.099,
+        "maximum": 224481.674,
+        "range": 800.5750000000116,
+        "median_absolute_deviation": 65.83600000001024
+      },
+      "traced_decode_host_us": [
+        796.9113,
+        797.5478666666667,
+        796.4257,
+        796.7927333333333,
+        795.8355666666666
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -1385.850999999995,
+      "host_reduction_vs_auto_percent": 0.6155704926958063
+    },
+    {
+      "artifact": "prefill_output_baseline_auto_layer5.json",
+      "artifact_sha256": "ee90bdf4e3770755b3ebdf4fdbf83a67201014312e1220189811454b8b31a6c5",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 9,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-mode",
+        "auto",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_baseline_auto_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "auto",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        195898.61,
+        194793.696,
+        195118.534
+      ],
+      "prefill_host_statistics_us": {
+        "median": 195118.534,
+        "minimum": 194793.696,
+        "maximum": 195898.61,
+        "range": 1104.9139999999898,
+        "median_absolute_deviation": 324.8380000000179
+      },
+      "traced_decode_host_us": [
+        864.2118,
+        864.9388666666666,
+        863.5111333333333,
+        864.304,
+        863.9967333333333
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "None"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": 0.0,
+      "host_reduction_vs_auto_percent": 0.0
+    },
+    {
+      "artifact": "prefill_output_k2_hifi4_layer5.json",
+      "artifact_sha256": "e46222c0f3b4bc0b71400c7aa2924d79a566d851503265d250f4c256fea2aba0",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 10,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "2",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k2_hifi4_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 2,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        193916.525,
+        193287.808,
+        193062.207
+      ],
+      "prefill_host_statistics_us": {
+        "median": 193287.808,
+        "minimum": 193062.207,
+        "maximum": 193916.525,
+        "range": 854.3179999999993,
+        "median_absolute_deviation": 225.6009999999951
+      },
+      "traced_decode_host_us": [
+        865.3312666666667,
+        865.2153666666667,
+        864.6950666666667,
+        864.8413333333333,
+        865.186
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=2,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -1830.7260000000242,
+      "host_reduction_vs_auto_percent": 0.938263507043377
+    },
+    {
+      "artifact": "prefill_output_k4_hifi4_layer5.json",
+      "artifact_sha256": "0995936e3c0e95a5ebcad26334bdaecf2fc4f39ab1e6bfc0b9957aee751df538",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 11,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_hifi4_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        192813.603,
+        191856.09,
+        192112.119
+      ],
+      "prefill_host_statistics_us": {
+        "median": 192112.119,
+        "minimum": 191856.09,
+        "maximum": 192813.603,
+        "range": 957.5130000000063,
+        "median_absolute_deviation": 256.02900000000955
+      },
+      "traced_decode_host_us": [
+        864.1977666666667,
+        864.0234666666666,
+        864.0929,
+        863.5916333333333,
+        863.9239333333334
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -3006.415000000008,
+      "host_reduction_vs_auto_percent": 1.5408146721725615
+    },
+    {
+      "artifact": "prefill_output_k8_hifi4_layer5.json",
+      "artifact_sha256": "2c3a9ecee3d20a0fe20f07518f98278d08eeccdecd26f2e535b2a02be5a551c8",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 12,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "8",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k8_hifi4_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 8,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        192536.727,
+        191092.426,
+        191832.315
+      ],
+      "prefill_host_statistics_us": {
+        "median": 191832.315,
+        "minimum": 191092.426,
+        "maximum": 192536.727,
+        "range": 1444.3010000000068,
+        "median_absolute_deviation": 704.4120000000112
+      },
+      "traced_decode_host_us": [
+        864.666,
+        863.9266,
+        863.4356666666666,
+        864.0852333333333,
+        863.9780333333333
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -3286.219000000012,
+      "host_reduction_vs_auto_percent": 1.684216733608716
+    },
+    {
+      "artifact": "prefill_output_k16_hifi4_layer5.json",
+      "artifact_sha256": "11ceb7d3ad5a590aa2e16e714c1df56aff5b512e99ab6fa0edd0225cf71db895",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 13,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k16_hifi4_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        192099.624,
+        191573.212,
+        191224.878
+      ],
+      "prefill_host_statistics_us": {
+        "median": 191573.212,
+        "minimum": 191224.878,
+        "maximum": 192099.624,
+        "range": 874.7460000000137,
+        "median_absolute_deviation": 348.33400000000256
+      },
+      "traced_decode_host_us": [
+        864.842,
+        863.777,
+        864.6279333333333,
+        864.1680666666666,
+        864.5057
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -3545.3220000000147,
+      "host_reduction_vs_auto_percent": 1.817009346738949
+    },
+    {
+      "artifact": "prefill_output_k32_hifi4_layer5.json",
+      "artifact_sha256": "ea1f2749847889536f356cd730e55a69c9c7f3a2fee229f86c717bac69191553",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 14,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "32",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k32_hifi4_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 32,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        191977.947,
+        191282.605,
+        190976.103
+      ],
+      "prefill_host_statistics_us": {
+        "median": 191282.605,
+        "minimum": 190976.103,
+        "maximum": 191977.947,
+        "range": 1001.8439999999828,
+        "median_absolute_deviation": 306.5020000000077
+      },
+      "traced_decode_host_us": [
+        865.1410333333333,
+        864.5705666666667,
+        863.8282,
+        864.0158666666666,
+        865.0802666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=32,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -3835.9290000000037,
+      "host_reduction_vs_auto_percent": 1.9659480426395597
+    },
+    {
+      "artifact": "prefill_output_k4_lofi_layer5.json",
+      "artifact_sha256": "3c2b15a21c9590262321cf4cfe027879887c3f979e256c56535bcbdf8d5b81d2",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 15,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_lofi_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991236270227776,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        191795.694,
+        191045.919,
+        190680.416
+      ],
+      "prefill_host_statistics_us": {
+        "median": 191045.919,
+        "minimum": 190680.416,
+        "maximum": 191795.694,
+        "range": 1115.2779999999912,
+        "median_absolute_deviation": 365.502999999997
+      },
+      "traced_decode_host_us": [
+        863.6259333333334,
+        864.0981333333333,
+        863.0364666666667,
+        864.3489333333333,
+        863.8105666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -4072.61500000002,
+      "host_reduction_vs_auto_percent": 2.0872517420615817
+    },
+    {
+      "artifact": "prefill_output_k4_hifi2_layer5.json",
+      "artifact_sha256": "e5b8191a8b87a5bf824f488550539729c635351b6f787ce65a6f4a3ea2da8f86",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 16,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--prefill-output-fidelity",
+        "HiFi2",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_hifi2_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi2",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991324146537388,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        192014.222,
+        191352.263,
+        191395.536
+      ],
+      "prefill_host_statistics_us": {
+        "median": 191395.536,
+        "minimum": 191352.263,
+        "maximum": 192014.222,
+        "range": 661.9590000000026,
+        "median_absolute_deviation": 43.272999999986496
+      },
+      "traced_decode_host_us": [
+        864.1306333333333,
+        863.8420666666667,
+        863.4503333333333,
+        864.0605333333333,
+        863.9219
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi2",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -3722.9980000000214,
+      "host_reduction_vs_auto_percent": 1.9080698915050383
+    },
+    {
+      "artifact": "prefill_output_k4_hifi4_l1_layer5.json",
+      "artifact_sha256": "f9e216345035b2b62731af26e62f3a08682a29f488a0b0494db9c37db8af4549",
+      "journal": "prefill_output_commands.json",
+      "journal_index": 17,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "4",
+        "--prefill-output-input-memory",
+        "l1",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k4_hifi4_l1_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 4,
+        "prefill_output_fidelity": "HiFi4",
+        "prefill_output_input_memory": "l1"
+      },
+      "prefill_pcc": 0.9991318001817636,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        192929.153,
+        192160.331,
+        192185.83
+      ],
+      "prefill_host_statistics_us": {
+        "median": 192185.83,
+        "minimum": 192160.331,
+        "maximum": 192929.153,
+        "range": 768.8219999999856,
+        "median_absolute_deviation": 25.498999999981606
+      },
+      "traced_decode_host_us": [
+        865.32,
+        863.8458666666667,
+        864.4072333333334,
+        865.0144333333334,
+        863.8595333333334
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -2932.704000000027,
+      "host_reduction_vs_auto_percent": 1.5030371230649093
+    },
+    {
+      "artifact": "prefill_output_k16_hifi2_layer0.json",
+      "artifact_sha256": "74f0cf817d45e31b1b0ce782f97cf6c219c7367d44a22494023a37b7ef8198a8",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 0,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--prefill-output-fidelity",
+        "HiFi2",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k16_hifi2_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "HiFi2",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991603933468373,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223607.498,
+        222776.678,
+        222919.43
+      ],
+      "prefill_host_statistics_us": {
+        "median": 222919.43,
+        "minimum": 222776.678,
+        "maximum": 223607.498,
+        "range": 830.8199999999779,
+        "median_absolute_deviation": 142.75199999997858
+      },
+      "traced_decode_host_us": [
+        795.3681333333334,
+        796.3333,
+        796.8035,
+        797.0740333333333,
+        796.7304
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi2",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -2213.3559999999998,
+      "host_reduction_vs_auto_percent": 0.9831335716691215
+    },
+    {
+      "artifact": "prefill_output_k16_lofi_layer0.json",
+      "artifact_sha256": "7b34912b26a8812011aded35f9c0877b93585bfd4b8d66bdcd96918208bb1635",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 1,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k16_lofi_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.99915285133721,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223275.888,
+        222338.546,
+        222689.914
+      ],
+      "prefill_host_statistics_us": {
+        "median": 222689.914,
+        "minimum": 222338.546,
+        "maximum": 223275.888,
+        "range": 937.3420000000042,
+        "median_absolute_deviation": 351.36799999998766
+      },
+      "traced_decode_host_us": [
+        795.6380333333333,
+        796.845,
+        796.4142,
+        797.3877333333334,
+        795.6651
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -2442.872000000003,
+      "host_reduction_vs_auto_percent": 1.085080517770523
+    },
+    {
+      "artifact": "prefill_output_k32_hifi2_layer0.json",
+      "artifact_sha256": "e0695f7b4d9fa2960ce27d2ed64b68f70cb6c67f5b701969d925f4f4dd08a0f5",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 2,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "32",
+        "--prefill-output-fidelity",
+        "HiFi2",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k32_hifi2_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 32,
+        "prefill_output_fidelity": "HiFi2",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991603933468373,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223568.143,
+        222805.344,
+        222694.033
+      ],
+      "prefill_host_statistics_us": {
+        "median": 222805.344,
+        "minimum": 222694.033,
+        "maximum": 223568.143,
+        "range": 874.1100000000151,
+        "median_absolute_deviation": 111.31100000001607
+      },
+      "traced_decode_host_us": [
+        796.638,
+        796.5442,
+        797.1086,
+        797.1667,
+        797.1469666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=32,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi2",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -2327.441999999981,
+      "host_reduction_vs_auto_percent": 1.0338085542103053
+    },
+    {
+      "artifact": "prefill_output_k32_lofi_layer0.json",
+      "artifact_sha256": "c8508e22d67c4e4b711d7820b03977a052fe02346ea19d43c774f12da7570b05",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 3,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "32",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k32_lofi_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 32,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.99915285133721,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223258.725,
+        222620.03,
+        222756.139
+      ],
+      "prefill_host_statistics_us": {
+        "median": 222756.139,
+        "minimum": 222620.03,
+        "maximum": 223258.725,
+        "range": 638.695000000007,
+        "median_absolute_deviation": 136.10899999999674
+      },
+      "traced_decode_host_us": [
+        797.5662,
+        797.9101666666667,
+        797.2526,
+        797.6246333333333,
+        796.2213
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=32,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -2376.646999999997,
+      "host_reduction_vs_auto_percent": 1.0556645445679322
+    },
+    {
+      "artifact": "prefill_output_k16_hifi2_layer5.json",
+      "artifact_sha256": "c1bc06f1af34c87c9ae43b4478cc118d1740d8731d745386861b7f84aaafae2b",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 4,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--prefill-output-fidelity",
+        "HiFi2",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k16_hifi2_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "HiFi2",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991324146537388,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        191118.981,
+        190650.579,
+        190953.907
+      ],
+      "prefill_host_statistics_us": {
+        "median": 190953.907,
+        "minimum": 190650.579,
+        "maximum": 191118.981,
+        "range": 468.40200000000186,
+        "median_absolute_deviation": 165.07399999999325
+      },
+      "traced_decode_host_us": [
+        864.6591666666667,
+        863.7898666666666,
+        864.7964333333333,
+        864.1064333333334,
+        864.4100333333333
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi2",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -4164.627000000008,
+      "host_reduction_vs_auto_percent": 2.1344087179334834
+    },
+    {
+      "artifact": "prefill_output_k16_lofi_layer5.json",
+      "artifact_sha256": "4ea19bc5ce764c047dd0815697ca56f525d61912808de796dc5fb2b1c4686d7b",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 5,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k16_lofi_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991236270227776,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        190994.18,
+        190090.823,
+        189985.102
+      ],
+      "prefill_host_statistics_us": {
+        "median": 190090.823,
+        "minimum": 189985.102,
+        "maximum": 190994.18,
+        "range": 1009.0779999999795,
+        "median_absolute_deviation": 105.72099999999045
+      },
+      "traced_decode_host_us": [
+        864.8686333333334,
+        864.1529666666667,
+        864.9588333333334,
+        864.8239,
+        864.4051
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -5027.71100000001,
+      "host_reduction_vs_auto_percent": 2.5767470147146603
+    },
+    {
+      "artifact": "prefill_output_k32_hifi2_layer5.json",
+      "artifact_sha256": "84e729994041f0313241ae715c19255eb19276d847e65c037057a76281e393a2",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 6,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "32",
+        "--prefill-output-fidelity",
+        "HiFi2",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k32_hifi2_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 32,
+        "prefill_output_fidelity": "HiFi2",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991324146537388,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        191401.832,
+        190348.88,
+        190520.606
+      ],
+      "prefill_host_statistics_us": {
+        "median": 190520.606,
+        "minimum": 190348.88,
+        "maximum": 191401.832,
+        "range": 1052.9519999999902,
+        "median_absolute_deviation": 171.7259999999951
+      },
+      "traced_decode_host_us": [
+        863.7562666666666,
+        863.8905333333333,
+        863.5298333333334,
+        864.1536666666667,
+        863.7389
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=32,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "HiFi2",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -4597.928000000014,
+      "host_reduction_vs_auto_percent": 2.356479369612327
+    },
+    {
+      "artifact": "prefill_output_k32_lofi_layer5.json",
+      "artifact_sha256": "1db741ad63240b3308c0ed1bda0df2f4d70b294cea37c08da1fee4599798717f",
+      "journal": "prefill_output_cross_commands.json",
+      "journal_index": 7,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "32",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_k32_lofi_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 32,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "inherit"
+      },
+      "prefill_pcc": 0.9991236270227776,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        190996.227,
+        190267.3,
+        190164.064
+      ],
+      "prefill_host_statistics_us": {
+        "median": 190267.3,
+        "minimum": 190164.064,
+        "maximum": 190996.227,
+        "range": 832.1630000000005,
+        "median_absolute_deviation": 103.23599999997532
+      },
+      "traced_decode_host_us": [
+        863.911,
+        864.1023333333334,
+        864.1881666666667,
+        864.2880333333334,
+        864.6837666666667
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=32,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -4851.234000000026,
+      "host_reduction_vs_auto_percent": 2.486300968210444
+    },
+    {
+      "artifact": "prefill_output_selected_l1_layer0.json",
+      "artifact_sha256": "241ef5aef10470fa4515f031ebc279574f159e6d169826da93e75da3f6cc2231",
+      "journal": "prefill_output_l1_commands.json",
+      "journal_index": 0,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--prefill-output-input-memory",
+        "l1",
+        "--defaults",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_selected_l1_layer0.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 0,
+      "layer_type": "sliding_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer0_4096_128.pt",
+      "input_fixture_sha256": "4a9b303efad5d98c999dea75023a8cbe1ec2926d8c4baa4f836eb91c6fe434b3",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "l1"
+      },
+      "prefill_pcc": 0.99915285133721,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9953353194067491,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        223356.976,
+        222674.718,
+        222598.864
+      ],
+      "prefill_host_statistics_us": {
+        "median": 222674.718,
+        "minimum": 222598.864,
+        "maximum": 223356.976,
+        "range": 758.1119999999937,
+        "median_absolute_deviation": 75.85399999999208
+      },
+      "traced_decode_host_us": [
+        796.1895,
+        796.4757,
+        796.8397333333334,
+        796.5124666666667,
+        796.5017666666666
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          4096
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        4096,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer0.json",
+      "host_delta_vs_auto_us": -2458.0679999999993,
+      "host_reduction_vs_auto_percent": 1.0918303120896835
+    },
+    {
+      "artifact": "prefill_output_selected_l1_layer5.json",
+      "artifact_sha256": "bcf69271133cafec1c3fa8c332210b9837306bd1b202e12339f51fe1fd1c0da8",
+      "journal": "prefill_output_l1_commands.json",
+      "journal_index": 1,
+      "command": [
+        "python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_optimized_prefill_output",
+        "--prefill-output-block",
+        "16",
+        "--prefill-output-fidelity",
+        "LoFi",
+        "--prefill-output-input-memory",
+        "l1",
+        "--defaults",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--real",
+        "--input-fixture",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+        "--decode",
+        "--steps",
+        "128",
+        "--timing",
+        "--prefill-timing",
+        "--verify-program-cache",
+        "--output",
+        "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/prefill_output_selected_l1_layer5.json"
+      ],
+      "returncode": 0,
+      "runtime_sha256": "b513a1b40988b33a359acb7d7809696eebf81a7197756e3ec3f943692182ab83",
+      "probe_sha256": "561fd4a9fff0747e065dcea9e62921753fa1e5838919e681b9e0ae4543ab63cd",
+      "layer": 5,
+      "layer_type": "full_attention",
+      "length": 4096,
+      "steps": 128,
+      "input_fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_decoder/actual_text_layer5_4096_128.pt",
+      "input_fixture_sha256": "85fef8daeebc0d321f844c9f30af6f0e367cdbe1b9206c9cbbf001c7e5f129aa",
+      "config": {
+        "prefill_output_mode": "explicit",
+        "prefill_output_grid": [
+          11,
+          8
+        ],
+        "prefill_output_block": 16,
+        "prefill_output_fidelity": "LoFi",
+        "prefill_output_input_memory": "l1"
+      },
+      "prefill_pcc": 0.9991236270227776,
+      "prefill_passed": true,
+      "decode_min_pcc": 0.9951361141534202,
+      "decode_passed": true,
+      "decode_repeated_equal": true,
+      "runtime_audits_clean": true,
+      "program_cache_miss_guard": true,
+      "warmed_prefill_host_us": [
+        191011.375,
+        190323.226,
+        190142.923
+      ],
+      "prefill_host_statistics_us": {
+        "median": 190323.226,
+        "minimum": 190142.923,
+        "maximum": 191011.375,
+        "range": 868.4519999999902,
+        "median_absolute_deviation": 180.30299999998533
+      },
+      "traced_decode_host_us": [
+        863.7664666666667,
+        864.9023,
+        863.8372333333333,
+        863.8499666666667,
+        863.4829
+      ],
+      "observed_prefill": {
+        "input_shape": [
+          1,
+          1,
+          1024,
+          8192
+        ],
+        "input_dtype": "DataType.BFLOAT16",
+        "input_memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)",
+        "output_shape": [
+          1,
+          1,
+          1024,
+          2816
+        ],
+        "output_dtype": "DataType.FLOAT32",
+        "selected_program": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=16,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=8,per_core_M=4,per_core_N=8,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)"
+      },
+      "projection_compute": {
+        "fidelity": "LoFi",
+        "fp32_dest_acc_en": true,
+        "packer_l1_acc": false
+      },
+      "weight_shape": [
+        1,
+        1,
+        8192,
+        2816
+      ],
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "output_memory": "DRAM interleaved",
+      "matched_auto_baseline": "prefill_output_baseline_auto_layer5.json",
+      "host_delta_vs_auto_us": -4795.308000000019,
+      "host_reduction_vs_auto_percent": 2.457638391235565
+    }
+  ],
+  "maximum_context_validation": "pending for selected prefill projection and subsequent cumulative runtime",
+  "source_audit_only": true,
+  "integration_runtime_sha256": "3d51014f98128dfb21bb484fcece50993524b967754f68f6dfe825ae7f472ba9"
+}

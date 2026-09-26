@@ -1,0 +1,123 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py
+@@ -7,6 +7,7 @@
+ from types import SimpleNamespace
+ 
+ import ttnn
++from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import concat_heads
+ from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import (
+     BroadcastQKV,
+     BroadcastRouter,
+@@ -301,6 +302,10 @@
+         output_block_w=16,
+         output_fidelity="auto",
+         output_l1=True,
++        prefill_output_grid=None,
++        prefill_output_block_w=4,
++        prefill_output_fidelity=None,
++        prefill_output_l1=False,
+         qkv_dram=False,
+         qkv_dram_readers=1,
+         qkv_dram_block=1,
+@@ -593,6 +598,15 @@
+             output_l1=output_l1,
+         )
+         self.precision_policy["output_projection"] = self.layer.self_attn.output_policy
++        self.layer.self_attn.configure_prefill_output(
++            kwargs["mesh_device"],
++            max(self.chunk_size, self.config.sliding_window or 0),
++            grid=prefill_output_grid,
++            block_w=prefill_output_block_w,
++            fidelity=prefill_output_fidelity,
++            input_l1=prefill_output_l1,
++        )
++        self.precision_policy["prefill_output_projection"] = self.layer.self_attn.prefill_output_policy
+         return self
+ 
+     @staticmethod
+@@ -1182,7 +1196,85 @@
+             )
+         return self
+ 
++    def configure_prefill_output(self, mesh, max_rows, *, grid=None, block_w=4, fidelity=None, input_l1=False):
++        self.prefill_output_enabled = grid is not None or fidelity is not None or input_l1
++        self.prefill_output_l1 = input_l1
++        self.prefill_output_compute = self.compute
++        self.prefill_output_programs = {}
++        if fidelity is not None:
++            self.prefill_output_compute = ttnn.init_device_compute_kernel_config(
++                mesh.arch(),
++                math_fidelity=fidelity,
++                math_approx_mode=False,
++                fp32_dest_acc_en=True,
++                packer_l1_acc=False,
++                dst_full_sync_en=False,
++            )
++        if grid is not None:
++            gx, gy = grid
++            available = mesh.compute_with_storage_grid_size()
++            k, n = self.source.weights.o_proj.shape[-2], self.source.weights.o_proj.shape[-1]
++            if not (0 < gx <= available.x and 0 < gy <= available.y):
++                raise ValueError("Prefill output grid must fit the device")
++            if block_w <= 0 or k // 32 % block_w:
++                raise ValueError("Prefill output K block must divide tiled K")
++            for rows in range(32, (max_rows + 31) // 32 * 32 + 1, 32):
++                per_m = (rows // 32 + gy - 1) // gy
++                per_n = (n // 32 + gx - 1) // gx
++                candidates = [(h, w) for h in (1, 2, 4) for w in (1, 2, 4) if h * w <= 4]
++                h, w = max(
++                    ((h, w) for h, w in candidates if per_m % h == 0 and per_n % w == 0),
++                    key=lambda pair: (pair[0] * pair[1], pair[1]),
++                )
++                self.prefill_output_programs[rows] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
++                    compute_with_storage_grid_size=(gx, gy),
++                    in0_block_w=block_w,
++                    out_subblock_h=h,
++                    out_subblock_w=w,
++                    out_block_h=per_m,
++                    out_block_w=per_n,
++                    per_core_M=per_m,
++                    per_core_N=per_n,
++                    transpose_mcast=False,
++                    fused_activation=None,
++                    fuse_batch=False,
++                )
++        self.prefill_output_policy = dict(
++            enabled=self.prefill_output_enabled,
++            grid=tuple(grid) if grid is not None else None,
++            k_block=block_w if grid is not None else None,
++            fidelity=str(self.prefill_output_compute.math_fidelity),
++            fp32_dest_acc_en=self.prefill_output_compute.fp32_dest_acc_en,
++            input_l1=input_l1,
++            output_dtype="float32",
++            output_memory="DRAM interleaved",
++            weight_dtype=str(self.source.weights.o_proj.dtype),
++            programs={str(rows): str(program) for rows, program in self.prefill_output_programs.items()},
++        )
++
+     def project(self, attention, decode):
++        if not decode and getattr(self, "prefill_output_enabled", False):
++            cfg = self.source.config
++            combined = concat_heads(
++                attention,
++                is_decode_mode=False,
++                num_heads=cfg.num_attention_heads,
++                head_dim=cfg.head_dim,
++                mesh_device=self.source.mesh_device,
++            )
++            if self.prefill_output_l1:
++                combined = ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG)
++            rows = combined.padded_shape[-2]
++            if self.prefill_output_programs and rows not in self.prefill_output_programs:
++                raise ValueError(f"No setup-time prefill output program for {rows} rows")
++            return ttnn.linear(
++                combined,
++                self.source.weights.o_proj,
++                dtype=ttnn.float32,
++                program_config=self.prefill_output_programs.get(rows),
++                compute_kernel_config=self.prefill_output_compute,
++                memory_config=ttnn.DRAM_MEMORY_CONFIG,
++            )
+         if not decode or self.output_program is None or not self.project_sharded:
+             return super().project(attention, decode)
+         cfg = self.source.config
