@@ -1280,6 +1280,13 @@ tasks:
     - experts
     - ffn_residual
     layer: 5
+  frozen:
+    at: '2026-09-26T23:33:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_07_ffn_residual.py: 835f212841aa508fe88e93983dcab727a50404633b6edb7b3af54824892e6b0a
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: M.1
   title: Assemble the all-device model (hidden state on the device from embedding to final norm)
   step: assemble
