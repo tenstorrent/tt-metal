@@ -537,3 +537,28 @@ Decisions and gotchas
 - Probes ran from a temporary test file in `tt/` (deleted).
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attention.py`
+
+## S.sliding_moe.02 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_sliding_moe_02_attention.py` with the body of
+  `test_swap_full_dense_02_attention.py` (BLOCK_TYPE sliding_moe, layer 1), using the C.sliding_moe.* limits. Gated
+  pcc_swap_out (0.98). Asserted extras: attn_norm rel <= 0.03 and ratio [0.97, 1.03]; attention rel <= 0.02 (whole chunk
+  and first 128 rows), ratio [0.95, 1.05], worst row <= 0.08; attention vs the CPU attention on the same device
+  attn_norm input rel <= 0.015; a window discriminator (closer to CPU w128 than to w127 and w129); block out finite with
+  rel L2 <= 0.01 (whole chunk and first 128 rows).
+
+Why
+- In the precompile pass the attention output is zero, and block out still scores rel 0.0142. The sink keeps attn_out
+  small next to the residual, so Gemma's 0.02 block-out limit is too loose. The device scores 0.0031, so 0.01 keeps 3x headroom.
+- Attention vs the golden is 0.0145 in the swap (component test 0.0086): the device attn_norm error (0.003) is
+  amplified through the sink. Against the CPU attention on the same input it is 0.0070, so that check gets the
+  tighter 0.015 limit.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999996 / rel 0.0030; attention rel 0.0038). BRINGUP_IMPL=stub: FAIL (all checks).
+- Device (default): PASS. pcc_swap_out 0.999995, out rel 0.0031 / first rows 0.0029, attention rel 0.0145 / 0.0128,
+  ratio [0.9882, 1.0420], worst row 0.042. vs CPU w128 0.0070, w127 0.0081, w129 0.0141. The margin to w127 is only 0.0011.
+- The first pcc=0 block in each log is the precompile pass.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_02_attention.py`
