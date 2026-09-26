@@ -4,6 +4,9 @@
 
 #include "dropout_op.hpp"
 
+#include <fmt/format.h>
+
+#include <stdexcept>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/unary/unary.hpp>
 
@@ -16,6 +19,9 @@
 namespace ttml::ops {
 
 autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability, bool use_per_device_seed) {
+    if (!(probability >= 0.0F && probability < 1.0F)) {
+        throw std::invalid_argument(fmt::format("Dropout probability must be in [0, 1), but is {}.", probability));
+    }
     if (probability == 0.0F) {
         return tensor;
     }
