@@ -146,7 +146,7 @@ def test_ledger_generator(fx):
     assert [t["id"] for t in generate(s, early=True)["tasks"]] == ids[:7]
     assert [i for i in ids if i.startswith("C.")] == [f"C.blk.{st.name}" for st in Reference().block_graph(0)]
     assert [i for i in ids if i.startswith("S.")] == [f"S.blk.{n:02d}" for n in range(1, 7)]
-    assert ids[-6:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2"]
+    assert ids[-7:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2", "X.3"]
     t = {x["id"]: x for x in out["tasks"]}
     assert t["S.blk.03"]["deps"] == ["C.blk.attn_residual", "S.blk.02"]
     assert t["L.last"]["deps"] == ["L.s512", "G.s512"]
@@ -170,7 +170,9 @@ def test_approvals_follow_the_approved_bytes(fx):
     assert approvals.is_approved(s, "plan")
     led.update_task_def("C.blk.mlp", frozen={"files": {"x": "y"}})  # freezing keeps the approval
     tasks = led.load_spec()
-    tasks["tasks"].append({"id": "X.3", "title": "picked", "step": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}})
+    tasks["tasks"].append(
+        {"id": "P.1", "title": "picked", "step": "perf", "role": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}}
+    )
     led.write_tasks(tasks)  # a picked perf item keeps it too
     assert approvals.is_approved(s, "plan")
     tasks["tasks"][5]["gate"]["metrics"] = {"x": ">= 0"}  # a changed gate does not

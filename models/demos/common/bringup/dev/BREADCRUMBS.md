@@ -376,3 +376,14 @@ Drive this ledger with
 - Owner: ladder rows (accuracy runs that read every layer back) never belong in the timing section. The exporter
   drops them for every model; only warm, no-readback measurements appear (profile chunk, full prefill). The selftest
   pins it. Token counts below 1k print as plain numbers.
+
+## F37 (2026-09-26): chunk time by position
+- Owner: the chunk-time-by-position table (one warm chunk at 0, 50k, 100k, 150k, 200k) belongs on the timing page,
+  measured at the end. `testing/positions.py` + `tests/test_positions.py`: positions from spec `perf.positions`, default
+  0 and 1..4 x the start of the target's last chunk; the device model is built with target.seq raised in memory so its
+  position tables cover the longest start; zeros prefix and random ids (timing only); compile run, then a timed run.
+  Records pos_chunk, pos_ms_<start>.
+- ledger_gen adds the final X.3 (after X.2; the overseer points its deps at the last pick): full-target ladder, warm
+  full prefill, position sweep. A pick is now a perf task with a role, so X.2 still stops when only X.3 follows it.
+- Dashboards: a line chart plus table under Chunk timing (standard), a bar block on the teletext Timing page.
+- Gemma X.4 runs the sweep (its X.3 predates F37). Profiler-off probe: 443 / 615 / 781 / 946 / 1112 ms.
