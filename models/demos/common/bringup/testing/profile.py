@@ -6,7 +6,7 @@
 Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
 Writes ``<results>/<task>_profile.json`` (read by the dashboard and by the opportunity list) and records
-chunk_wall_ms, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
+chunk_wall_ms, host_transfers_per_layer, device_ms_total, device_ms_<phase>, device_ms_chip<c>, host_overhead_ms, profiled_programs.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from collections import defaultdict
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import profiler
+from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
 
 def profile_rung(s) -> str:
@@ -42,14 +43,21 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     tokens = g.tokens()[start:]
     starts = {i for k, i in enumerate(layers) if k == 0 or layers[k - 1] != i - 1}
 
-    def run():
+    host = []
+
+    def run(count=False):
         h = None
         for i in layers:
             if i in starts:
                 if h is not None:
                     model.free(h)
                 h = model.embed(tokens) if i == 0 else model.from_host(g.layer(g.n_chunks - 1, i)["in"].float())
-            h2 = model.layer(i, h, start, state)
+            if count:
+                with HostTransfers() as ht:
+                    h2 = model.layer(i, h, start, state)
+                host.append(ht.total)
+            else:
+                h2 = model.layer(i, h, start, state)
             model.free(h)
             h = h2
         model.sync()
@@ -59,6 +67,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     t0 = time.time()
     run()
     wall = time.time() - t0
+    run(count=True)  # warm, apart from the timed run: host round-trips inside the forward pass (agent rule 5)
+    metrics.record("host_transfers_per_layer", max(host))
 
     profiler.enable(mesh)
     run()

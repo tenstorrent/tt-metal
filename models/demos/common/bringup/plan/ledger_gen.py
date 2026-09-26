@@ -227,6 +227,8 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         layers = r.get("layers") or spec.layers()
         if max(layers) == spec.num_layers - 1:
             m.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))
+        if not r.get("prefix_from_golden") and r["seq"] // r["chunk"] > 1:
+            m["host_transfers_per_layer"] = "== 0"  # agent rule 5: no host work in the forward path (warm chunks)
         add(
             tid,
             f"Ladder {r['name']}: {'last chunk after a golden prefix' if r.get('prefix_from_golden') else 'all chunks'} "
