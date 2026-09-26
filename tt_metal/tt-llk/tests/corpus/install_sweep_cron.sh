@@ -11,11 +11,11 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 LOGDIR="$HOME/sfpi-uplift/sweep-logs"
 
 LINES="# tt-llk SFPU 2x2 sweeps (installed by corpus/install_sweep_cron.sh)
-0 2 * * * mkdir -p $LOGDIR && flock -n /tmp/tt-sweep-nightly.cron.lock -c '$HERE/nightly_bh_sweep.sh' >> $LOGDIR/nightly-\$(date +\\%Y\\%m\\%d).log 2>&1
-0 4 * * 0 mkdir -p $LOGDIR && flock -n /tmp/tt-sweep-weekly.cron.lock -c '$HERE/weekly_bh_sweep.sh' >> $LOGDIR/weekly-\$(date +\\%Y\\%m\\%d).log 2>&1"
+0 2 * * * mkdir -p $LOGDIR && flock -n /tmp/tt-sweep-nightly.cron.lock -c '$HERE/sweep.sh --mode nightly' >> $LOGDIR/nightly-\$(date +\\%Y\\%m\\%d).log 2>&1
+0 4 * * 0 mkdir -p $LOGDIR && flock -n /tmp/tt-sweep-weekly.cron.lock -c '$HERE/sweep.sh --mode weekly' >> $LOGDIR/weekly-\$(date +\\%Y\\%m\\%d).log 2>&1"
 
 if [ "${1:-}" = "--install" ]; then
-  ( crontab -l 2>/dev/null | grep -v 'install_sweep_cron.sh\|nightly_bh_sweep.sh\|weekly_bh_sweep.sh'; echo "$LINES" ) | crontab -
+  ( crontab -l 2>/dev/null | grep -v 'install_sweep_cron.sh\|nightly_bh_sweep.sh\|weekly_bh_sweep.sh\|sweep.sh --mode'; echo "$LINES" ) | crontab -
   echo "installed:"
   crontab -l | tail -3
 else

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DejaGnu byte-parity gate for the scheduled sweeps (extracted from
-# weekly_bh_sweep.sh so the counting/gating logic is directly self-testable:
+# sweep.sh --mode weekly so the counting/gating logic is directly self-testable:
 # selftest_dejagnu_gate.sh runs this script against synthetic clean/failing
 # .sum fixtures and asserts clean->GREEN(rc 0) and failing->RED(rc 1)).
 #

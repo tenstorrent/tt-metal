@@ -34,7 +34,7 @@
 #     the same header's -DDISABLE_SFPLOADMACRO plain arm via
 #     TT_METAL_DISABLE_SFPLOADMACRO=1).
 #   schedule: 'nightly' (default) or 'weekly' — the device-time budget split
-#     as DATA (BUDGET.md, laneAZ evidence): nightly_bh_sweep.sh passes
+#     as DATA (BUDGET.md, laneAZ evidence): sweep.sh --mode nightly passes
 #     --schedule nightly and runs only nightly rows; weekly/manual sweeps run
 #     every row.  Policy: every ENGAGED row (OFF/ON bytes change), every
 #     booked loss, and every headline win is nightly; UNENGAGED causal-only

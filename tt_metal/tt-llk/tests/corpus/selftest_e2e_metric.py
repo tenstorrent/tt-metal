@@ -717,11 +717,17 @@ with tempfile.TemporaryDirectory() as td:
         md,
     )
 
-wiring = []
-for w in ("weekly_bh_sweep.sh", "nightly_bh_sweep.sh", "headline_bh_sweep.sh"):
-    t = (HERE / w).read_text()
-    wiring.append("--kernel-baseline" in t and "_v2.tsv" in t)
-check("wrappers pass --kernel-baseline when the v2 baseline exists", all(wiring))
+# One entrypoint since the three *_bh_sweep.sh presets collapsed into
+# sweep.sh --mode {headline,nightly,weekly}; the wiring assertion is the same.
+t = (HERE / "sweep.sh").read_text()
+check(
+    "sweep.sh passes --kernel-baseline when the v2 baseline exists",
+    "--kernel-baseline" in t and "_v2.tsv" in t,
+)
+check(
+    "sweep.sh offers all three modes",
+    all(f"{m}" in t for m in ("headline", "nightly", "weekly")),
+)
 check(
     "conf carries the verdict-metric ratification + ES-F1 flush config",
     "END-TO-END DEVICE KERNEL TIME" in (HERE / "sweep_2x2.conf").read_text()

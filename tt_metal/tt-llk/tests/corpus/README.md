@@ -307,15 +307,17 @@ Sweep-hardening round 2 (adversarial review, 2026-08-16):
 
 ### Scheduled sweeps
 
-`nightly_bh_sweep.sh` (02:00) runs validate → classify → CRAQ → BH silicon →
-report against the chip-class baseline and the previous nightly run.
-`weekly_bh_sweep.sh` (Sun 04:00) adds per-knob attribution (each optimization
+One entrypoint, `sweep.sh --mode {headline,nightly,weekly}`.
+
+`sweep.sh --mode nightly` (02:00) runs validate → classify → CRAQ → BH
+silicon → report against the chip-class baseline and the previous nightly
+run.  `--mode weekly` (Sun 04:00) adds per-knob attribution (each optimization
 flag toggled individually; per-knob silicon legs for the `HEADLINE_ROWS`
 only), the WH CRAQ matrix for macro rows, and the DejaGnu byte-parity suites
 (`loadmacro*`, `macro-planner*`) against the pinned toolchain build tree
 (SKIP if absent).  All knobs/rows/paths live in `sweep_2x2.conf`
 (env-overridable EXCEPT the reviewed `PINNED_*` toolchain pins, which reject
-environment overrides unless the wrapper is passed `--allow-pin-override`),
+environment overrides unless `sweep.sh` is passed `--allow-pin-override`),
 not in script bodies.  Install the cron entries with
 `install_sweep_cron.sh` (prints by default; `--install` writes the crontab —
 an orchestrator/owner step, both entries flock-guarded and logging to

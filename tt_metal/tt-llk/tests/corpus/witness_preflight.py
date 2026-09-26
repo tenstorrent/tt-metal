@@ -32,7 +32,7 @@ Exit codes: 0 all witnesses present; 1 at least one witness missing (RED);
 2 configuration/environment error (malformed table, unpinned toolchain,
 missing venv, compile failure).
 
-Wired into nightly_bh_sweep.sh preflight; `--skip-witness` on the wrapper
+Wired into `sweep.sh --mode nightly` preflight; `--skip-witness` on the wrapper
 is the loudly-logged emergency escape.  Self-tested (fixture dumps, no
 toolchain) by selftest_witness_preflight.py.
 """
