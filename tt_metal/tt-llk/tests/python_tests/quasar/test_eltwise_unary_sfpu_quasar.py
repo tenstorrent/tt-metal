@@ -487,10 +487,26 @@ def prepare_cumsum_inputs(
     return (-1.0 + 2.0 * u).to(format_dict[input_format])
 
 
+def prepare_ema_inputs(
+    src_A: torch.Tensor,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus into [-1, 1] for the column-wise exponential moving average.
+
+    The weights sum to one (alpha + beta = 1), so every output is a convex combination of the
+    column's inputs and |out| <= 1 for |x| <= 1 — no growth over the 32-row chain, and clear of
+    the subnormal magnitudes the SFPU MAD datapath flushes to zero. Both signs are covered so
+    the recurrence sees cancellation as well as reinforcement.
+    """
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+    return (-1.0 + 2.0 * u).to(format_dict[input_format])
+
+
 # Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
 # Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
 # which is why the suite has always written the latter.
-LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.Ema)
 
 
 def prepare_unary_inputs(
@@ -507,6 +523,8 @@ def prepare_unary_inputs(
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Cumsum:
         return prepare_cumsum_inputs(src_A, input_format)
+    if mathop == MathOperation.Ema:
+        return prepare_ema_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
         return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop in COMP_OPS:
@@ -750,6 +768,12 @@ OP_CONFIGS = [
     # cross-tile carry (first=false) needs the shared C++ source to thread
     # `first = (i == 0)` through its tile loop, so it is a follow-on.
     OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Column-wise exponential moving average: the same whole-tile shape as cumsum
+    # (VectorMode::RC_custom, one call per tile), with the carry and the two smoothing
+    # weights living in LREG4-6 between calls. Every tile is swept with first=true, so
+    # tiles are independent; the cross-tile carry has the same follow-on dependency on the
+    # shared C++ source threading `first = (i == 0)` that cumsum's does.
+    OpConfig(MathOperation.Ema, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
@@ -852,7 +876,7 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
+    tanh, sigmoid, silu, rsqrt, square, cumsum, ema, typecast,
     floor/ceil/trunc/frac/round, and the six
     compare-to-zero modes), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the

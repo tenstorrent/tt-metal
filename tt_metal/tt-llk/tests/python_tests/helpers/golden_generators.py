@@ -35,6 +35,8 @@ from helpers.pack import (
 from helpers.sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
+    EMA_ALPHA,
+    EMA_BETA,
     HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
     LRELU_NEGATIVE_SLOPE,
@@ -2391,6 +2393,7 @@ class UnarySFPUGolden:
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Cumsum: self._cumsum,
+            MathOperation.Ema: self._ema,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
             MathOperation.LeftShift: self._left_shift,
@@ -2534,15 +2537,17 @@ class UnarySFPUGolden:
 
         result = tensor.clone().flatten()
 
-        # Cumsum accumulates down each tile's columns, so it cannot go through the
-        # per-element map below and is evaluated here on the untilized (row-major) view.
-        # The tilize that follows puts it in the layout the element-wise path produces, so
-        # every later stage (dest rounding, untilize, output conversion) stays shared.
-        whole_tensor_res = (
-            self._cumsum(result, dimensions)
-            if operation == MathOperation.Cumsum
-            else None
-        )
+        # Cumsum and ema both run a recurrence down each tile's columns, so neither can go
+        # through the per-element map below; both are evaluated here on the untilized
+        # (row-major) view. The tilize that follows puts the result in the layout the
+        # element-wise path produces, so every later stage (dest rounding, untilize, output
+        # conversion) stays shared.
+        if operation == MathOperation.Cumsum:
+            whole_tensor_res = self._cumsum(result, dimensions)
+        elif operation == MathOperation.Ema:
+            whole_tensor_res = self._ema(result, dimensions)
+        else:
+            whole_tensor_res = None
 
         if not skip_tilize:
             result = tilize_block(
@@ -3327,6 +3332,27 @@ class UnarySFPUGolden:
         rows, cols = dimensions[0], dimensions[1]
         tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
         return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
+
+    def _ema(self, x, dimensions: tuple[int, int]):
+        """Column-wise (top-to-bottom) exponential moving average inside each 32x32 tile.
+
+        ``out[r] = EMA_ALPHA * out[r-1] + EMA_BETA * x[r]``, with ``out[-1] = 0``. Reached
+        through the whole-tensor branch of __call__, so ``x`` is the untilized view of the
+        [H, W] tensor already in the Dest format. Every tile starts a fresh chain, matching
+        the ``first = true`` the dispatcher passes for each tile. The recurrence runs in
+        float32 because the kernel keeps its carry in an LREG at full width; the caller
+        applies the single Dest-format rounding.
+        """
+        rows, cols = dimensions[0], dimensions[1]
+        tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM).to(
+            torch.float32
+        )
+        out = torch.empty_like(tiles)
+        carry = torch.zeros_like(tiles[:, 0, :, :])
+        for row in range(TILE_DIM):
+            carry = EMA_ALPHA * carry + EMA_BETA * tiles[:, row, :, :]
+            out[:, row, :, :] = carry
+        return out.flatten()
 
     # Pools whose NaN result is emitted by the datapath rather than selected from a lane, so
     # its sign is the ISA's to choose and the golden canonicalises it. Max and Min instead

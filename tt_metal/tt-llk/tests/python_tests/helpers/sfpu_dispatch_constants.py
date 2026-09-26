@@ -53,3 +53,9 @@ LRELU_NEGATIVE_SLOPE = 0.1
 
 # UnaryMax/MinInt32 and UnaryMax/MinUint32 compare against this scalar.
 INT_MAXMIN_SCALAR = 1000
+
+# ema's smoothing weights: out[r] = EMA_ALPHA * out[r-1] + EMA_BETA * x[r]. The dispatcher
+# hands the kernel these two values as raw fp32 bit patterns (0x3E800000 / 0x3F400000);
+# both are exactly representable, so the float form here is the same number.
+EMA_ALPHA = 0.25
+EMA_BETA = 0.75
