@@ -57,6 +57,9 @@ enum class RoutedExpertActivation : uint8_t {
     SituGlu = 2,
     // clamped SiLU-GLU: silu(min(gate,L)) * clamp(up,±L)  (DeepSeek V4)
     ClampedSiluGlu = 3,
+    // GeGLU with the tanh approximation: gelu_tanh(gate) * up  (Gemma-4). Same path as Silu,
+    // with gelu_tanh_tile in place of silu_tile.
+    GeluTanh = 4,
 };
 
 // Attributes (the constants known at host time).
@@ -107,10 +110,20 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "compute_kernel_config");
+    // compute_kernel_config is part of the key because GeluTanh honours its math_fidelity and
+    // fp32_dest_acc_en (the other variants ignore it).
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            compute_kernel_config);
     }
 };
 
