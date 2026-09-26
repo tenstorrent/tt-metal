@@ -794,3 +794,26 @@ Results
   estimate in the test: 0.0091 / [0.986, 1.014] / 0.028).
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py`
+
+## S.sliding_moe.06.test.1 (swap 06, experts), 2026-09-26
+
+What was done
+- Replaced the rendered one-liner in `tests/bringup/test_swap_sliding_moe_06_experts.py` with swap 05's body (all of its
+  per-step checks for attn_norm, attention, attn_residual, ffn_norm and router, plus the block-out rel L2 <= 0.01).
+  Added `_check_experts`.
+- Experts checks: vs golden, PCC >= 0.99 and rel L2 <= 0.03. Vs the CPU experts on the same device ffn_norm and router
+  ("iso"): rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03], worst row rel L2 <= 0.1 (the component test limits).
+
+Decisions and why
+- The per-row checks run against iso, not the golden. The device router's near-tie flips (up to 39 of 2048 rows)
+  change which experts a row uses, so per-row errors against the golden would measure the router, not the experts.
+
+Results
+- BRINGUP_IMPL=reference: PASS. Experts golden rel 0.0126, iso 0. Out pcc 0.999997.
+- BRINGUP_IMPL=stub: FAIL on every check.
+- Device gate: PASS. pcc_swap_out 0.999992. Experts pcc 0.99983, golden rel 0.0185, iso rel 0.0098, iso ratio
+  [0.9793, 1.0114], iso worst row 0.029. Out rel 0.0040.
+- Gotcha: the iso norm-ratio minimum of 0.979 is close to the 0.97 limit (the same as in the component test). A
+  lower-fidelity experts perf change (unified / LoFi) will likely fail it.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_06_experts.py`
