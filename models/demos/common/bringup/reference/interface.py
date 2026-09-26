@@ -89,7 +89,10 @@ def run_block(
     overrides = overrides or {}
     env = {"in": h_in}
     rec(f"{prefix}in", h_in)
+    from models.demos.common.bringup.testing import profiler
+
     for s in steps:
+        profiler.signpost(s.name)  # a profile section per step (no-op unless the profiler is on)
         fn = overrides.get(s.name) or component(s.name)
         env[s.output] = fn(ctx, *[env[i] for i in s.inputs])
         rec(f"{prefix}{s.output}", env[s.output])

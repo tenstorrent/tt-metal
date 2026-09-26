@@ -63,6 +63,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 - **implement**: write the TTNN module for the component in `<model_dir>/tt/` and register it in the model's
   `device_component` (and, for integration, `device_model`) hooks. Start from the code the components entry names under
   `reuse`. Keep every other component on the CPU reference.
+- **assemble**: after the swap tests, build the all-device model (hidden state resident on the device, every block
+  through `run_block`) from the validated modules and make it the `device_model` hook; the hybrid stays selectable.
 - **contract**: write the prefill adapter and runtime the engine loads (see
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`). The runtime must accept the engine's uint32 device
   input with a padded tail, and must call the layer-completion sink only after that layer's state is on the device.

@@ -74,8 +74,15 @@ DEFAULT_POLICY = {
     "contract": {"attempts": 3, "escalate": "stop"},
     "test": {"attempts": 3, "escalate": "stop"},
     "perf": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
+    "assemble": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
 }
-ROLE_OF_STEP = {"reference": "reference", "plan": "plan", "implement": "implement", "contract": "contract"}
+ROLE_OF_STEP = {
+    "reference": "reference",
+    "plan": "plan",
+    "implement": "implement",
+    "assemble": "assemble",
+    "contract": "contract",
+}
 IGNORED = (
     r"/dashboard/[^/]+\.html$",
     r"(^|/)__pycache__/",
