@@ -23,7 +23,8 @@ except through the safe runners, and the knowledge files must keep their format.
 Each agent run is recorded in state.json under the task: role, attempt, session id, model, agent-definition hashes.
 
 BRINGUP_AGENT_CMD replaces the ``claude`` executable (tests use a mock agent). Exit codes: 0 done, 1 stopped on a
-failure, 3 waiting for a person.
+failure (including a box that fails at device open: reset it, then resume), 3 waiting for a person, 4 paused
+(``pause`` asks a running orchestrator to stop before its next task; edit the framework only while paused).
 """
 
 from __future__ import annotations
@@ -75,7 +76,7 @@ DEFAULT_POLICY = {
 }
 ROLE_OF_STEP = {"reference": "reference", "plan": "plan", "implement": "implement", "contract": "contract"}
 IGNORED = (
-    r"/dashboard/index\.html$",
+    r"/dashboard/[^/]+\.html$",
     r"(^|/)__pycache__/",
     r"\.pyc$",
     r"^generated/",
@@ -83,7 +84,14 @@ IGNORED = (
     r"(^|/)\.lock$",
     r"\.tmp$",
 )
-DONE, STOPPED, HUMAN = 0, 1, 3
+DONE, STOPPED, HUMAN, PAUSED = 0, 1, 3, 4
+# A gate that fails at device open is a box problem (a board reset is needed), not the task's: retrying it only burns
+# attempts. These signatures stop the run at once with a reason for the person.
+INFRA_FAILURES = re.compile(
+    r"Timed out while waiting for active ethernet core|Try resetting the board|No Tenstorrent devices|"
+    r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware",
+    re.I,
+)
 
 
 def now() -> str:
@@ -228,6 +236,12 @@ def allowed(path: str, patterns: list[str]) -> bool:
 
 
 # ---------------------------------------------------------------- the orchestrator
+class InfraStop(Exception):
+    def __init__(self, tid: str, sig: str):
+        super().__init__(sig)
+        self.tid, self.sig = tid, sig
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -248,6 +262,7 @@ class Orchestrator:
         (self.run_dir / "agents").mkdir(parents=True, exist_ok=True)
         self.echo = echo
         self.roles = yaml.safe_load((HERE / "briefs" / "roles.yaml").read_text())
+        self.pause_file = self.run_dir / "PAUSE"
 
     # ---- policy
     def common_paths(self) -> list[str]:
@@ -396,6 +411,10 @@ class Orchestrator:
     # ---- steps
     def gate(self, tid: str):
         res = run_gate(self.spec, self.led, tid, commit=True)
+        if res.verdict in ("FAIL", "HANG"):
+            sig = self.infra_failure(res)
+            if sig:
+                raise InfraStop(tid, sig)
         self.echo(f"  [{tid}] gate {res.verdict}" + (f" -> {res.commit}" if res.commit else ""))
         return res
 
@@ -500,6 +519,17 @@ class Orchestrator:
         )
         return False
 
+    def infra_failure(self, res) -> str | None:
+        text = res.log.read_text(errors="replace") if res and res.log and res.log.exists() else ""
+        m = INFRA_FAILURES.search(text)
+        return m.group(0) if m else None
+
+    def stop_for_infra(self, tid: str, sig: str) -> int:
+        why = f"the box failed at device open ({sig!r}); reset the board, then resume"
+        self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
+        self.echo(f"  [{tid}] STOPPED (infrastructure): {why}")
+        return STOPPED
+
     def step(self, tid: str) -> int:
         task = self.led.task(tid)
         role = task.get("role") or ROLE_OF_STEP.get(task.get("step"))
@@ -561,8 +591,14 @@ class Orchestrator:
                     return STOPPED
                 self.echo("nothing left to run" + (f" before {until}" if until else ""))
                 return DONE
+            if self.pause_file.exists():
+                self.echo(f"paused before {runnable[0]} ({self.pause_file}); `resume` continues")
+                return PAUSED
             tid = runnable[0]
-            rc = self.step(tid)
+            try:
+                rc = self.step(tid)
+            except InfraStop as e:
+                rc = self.stop_for_infra(e.tid, e.sig)
             if rc != DONE:
                 return rc
             if only:
@@ -571,7 +607,7 @@ class Orchestrator:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["run", "resume"])
+    ap.add_argument("command", choices=["run", "resume", "pause"])
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
     ap.add_argument("--until", help="stop after this task")
     ap.add_argument("--only", help="run just this task (if runnable)")
@@ -580,6 +616,11 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     spec = Spec.load(a.spec)
     orch = Orchestrator(spec, model=a.model)
+    if a.command == "pause":
+        orch.pause_file.write_text(now() + "\n")
+        print(f"pause requested: the running orchestrator stops before its next task ({orch.pause_file})")
+        return 0
+    orch.pause_file.unlink(missing_ok=True)
     orch.attempts_override = a.attempts
     if a.command == "resume":
         led = orch.led

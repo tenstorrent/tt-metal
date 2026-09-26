@@ -167,7 +167,14 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
     paths = [rel(ledger.state_path), rel(ledger.results_dir / f"{task['id']}.json"), rel(ledger.tasks_path)]
     paths.append(rel(ledger.dir / ".gitignore"))
-    for extra in ("approvals.yaml", "findings.yaml", "__init__.py", "results/block_graphs.json"):
+    for extra in (
+        "approvals.yaml",
+        "findings.yaml",
+        "__init__.py",
+        "results/block_graphs.json",
+        "spec.yaml",
+        "supervision.md",
+    ):
         if (ledger.dir / extra).exists():
             paths.append(rel(ledger.dir / extra))
     if ledger.breadcrumbs.exists():

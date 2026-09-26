@@ -244,3 +244,21 @@ Drive this ledger with
   safe runner's reset did not clear it) right after the first runs of the new GeluTanh expert pipeline. The owner reset
   the board and set the rule "always use 2D fabric". Spec `agents.rules` is now rendered at the top of every brief;
   Gemma's spec opens the mesh with FABRIC_2D (box check passes on it).
+
+## F21 (2026-09-26): formal intake, supervision, dashboard styles
+- `intake/check_hf_sanity.py` (added to R.1 by the ledger generator): records the checkpoint revision from the HF
+  download metadata and checks it against `hf.revision`; runs the model card's usage example (`intake.smoke`) through
+  the chat template and requires the expected answer; requires HF next-token accuracy on the canonical prompt above
+  `text.min_top1` (default 0.4). HF has no standard golden input per model; the usage example is the closest thing,
+  and the accuracy floor would have caught Gemma's raw-text input at intake.
+- Orchestrator: `pause` (stops before the next task; edit the framework only while paused), and an infrastructure
+  stop: a gate log with a device-open signature (active ethernet core timeout, "Try resetting the board") stops the run
+  with "reset the board" instead of burning attempts.
+- Dashboard styles: `dashboard/teletext_template.html` (the teletext service built by a subagent, now data-driven from
+  the same `build()` as the standard page); `export --style standard|teletext|both`, default from `dashboard.styles`.
+- `/bringup` skill rewritten: interview (target, ladder, owner rules, dashboard style, retry policy), on-the-spot checks
+  (revision, base vs instruction-tuned -> input wrap, usage example -> smoke), spec and approval, launch, and a
+  supervision section (failure classes and actions, a `supervision.md` log per model, the never-list). Installed as
+  `~/.claude/skills/bringup` -> this directory: the repo's `.claude` is a symlink into the tt_ops_code_gen submodule,
+  so a project-level install would modify another repository.
+- Gate commits also stage the model's `spec.yaml` and `supervision.md`.
