@@ -401,9 +401,11 @@ function pShard(){
 }
 
 function pPcc(){
-  const b = new Buf(), T = D.trails || [], N = (D.layer_types || []).length || Math.max(1, ...T.flatMap(t => t.points.map(p => p[0] + 1)));
+  /* the CPU reference and the latest device run only: more lines are unreadable at teletext resolution */
+  const ALL = D.trails || [], DEV = ALL.filter(t => t.device), T = ALL.filter(t => !t.device).slice(0, 1).concat(DEV.slice(-1));
+  const b = new Buf(), N = (D.layer_types || []).length || Math.max(1, ...T.flatMap(t => t.points.map(p => p[0] + 1)));
   banner(b, "PCC trail", CYN, BLK, 0, 1, BLU);
-  b.t(3, 0, "1-PCC by layer, log scale, lower=better", CYN);
+  b.t(3, 0, "1-PCC/layer, log, lower=better", CYN);
   if (!T.length){ noData(b, 6, "No per-layer PCC recorded yet."); return [b]; }
   const thr = [...new Set([D.thresholds && D.thresholds.layer, D.thresholds && D.thresholds.final_hidden].filter(v => v != null))];
   const lv = v => Math.log10(Math.max(1 - v, 1e-16));
@@ -429,10 +431,11 @@ function pPcc(){
   thr.forEach(p => { const r = r0 + Math.floor(yOf(lv(p)) / 3), c = Math.min(c0 + PW / 2 + 1, W - 4); b.t(r, c, String(p).slice(0, 4), RED); });
   const step = ppl === 2 ? 5 : 10;
   for (let i = 0; i < N; i += step){ const c = c0 + Math.floor(i * ppl / 2), s = "L" + i; if (c + s.length <= W) b.t(r0 + RR, c, s, WHT); }
-  T.slice(0, 2).forEach((t, k) => { const r = 21 + k, col = COLS[k % COLS.length], worst = Math.max(...t.points.map(p => 1 - p[1]));
-    b.m(r, 0, 63, col); const tag = ` max ${worst > 0 ? expo(worst) : "0"}${t.device ? " DEV" : " CPU"}`;
-    b.t(r, 2, trunc(t.label, W - 3 - tag.length), WHT); b.tr(r, W - 1, tag, col); });
-  if (T.length > 2) b.tr(22, W - 1, `+${T.length - 2} trails`, YEL);
+  T.forEach((t, k) => { const r = 21 + k, col = COLS[k % COLS.length];
+    const worst = Math.max(...t.points.map(p => 1 - p[1])), name = t.device ? t.label : "CPU reference vs HF";
+    const tag = ` worst ${worst > 0 ? expo(worst) : "0"}`;
+    b.m(r, 0, 63, col); b.t(r, 2, trunc(name, W - 3 - tag.length), WHT); b.tr(r, W - 1, tag, col); });
+  if (ALL.length > T.length) b.tr(3, W - 1, `+${ALL.length - T.length} older`, YEL);
   return [b];
 }
 
