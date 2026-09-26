@@ -11,6 +11,7 @@ runner startup (full model load + kernel JIT) once PER scenario.
 """
 
 import contextlib
+import copy
 import glob
 import json
 import os
@@ -30,6 +31,11 @@ NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 # 56320 rows (= 11 x CHUNK_SIZE). The adapter's own prefill_trace_default omits dsa/, which would leave
 # the merged table's index config with no golden to PCC against.
 GLM52_TRACE = "/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k"
+GLM52_MTP_TRACE = os.environ.get("GLM52_MTP_TRACE", "/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k")
+GLM52_HF_MODEL = os.environ.get("GLM52_HF_MODEL", "/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8")
+GLM52_MTP_TTNN_CACHE = os.environ.get(
+    "TT_GLM52_MTP_TTNN_CACHE", "/mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache"
+)
 SERVICE_ID = "ci_ds_prefill"
 TABLE_PATH = "/tmp/ci_prefill_kv_table.pb"  # IPC rendezvous files; cleaned up around each scenario
 DEVMAP_PATH = "/tmp/ci_prefill_kv_devmap.json"
@@ -163,7 +169,28 @@ SCENARIOS = {
         "producer_timeout_s": 7200,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
+    "glm52_mtp4": {
+        "users": 1,
+        "layers": 78,
+        "max_seq_len": 56320,
+        "env": {
+            "PREFILL_MODEL": "glm_5_2",
+            "PREFILL_TRACE_DIR": GLM52_TRACE,
+            "PREFILL_MTP_TRACE_DIR": GLM52_MTP_TRACE,
+            "PREFILL_MTP_LEVELS": "4",
+            "TT_GLM52_MTP_TTNN_CACHE": GLM52_MTP_TTNN_CACHE,
+            "PREFILL_HF_MODEL": GLM52_HF_MODEL,
+            "PREFILL_STANDALONE_CHUNKED_PCC": "0.85",
+        },
+        "ready_timeout_s": 3600,
+        "producer_timeout_s": 7200,
+        "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
+    },
 }
+
+SCENARIOS["glm52_mtp7"] = copy.deepcopy(SCENARIOS["glm52_mtp4"])
+SCENARIOS["glm52_mtp7"]["env"]["PREFILL_MTP_LEVELS"] = "7"
+SCENARIOS["glm52_mtp7"]["producer_timeout_s"] = 8400
 
 # Keep the Llama golden prerequisite out of the existing Kimi/GLM CI scenarios.
 # Select the Llama acceptance case explicitly with PREFILL_MODEL=llama_3p1_8b.
