@@ -434,6 +434,13 @@ tasks:
     kind: mlp
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-26T00:00:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py: c7c7c5a3f9ee164476d06e9c0c7e99a7ddb04ad08b4ab8d02532dedac47fcb07
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.sliding.06
   title: 'sliding block with steps 1-6 on device (last: mlp)'
   step: implement
