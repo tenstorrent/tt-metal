@@ -193,7 +193,8 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
     if constexpr (ENABLE_2X_FORMAT)
     {
         const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
-        // Non-DI MXFP4_2x traversal (mirrors the DI X2 (srca,srcb,dest) sequence):
+        // Non-DI 2x traversal (mirrors the DI X2 (srca,srcb,dest) sequence), one FPU row group
+        // per MVMUL. With an 8-row FPU:
         //   #0 (0, 0, 0)     #1 (0, 8, 8)
         //   #2 (16, 0,16)    #3 (16, 8,24)
         //   #4 (0,16,32)     #5 (0,24,40)
@@ -202,11 +203,11 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         // at #1->#2 it is still 0 so srcb cr=1 wraps to 0; at #3->#4 we pump it up to
         // 16 via {cr=1, incr=16}; at #5->#6 srcb cr=1 then wraps to 16.
 
-        // Common in-replay step (used between #0->#1, #2->#3, #4->#5, #6->#7).
+        // Common in-replay step (used within each face pair).
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 0},
-            .srcb = {.incr = 8, .clr = 0, .cr = 0},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .srcb = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_0);
 
@@ -214,7 +215,7 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0},
             .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_1);
 
@@ -223,7 +224,7 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         addr_mod_t {
             .srca = {.incr = 0, .clr = 0, .cr = 1},
             .srcb = {.incr = 16, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_2);
 
@@ -231,7 +232,7 @@ inline void _llk_math_matmul_addrmod_(const std::uint8_t ct_dim, const std::uint
         addr_mod_t {
             .srca = {.incr = 16, .clr = 0, .cr = 0},
             .srcb = {.incr = 0, .clr = 0, .cr = 1},
-            .dest = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = ELTWISE_MATH_ROWS, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_3);
 
@@ -370,8 +371,7 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  * outside the replay buffer by the MOP in @ref _llk_math_matmul_mop_config_, or directly from the
  * RISC core in the experimental no-MOP path.
  *
- * @tparam ENABLE_2X_FORMAT: Select the MXFP4_2x traversal (8 MVMULs) instead of the plain one
- * (16 on Quasar, 32 on 4row_arch).
+ * @tparam ENABLE_2X_FORMAT: Select the 2x traversal, half the MVMULs of the plain one.
  */
 template <bool ENABLE_2X_FORMAT>
 inline constexpr std::uint32_t _llk_math_matmul_replay_buf_len_()
@@ -411,8 +411,9 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
 
     if constexpr (ENABLE_2X_FORMAT)
     {
-        // Non-DI MXFP4_2x: 7-MVMUL replay + matmul_op = 8 MVMULs per tile (vs 16 in plain non-DI).
-        // (srca,srcb,dest) sequence mirrors the DI X2 path:
+        // Non-DI 2x: half the face pairs of the plain image (SrcA expands two datums per element), so
+        // one K face covers the tile: 8 MVMULs per tile on an 8-row FPU, 16 on a 4-row FPU.
+        // (srca,srcb,dest) sequence mirrors the DI X2 path, shown for 8 rows:
         //   #0 (0,  0,  0)  B0[0:7]*A0
         //   #1 (0,  8,  8)  B0[8:15]*A0
         //   #2 (16, 0, 16)  B0[0:7]*A1     <- ADDR_MOD_1 (srca+=16, srcb cr->0)
@@ -424,13 +425,15 @@ inline void _llk_math_matmul_load_replay_(const bool use_half_face_replay = fals
         load_replay_buf<0, replay_buf_len>(
             []
             {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #0 -> srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #1 -> srca+=16, srcb cr->0, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #2 -> srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // #3 -> srca cr->0, srcb cr+=16 (=16), dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #4 -> srcb+=8, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // #5 -> srca+=16, srcb cr->16, dest+=8
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #6 -> srcb+=8, dest+=8
+                constexpr std::uint32_t IN_FACE_ROWS = FACE_R_DIM - ELTWISE_MATH_ROWS;
+
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0);
+                _llk_math_matmul_emit_rows_<IN_FACE_ROWS>();
             });
     }
     else
@@ -650,13 +653,8 @@ inline void _llk_math_matmul_init_(
             "direct-indexing and 2x matmul support exact 16x16-face, 2x2 operand shapes only");
     }
 
-    // A part without the MXFP4_2x replay image reaches 2x through direct indexing.
-    constexpr bool USE_DIRECT_INDEXING = ENABLE_DIRECT_INDEXING || (ENABLE_2X_FORMAT && !FPU_HAS_MXFP4_2X_REPLAY);
-
-    if constexpr (USE_DIRECT_INDEXING)
+    if constexpr (ENABLE_DIRECT_INDEXING)
     {
-        // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
-        // MXFP4_2x matmul implementation on Quasar, the Int8_2x path on 4row_arch).
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
         _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
         _set_tile_shape_idx_gpr_(NUM_FACES * MAX_FACE_R_DIM);

@@ -8,6 +8,3 @@
 
 #undef MATH_ROWS
 #define MATH_ROWS 0x00000004 // = 4 in decimal
-
-#undef HAS_MXFP4_2X_REPLAY
-#define HAS_MXFP4_2X_REPLAY 0

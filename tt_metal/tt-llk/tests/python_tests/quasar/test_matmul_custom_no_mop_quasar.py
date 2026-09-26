@@ -292,7 +292,7 @@ MATMUL_2X_DIMENSIONS = [
 @pytest.mark.quasar
 @pytest.mark.skipif(
     is_4row_arch(),
-    reason="MxFp4_2x is not implemented on the 4-row Quasar architecture",
+    reason="MxFp4_2x register formats do not exist on the 4-row Quasar variant; its 2x path is Int8_2x",
 )
 @parametrize(
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),

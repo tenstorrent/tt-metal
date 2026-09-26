@@ -35,8 +35,6 @@ static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2a::MOV_8_ROWS : p
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2b::MOV_8_ROWS : p_movd2b::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movb2a::MOV_8_ROWS : p_movb2a::MOV_4_ROWS));
 
-// Part capabilities come from ckernel_proj_params.h; kernels branch on these, never on the FPU width.
-constexpr static bool FPU_HAS_MXFP4_2X_REPLAY   = HAS_MXFP4_2X_REPLAY != 0;
 constexpr static bool FPU_SPLITS_DEST_ROW_GROUP = ELTWISE_MATH_ROWS < MAX_FPU_ROWS; // a dest row group takes several FPU issues
 
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
