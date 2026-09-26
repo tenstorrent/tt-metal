@@ -525,6 +525,7 @@ def test_per_test_memory_layout_restores_session_default(
     isolated_layout, monkeypatch, explicit, coverage
 ):
     from types import SimpleNamespace
+
     from helpers import llk_pytest_plugin as plugin
 
     monkeypatch.setenv("LLK_HOME", str(TestConfig.LLK_ROOT))
@@ -589,6 +590,7 @@ def test_per_test_memory_layout_restores_session_default(
 
 def test_layout_marker_preserves_distinct_compile_variants(isolated_layout):
     from types import SimpleNamespace
+
     from helpers import llk_pytest_plugin as plugin
     from helpers.param_config import RUNTIME_AXES_MARK
 
@@ -623,6 +625,7 @@ def test_skipped_layout_marker_does_not_configure_unsupported_layout(
     isolated_layout, monkeypatch
 ):
     from types import SimpleNamespace
+
     from helpers import llk_pytest_plugin as plugin
 
     monkeypatch.setattr(plugin, "_exalens_server", None)
