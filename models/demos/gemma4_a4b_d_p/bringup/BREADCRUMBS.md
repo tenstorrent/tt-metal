@@ -373,3 +373,11 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_moe_norm_L00 0.999996, rel_l2 0.00307, row_norm_ratio [0.9965, 1.0021].
 - The log also has a `FAIL pcc_moe_norm_L00: pcc=0.000000` line. It comes from the precompile collect pass (the plugin stubs comp_pcc), not from the real run.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py`
+
+## S.sliding.09 test (run1, attempt 1): swap attn_norm .. moe_norm into the sliding block
+- Replaced the one-line template body with swap 8's checks and added `moe_norm` to SWAPPED. No new check was needed. moe_norm is a `norm` step
+  (h_mid -> pre_feedforward_layernorm_2), so it gets the existing checks: its own output vs golden (PCC >= 0.99, rel L2 <= 0.03) and vs the CPU norm on the same
+  device h_mid (rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]). These catch sum-instead-of-mean and zeroed rows, which PCC misses. The gated metric stays `pcc_swap_out` >= 0.98.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (every check). Device gate PASS (moe_norm is already implemented):
+  pcc_swap_out 0.999967, block out rel 0.0081 / 0.0070 (no change from swap 8), moe_norm pcc 0.99998, rel 0.0065 vs golden, iso 0.0019, ratio [0.9984, 1.0002].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py`
