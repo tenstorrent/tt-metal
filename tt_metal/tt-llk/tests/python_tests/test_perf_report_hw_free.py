@@ -651,6 +651,65 @@ def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
     assert _ci_provenance()["run_id"] == "999-wormhole-3"
 
 
+def test_pipeline_is_pr_for_a_pull_request(monkeypatch):
+    monkeypatch.delenv("PIPELINE", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+
+    assert _ci_provenance()["pipeline"] == "pr"
+
+
+def test_pipeline_defaults_to_nightly_without_an_explicit_value(monkeypatch):
+    monkeypatch.delenv("PIPELINE", raising=False)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+
+    assert _ci_provenance()["pipeline"] == "nightly"
+
+
+@pytest.mark.parametrize("event", ["push", "schedule", "pull_request"])
+@pytest.mark.parametrize("pipeline", ["pr", "nightly", "baseline"])
+def test_explicit_pipeline_wins_over_the_event_guess(monkeypatch, event, pipeline):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    monkeypatch.setenv("PIPELINE", pipeline)
+
+    assert _ci_provenance()["pipeline"] == pipeline
+
+
+def test_an_unknown_pipeline_is_rejected(monkeypatch):
+    monkeypatch.setenv("PIPELINE", "staging")
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        ValueError, match="PIPELINE"
+    ):  # allow-pytest.raises: no expect_error in LLK suite
+        _ci_provenance()
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("L1_TO_L1", {"L1_TO_L1"}),
+        ("MATH_ISOLATE", {"MATH_ISOLATE"}),
+        ("ALL_ISOLATION_MODES", {"UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"}),
+        ("ALL_MODES", {"L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"}),
+        (
+            "L1_TO_L1, ALL_ISOLATION_MODES",
+            {"L1_TO_L1", "UNPACK_ISOLATE", "MATH_ISOLATE", "PACK_ISOLATE"},
+        ),
+    ],
+)
+def test_run_type_presets_expand(text, expected):
+    from helpers.perf.core import _expand_run_types
+
+    assert _expand_run_types(text) == expected
+
+
+def test_an_unknown_run_type_is_rejected():
+    from helpers.perf.core import _expand_run_types
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
+        ValueError, match="L1_TO_L2"
+    ):  # allow-pytest.raises: no expect_error in LLK suite
+        _expand_run_types("L1_TO_L2")
+
+
 def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
     # The current run survives by name, not by being the newest: an mtime that is
     # older than its neighbours (a clock step, a filesystem that lies) must not be

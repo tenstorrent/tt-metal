@@ -21,8 +21,9 @@ import os
 from .parquet import convert_csvs_to_parquet
 
 _VALID_ARCHES = ("wormhole", "blackhole", "quasar")
-# Lowercase, as the warehouse's RUNS.PIPELINE stores them.
-_VALID_PIPELINES = ("pr", "nightly")
+# Lowercase, as the warehouse's RUNS.PIPELINE stores them. "baseline" is the
+# pinned run that the nightly gates read.
+_VALID_PIPELINES = ("pr", "nightly", "baseline")
 
 
 def _run_csvs(csv_dir):

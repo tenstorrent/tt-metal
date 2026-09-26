@@ -1,0 +1,309 @@
+name: "LLK perf gate impl"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: "Architecture to gate on (wormhole or blackhole)"
+        required: false
+        default: wormhole
+        type: string
+      perf_run_id:
+        description: >-
+          The workflow run that produced this PR's perf data. Leave empty when a
+          job in THIS run uploaded it; the download then reads the current run.
+        required: false
+        type: string
+      baseline_run_id:
+        description: >-
+          Read the baseline from this workflow run's perf artifacts instead of
+          from the warehouse. For piloting the gate without writing anything to
+          Snowflake. Empty = the normal path (Snowflake + SFTP).
+        required: false
+        type: string
+      baseline_artifact_pattern:
+        description: >-
+          Take the baseline from THIS run's artifacts matching this pattern
+          instead of the warehouse, for a PR measured against its branch point.
+        required: false
+        default: ""
+        type: string
+      current_artifact_pattern:
+        description: "Artifact pattern for the current side (blank = perf-data-<arch>-*)"
+        required: false
+        default: ""
+        type: string
+      baseline_commit:
+        description: "Commit the baseline side was measured at, for the report"
+        required: false
+        default: ""
+        type: string
+      measure_result:
+        description: >-
+          Results of the measuring jobs, comma-separated. Anything other than
+          success or skipped means the suite is incomplete, so nothing is compared.
+        required: false
+        default: ""
+        type: string
+      run_types:
+        description: "Comma-separated run types to gate on (e.g. L1_TO_L1, MATH_ISOLATE, PACK_ISOLATE)"
+        required: false
+        default: L1_TO_L1
+        type: string
+      threshold:
+        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.08)"
+        required: false
+        default: "0.02"
+        type: string
+      module_thresholds:
+        description: "Per-module thresholds, comma-separated, e.g. perf_matmul=0.25"
+        required: false
+        default: ""
+        type: string
+      min_cycles:
+        description: "A point must also move more than this many cycles"
+        required: false
+        default: "30"
+        type: string
+      fail_on_regression:
+        description: "Fail the job on a regression. False reports to Slack only."
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  llk-perf-gate:
+    name: "Compare perf: current vs main"
+    runs-on: ubuntu-slim
+    outputs:
+      gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas
+
+      - name: Check the measurement is complete
+        id: measured
+        env:
+          MEASURE_RESULT: ${{ inputs.measure_result }}
+        run: |
+          COMPLETE=true
+          IFS=',' read -ra RESULTS <<< "$MEASURE_RESULT"
+          for R in "${RESULTS[@]}"; do
+            R=$(echo "$R" | xargs)
+            case "$R" in ""|success|skipped) ;; *) COMPLETE=false ;; esac
+          done
+          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+          if [ "$COMPLETE" != "true" ]; then
+            echo "::error::The measurement did not complete (${MEASURE_RESULT}), so the gate compares nothing."
+          fi
+
+      - name: No baseline source
+        if: inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+        run: |
+          echo "::warning::No baseline source was given, so the gate compares nothing."
+          echo "false" > have_baseline.txt
+          echo '{}' > baseline_metadata.json
+
+      - name: Download the baseline from a workflow run
+        if: inputs.baseline_run_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-*
+          merge-multiple: true
+          path: baseline_perf
+          run-id: ${{ inputs.baseline_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record the baseline run as the baseline
+        if: inputs.baseline_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+        run: |
+          COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Baseline CSVs from run ${BASELINE_RUN_ID}: ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Run ${BASELINE_RUN_ID} published no perf CSVs."
+            echo "false" > have_baseline.txt
+            echo '{}' > baseline_metadata.json
+            exit 1
+          fi
+
+          BASELINE_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${BASELINE_RUN_ID}" \
+            --jq '.head_sha') || BASELINE_SHA=""
+          python3 - "$BASELINE_SHA" "$BASELINE_RUN_ID" > baseline_metadata.json <<'PYTHON'
+          import json
+          import sys
+
+          sha, run_id = sys.argv[1], sys.argv[2]
+          print(json.dumps({"commit_sha": sha, "run_id": run_id}))
+          PYTHON
+          echo "true" > have_baseline.txt
+          echo "Baseline commit: ${BASELINE_SHA:-unknown}"
+
+      - name: Take the baseline from this run's artifacts
+        if: inputs.baseline_artifact_pattern != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.baseline_artifact_pattern }}
+          merge-multiple: true
+          path: baseline_perf
+
+      - name: Record the branch point as the baseline
+        if: inputs.baseline_artifact_pattern != ''
+        env:
+          BASELINE_COMMIT: ${{ inputs.baseline_commit }}
+          PATTERN: ${{ inputs.baseline_artifact_pattern }}
+        run: |
+          COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Branch-point CSVs (${PATTERN}): ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::Nothing matched ${PATTERN}; the branch point measured nothing."
+            echo "false" > have_baseline.txt
+            echo '{}' > baseline_metadata.json
+            exit 1
+          fi
+          printf '{"commit_sha": "%s", "source": "branch point, measured in this run"}\n' \
+            "$BASELINE_COMMIT" > baseline_metadata.json
+          echo "true" > have_baseline.txt
+
+      - name: Download the PR's perf data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
+          merge-multiple: true
+          path: current_perf
+          run-id: ${{ inputs.perf_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check that perf data arrived
+        run: |
+          COUNT=$(find current_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
+          echo "Current-side CSVs: ${COUNT}"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No perf CSVs for the current side. The gate measured nothing."
+            exit 1
+          fi
+
+      - name: Compare regressions
+        id: compare
+        if: >-
+          steps.measured.outputs.complete == 'true'
+          && hashFiles('baseline_perf/**/*.csv') != ''
+        env:
+          RUN_TYPES: ${{ inputs.run_types }}
+          THRESHOLD: ${{ inputs.threshold }}
+          MIN_CYCLES: ${{ inputs.min_cycles }}
+          MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
+        run: |
+          set +e
+          BASELINE_SHA=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha') or 'unknown')")
+
+          python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            --current 'current_perf/**/*.csv' \
+            --baseline 'baseline_perf/**/*.csv' \
+            --run-types "$RUN_TYPES" \
+            --threshold "$THRESHOLD" \
+            --min-cycles "$MIN_CYCLES" \
+            --module-threshold "$MODULE_THRESHOLDS" \
+            --report perf_gate_report.md \
+            --test 'LLK perf' \
+            --baseline-sha "$BASELINE_SHA" \
+            --current-sha "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --baseline-label "${{ inputs.baseline_artifact_pattern && 'branch point on main' || 'pinned baseline' }}" \
+            --current-label "${{ github.event_name == 'pull_request' && 'PR head' || github.ref_name }}"
+          EXIT_CODE=$?
+          echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          if [ -f perf_gate_report.verdict.json ]; then
+            echo "comparison_finished=true" >> $GITHUB_OUTPUT
+          else
+            echo "comparison_finished=false" >> $GITHUB_OUTPUT
+            echo "::warning::The comparison did not finish (exit ${EXIT_CODE}); no verdict."
+          fi
+          exit 0  # Don't fail the step; let the verdict step decide
+
+      - name: Comment on PR
+        if: >-
+          always() && github.event_name == 'pull_request'
+          && steps.measured.outputs.complete == 'true'
+          && hashFiles('perf_gate_report.md') != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ARCH: ${{ inputs.arch }}
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('perf_gate_report.md')) {
+              core.warning('The comparison wrote no report; nothing to post.');
+              return;
+            }
+            const marker = `<!-- llk-perf-gate:${process.env.ARCH} -->`;
+            const body = `${marker}\n${fs.readFileSync('perf_gate_report.md', 'utf8')}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+      - name: Gate verdict
+        if: always()
+        run: |
+          HAVE_BASELINE=$(cat have_baseline.txt)
+          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+
+          if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
+            echo "::error::The measurement did not complete, so the gate compared nothing."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$HAVE_BASELINE" != "true" ]; then
+            echo "⚠️  No baseline found; gate skipped (first run or data missing)"
+            exit 0
+          fi
+
+          if [ "${{ steps.compare.outputs.comparison_finished }}" = "false" ]; then
+            echo "::error::The comparison did not finish, so the gate has no verdict."
+            echo "This is an infrastructure fault, not a performance result."
+            exit 1
+          fi
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "❌ Performance regressions detected"
+            cat perf_gate_report.md
+            if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
+              exit 1
+            fi
+            echo "Report-only: Slack carries the verdict; the job does not fail."
+            exit 0
+          fi
+
+          echo "✅ No regressions detected"
+          cat perf_gate_report.md
