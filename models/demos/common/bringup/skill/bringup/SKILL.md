@@ -19,7 +19,8 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 - **Ladder**: default four rungs: 2 chunks of 2048 with full dumps, 2 chunks of 8192, the last chunk after a golden
   prefix, then the full target.
 - **Layer subset**, only if the model does not fit the box.
-- **Owner rules** for every agent, e.g. "always use 2D fabric". They go in `agents.rules` and appear in every brief.
+- **Owner rules** for every agent of this model (beyond the standing ones in the agent definition, such as always
+  2D fabric). They go in `agents.rules` and appear in every brief.
 - **Dashboard style**: `standard` (the ERNIE look), `teletext` (a 90s teletext service on a CRT), or `both`. Goes in
   `dashboard.styles`.
 - **Retry policy**, only if they want to change it: per role, attempts (default 3) and whether it escalates to
