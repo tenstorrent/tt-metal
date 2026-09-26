@@ -352,6 +352,26 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
     assert torch.allclose(torch_tensor, opt_tensor)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("fill_value", [0, 1.0])
+def test_full_with_opt_tensor_block_float(device, dtype, fill_value):
+    input_shape = [32, 32]
+    torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
+    opt_tensor = ttnn.from_torch(
+        torch.ones(input_shape, dtype=torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.full(input_shape, device=device, fill_value=fill_value, optional_tensor=opt_tensor)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+    assert ttnn.is_tensor_storage_on_device(opt_tensor)
+    assert_equal(torch_tensor, ttnn.to_torch(opt_tensor))
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [
