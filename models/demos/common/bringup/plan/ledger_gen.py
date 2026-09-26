@@ -70,13 +70,16 @@ def generate(spec, ref=None, early: bool = False) -> dict:
 
     add(
         "R.1",
-        "Checkpoint has every tensor the spec expects; intake approved; canonical prompt built",
+        "Checkpoint, intake approval, canonical prompt, HF sanity (revision, usage-example smoke, accuracy floor)",
         "intake",
         [],
-        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt",
+        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt && {PY}.intake.check_hf_sanity",
         {
             "intake_approved": "== 1",
             "prompt_hash_ok": "== 1",
+            "revision_ok": "== 1",
+            "text_top1_acc": f">= {spec.get('text.min_top1', 0.4)}",
+            **({"smoke_ok": "== 1"} if spec.get("intake.smoke") else {}),
             "missing_tensors": "== 0",
             "shape_mismatches": "== 0",
             "count_mismatches": "== 0",
