@@ -2630,6 +2630,153 @@
   "started": "2026-09-25T22:25:11",
   "status": "PASS"
  },
+ "K.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "8046239a1ff68c6935b0e2626656c09b5026868f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "1494e0af-8e4c-4374-a46e-e48386dcb454"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/K.1.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "2293336ee63cf8cab5da0b7ad3f3e11e1385b1bc",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/K.1.contract.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [
+     "agent exited rc=143 is_error=None"
+    ],
+    "rc": 143,
+    "role": "contract",
+    "seconds": 11.7,
+    "session_id": "54f2875e-b571-4e41-b0c4-b0fe61d7e5fd",
+    "t": "2026-09-26T04:16:05"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/K.1.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "8046239a1ff68c6935b0e2626656c09b5026868f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/K.1.contract.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "contract",
+    "seconds": 810.6,
+    "session_id": "4104a936-3cd9-47ea-94ad-6bef0151e684",
+    "t": "2026-09-26T04:44:17"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/K.1.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "8046239a1ff68c6935b0e2626656c09b5026868f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/K.1.contract.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "contract",
+    "seconds": 148.3,
+    "session_id": "1494e0af-8e4c-4374-a46e-e48386dcb454",
+    "t": "2026-09-26T04:53:22"
+   }
+  ],
+  "attempts": 4,
+  "duration_s": 84.0,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T04:15:53"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-26T04:21:09"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T04:30:46"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T04:45:26"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T04:50:53"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T04:54:48"
+   }
+  ],
+  "last_run": "2026-09-26T04:54:48",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/K.1.log",
+  "metrics": {
+   "ack_blocks_checked": 960,
+   "acks_early": 0,
+   "contract_checks_failed": 0,
+   "pcc_producer_kv_k": 0.9944710873634661,
+   "pcc_producer_kv_v": 0.9942611294567594
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T04:53:24",
+  "status": "PASS",
+  "waiting": null
+ },
  "L.last": {
   "attempts": 0,
   "duration_s": 315.3,
