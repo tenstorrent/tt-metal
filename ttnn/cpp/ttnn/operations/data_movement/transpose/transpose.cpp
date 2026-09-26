@@ -249,41 +249,47 @@ ttnn::Tensor transpose_impl(
 
     TT_FATAL(normalized_dim1 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
     TT_FATAL(normalized_dim2 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
+
+    // Identity transposes (dim1 == dim2, or both dims have size 1) don't move any data, so they can be
+    // resolved directly in the input dtype without ever typecasting a bfloat8_b tensor through bfloat16.
+    const bool is_identity_transpose =
+        (normalized_dim1 == normalized_dim2) || (input_unsqueezed.padded_shape()[normalized_dim1] == 1 &&
+                                                 input_unsqueezed.padded_shape()[normalized_dim2] == 1);
+    if (is_identity_transpose) {
+        Tensor output;
+        if (memory_config_arg.has_value() && input_unsqueezed.memory_config() != memory_config_arg.value()) {
+            output = ttnn::clone(
+                input_unsqueezed,
+                std::nullopt,
+                memory_config_arg.value_or(input_unsqueezed.memory_config()),
+                std::nullopt);
+        } else {
+            output = input_unsqueezed;
+        }
+        return initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
+    }
+
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;
     const bool typecast = input_unsqueezed.dtype() == DataType::BFLOAT8_B and !bfloat8_supported;
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
-    Tensor output;
-    if ((normalized_dim1 == normalized_dim2) || (input_typecasted.padded_shape()[normalized_dim1] == 1 &&
-                                                 input_typecasted.padded_shape()[normalized_dim2] == 1)) {
-        if (memory_config_arg.has_value() && input_typecasted.memory_config() != memory_config_arg.value()) {
-            output = ttnn::clone(
-                input_typecasted,
-                std::nullopt,
-                memory_config_arg.value_or(input_typecasted.memory_config()),
-                std::nullopt);
-        } else {
-            output = input_typecasted;
-        }
-    } else {
-        // covered in main if branch => not a TT_FATAL
-        TT_ASSERT(normalized_dim1 != normalized_dim2, "Unsupported transpose dims");
+    // covered by the is_identity_transpose branch above => not a TT_FATAL
+    TT_ASSERT(normalized_dim1 != normalized_dim2, "Unsupported transpose dims");
 
-        using ttnn::prim::TransposeOpDim;
-        constexpr auto tod_default_value = TransposeOpDim::NW;
-        constexpr TransposeOpDim transpose_dims[4][4] = {
-            //     dim2=0              dim2=1              dim2=2              dim2=3
-            {tod_default_value, TransposeOpDim::CN, TransposeOpDim::NH, TransposeOpDim::NW},  // dim1=0
-            {TransposeOpDim::CN, tod_default_value, TransposeOpDim::HC, TransposeOpDim::CW},  // dim1=1
-            {TransposeOpDim::NH, TransposeOpDim::HC, tod_default_value, TransposeOpDim::WH},  // dim1=2
-            {TransposeOpDim::NW, TransposeOpDim::CW, TransposeOpDim::WH, tod_default_value},  // dim1=3
-        };
+    using ttnn::prim::TransposeOpDim;
+    constexpr auto tod_default_value = TransposeOpDim::NW;
+    constexpr TransposeOpDim transpose_dims[4][4] = {
+        //     dim2=0              dim2=1              dim2=2              dim2=3
+        {tod_default_value, TransposeOpDim::CN, TransposeOpDim::NH, TransposeOpDim::NW},  // dim1=0
+        {TransposeOpDim::CN, tod_default_value, TransposeOpDim::HC, TransposeOpDim::CW},  // dim1=1
+        {TransposeOpDim::NH, TransposeOpDim::HC, tod_default_value, TransposeOpDim::WH},  // dim1=2
+        {TransposeOpDim::NW, TransposeOpDim::CW, TransposeOpDim::WH, tod_default_value},  // dim1=3
+    };
 
-        output = detail::transpose_(
-            input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], memory_config_arg, pad_value);
-    }
+    Tensor output = detail::transpose_(
+        input_typecasted, transpose_dims[normalized_dim1][normalized_dim2], memory_config_arg, pad_value);
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 }
