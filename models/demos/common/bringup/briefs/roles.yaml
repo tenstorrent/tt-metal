@@ -40,3 +40,11 @@ perf: |
   The gate re-runs an accuracy rung and the warm profile; it passes only if every accuracy threshold still holds and
   the measured time drops below its threshold. Keep the previous behaviour selectable (a named setting or an env var,
   recorded in the profile's settings) so the two can be compared. Do not change thresholds, goldens or frozen tests.
+assemble: |
+  Role: assemble. Every step of every block type has passed on the device, but through the hybrid harness
+  (`$model_dir/bringup/hooks.py`: the CPU reference with host in / host out around each device step). Build the model
+  the ladder, the contract and the profile use: one device model whose hidden state stays on the device from the
+  embedding to the final norm, made from the validated modules (reuse them, do not rewrite them). Each block's forward
+  goes through `run_block` with the block graph, so the profiler sees one section per step. Everything that depends
+  only on shapes or positions is built once at load and sliced on the device (agent rule 5). Register it as the
+  `device_model` hook; keep the hybrid selectable (e.g. `BRINGUP_HYBRID=1`) for debugging. $details
