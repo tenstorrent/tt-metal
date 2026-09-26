@@ -12,12 +12,9 @@
 #include "tensor_impl.hpp"
 
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "pinned_upload.hpp"
-#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -196,49 +193,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         expected_packed_buffer_size_bytes);
 
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
-    auto* mesh_device = mesh_buffer->device();
-
-    const bool use_pinned = pinned_upload::should_use_pinned_write_path(*mesh_device, data_to_write.size());
-
-    if (use_pinned) {
-        // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
-        // by this host can be pinned/written; restrict the pin and the transfers to those so the
-        // remote coordinates are a complete no-op here.
-        const auto& view = mesh_device->get_view();
-        std::vector<distributed::MeshCoordinate> local_coords;
-        local_coords.reserve(mesh_device->shape().mesh_size());
-        distributed::MeshCoordinateRangeSet local_range;
-        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-            if (view.impl().is_local(coord)) {
-                local_coords.push_back(coord);
-                local_range.merge(distributed::MeshCoordinateRange(coord, coord));
-            }
-        }
-
-        HostBuffer pinned_buffer(*host_buffer);
-        auto pinned_memory = local_coords.empty() ? nullptr
-                                                  : experimental::PinnedMemoryCache::instance().try_pin(
-                                                        *mesh_device,
-                                                        local_range,
-                                                        pinned_buffer,
-                                                        /*map_to_noc=*/true,
-                                                        experimental::PinnedMemoryDeviceAccess::ReadOnly);
-
-        if (pinned_memory) {
-            std::vector<distributed::ShardDataTransfer> transfers;
-            transfers.reserve(local_coords.size());
-            for (const auto& coord : local_coords) {
-                auto xfer = distributed::ShardDataTransfer{coord}
-                                .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
-                                .region(BufferRegion(0, data_to_write.size()));
-                experimental::ShardDataTransferSetPinnedMemory(xfer, pinned_memory);
-                transfers.push_back(std::move(xfer));
-            }
-            command_queue.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
-        } else {
-            command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
-        }
-    } else {
+    if (!pinned_upload::write_replicated(command_queue, mesh_buffer, *host_buffer)) {
         command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
     }
 

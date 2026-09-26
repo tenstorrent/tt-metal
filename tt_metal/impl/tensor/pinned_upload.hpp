@@ -11,6 +11,7 @@
 
 namespace tt::tt_metal {
 class DistributedHostBuffer;
+class HostBuffer;
 namespace distributed {
 class MeshBuffer;
 class MeshCommandQueue;
@@ -52,6 +53,12 @@ bool write_shards(
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const DistributedHostBuffer& host_buffer);
 
+// write_shards for one host buffer written whole to every device of the mesh that this host owns.
+bool write_replicated(
+    distributed::MeshCommandQueue& cq,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const HostBuffer& host_buffer);
+
 // Waits for the writes of device-immutable uploads that returned early and releases their pins. Their storage (for a
 // file mapping, the munmap) is released on a background thread; see wait_for_storage_release.
 // `cq_id` limits this to uploads through that command queue; nullopt covers every command queue of `mesh_device`.
@@ -62,5 +69,8 @@ size_t num_pending(const distributed::MeshDevice& mesh_device);
 
 // Waits until the storage of every drained upload has been released.
 void wait_for_storage_release();
+
+// Chunk pins that chunked uploads in this process have created, so tests can tell pinned chunks from copied ones.
+size_t num_chunk_pins_created();
 
 }  // namespace tt::tt_metal::pinned_upload

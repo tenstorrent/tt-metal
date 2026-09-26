@@ -10,6 +10,7 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_event_impl.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -26,6 +27,7 @@
 #include <memory>
 #include <optional>
 #include <source_location>
+#include <thread>
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
@@ -890,6 +892,22 @@ MeshCommandQueueBase& MeshDeviceImpl::mesh_command_queue_base(std::optional<uint
     const auto& command_queue = mesh_command_queues_[id];
     TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
     return *command_queue;
+}
+
+bool MeshDeviceImpl::wait_for_event_unless_queue_failed(const MeshEvent& event) const {
+    const uint32_t cq_id = event.impl().mesh_cq_id();
+    // close() destroys the queues only after they finish their work.
+    if (cq_id >= mesh_command_queues_.size()) {
+        return true;
+    }
+    const MeshCommandQueueBase& command_queue = *mesh_command_queues_[cq_id];
+    while (!EventQuery(event)) {
+        if (command_queue.completion_reader_failed()) {
+            return false;
+        }
+        std::this_thread::yield();
+    }
+    return true;
 }
 
 DeviceIds MeshDeviceImpl::get_device_ids() const {

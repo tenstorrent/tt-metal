@@ -10,9 +10,11 @@
 #include <cstring>
 #include <memory>
 #include <cstdint>
+#include <mutex>
 #include <utility>
 #include <unistd.h>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
@@ -325,8 +327,20 @@ bool PinnedMemoryImpl::lock_may_block() const { return !barrier_events_.empty();
 
 void PinnedMemoryImpl::drain_barrier_events() {
     while (!barrier_events_.empty()) {
-        auto& event = barrier_events_.front();
-        distributed::EventSynchronize(event);
+        const auto& event = barrier_events_.front();
+        if (!event.device()->impl().wait_for_event_unless_queue_failed(event)) {
+            // Once per process: every pin still in use when the device failed ends up here.
+            static std::once_flag failed_queue_warned;
+            std::call_once(failed_queue_warned, [&] {
+                log_warning(
+                    tt::LogMetal,
+                    "Releasing pinned host memory whose transfers on command queue {} will not complete: the queue "
+                    "stopped after a device error. This message is emitted once per process.",
+                    event.impl().mesh_cq_id());
+            });
+            barrier_events_.clear();
+            return;
+        }
         barrier_events_.pop_front();
     }
 }

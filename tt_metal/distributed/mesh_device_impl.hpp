@@ -77,6 +77,7 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
+class MeshEvent;
 class RealtimeProfilerManager;
 class TensorPrefetcherManager;
 
@@ -501,6 +502,11 @@ public:
     // MeshCommandQueueBase, exposing dispatch-implementation methods (e.g.
     // enqueue_write_dram_core_counter) without a downcast.
     MeshCommandQueueBase& mesh_command_queue_base(std::optional<uint8_t> cq_id = std::nullopt) const;
+
+    // Waits until `event`, recorded on one of this mesh's command queues, has completed, and returns true. Returns
+    // false without waiting further once that queue's completion reader has stopped on a device error, since the
+    // event then never completes. After close() the queues are gone and there is nothing left to wait for.
+    bool wait_for_event_unless_queue_failed(const MeshEvent& event) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);

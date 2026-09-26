@@ -7,8 +7,10 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -71,7 +73,7 @@ struct Source {
     std::vector<distributed::MeshCoordinate> coords;
 };
 
-// Process-wide pool that runs chunk pins. Separate from the command queues' dispatch pools, whose workers are pinned
+// Worker pool that runs chunk pins. Separate from the command queues' dispatch pools, whose workers are pinned
 // to devices and whose wait() covers the whole pool.
 class PinWorkerPool {
 public:
@@ -133,17 +135,47 @@ private:
     std::vector<std::thread> workers_;
 };
 
-// Created on first use with the thread count configured at that time.
-PinWorkerPool& pin_worker_pool(size_t num_threads) {
-    static PinWorkerPool pool(num_threads);
+// Uploads configured with the same thread count share a pool. An upload configured with a different count (a changed
+// TT_METAL_PINNED_UPLOAD_THREADS, or another MetalEnv) replaces it; the old pool exits once the uploads using it
+// finish.
+std::shared_ptr<PinWorkerPool> pin_worker_pool(size_t num_threads) {
+    static std::mutex mutex;
+    static std::shared_ptr<PinWorkerPool> pool;
+    std::lock_guard lock(mutex);
+    if (pool == nullptr || pool->num_threads() != num_threads) {
+        pool = std::make_shared<PinWorkerPool>(num_threads);
+    }
     return pool;
 }
+
+// Chunk pins created so far; see num_chunk_pins_created.
+std::atomic<size_t> chunk_pins_created{0};
+
+size_t os_page_size() {
+    const long page_size = sysconf(_SC_PAGESIZE);
+    return page_size > 0 ? static_cast<size_t>(page_size) : 4096;
+}
+
+// A host range widened to whole OS pages, which is what a pin of the range covers.
+struct PinnedSpan {
+    uintptr_t begin = 0;
+    uintptr_t end = 0;
+
+    PinnedSpan(const std::byte* base, size_t size) {
+        const uintptr_t page = os_page_size();
+        begin = reinterpret_cast<uintptr_t>(base) / page * page;
+        end = (reinterpret_cast<uintptr_t>(base) + size + page - 1) / page * page;
+    }
+
+    bool overlaps(const PinnedSpan& other) const { return begin < other.end && other.begin < end; }
+};
 
 // Pins of device-immutable uploads that returned before their writes completed.
 struct PendingUpload {
     uint32_t cq_id = 0;
     distributed::MeshEvent completion;  // Recorded after the upload's last write.
     std::vector<PinnedMemoryPtr> pins;
+    std::vector<PinnedSpan> spans;   // The host ranges of the upload's sources.
     std::vector<MemoryPin> storage;  // Keeps the uploaded memory alive until the pins are released.
 };
 
@@ -169,11 +201,16 @@ public:
                 continue;
             }
             all_seen = false;
-            MemoryPin pin = source.host_buffer.pin();
-            if (pin == nullptr) {
-                continue;
+            // A key pushed out of keys_ keeps the callback it registered; registering another each time the key is
+            // recorded again would grow the storage's callback list by one per upload.
+            if (!keys_with_release_callback_.contains(key)) {
+                MemoryPin pin = source.host_buffer.pin();
+                if (pin == nullptr) {
+                    continue;
+                }
+                pin.impl().add_final_release_callback([key] { SeenUploads::instance().forget(key); });
+                keys_with_release_callback_.insert(key);
             }
-            pin.impl().add_final_release_callback([key] { SeenUploads::instance().forget(key); });
             keys_.push_back(key);
             if (keys_.size() > k_seen_uploads_capacity) {
                 keys_.pop_front();
@@ -191,10 +228,13 @@ private:
         if (it != keys_.end()) {
             keys_.erase(it);
         }
+        keys_with_release_callback_.erase(key);
     }
 
     std::mutex mutex_;
     std::deque<Key> keys_;
+    // Keys whose storage calls forget() when released, including keys since pushed out of keys_.
+    std::set<Key> keys_with_release_callback_;
 };
 
 // Drops storage references on a background thread. Unmapping a file mapping costs about as much as transferring it
@@ -326,6 +366,38 @@ public:
         release(std::move(drained));
     }
 
+    // Waits for, then releases, the pending uploads (to any device, through any command queue) whose sources overlap
+    // the host ranges of `sources`.
+    void drain_overlapping(const std::vector<Source>& sources) {
+        std::vector<PinnedSpan> spans;
+        spans.reserve(sources.size());
+        for (const auto& source : sources) {
+            spans.emplace_back(source.base, source.size);
+        }
+        std::vector<PendingUpload> drained;
+        {
+            std::lock_guard lock(mutex_);
+            for (auto device = by_device_.begin(); device != by_device_.end();) {
+                auto& uploads = device->second;
+                for (auto upload = uploads.begin(); upload != uploads.end();) {
+                    const bool overlaps =
+                        std::any_of(upload->spans.begin(), upload->spans.end(), [&](const auto& held) {
+                            return std::any_of(
+                                spans.begin(), spans.end(), [&](const auto& span) { return held.overlaps(span); });
+                        });
+                    if (overlaps) {
+                        drained.push_back(std::move(*upload));
+                        upload = uploads.erase(upload);
+                    } else {
+                        ++upload;
+                    }
+                }
+                device = uploads.empty() ? by_device_.erase(device) : std::next(device);
+            }
+        }
+        release(std::move(drained));
+    }
+
     size_t num_pending(const distributed::MeshDevice& mesh_device) const {
         std::lock_guard lock(mutex_);
         auto it = by_device_.find(&mesh_device);
@@ -353,11 +425,6 @@ private:
     std::unordered_map<const distributed::MeshDevice*, std::deque<PendingUpload>> by_device_;
     StorageReleaser storage_releaser_;
 };
-
-size_t os_page_size() {
-    const long page_size = sysconf(_SC_PAGESIZE);
-    return page_size > 0 ? static_cast<size_t>(page_size) : 4096;
-}
 
 std::vector<Source> collect_local_sources(
     const distributed::MeshDevice& mesh_device, const DistributedHostBuffer& host_buffer) {
@@ -387,6 +454,29 @@ std::vector<Source> collect_local_sources(
         }
         existing->coord_range.merge(distributed::MeshCoordinateRange(coord, coord));
         existing->coords.push_back(coord);
+    }
+    return sources;
+}
+
+// The one source of a host buffer replicated to every device of the mesh that this host owns; none if it owns no
+// device.
+std::vector<Source> replicated_local_sources(
+    const distributed::MeshDevice& mesh_device, const HostBuffer& host_buffer) {
+    const auto& view = mesh_device.get_view();
+    Source source{.host_buffer = host_buffer};
+    auto bytes = source.host_buffer.view_bytes();
+    source.base = bytes.data();
+    source.size = bytes.size();
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
+        // Only chips owned by this host can be pinned or written.
+        if (view.impl().is_local(coord)) {
+            source.coord_range.merge(distributed::MeshCoordinateRange(coord, coord));
+            source.coords.push_back(coord);
+        }
+    }
+    std::vector<Source> sources;
+    if (!source.coords.empty()) {
+        sources.push_back(std::move(source));
     }
     return sources;
 }
@@ -422,9 +512,8 @@ bool write_shards_with_cached_pins(
     return true;
 }
 
-// Whether the chunked pipeline can write every chunk of every source through the pinned branch of
-// write_to_device_buffer. It must decide up front: the pinned branch reads a transfer's host_data as the base of the
-// whole buffer, the copy branch as the start of the region, so the pipeline cannot find out per chunk.
+// Whether the chunks of every source can go through the pinned branch of write_to_device_buffer. A chunk that cannot
+// is copied instead, which makes pinning it wasted work, so an upload that would copy its chunks is not chunked.
 bool chunked_upload_applies(
     distributed::MeshDevice& mesh_device, const distributed::MeshBuffer& mesh_buffer, std::vector<Source>& sources) {
     auto& metal_env = mesh_device.impl().metal_env();
@@ -455,11 +544,12 @@ bool chunked_upload_applies(
                 experimental::per_core_allocation::is_per_core_allocation(*device_buffer)) {
                 return false;
             }
-            for (size_t offset = 0; offset < source.size; offset += source.chunk_bytes) {
-                if (!buffer_dispatch::pinned_write_source_aligned(*device_buffer, source.base + offset)) {
-                    return false;
-                }
-            }
+        }
+        // Chunk offsets are multiples of the OS page, which meets any L1 read alignment, so every chunk is as aligned
+        // as the base.
+        if (!buffer_dispatch::pinned_write_source_aligned(
+                *mesh_buffer.get_device_buffer(source.coords.front()), source.base)) {
+            return false;
         }
         // A cached pin of this range may still be in use, and its presence means the range is being re-uploaded.
         if (experimental::PinnedMemoryCache::instance().contains(source.base)) {
@@ -469,13 +559,29 @@ bool chunked_upload_applies(
     return true;
 }
 
+// Waits until the writes enqueued on `cq` before `written` have completed. A queue that stops on a device error never
+// completes the event, so this throws then instead of waiting forever; the device error itself surfaces from the
+// queue's next finish().
+void wait_for_writes(
+    distributed::MeshDevice& mesh_device,
+    const distributed::MeshCommandQueue& cq,
+    const distributed::MeshEvent& written) {
+    if (!mesh_device.impl().wait_for_event_unless_queue_failed(written)) {
+        TT_THROW(
+            "A tensor upload through command queue {} did not complete: the queue stopped after a device error.",
+            cq.id());
+    }
+}
+
 void write_shards_chunked(
     distributed::MeshCommandQueue& cq,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const std::vector<Source>& sources) {
     auto& mesh_device = *mesh_buffer->device();
     auto& metal_env = mesh_device.impl().metal_env();
-    auto& pool = pin_worker_pool(metal_env.get_rtoptions().get_pinned_upload_threads());
+    // Held for the whole upload: another upload may replace the shared pool meanwhile.
+    const auto shared_pool = pin_worker_pool(metal_env.get_rtoptions().get_pinned_upload_threads());
+    auto& pool = *shared_pool;
 
     // The driver serializes pins per device handle. Pins for different MMIO devices already go through different
     // handles, so each device needs only enough extra handles for its share of the pool threads.
@@ -491,7 +597,22 @@ void write_shards_chunked(
             ? 0
             : (pool.num_threads() + mmio_device_ids.size() - 1) / mmio_device_ids.size();
     for (ChipId mmio_device_id : mmio_device_ids) {
-        metal_env.get_cluster().set_pin_handle_count(mmio_device_id, extra_handles_per_device);
+        try {
+            metal_env.get_cluster().set_pin_handle_count(mmio_device_id, extra_handles_per_device);
+        } catch (const std::exception& e) {
+            // Opening a handle fails when the process is out of file descriptors, for example. Pins then share the
+            // handles already open, and run less concurrently.
+            static std::once_flag handle_failure_warned;
+            std::call_once(handle_failure_warned, [&] {
+                log_warning(
+                    tt::LogMetal,
+                    "Opening {} extra device handle(s) for pinning tensor uploads to device {} failed; pinning through "
+                    "the handles already open. This message is emitted once per process. Error: {}",
+                    extra_handles_per_device,
+                    mmio_device_id,
+                    e.what());
+            });
+        }
     }
 
     size_t num_chunks = 0;
@@ -539,6 +660,7 @@ void write_shards_chunked(
                         /*map_to_noc=*/true,
                         experimental::PinnedMemoryDeviceAccess::ReadOnly);
                     experimental::HostBufferSetPinnedMemory(chunk, nullptr);
+                    chunk_pins_created.fetch_add(1, std::memory_order_relaxed);
                     return pinned;
                 });
             }
@@ -556,7 +678,11 @@ void write_shards_chunked(
         }
     });
 
-    std::deque<std::vector<PinnedMemoryPtr>> in_flight;
+    struct InFlightChunk {
+        distributed::MeshEvent written;  // Recorded after the chunk's writes.
+        std::vector<PinnedMemoryPtr> pins;
+    };
+    std::deque<InFlightChunk> in_flight;
     for (size_t c = 0; c < num_chunks; c++) {
         submit_through(c + 1 + chunks_ahead);
         std::vector<PinnedMemoryPtr> chunk_pins;
@@ -585,25 +711,12 @@ void write_shards_chunked(
                 });
             }
             for (const auto& coord : source.coords) {
-                auto transfer = distributed::ShardDataTransfer{coord}.region(BufferRegion(offset, length));
+                // host_data is the chunk's first byte whether the write reads the pin or copies.
+                auto transfer = distributed::ShardDataTransfer{coord}
+                                    .host_data(source.base + offset)
+                                    .region(BufferRegion(offset, length));
                 if (pinned) {
-                    const auto pinned_source = buffer_dispatch::resolve_pinned_interleaved_write_source(
-                        *mesh_buffer->get_device_buffer(coord), source.base + offset, length, *pinned);
-                    TT_FATAL(
-                        pinned_source.status == buffer_dispatch::PinnedInterleavedWriteSource::Status::Pinned,
-                        "Chunk at offset {} ({} B) of the upload to device coordinate {} cannot be read from its pin "
-                        "(status {}); the copy path would read the wrong bytes because it treats host_data as the "
-                        "chunk start. chunked_upload_applies must reject this upload.",
-                        offset,
-                        length,
-                        coord,
-                        static_cast<int>(pinned_source.status));
-                    // The pinned branch of write_to_device_buffer reads host_data + region offset.
-                    transfer.host_data(source.base);
                     experimental::ShardDataTransferSetPinnedMemory(transfer, pinned);
-                } else {
-                    // The copy branch reads the region's bytes starting at host_data.
-                    transfer.host_data(source.base + offset);
                 }
                 transfers.push_back(std::move(transfer));
             }
@@ -612,28 +725,57 @@ void write_shards_chunked(
             }
         }
         cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/false);
-        in_flight.push_back(std::move(chunk_pins));
+        in_flight.push_back({.written = cq.enqueue_record_event_to_host(), .pins = std::move(chunk_pins)});
         if (in_flight.size() > k_in_flight_chunks) {
-            // Releasing the last reference waits for the chunk's writes, then unpins.
+            wait_for_writes(mesh_device, cq, in_flight.front().written);
             in_flight.pop_front();
         }
     }
 
     if (!device_immutable) {
-        // The caller may reuse its memory once this returns.
-        in_flight.clear();
+        // The caller may reuse its memory once this returns. Events on one queue complete in order.
+        wait_for_writes(mesh_device, cq, in_flight.back().written);
         return;
     }
-    PendingUpload pending{.cq_id = cq.id(), .completion = cq.enqueue_record_event_to_host()};
-    for (auto& chunk_pins : in_flight) {
-        for (auto& pin : chunk_pins) {
+    PendingUpload pending{.cq_id = cq.id(), .completion = in_flight.back().written};
+    for (auto& chunk : in_flight) {
+        for (auto& pin : chunk.pins) {
             pending.pins.push_back(std::move(pin));
         }
     }
     for (const auto& source : sources) {
+        pending.spans.emplace_back(source.base, source.size);
         pending.storage.push_back(source.host_buffer.pin());
     }
     PendingUploads::instance().add(mesh_device, std::move(pending));
+}
+
+bool write_sources(
+    distributed::MeshCommandQueue& cq,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    std::vector<Source> sources) {
+    auto& mesh_device = *mesh_buffer->device();
+    size_t total_size = 0;
+    for (const auto& source : sources) {
+        total_size += source.size * source.coords.size();
+    }
+    if (sources.empty() || !should_use_pinned_write_path(mesh_device, total_size)) {
+        return false;
+    }
+
+    PendingUploads::instance().release_completed(mesh_device);
+    // A pin of a range that an earlier upload's chunk pins still cover may duplicate one of them exactly, which fails
+    // the pin (and a failing cached whole-range pin first evicts the cache's other entries for the device). An upload
+    // of the range still enqueueing on another thread is not pending yet; a duplicate there fails the same way and is
+    // copied.
+    PendingUploads::instance().drain_overlapping(sources);
+
+    if (chunked_upload_applies(mesh_device, *mesh_buffer, sources) &&
+        !SeenUploads::instance().check_and_record(sources)) {
+        write_shards_chunked(cq, mesh_buffer, sources);
+        return true;
+    }
+    return write_shards_with_cached_pins(cq, mesh_buffer, sources);
 }
 
 }  // namespace
@@ -663,28 +805,17 @@ bool write_shards(
     distributed::MeshCommandQueue& cq,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const DistributedHostBuffer& host_buffer) {
-    auto& mesh_device = *mesh_buffer->device();
-    auto sources = collect_local_sources(mesh_device, host_buffer);
-    size_t total_size = 0;
-    for (const auto& source : sources) {
-        total_size += source.size * source.coords.size();
-    }
-    if (sources.empty() || !should_use_pinned_write_path(mesh_device, total_size)) {
-        return false;
-    }
-
-    PendingUploads::instance().release_completed(mesh_device);
-
-    if (chunked_upload_applies(mesh_device, *mesh_buffer, sources)) {
-        if (!SeenUploads::instance().check_and_record(sources)) {
-            write_shards_chunked(cq, mesh_buffer, sources);
-            return true;
-        }
-        // A pin cache entry must not overlap chunk pins still held by an earlier upload of this range.
-        drain(mesh_device);
-    }
-    return write_shards_with_cached_pins(cq, mesh_buffer, sources);
+    return write_sources(cq, mesh_buffer, collect_local_sources(*mesh_buffer->device(), host_buffer));
 }
+
+bool write_replicated(
+    distributed::MeshCommandQueue& cq,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const HostBuffer& host_buffer) {
+    return write_sources(cq, mesh_buffer, replicated_local_sources(*mesh_buffer->device(), host_buffer));
+}
+
+size_t num_chunk_pins_created() { return chunk_pins_created.load(std::memory_order_relaxed); }
 
 void drain(const distributed::MeshDevice& mesh_device, std::optional<uint32_t> cq_id) {
     PendingUploads::instance().drain(mesh_device, cq_id);

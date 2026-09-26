@@ -1162,6 +1162,24 @@ bool pinned_write_source_aligned(const Buffer& buffer, const void* src_region_st
     return reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) == 0;
 }
 
+namespace {
+
+// Where the device reads an interleaved-buffer write from when it takes the pinned path.
+struct PinnedInterleavedWriteSource {
+    enum class Status {
+        Pinned,      // The device reads the source directly; noc_addr / noc_xy / remote_chip are valid.
+        NotMapped,   // The pin has no NOC address usable by the buffer's device.
+        Unaligned,   // The source start fails pinned_write_source_aligned.
+        OutsidePin,  // The source range is not contained in the pinned range.
+    };
+    Status status = Status::NotMapped;
+    uint64_t noc_addr = 0;
+    uint32_t noc_xy = 0;
+    bool remote_chip = false;
+};
+
+// Whether a write of `region_size` bytes from `src_region_start` can read `pinned_memory` directly, for a buffer that
+// passes pinned_interleaved_write_layout_supported.
 PinnedInterleavedWriteSource resolve_pinned_interleaved_write_source(
     const Buffer& buffer,
     const void* src_region_start,
@@ -1189,6 +1207,8 @@ PinnedInterleavedWriteSource resolve_pinned_interleaved_write_source(
         .remote_chip = noc_addr->device_id != device_id,
     };
 }
+
+}  // namespace
 
 // Main API to write buffer data
 bool write_to_device_buffer(
@@ -1222,7 +1242,7 @@ bool write_to_device_buffer(
     bool remote_chip = false;
     if (has_pinned_inputs && pinned_interleaved_write_layout_supported(buffer)) {
         const auto region = buffer.impl().root_buffer_region();
-        const uint8_t* src_region_start = static_cast<const uint8_t*>(src) + region.offset;
+        const uint8_t* src_region_start = static_cast<const uint8_t*>(src);
         const auto source =
             resolve_pinned_interleaved_write_source(buffer, src_region_start, region.size, *pinned_memory);
         switch (source.status) {
@@ -1422,11 +1442,9 @@ bool write_to_device_buffer(
         dispatch_params_variant);
     TT_ASSERT(dispatch_params != nullptr);
 
-    // A copied write reads the region's bytes from `src`. A pinned write relays them from pinned_src_addr and copies
-    // only the unaligned head inline; that head is the region's first bytes, and `src` is the root buffer's host base.
-    const void* region_src = use_pinned_transfer ? static_cast<const uint8_t*>(src) + region.offset : src;
+    // A pinned write relays the region from pinned_src_addr and copies only its unaligned head inline, from `src`.
     write_interleaved_buffer_to_device(
-        region_src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
+        src, *dispatch_params, *root_buffer, buf_dispatch_constants, sub_device_ids, dispatch_core_type);
     return use_pinned_transfer;
 }
 

@@ -11,7 +11,9 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <utility>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -31,6 +33,7 @@ void MemoryPinImpl::add_final_release_callback(std::function<void()> callback) {
     if (!final_release_state_) {
         final_release_state_ = std::make_shared<FinalReleaseState>();
     }
+    std::lock_guard lock(final_release_state_->callbacks_mutex);
     final_release_state_->callbacks.push_back(std::move(callback));
 }
 
@@ -54,13 +57,22 @@ MemoryPinImpl::MemoryPinImpl(const MemoryPinImpl& other) :
 
 MemoryPinImpl& MemoryPinImpl::operator=(const MemoryPinImpl& other) {
     if (this != &other) {
-        inc_ = other.inc_;
-        dec_ = other.dec_;
-        final_release_state_ = other.final_release_state_;
-        acquire_final_release_state();
+        *this = MemoryPinImpl(other);
     }
     return *this;
 }
+
+MemoryPinImpl& MemoryPinImpl::operator=(MemoryPinImpl&& other) noexcept {
+    if (this != &other) {
+        release_final_release_state();
+        inc_ = std::move(other.inc_);
+        dec_ = std::move(other.dec_);
+        final_release_state_ = std::move(other.final_release_state_);
+    }
+    return *this;
+}
+
+MemoryPinImpl::~MemoryPinImpl() { release_final_release_state(); }
 
 void MemoryPinImpl::acquire_final_release_state() {
     if (final_release_state_) {
@@ -74,7 +86,12 @@ void MemoryPinImpl::release_final_release_state() {
     }
     // acq_rel: callbacks added through any copy happen-before the release that runs them.
     if (final_release_state_->holders.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        for (const auto& callback : final_release_state_->callbacks) {
+        std::vector<std::function<void()>> callbacks;
+        {
+            std::lock_guard lock(final_release_state_->callbacks_mutex);
+            callbacks.swap(final_release_state_->callbacks);
+        }
+        for (const auto& callback : callbacks) {
             callback();
         }
     }
@@ -86,11 +103,11 @@ void MemoryPinImpl::mark_device_immutable() {
     if (!final_release_state_) {
         final_release_state_ = std::make_shared<FinalReleaseState>();
     }
-    final_release_state_->device_immutable = true;
+    final_release_state_->device_immutable.store(true, std::memory_order_release);
 }
 
 bool MemoryPinImpl::is_device_immutable() const noexcept {
-    return final_release_state_ != nullptr && final_release_state_->device_immutable;
+    return final_release_state_ != nullptr && final_release_state_->device_immutable.load(std::memory_order_acquire);
 }
 
 bool MemoryPinImpl::is_empty() const noexcept { return !inc_ && !dec_; }
