@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <vector>
 #include <utility>
 
@@ -17,6 +18,7 @@ class ControlPlane;
 // Default timeout and poll interval constants
 constexpr std::chrono::milliseconds DEFAULT_PAUSE_TIMEOUT{5000};
 constexpr std::chrono::milliseconds DEFAULT_POLL_INTERVAL{100};
+constexpr uint32_t DEFAULT_POLLING_PROGRESS_CYCLES = 1000;
 
 /**
  * FabricCommandInterface provides high-level test APIs for controlling fabric routers.

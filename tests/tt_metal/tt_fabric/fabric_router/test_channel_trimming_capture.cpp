@@ -2085,6 +2085,9 @@ protected:
 
         // Use t3k_2x2 mesh descriptor (2 meshes, inter-mesh connectivity → VC1 enabled)
         const auto& [mesh_graph_desc_path, mesh_graph_eth_coords] = t3k_mesh_descriptor_chip_mappings[2];
+        if (!has_physical_chip_mapping_for_eth_coords(mesh_graph_eth_coords)) {
+            GTEST_SKIP() << "Current cluster does not provide the T3K Ethernet coordinates required by this test";
+        }
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_path, get_physical_chip_mapping_from_eth_coords_mapping(mesh_graph_eth_coords));
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);

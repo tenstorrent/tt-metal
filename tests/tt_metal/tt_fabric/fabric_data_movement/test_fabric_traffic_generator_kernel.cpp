@@ -26,6 +26,7 @@
 #include "fabric_worker_kernel_helpers.hpp"
 #include "fabric_command_interface.hpp"
 #include "utils.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_fabric::traffic_generator_tests {
 
@@ -80,6 +81,10 @@ bool telemetry_increased(const TelemetryMap& before, const TelemetryMap& after) 
 
 bool check_traffic_flowing(MeshId mesh_id, size_t num_devices, std::chrono::milliseconds interval) {
     auto baseline = capture_telemetry(mesh_id, num_devices);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const ChipId progress_device = control_plane.get_physical_chip_id_from_fabric_node_id(FabricNodeId(mesh_id, 0));
+    tt::tt_metal::MetalContext::instance().get_cluster().advance_device_execution(
+        progress_device, DEFAULT_POLLING_PROGRESS_CYCLES);
     std::this_thread::sleep_for(interval);
     auto after = capture_telemetry(mesh_id, num_devices);
     return telemetry_increased(baseline, after);
