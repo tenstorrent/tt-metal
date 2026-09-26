@@ -52,12 +52,6 @@ public:
     }
 };
 
-// T is the element type written; DFB is deduced from the buffer argument. DataflowBuffer is a class
-// template on Quasar, so the former explicit uint16_t specialization (which cannot be spelled for a
-// deduced DFB) is folded into the if constexpr below with identical behaviour.
-template <typename T, typename DFB>
-FORCE_INLINE void process_data(DFB cb, uint32_t value, int32_t num_of_elems) {
-    T* ptr = reinterpret_cast<T*>(cb.get_write_ptr());
     for (int j = 0; j < num_of_elems; j++) {
         if constexpr (std::is_same_v<T, uint16_t>) {
             ptr[j] = static_cast<uint16_t>(value >> 16);

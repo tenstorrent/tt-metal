@@ -372,12 +372,8 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
 }
 
-// The BLOCKED fields of every hart's 32-byte init entry: block_size is the ring's block size on every
-// hart, split_tc marks the side whose one whole-block op is shared by all of its counters, and
-// entries_to_jump is the serializer's cursor hop. With stride = stride_in_entries (the peer count), a
-// DM BLOCKED hart facing STRIDED peers stretches its stride to (own-side count) * stride, and a STRIDED
-// hart hops over the other peers' blocks to its next entry: (peers - 1) * block_size + stride. The two
-// hops differ below (4 vs 6), so a swapped or off-by-block formula fails the test.
+// Checks the BLOCKED fields the serializer writes into each hart's init entry (block_size, split_tc,
+// entries_to_jump) for a BLOCKED side facing STRIDED peers and the reverse.
 struct DfbBlockedInitEntryCase {
     const char* name;
     experimental::dfb::DataflowBufferConfig config;
@@ -393,7 +389,7 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
     }
     constexpr uint32_t bs = 4;
     const DfbBlockedInitEntryCase cases[] = {
-        // DM 2B -> 2S: stride = C = 2. Producer hop = P * stride = 4; consumer hop = (P - 1) * bs + stride = 6.
+        // 2 BLOCKED producers -> 2 STRIDED consumers: the producers are the split side.
         {.name = "2B->2S",
          .config =
              {.entry_size = 1024,
@@ -409,7 +405,7 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
          .consumer_jump = (2 - 1) * bs + 2,
          .producer_split_tc = 1,
          .consumer_split_tc = 0},
-        // DM 2S -> 2B: stride = P = 2. Consumer hop = C * stride = 4; producer hop = (C - 1) * bs + stride = 6.
+        // 2 STRIDED producers -> 2 BLOCKED consumers: the consumers are the split side.
         {.name = "2S->2B",
          .config =
              {.entry_size = 1024,
@@ -2447,19 +2443,14 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
 // =====================================================================================
 // BLOCKED access-pattern config-rejection tests
 // =====================================================================================
-// --- REJECTED CONFIG: Tensix BLOCKED producer + implicit DM consumer ---
-// A Tensix producer can only post explicit credits -- the ISR poster is #ifndef COMPILE_FOR_TRISC, so it
-// is compiled out on Tensix. A STRIDED DM consumer takes those per-tile posts fine, but a BLOCKED one
-// spin-waits forever, since the per-block posts never reach its implicit drain's txn signal.
-// finalize_single_dfb_config rejects the combination, turning a device hang into a host error.
-// Use an explicit DM consumer, or a DM producer if the consumer must be implicit.
+// Tensix BLOCKED producer -> implicit-sync DM BLOCKED consumer must be rejected on the host:
+// a Tensix producer cannot post implicit credits, so the consumer would hang on the device.
 static void expect_tensix_blocked_implicit_consumer_rejected(
     distributed::MeshDevice& mesh_device, uint32_t num_threads, uint32_t num_entries) {
     if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
-    // Build only: the rejection is a host TT_FATAL in finalize_single_dfb_config, raised inside
-    // MakeProgramFromSpec. Launching would deadlock the device if the guard ever regressed.
+    // Build only: launching would hang the device if the check ever regressed.
     m2_config_test_helpers::M2ConfigDFBParams params{
         .producer_type = M2PorCType::TENSIX,
         .consumer_type = M2PorCType::DM,
@@ -2482,18 +2473,14 @@ TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
     expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/4, /*num_entries=*/32);
 }
 
-// --- ACCEPTED CONFIG: implicit BLOCKED whose single txn window is the whole ring ---
-// The ISR credits all of a RISC's tile counters equally when a txn ID retires, while a BLOCKED
-// endpoint moves a whole block per counter, so a txn window must cover a whole number of blocks on
-// every counter. At P=1, C=4, block_size=4 and 16 entries only one txn id satisfies that: its window
-// is the whole ring, so all four blocks are written before any counter is credited. The txn-id picker
-// falls back to that count, which is why this config runs rather than being rejected.
+// 1 BLOCKED producer -> 4 BLOCKED consumers, implicit sync, block 4, 16 entries: the only txn window
+// that covers whole blocks on every consumer is the whole ring, so the config is accepted and must run.
 TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_2_0) {
     auto& mesh_device = this->device();
     if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
-    // Host-side check of the property the run relies on: one txn id whose window is the whole ring.
+    // Check the host picked a single txn id covering the whole ring.
     {
         Program probe = m2_config_test_helpers::build_single_dfb_program_2_0(
             mesh_device,
@@ -2528,9 +2515,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_2_0) {
     run_single_dfb_program_2_0(mesh_device, params);
 }
 
-// --- REJECTED CONFIG: BLOCKED->BLOCKED with mismatched block sizes (direct API) ---
-// The ring is one global block grid, which cannot serve two block sizes. The M2 spec layer
-// already rejects this; the direct CreateDataflowBuffer path must too.
+// BLOCKED -> BLOCKED with different producer and consumer block sizes must be rejected by the direct API.
 TEST_F(UnitMeshFixture, DirectApi_BlockSizeMismatch_rejected) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
@@ -2555,7 +2540,8 @@ TEST_F(UnitMeshFixture, DirectApi_BlockSizeMismatch_rejected) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must equal consumer_block_size")));
 }
 
-// --- REJECTED CONFIG: BLOCKED->STRIDED where the consumers cannot split a block (direct API) ---
+// BLOCKED producer, block 3 -> 2 STRIDED consumers must be rejected by the direct API: the consumers
+// cannot split a block evenly.
 TEST_F(UnitMeshFixture, DirectApi_BlockedStrided_ConsumersDontDivideBlock_rejected) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
@@ -2579,9 +2565,8 @@ TEST_F(UnitMeshFixture, DirectApi_BlockedStrided_ConsumersDontDivideBlock_reject
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be divisible by num_consumers")));
 }
 
-// --- REJECTED CONFIG: implicit-sync broadcast BLOCKED producer (DM<->DM ALL) ---
-// The ISR credits each counter an equal split of a txn window, but a broadcasting producer must
-// post the full count to every counter, the consumers would starve at 1/C of their credits.
+// Implicit-sync BLOCKED producer -> ALL consumers must be rejected by the direct API: implicit credits
+// are split across the consumers, but a broadcast needs the full count on every one.
 TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
@@ -2607,8 +2592,7 @@ TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected)
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("broadcasts its credits")));
 }
 
-// B10 — a BLOCKED binding needs block_size > 0 (check_block_size_validity in program_spec.cpp).
-// This config leaves it unset on a BLOCKED consumer, so it must throw.
+// A BLOCKED consumer binding with block_size left at 0 must throw.
 TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
     auto& mesh_device = this->device();
     if (mesh_device.arch() != ARCH::QUASAR) {

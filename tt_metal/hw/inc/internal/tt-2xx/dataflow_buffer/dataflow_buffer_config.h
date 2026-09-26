@@ -220,7 +220,7 @@ struct dfb_hart_init_entry_t {
     uint16_t num_entries;                   // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;                      // bytes 26-27; producer: TC capacity; consumer: 0
     uint16_t block_size;                    // bytes 28-29; how many tiles exist in one block. 1 unless the ring is
-                                            // BLOCKED, in which case every hart gets the ring's block size.
+                                            // BLOCKED, otherwise block size.
     uint16_t entries_to_jump;               // bytes 30-31; how many tiles the counter's cursor jumps on each
                                             // rotation of tile counters.
 } __attribute__((packed));

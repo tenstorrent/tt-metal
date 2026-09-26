@@ -100,8 +100,7 @@ inline void accumulate_compute_loop(
     // Accumulate the input CB
     accumulate_cb(dfb_in);
 
-    // Accumulate any additional CBs, in argument order. (A fold over the pack rather than an
-    // array of pointers: on Quasar the additional CBs may be different DataflowBuffer specializations.)
+    // Accumulate any additional CBs
     constexpr uint32_t num_additional_dfbs = sizeof...(dfb_additional);
     if constexpr (num_additional_dfbs > 0) {
         (accumulate_cb(dfb_additional), ...);

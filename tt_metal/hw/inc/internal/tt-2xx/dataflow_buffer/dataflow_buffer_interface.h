@@ -76,7 +76,6 @@ struct LocalDFBInterface {
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
 static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan (pack TRISC) size is incorrect");
-// 12B (main's shared-TC-pool layout) + 6B for block_size / split_tc / jump.
 static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
@@ -109,17 +108,14 @@ static_assert(sizeof(LocalDFBInterface) == 94, "LocalDFBInterface (unpack TRISC)
 
 #else
 
-// Per–tile-counter slot (DM).
-//
-// All u32 fields are at 4B-aligned offsets and the struct pads to 20B to keep every
-// tc_slots[] element 4B-aligned within LocalDFBInterface.
+// Per–tile-counter slot (DM). A DM hart is either producer or consumer of a DFB, never both, so
+// one cursor (`ptr`) serves as its write or read pointer.
 struct DFBTCSlot {
-    uint32_t rd_ptr;
-    uint32_t wr_ptr;
+    uint32_t ptr;
     uint32_t base_addr;
     uint32_t limit;
     dfb::PackedTileCounter packed_tile_counter;
-    uint8_t _align[3];  // pad 17 → 20B so every slot in tc_slots[] is 4B-aligned
+    uint8_t _align[3];  // pad 13 → 16B so every slot in tc_slots[] is 4B-aligned
 };
 
 struct LocalDFBInterface {
@@ -147,10 +143,8 @@ struct LocalDFBInterface {
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };
 
-static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-// 152, not 150: this struct is not packed, so the two bytes after split_tc are alignment padding
-// for the uint32_t jump (tc_slots[] must stay 4B-aligned).
-static_assert(sizeof(LocalDFBInterface) == 152, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incorrect");
 
 #endif
 

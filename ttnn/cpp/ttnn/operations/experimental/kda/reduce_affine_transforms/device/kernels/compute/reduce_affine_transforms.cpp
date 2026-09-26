@@ -168,7 +168,6 @@ TT_KERNEL void compute(uint32_t group) {
         // Both FP32 products remain separate calls: they consume different right-hand operands and publish
         // different output rectangles.
         matmul_product<Kt, Kt, Kt>(stage_a, remote_a, stage_a, &send_a);
-        // No send buffer for this product; a typed null keeps the DFBSend parameter deducible.
         matmul_product<Kt, Kt, Vt>(stage_a, remote_b, scratch, static_cast<decltype(&send_a)>(nullptr));
         scratch.wait_front(b_tiles);
         add(scratch, stage_b, stage_b, send_b, b_tiles);

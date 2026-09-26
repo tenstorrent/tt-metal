@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) BLOCKED DFB producer.
-// Parallel to dfb_producer_2_0.cpp, but moves block_size contiguous entries per NoC
-// transaction and posts their credits together, then strides by block_size * num_producers.
+// Fills block_size contiguous entries per reserve/push; blocks are interleaved across producers.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -30,7 +29,6 @@ void kernel_main() {
 
     const uint32_t num_blocks = num_entries_per_producer / block_size;
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        // This thread's b-th block: block_size contiguous pages, blocks interleaved across producers.
         const uint32_t block_base_page = chunk_offset + (b * num_producers + producer_idx) * block_size;
         if (block_base_page >= chunk_offset + entries_per_core) {
             break;
@@ -40,10 +38,8 @@ void kernel_main() {
             noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = block_base_page}, {});
 #endif
         } else {
-            // One reserve/push per block; the pages are fetched one at a time so the test does not
-            // depend on the block being contiguous in DRAM (interleaved tensors round-robin pages
-            // over banks). The implicit-sync path above is the one-burst-per-block API and needs a
-            // block-contiguous source.
+            // Pages are read one at a time: an interleaved tensor's block is not contiguous in DRAM.
+            // The implicit-sync path above reads a whole block per call and needs a contiguous source.
             dfb.reserve_back(block_size);
             for (uint32_t i = 0; i < block_size; ++i) {
                 noc.async_read(

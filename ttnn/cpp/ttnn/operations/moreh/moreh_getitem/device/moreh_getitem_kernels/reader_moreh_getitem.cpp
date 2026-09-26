@@ -144,10 +144,6 @@ void kernel_main() {
                 }
 
                 uint32_t index_l1_addr = 0;
-                // Runs fn on this dimension's index DFB. A case exists exactly for the dimensions whose
-                // index tensor is bound, the condition index_is_defined[dim] tests, so fn always runs.
-                // (The index DFBs may be distinct DataflowBuffer specializations, so dispatch by
-                // dimension instead of through one pointer type.)
                 auto index_op = [&](auto&& fn) {
 #ifdef HAS_INDEX0
                     if (dim == 0) {

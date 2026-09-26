@@ -30,9 +30,7 @@ void kernel_main() {
 
     if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-        // Implicit sync: one call per tensor page. The DFB completes each share itself (waits for
-        // room for the whole share, lands the entries `stride` apart, moves the bookmark after the
-        // last one), so the kernel looks the same on every ring.
+        // Implicit sync: one call per page; the DFB does the reserve/push itself.
         for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
             const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
             if (page_id >= chunk_offset + entries_per_core) {
@@ -42,8 +40,7 @@ void kernel_main() {
         }
 #endif
     } else {
-        // Explicit sync: one op moves this hart's whole share (1 entry on a plain ring, its part of
-        // each block when the consumers are BLOCKED); entry i of a strided share sits i * stride in.
+        // Explicit sync: one reserve/push covers share entries, spaced stride_bytes apart in the ring.
 #ifdef ARCH_QUASAR
         const uint32_t share = dfb.get_produce_share();
         const uint32_t stride_bytes = entry_size * dfb.get_produce_stride_tiles();

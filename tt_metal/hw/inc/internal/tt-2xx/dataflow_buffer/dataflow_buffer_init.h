@@ -805,8 +805,6 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         iface.block_size = eh.block_size;
         iface.split_tc = eh.split_tc;
         iface.jump = eh.entries_to_jump;
-        // The host serializes both >= 1 for Tensix harts; the cursor math divides by the stride and a
-        // BLOCKED side's share is the block itself, so this is the one place that checks both.
         ASSERT(iface.stride_size_tiles != 0 && iface.block_size != 0);
 #if defined(UCK_CHLKC_PACK)
         iface.wr_entry_ptr = 0;
@@ -821,8 +819,6 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         // Store scalar pack as three u32s from the already-unpacked header.
         dfb_write_dm_iface_scalars_from_hdr(iface, eh);
         iface.num_entries = eh.num_entries;
-        // The host serializes stride_size = entry_size * stride with stride >= 1 and block_size >= 1;
-        // the DM stride math divides by entry_size, so this is the one place that checks.
         ASSERT(iface.entry_size != 0 && iface.stride_size >= iface.entry_size && iface.block_size != 0);
 #endif
 
@@ -870,8 +866,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 #else                             // DM
             iface.tc_slots[t].base_addr = base;
             iface.tc_slots[t].limit = limit;
-            iface.tc_slots[t].rd_ptr = base;
-            iface.tc_slots[t].wr_ptr = base;
+            iface.tc_slots[t].ptr = base;
 #endif
         }
         total_tc_slots += rdcycle() - t_slots_start;
