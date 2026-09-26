@@ -263,3 +263,24 @@ Result
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_residual.py
+
+## S.full_dense.03 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_dense_03_attn_residual.py` with the
+  swap 02 pattern, SWAPPED = attn_norm, attention, attn_residual. Gated pcc_swap_out (0.98) plus asserted extras:
+  block out finite, rel L2 <= 0.01 whole and first 128 rows; each swapped step PCC >= 0.99 and own rel L2 <= 0.03 /
+  0.015 / 0.01, per-token norm ratio [0.97, 1.03] (attn_norm, attention) or [0.99, 1.01] (attn_residual);
+  attention and attn_residual also checked on the first 128 rows.
+
+Why
+- attn_residual limits (rel 0.01, ratio [0.99, 1.01]) copied from test_c_full_dense_attn_residual.py; h_mid here
+  also carries the device attn_norm + attention error, measured 0.0042 (2.4x headroom).
+
+Results
+- BRINGUP_IMPL=reference: PASS (out rel 0.0017, h_mid rel 0.0017). BRINGUP_IMPL=stub: FAIL (every check).
+- Gate (device): PASS, pcc_swap_out 0.999996, out rel 0.00294 / first-128 0.00296, attention rel 0.00519,
+  attn_residual rel 0.00420 / first-128 0.00424, ratio [0.9966, 1.0050].
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_03_attn_residual.py
