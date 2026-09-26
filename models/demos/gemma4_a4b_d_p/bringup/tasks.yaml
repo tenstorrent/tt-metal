@@ -784,6 +784,13 @@ tasks:
     - experts
     - post_moe_norm
     layer: 0
+  frozen:
+    at: '2026-09-26T01:25:40'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py: a23eeada8512d50c0a07ee5de31584197a9fe397feada837a4ba2c9940c1bf80
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.sliding.ffn_combine
   title: sliding ffn_combine (residual) on device, layer 0
   step: implement
