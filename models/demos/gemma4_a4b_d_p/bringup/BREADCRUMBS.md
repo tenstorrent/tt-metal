@@ -285,3 +285,23 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (block rel 0.0027); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999968, block out rel 0.0080 / 0.0066
   (0.0079 at swap 5), mlp 0.0048 vs golden (iso 0.0028, ratio [0.9975, 1.0039]).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py`
+
+## C.sliding.post_mlp_norm test (run1, attempt 1)
+- Replaced the one-line template body with the ffn_norm/post_attn_norm norm checks: PCC >= 0.99 (gated), plus asserted finite output, rel L2 <= 0.03 and
+  per-token output-norm ratio in [0.97, 1.03] (informational metrics `rel_l2_post_mlp_norm_L00`, `row_norm_ratio_{min,max}_post_mlp_norm_L00`).
+- Scored mutations on this golden once (mlp_out -> mlp_post_norm, [2048, 2816]) inside the test under BRINGUP_IMPL=reference, then removed the scoring code.
+  The recovered post_feedforward_layernorm_1 weight spans about [-2.4, 135], a wider range than the earlier norms. PCC / rel: reference 0.999997 / 0.0023
+  (ratio [0.9971, 1.0033]); bf16 in/out 0.999995 / 0.0033; 1% noise 0.010; `1 + w` 0.9984 (passes PCC) / 0.059; no weight 0.27; sum instead of mean ~1.0 / 0.98;
+  last row zeroed 0.9997 / 0.025, caught by the ratio (min 0). No new check was needed.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023); BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails as expected until the implement step:
+  `NotImplementedError: implement step: no device module for post_mlp_norm yet`.
+- For the implement step: reuse `tt/rms_norm.py:TtRMSNorm` through `_NORM_WEIGHTS["post_mlp_norm"] = "post_feedforward_layernorm_1.weight"` (the `_1` one; plain `post_feedforward_layernorm` is the later ffn_out norm, `_2` the MoE one). bf16 gamma up to 135
+  adds only about 0.001 rel (bf16 emulation 0.0033).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py`
+
+## C.sliding.post_mlp_norm implement (run1, attempt 1)
+- No new module. `tt/rms_norm.py:TtRMSNorm` is reused through `_NORM_WEIGHTS["post_mlp_norm"] = "post_feedforward_layernorm_1.weight"` in hooks.py, and
+  `post_mlp_norm` is added to `DEVICE_STEPS["sliding"]`, so `HybridDeviceModel` swaps it in for the ladder.
+- Gate PASS: pcc_post_mlp_norm_L00 0.999996, rel L2 0.00294, ratio [0.9950, 1.0033]. The log also has a `FAIL ... pcc=0.000000` line. It comes from the
+  precompile collect pass (stubbed outputs), not from the real pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py`
