@@ -94,3 +94,56 @@ class TestMllamaProjectorKeyRemap:
 
         assert "vision_model.vision_projection.weight" in state_dict
         assert "vision_model.vision_projection.bias" in state_dict
+
+
+class TestQkNormGammaPermute:
+    """Full-width QK-norm gammas (OLMo-2/3: ``q_norm.weight`` spans every head) must be rope-permuted per head,
+    matching ``reverse_permute`` on the wq/wk rows; per-head gammas (Qwen-3) keep the old behaviour."""
+
+    def test_full_width_matches_row_permute(self):
+        from models.tt_transformers.tt.load_checkpoints import (
+            permute_1d_per_head,
+            reverse_permute,
+            reverse_permute_1d,
+            reverse_permute_1d_per_head,
+        )
+
+        n_heads, head_dim = 5, 16
+        gamma = torch.arange(n_heads * head_dim, dtype=torch.float32) + 1.0
+        # a diagonal wq with gamma on the diagonal: the permuted row order is exactly the permuted gamma order
+        wq = reverse_permute(torch.diag(gamma), n_heads, n_heads * head_dim, n_heads * head_dim)
+        assert torch.equal(wq.sum(dim=1), reverse_permute_1d_per_head(gamma, head_dim))
+        # per-head gamma: identical to the plain 1d permute
+        g1 = gamma[:head_dim]
+        assert torch.equal(reverse_permute_1d_per_head(g1, head_dim), reverse_permute_1d(g1))
+        # round trip
+        assert torch.equal(permute_1d_per_head(reverse_permute_1d_per_head(gamma, head_dim), head_dim), gamma)
+
+    def test_convert_hf_to_meta_permutes_full_width_gamma(self):
+        from models.tt_transformers.tt.load_checkpoints import (
+            convert_hf_to_meta,
+            reverse_permute_1d_per_head,
+            standardize_hf_keys,
+        )
+
+        n_heads, n_kv, head_dim, dim = 4, 2, 8, 32
+        sd = {
+            "model.layers.0.self_attn.q_proj.weight": torch.randn(n_heads * head_dim, dim),
+            "model.layers.0.self_attn.k_proj.weight": torch.randn(n_kv * head_dim, dim),
+            "model.layers.0.self_attn.v_proj.weight": torch.randn(n_kv * head_dim, dim),
+            "model.layers.0.self_attn.o_proj.weight": torch.randn(dim, n_heads * head_dim),
+            "model.layers.0.self_attn.q_norm.weight": torch.randn(n_heads * head_dim),
+            "model.layers.0.self_attn.k_norm.weight": torch.randn(n_kv * head_dim),
+            "model.embed_tokens.weight": torch.randn(16, dim),
+            "lm_head.weight": torch.randn(16, dim),
+            "model.norm.weight": torch.randn(dim),
+        }
+        out = convert_hf_to_meta(standardize_hf_keys(dict(sd)), head_dim, n_heads, n_kv)
+        assert torch.equal(
+            out["layers.0.attention.q_norm.weight"],
+            reverse_permute_1d_per_head(sd["model.layers.0.self_attn.q_norm.weight"], head_dim),
+        )
+        assert torch.equal(
+            out["layers.0.attention.k_norm.weight"],
+            reverse_permute_1d_per_head(sd["model.layers.0.self_attn.k_norm.weight"], head_dim),
+        )

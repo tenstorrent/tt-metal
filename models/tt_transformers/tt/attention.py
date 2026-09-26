@@ -304,7 +304,9 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
-        if f"{q_norm_str}.weight" in state_dict:
+        # Full-width QK-norm (OLMo-2/3) replaces the per-head norms below; see the block after them.
+        self.qk_norm_full_width = getattr(configuration, "qk_norm_full_width", False)
+        if f"{q_norm_str}.weight" in state_dict and not self.qk_norm_full_width:
             fn_q_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
@@ -322,7 +324,7 @@ class Attention(LightweightModule):
         else:
             self.q_norm = lambda x, mode, norm_config: x
 
-        if f"{k_norm_str}.weight" in state_dict:
+        if f"{k_norm_str}.weight" in state_dict and not self.qk_norm_full_width:
             fn_k_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
@@ -339,6 +341,33 @@ class Attention(LightweightModule):
             self.k_norm = lambda x, mode, norm_config: norm_reshard(x, fn_k_norm, mode, norm_config)
         else:
             self.k_norm = lambda x, mode, norm_config: x
+
+        # Full-width QK-norm (OLMo-2/3): RMSNorm over the WHOLE q / k projection output, applied to the
+        # fused-QKV activation before the head split (see _apply_qk_norm_full_width). The gamma is
+        # column-sharded exactly like the fused QKV columns (contiguous head blocks per device); under
+        # TP the statistics are reduced across devices (rms_norm_pre/post_all_gather + all_gather of the
+        # per-row sums), so the norm sees the full n_heads*head_dim / n_kv_heads*head_dim as HF does.
+        self.q_norm_fw = self.k_norm_fw = None
+        if self.qk_norm_full_width:
+            assert not self.TG, "full-width QK-norm is not implemented for the Galaxy 2D-sharded QKV layout"
+            assert f"{q_norm_str}.weight" in state_dict and f"{k_norm_str}.weight" in state_dict
+            # the per-head sites above become identity for this model
+            self.q_norm = lambda x, mode, norm_config: x
+            self.k_norm = lambda x, mode, norm_config: x
+            fw_kwargs = dict(
+                device=self.mesh_device,
+                eps=configuration.norm_eps,
+                state_dict=state_dict,
+                state_dict_prefix=None,  # weight_key already carries the layer prefix
+                weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                add_unit_offset=self.rms_norm_add_unit_offset,
+                is_distributed=(lambda mode: True) if self.num_devices > 1 else None,
+                ccl_topology=self.ccl_topology,
+                tt_ccl=self.tt_ccl,
+            )
+            self.q_norm_fw = RMSNorm(dim=self.n_heads * self.head_dim, weight_key=q_norm_str, **fw_kwargs)
+            self.k_norm_fw = RMSNorm(dim=self.n_kv_heads * self.head_dim, weight_key=k_norm_str, **fw_kwargs)
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.args.use_fused_all_gather_matmul
@@ -722,6 +751,52 @@ class Attention(LightweightModule):
 
         return q_heads_1QSD, k_heads_1KSD
 
+    def _apply_qk_norm_full_width(self, xqkv, mode):
+        """Full-width QK-norm on the fused activation ``[.., .., rows, q_local | k_local | v_local]``.
+
+        Slices the (tile-aligned) q and k column blocks, RMS-normalises each over its full width (across
+        devices when TP-sharded), and concatenates back in the caller's memory config / dtype. Replaces the
+        per-head q_norm/k_norm for models with ``qk_norm_full_width`` (OLMo-2/3).
+        """
+        q_w = self.n_local_heads * self.head_dim
+        kv_w = self.n_local_kv_heads * self.head_dim
+        mem_cfg = xqkv.memory_config()
+        in_dtype = xqkv.dtype
+        if in_dtype != ttnn.bfloat16:
+            xqkv = ttnn.typecast(xqkv, ttnn.bfloat16)
+        d0, d1, rows = xqkv.shape[0], xqkv.shape[1], xqkv.shape[2]
+        # The norm inputs live in DRAM: in decode the residual stream and QKV activations already occupy L1 and the
+        # interleaved rms_norm kernel's circular buffers for a 5120-wide row clash with them (dataflow-buffer /
+        # L1-buffer overlap). The slices are tiny in decode (32 rows) and DRAM-resident anyway in prefill.
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        q = ttnn.slice(xqkv, [0, 0, 0, 0], [d0, d1, rows, q_w], memory_config=dram)
+        k = ttnn.slice(xqkv, [0, 0, 0, q_w], [d0, d1, rows, q_w + kv_w], memory_config=dram)
+        v = ttnn.slice(xqkv, [0, 0, 0, q_w + kv_w], [d0, d1, rows, q_w + 2 * kv_w], memory_config=dram)
+        ttnn.deallocate(xqkv)
+        if mode == Mode.DECODE and self.num_devices == 1 and q_w == self.args.dim:
+            # Decode: the interleaved rms_norm kernel's circular buffers for a 5120-wide row clash with the L1-resident
+            # decode activations (residual, clones, KV updates). Use the model's width-sharded decode norm path — the
+            # q block is exactly `dim` wide (n_heads * head_dim == hidden), so the residual-norm program config applies.
+            cfg = self.args.get_norm_config("attn", Mode.DECODE, None)
+            q_sh = ttnn.to_memory_config(q, cfg["sharded_output_config"])
+            ttnn.deallocate(q)
+            q_n = self.q_norm_fw(q_sh, mode, in_sharded=True, out_sharded=True, norm_config=cfg)
+            ttnn.deallocate(q_sh)
+            q_n = ttnn.sharded_to_interleaved(q_n, ttnn.DRAM_MEMORY_CONFIG)
+            q = None
+        else:
+            q_n = self.q_norm_fw(q, mode)
+        k_n = self.k_norm_fw(k, mode)
+        if q is not None:
+            ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        out = ttnn.concat([q_n, k_n, v], dim=3, memory_config=mem_cfg)
+        for t in (q_n, k_n, v):
+            ttnn.deallocate(t)
+        if in_dtype != ttnn.bfloat16:
+            out = ttnn.typecast(out, in_dtype)
+        return out
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -793,6 +868,8 @@ class Attention(LightweightModule):
                 ttnn.deallocate(xqkv_fused_sharded)
             else:
                 xqkv_fused = xqkv_fused_sharded
+        if self.qk_norm_full_width:
+            xqkv_fused = self._apply_qk_norm_full_width(xqkv_fused, Mode.DECODE)
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
@@ -856,6 +933,11 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
+        if sdpa_decode_prog_cfg is None and q_heads_1BQD.is_sharded():
+            # Auto-configured flash-decode (models with sdpa_decode_use_default_program_config): the op's default
+            # path expects an interleaved Q; with the height-sharded decode Q only user 0 attends correctly and the
+            # other users' KV state drifts step by step (OLMo-3 bring-up, BH). Tiny tensor: [1, B, heads, head_dim].
+            q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, ttnn.DRAM_MEMORY_CONFIG)
         if page_table is not None:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -1095,6 +1177,9 @@ class Attention(LightweightModule):
         if original_seq_len != seq_len:
             xqkv_fused = xqkv_fused[:, :, :original_seq_len, :]
             seq_len = original_seq_len
+
+        if self.qk_norm_full_width:
+            xqkv_fused = self._apply_qk_norm_full_width(xqkv_fused, Mode.PREFILL)
 
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])

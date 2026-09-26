@@ -20,9 +20,15 @@ from models.tt_transformers.tt.model_config import ModelArgs
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -51,7 +57,10 @@ def test_rms_norm_inference(
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
-    first_layer_prefix = state_dict_prefix + "attention_norm."
+    # Post-norm decoders (EXAONE-4.x, OLMo-2/3) have no input_layernorm: exercise the norm that exists (ffn_norm,
+    # i.e. HF post_attention_layernorm) instead.
+    norm_key = "attention_norm" if f"{state_dict_prefix}attention_norm.weight" in state_dict else "ffn_norm"
+    first_layer_prefix = state_dict_prefix + f"{norm_key}."
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
@@ -60,7 +69,7 @@ def test_rms_norm_inference(
         dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
-        weight_key="attention_norm",
+        weight_key=norm_key,
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
