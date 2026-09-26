@@ -551,3 +551,17 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   first 1024 rows 0.0092, ffn_residual iso rel 0.0024, ratio [0.9972, 1.0042].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py`
   (BRINGUP_IMPL=reference / stub for the freeze checks).
+
+## C.global.attn_norm test (run1, attempt 1)
+- Replaced the one-line template body with the sliding attn_norm test's checks (STEP = attn_norm, LAYER = 5, input_layernorm.weight). The gated metric stays
+  `pcc_attn_norm_L05` >= 0.99. The test also asserts rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03] and a finite output (informational metrics `rel_l2_*`,
+  `row_norm_ratio_{min,max}_*`).
+- Why: on the layer-5 golden (s4096 chunk 1, w in [-0.003, 136]) PCC passes sum instead of mean (0.99998), 2x (~1.0), the last row zeroed (0.9998) and the last
+  32 rows zeroed (0.9928). rel L2 / ratio catch all of them. `1 + w` fails PCC here (0.82) because the weights are larger than on layer 0. CPU reference: rel 0.0024,
+  ratio [0.9985, 1.0025]; bf16 in/out rel 0.0028.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0024); stub FAIL (PCC). The device gate already PASSES: pcc 0.999996, rel 0.0030, ratio [0.9963, 1.0036],
+  because hooks.py routes `attn_norm` to the shared `TtRMSNorm` for either block type. The implement step may only need to add attn_norm to DEVICE_STEPS["global"]
+  (check). The `FAIL ... pcc=0.000000` line comes from the precompile collect pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py`
+- Re-issued brief (same attempt): the test body above was already in place. The only change was the docstring's template line, "layer 0" -> "layer 5". Re-verified:
+  reference PASS (pcc 0.999997, rel 0.0024, ratio [0.9985, 1.0025]); stub FAIL (PCC 0.0); device gate PASS (pcc 0.999996, rel 0.0030, ratio [0.9963, 1.0036]).
