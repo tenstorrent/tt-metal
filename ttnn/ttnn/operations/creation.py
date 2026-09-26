@@ -69,10 +69,15 @@ def _golden_function(shape: ttnn.Shape, dtype=None, *_, **__):
 ttnn.attach_golden_function(ttnn.ones, golden_function=_golden_function)
 
 
-def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
+def _golden_function_full(shape: ttnn.Shape, fill_value: float, dtype=None, *_, **__):
     import torch
 
-    return torch.full(input_shape, fill_value=fill_value)
+    # Same handling as the zeros and ones goldens above: TTNN accepts Shape directly and permits
+    # dtype, layout, device and memory config positionally, and defaults dtype to BFLOAT16.
+    if isinstance(shape, ttnn.Shape):
+        shape = tuple(shape)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    return torch.full(shape, fill_value=fill_value, dtype=torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.full, golden_function=_golden_function_full)
