@@ -72,6 +72,77 @@ def hf_arch(spec) -> str:
     return " · ".join(parts)
 
 
+def kt(n) -> str:
+    """Tokens in 1024-token k: 56320 -> '55k', 51200 -> '50k'."""
+    k = n / 1024
+    return f"{k:.0f}k" if abs(k - round(k)) < 0.05 else f"{k:.1f}k"
+
+
+def timing_rows(spec, task: dict, m: dict) -> list[dict]:
+    """Headline timing rows of one task: what range of tokens, how, on which model, how long."""
+    v = lambda k, d=None: m[k]["value"] if k in m else d  # noqa: E731
+    hyb = v("device_model_hybrid")
+    model = "hybrid harness" if hyb == 1 else "all-device" if hyb == 0 else "model not recorded"
+    rows = []
+    ch = sorted((int(k.rsplit("_c", 1)[1]), x["value"]) for k, x in m.items() if k.startswith("chunk_seconds_c"))
+    if ch:
+        rung = None
+        if task["id"].startswith("L."):
+            try:
+                rung = spec.rung(task["id"][2:])
+            except Exception:
+                rung = None
+        seq = v("rung_seq", rung and rung["seq"])
+        chunk = v("rung_chunk", rung and rung["chunk"])
+        start = v("rung_start", ((seq // chunk - 1) * chunk) if rung and rung.get("prefix_from_golden") else 0)
+        secs = [x for _, x in ch]
+        head = f"{kt(start)}->{kt(seq)}" if seq else task["id"]
+        rows.append(
+            {
+                "task": task["id"],
+                "headline": head,
+                "chunks": ch,
+                "tokens": (seq - start) if seq else None,
+                "chunk": chunk,
+                "how": "ladder: reads back every layer",
+                "model": model,
+                "seconds": sum(secs),
+            }
+        )
+    full = sorted(
+        (int(k.rsplit("_c", 1)[1]), x["value"] / 1e3) for k, x in m.items() if k.startswith("prefill_chunk_ms_c")
+    )
+    if "prefill_ms_full" in m:
+        seq, chunk = v("prefill_seq"), v("prefill_chunk")
+        rows.append(
+            {
+                "task": task["id"],
+                "headline": f"0->{kt(seq)}" if seq else "full prefill",
+                "chunks": full,
+                "tokens": seq,
+                "chunk": chunk,
+                "how": "warm, no readback, one sync (TTFT without LM head)",
+                "model": model,
+                "seconds": v("prefill_ms_full") / 1e3,
+            }
+        )
+    if "chunk_wall_ms" in m:
+        start, n = v("chunk_start"), v("chunk_len")
+        rows.append(
+            {
+                "task": task["id"],
+                "headline": f"{kt(start)}->{kt(start + n)}" if n else "one chunk",
+                "chunks": [[0, v("chunk_wall_ms") / 1e3]],
+                "tokens": n,
+                "chunk": n,
+                "how": "warm, no readback (on the golden prefix)",
+                "model": model,
+                "seconds": v("chunk_wall_ms") / 1e3,
+            }
+        )
+    return rows
+
+
 def build(spec) -> dict:
     led = Ledger(spec.bringup_dir)
     tasks_spec, state = led.tasks(), led.state()
@@ -158,22 +229,7 @@ def build(spec) -> dict:
             trails.append(
                 {"task": t["id"], "label": f"{t['id']} {t['title'].split(':')[0]}", "points": pts, "device": True}
             )
-        ch = sorted((int(k.rsplit("_c", 1)[1]), v["value"]) for k, v in m.items() if k.startswith("chunk_seconds_c"))
-        if ch:
-            timing.append({"task": t["id"], "label": f"{t['id']} ladder (reads back every layer)", "chunks": ch})
-        full = sorted(
-            (int(k.rsplit("_c", 1)[1]), v["value"] / 1e3) for k, v in m.items() if k.startswith("prefill_chunk_ms_c")
-        )
-        if full:
-            timing.append({"task": t["id"], "label": f"{t['id']} full prefill, warm, no readback", "chunks": full})
-        if "chunk_wall_ms" in m:
-            timing.append(
-                {
-                    "task": t["id"],
-                    "label": f"{t['id']} last chunk on golden prefix, warm",
-                    "chunks": [[0, m["chunk_wall_ms"]["value"] / 1e3]],
-                }
-            )
+        timing += timing_rows(spec, t, m)
 
     plan_mem = res / "plan_memory.json"
     return {
