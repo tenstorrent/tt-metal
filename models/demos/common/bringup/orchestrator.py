@@ -601,7 +601,10 @@ class Orchestrator:
         return self._after(task) if self.led.status(tid) == "PASS" else STOPPED
 
     def _after(self, task: dict) -> int:
-        picked = any(t.get("step") == "perf" and "X.2" in (t.get("deps") or []) for t in self.led.tasks().values())
+        picked = any(  # a pick is an agent's perf task after X.2 (the final X.3 is scripted)
+            t.get("step") == "perf" and t.get("role") and "X.2" in (t.get("deps") or [])
+            for t in self.led.tasks().values()
+        )
         if (task["id"] == "X.2" and not picked) or task.get("stop_after"):
             return self._human(
                 task,
