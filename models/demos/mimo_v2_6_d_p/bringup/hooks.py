@@ -46,10 +46,13 @@ def hf_model(spec, num_layers):
     return build_hf_model(hf_path(spec), num_layers, torch.float32)
 
 
-# Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
+# Device steps of the hybrid harness (BRINGUP_HYBRID=1), per block type: every step passed its component and swap
+# gates on the device. Steps not listed run on the CPU reference.
+_ATTN = {"attn_norm", "attention", "attn_residual", "ffn_norm"}
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention", "attn_residual", "mlp", "mlp_residual"},
-    "sliding_moe": {"attn_norm", "attention", "router", "experts", "ffn_residual"},
+    "full_dense": _ATTN | {"mlp", "mlp_residual"},
+    "sliding_moe": _ATTN | {"router", "experts", "ffn_residual"},
+    "full_moe": _ATTN | {"router", "experts", "ffn_residual"},
 }
 
 # Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out; out = h_mid + mlp_out (dense)
@@ -67,11 +70,9 @@ def _norm_module(mesh, spec, layer, step, loader=None):
     """TtRMSNorm (replicated, HiFi4 + fp32 acc, plain w) for one layer's norm step; loads only that weight."""
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
-    from models.demos.mimo_v2_6_d_p.tt.rms_norm import TtRMSNorm
+    from models.demos.mimo_v2_6_d_p.tt.model import build_norm
 
-    loader = loader or WeightLoader(hf_path(spec))
-    w = loader.get(f"model.layers.{layer}.{_NORM_WEIGHTS[step]}")
-    return TtRMSNorm(mesh, w, eps=1e-6)
+    return build_norm(mesh, loader or WeightLoader(hf_path(spec)), layer, step, eps=1e-6)
 
 
 def _host_fn(mesh, module):
@@ -113,13 +114,10 @@ def _residual_host_fn(mesh):
 def _mlp_module(mesh, spec, layer, loader=None):
     """TtDenseMLP (TP=4 SwiGLU) for the dense layer; fp8 + 128x128 block scale dequantized to bf16 at load."""
     from models.demos.common.bringup.reference.golden import hf_path
-    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader, fp8_weight
-    from models.demos.mimo_v2_6_d_p.tt.mlp import TtDenseMLP
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p.tt.model import build_mlp
 
-    loader = loader or WeightLoader(hf_path(spec))
-    p = f"model.layers.{layer}.mlp."
-    wg, wu, wd = (fp8_weight(loader, p + f"{n}.weight", torch.float32) for n in ("gate_proj", "up_proj", "down_proj"))
-    return TtDenseMLP(mesh, wg, wu, wd)
+    return build_mlp(mesh, loader or WeightLoader(hf_path(spec)), layer)
 
 
 def _rope_max_seq(spec):
@@ -135,26 +133,13 @@ def _attention_module(mesh, spec, layer, loader=None, cfg=None):
     import os
 
     from models.demos.common.bringup.reference.golden import hf_path
-    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig, rope_inv_freq
-    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader, qkv_weight
-    from models.demos.mimo_v2_6_d_p.tt.attention import TtFullAttention, TtSlidingAttention
+    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p.tt.model import build_attention
 
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
-    hq, hkv, d, dv = cfg.attn_dims(layer)
-    p = f"model.layers.{layer}.self_attn."
-    wqkv = qkv_weight(loader, p, (hq * d, hkv * d, hkv * dv), torch.float32)
-    wo = loader.get(p + "o_proj.weight").float()
-    sliding = cfg.is_sliding(layer)
-    inv_freq = rope_inv_freq(cfg.swa_rope_theta if sliding else cfg.rope_theta, cfg.rope_dim(layer))
-    dims, max_seq, vs = (hq, hkv, d, dv), _rope_max_seq(spec), cfg.attention_value_scale
-    if sliding:
-        sink = loader.get(p + "attention_sink_bias").float() if cfg.has_sink(layer) else None
-        module = TtSlidingAttention(mesh, wqkv, wo, dims, inv_freq, max_seq, vs, cfg.sliding_window, sink)
-    else:
-        assert not cfg.has_sink(layer)
-        module = TtFullAttention(mesh, wqkv, wo, dims, inv_freq, max_seq, vs)
-    return module, cfg
+    return build_attention(mesh, loader, cfg, layer, _rope_max_seq(spec)), cfg
 
 
 def _max_chunk(spec):
@@ -165,23 +150,18 @@ def _max_chunk(spec):
 
 
 def _router_module(mesh, spec, layer, loader=None, cfg=None):
-    """TtRouter (replicated, fp32 logits, fp32 sigmoid + bias choice, ttnn.topk) for one MoE layer."""
+    """TtRouter (replicated, fp32 logits, fp32 sigmoid + bias choice, ttnn.topk) for one MoE layer.
+    MIMO_ROUTER_MODE=fused selects moe_grouped_topk (TF32 keys) for comparison."""
     import os
 
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
     from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
-    from models.demos.mimo_v2_6_d_p.tt.router import TtRouter
+    from models.demos.mimo_v2_6_d_p.tt.model import build_router
 
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
-    assert cfg.n_group == 1 and cfg.scoring_func == "sigmoid" and cfg.norm_topk_prob
-    p = f"model.layers.{layer}.mlp.gate."
-    w = loader.get(p + "weight").float()
-    b = loader.get(p + "e_score_correction_bias").float()
-    rs = cfg.routed_scaling_factor if cfg.routed_scaling_factor is not None else 1.0
-    mode = os.environ.get("MIMO_ROUTER_MODE", "fp32")  # "fused": moe_grouped_topk (TF32 keys), for comparison
-    return TtRouter(mesh, w, b, _max_chunk(spec), top_k=cfg.num_experts_per_tok, route_scale=rs, mode=mode)
+    return build_router(mesh, loader, cfg, layer, _max_chunk(spec))
 
 
 def _router_host_fn(mesh, module):
@@ -201,39 +181,19 @@ def _router_host_fn(mesh, module):
 
 
 def _experts_module(mesh, spec, layer, loader=None, cfg=None):
-    """TtExperts (EP=4, 64 experts per chip, bfp8, local dispatch -> per-expert SwiGLU -> combine) for one MoE layer. The mxfp4
-    experts are dequantized one at a time at load unless the bfp8 device cache for the layer is complete."""
+    """TtExperts (EP=4, 64 experts per chip, bfp8, local dispatch -> per-expert SwiGLU -> combine) for one MoE layer.
+    Defaults: loop mode, bf16 input, fp32 intermediates, HiFi4; MIMO_EXPERTS_MODE / MIMO_EXPERTS_ACT=bfp8 /
+    MIMO_EXPERTS_MID=bf16 / MIMO_EXPERTS_FIDELITY=HiFi2 select the older behaviour (tt/model.py:build_experts)."""
     import os
 
-    import ttnn
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
     from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
-    from models.demos.mimo_v2_6_d_p.tt.experts import LazyExpertWeights, TtExperts
+    from models.demos.mimo_v2_6_d_p.tt.model import build_experts
 
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
-    weights = LazyExpertWeights(loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts)
-    # "loop" (default): per-expert extract -> ttnn.linear SwiGLU (HiFi4, fp32 dest) -> insert; "unified":
-    # unified_routed_expert_moe (Silu forced to LoFi + bf16 dest, fails the norm-ratio check); "fused": moe_fused_swiglu.
-    mode = os.environ.get("MIMO_EXPERTS_MODE", "loop")
-    # Loop-mode expert input dtype: bf16 (default; bfp8 fails layer 5's outlier channels), "bfp8" for comparison.
-    act = ttnn.bfloat8_b if os.environ.get("MIMO_EXPERTS_ACT", "bf16") == "bfp8" else ttnn.bfloat16
-    # fp32 (default) or bf16 gate/up/h intermediates; HiFi4 (default) or MIMO_EXPERTS_FIDELITY=HiFi2 for comparison.
-    mid = ttnn.bfloat16 if os.environ.get("MIMO_EXPERTS_MID", "fp32") == "bf16" else ttnn.float32
-    return TtExperts(
-        mesh,
-        layer,
-        weights,
-        emb_dim=cfg.hidden_size,
-        hidden_dim=cfg.moe_intermediate_size,
-        top_k=cfg.num_experts_per_tok,
-        max_seq_len=_max_chunk(spec),
-        mode=mode,
-        loop_act_dtype=act,
-        loop_mid_dtype=mid,
-        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("MIMO_EXPERTS_FIDELITY", "HiFi4")),
-    )
+    return build_experts(mesh, loader, cfg, layer, _max_chunk(spec))
 
 
 def _experts_host_fn(mesh, module):
@@ -254,14 +214,10 @@ def _experts_host_fn(mesh, module):
 
 
 def _new_kv_cache(mesh, cfg, layer, max_seq):
-    """Empty device KV cache for one layer, V padded to 192: full layers 4 KV heads (head r on chip r, paged-shaped),
-    sliding layers 8 KV heads (heads 2r, 2r+1 on chip r, contiguous)."""
-    from models.demos.mimo_v2_6_d_p.tt.attention import TtKVCacheFull, TtKVCacheSliding
+    """Empty device KV cache for one layer (tt/model.py:new_kv_cache)."""
+    from models.demos.mimo_v2_6_d_p.tt.model import new_kv_cache
 
-    _, hkv, d, dv = cfg.attn_dims(layer)
-    if cfg.is_sliding(layer):
-        return TtKVCacheSliding(mesh, hkv, d, dv, max_seq)
-    return TtKVCacheFull(mesh, hkv, d, dv, max_seq)
+    return new_kv_cache(mesh, cfg, layer, max_seq)
 
 
 def _attention_host_fn(mesh, module, cache_of):
@@ -404,6 +360,118 @@ class HybridDeviceModel:
         pass
 
 
+class _DeviceState:
+    """Per-layer device KV caches (tt/model.py:new_attention_caches)."""
+
+    def __init__(self, mesh, cfg, layers, max_seq):
+        from models.demos.mimo_v2_6_d_p.tt.model import new_attention_caches
+
+        self.caches = new_attention_caches(mesh, cfg, layers, max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.caches[layer].load_prefix(tensors["key"], tensors["value"], length)
+
+    def to_torch(self, layer, length):
+        return self.caches[layer].to_torch(length)
+
+
+class MiMoDeviceModel:
+    """Ladder/profile adapter over tt/model.py:TtMiMoModel.
+
+    The hidden state is a replicated [1, 1, S, H] bf16 device tensor from the embedding to the final norm. Each layer
+    is TtMiMoBlock.__call__: run_block over the reference block graph with the validated device modules (one profiler
+    section per step). RoPE tables, page tables and router / dispatch tables are built once at load and sliced on the
+    device. Only the LM head runs on the host (ladder logits on sampled rows, when the stack ends at the last layer)."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.common.bringup.reference.golden import hf_path
+        from models.demos.mimo_v2_6_d_p.tt.model import TtMiMoModel
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        self.path = hf_path(spec)
+        self.model = TtMiMoModel(
+            mesh, self.path, max_seq=_rope_max_seq(spec), max_chunk=_max_chunk(spec), layers=list(layers)
+        )
+        self.cfg = self.model.cfg
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = None
+        if lm_head:
+            from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+
+            self._lm_head = WeightLoader(self.path).get("lm_head.weight").float()  # untied
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _DeviceState(self.mesh, self.cfg, list(self.blocks), max_seq)
+
+    def embed(self, tokens):
+        import ttnn
+
+        ids = ttnn.from_torch(
+            tokens.reshape(1, 1, -1).to(torch.int64).to(torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        from models.demos.mimo_v2_6_d_p.tt.rms_norm import to_device_replicated
+
+        return to_device_replicated(self.mesh, h)
+
+    def to_host(self, h):
+        from models.demos.mimo_v2_6_d_p.tt.rms_norm import replicated_to_host
+
+        return replicated_to_host(h).float()
+
+    def layer(self, i, h, start, state):
+        return self.blocks[i](h, start, state.caches[i])
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        return torch.nn.functional.linear(self.to_host(hidden)[rows], self._lm_head)
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+    def perf_settings(self):
+        """Recorded in the profile: the active SDPA presets and the experts / router modes."""
+        import os
+
+        from models.demos.mimo_v2_6_d_p.tt.attention import sdpa_settings
+
+        full, sl = sdpa_settings(False), sdpa_settings(True)
+        return {
+            "sdpa_full_cfg": full["name"],
+            "sdpa_sliding_cfg": sl["name"],
+            "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", "loop"),
+            "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
+        }
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    """Hybrid for now (CPU reference + DEVICE_STEPS on the device); the assemble step replaces it."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
+    device, host in / host out per step) for debugging."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return MiMoDeviceModel(mesh, spec, layers, lm_head=lm_head)
