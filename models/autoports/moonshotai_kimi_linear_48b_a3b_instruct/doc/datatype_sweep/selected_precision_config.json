@@ -1,0 +1,14 @@
+{
+ "name": "bfp8_kvbfp8",
+ "experts": "bfp8",
+ "kv": "bfp8",
+ "top1": 0.96,
+ "top5": 1.0,
+ "top100": 1.0,
+ "decode_ms": 91.2,
+ "prefill_s": 0.67,
+ "degenerate": false,
+ "paris": true,
+ "meets_bars": true,
+ "note": "bfp4_kvbfp8 was only 1.5% faster; accuracy preferred"
+}
