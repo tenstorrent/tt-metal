@@ -272,7 +272,25 @@ Tensor scatter(
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
-    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
+    // Bail out on exactly the two shapes the device op cannot be built for, both of which torch
+    // answers by leaving the input alone. See #56881.
+    //   - An empty input: the factories size their work split as logical_volume() / last dim, which
+    //     is 0/0 when the scatter axis is empty - a SIGFPE that kills the process rather than an
+    //     error the caller can catch - and 0 work units otherwise, which the program builder
+    //     rejects. The scatter axis is transposed last before that division, so shape[dim] is the
+    //     dimension that ends up divided by, not shape[-1].
+    //   - An index whose scatter axis is empty: its dataflow buffer is sized from that extent and
+    //     a zero-entry buffer is rejected.
+    // An index that is empty along some *other* axis is left alone deliberately: the device op
+    // already handles it and returns a correct, freshly allocated result, so widening this to
+    // index_tensor.logical_volume() == 0 would swap that for an aliased input and drop a requested
+    // memory_config. An empty source implies an empty index, since validate_inputs requires
+    // index_shape[d] <= source_shape[d] for every d.
+    // The tensor is returned as-is rather than copied, because clone() and to_memory_config()
+    // divide by the page size and crash on a zero-volume tensor too. An explicitly requested
+    // memory_config therefore is not applied here, the same as on the rank-0 path above.
+    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{} ||
+        input_tensor.logical_volume() == 0 || original_index_tensor_lshape[normalized_dim] == 0) {
         return input_tensor;
     }
     const auto original_layout = input_tensor.layout();
