@@ -1,9 +1,10 @@
 intake:
   by: dnijemcevic
-  at: '2026-09-26T01:13:38'
+  at: '2026-09-26T01:54:57'
   files:
-    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: 4422c53a03bc78078cdfc0abdb493decf78b8d285b28a208919d91ac4979cc97
-  note: 'owner: always FABRIC_2D (2026-09-26)'
+    models/demos/gemma4_a4b_d_p/bringup/spec.yaml: c5ac40ca1b23dd01c48d15d2e4541697c8244dfa4569fa1f8f31b7ce0a8b95e9
+  note: 'owner (2026-09-26): both dashboard styles, pinned revision, usage-example
+    smoke; sanity gate passed by hand (Paris, 0.669)'
 plan:
   by: dnijemcevic
   at: '2026-09-25T23:11:27'
