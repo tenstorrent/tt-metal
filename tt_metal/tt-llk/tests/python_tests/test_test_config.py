@@ -548,7 +548,9 @@ def test_per_test_memory_layout_restores_session_default(
         TestConfig.LINKER_SCRIPTS / f"memory.{TestConfig.ARCH.value}.debug.ld"
     ).is_file()
     if not debug_available and (explicit == "debug" or coverage):
-        with pytest.raises(ValueError, match="match the target"):
+        with pytest.raises(  # allow-pytest.raises: LLK has no expect_error
+            ValueError, match="match the target"
+        ):
             TestConfig.setup_build(
                 TestConfig.LLK_ROOT, with_coverage=coverage, memory_layout=explicit
             )
@@ -570,7 +572,9 @@ def test_per_test_memory_layout_restores_session_default(
         )
         expected = explicit or selected or ("debug" if coverage else "normal")
         if expected == "debug" and not debug_available:
-            with pytest.raises(ValueError, match="match the target"):
+            with pytest.raises(  # allow-pytest.raises: LLK has no expect_error
+                ValueError, match="match the target"
+            ):
                 plugin.pytest_runtest_setup(item)
             assert variant_id() == default_identity
             continue
@@ -653,7 +657,9 @@ def test_failed_layout_request_preserves_previous_configuration(isolated_layout)
         variant_id(),
         TestConfig.SHARED_DIR,
     )
-    with pytest.raises(ValueError, match="support coverage"):
+    with pytest.raises(  # allow-pytest.raises: LLK has no expect_error
+        ValueError, match="support coverage"
+    ):
         TestConfig.setup_build(root, with_coverage=True, memory_layout="normal")
     assert (
         TestConfig.MEMORY_LAYOUT_LD_SCRIPT,
