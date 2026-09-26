@@ -27,7 +27,10 @@ def hf_layers(model):
 
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
-DEVICE_STEPS = {"sliding": {"attn_norm", "attention", "post_attn_norm", "attn_residual", "ffn_norm"}, "global": set()}
+DEVICE_STEPS = {
+    "sliding": {"attn_norm", "attention", "post_attn_norm", "attn_residual", "ffn_norm", "mlp"},
+    "global": set(),
+}
 
 # Residual steps: h_mid = in + attn_post_norm (replicated, no collective).
 _RESIDUAL_STEPS = {"attn_residual"}
@@ -86,6 +89,17 @@ def _residual_host_fn(mesh):
     return fn
 
 
+def _mlp_module(mesh, spec, layer, loader=None):
+    """TtDenseMLP (TP=4, intermediate padded 528 -> 544 per chip) for one layer's dense mlp."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import PREFIX, WeightLoader
+    from models.demos.gemma4_a4b_d_p.tt.mlp import TtDenseMLP
+
+    loader = loader or WeightLoader(hf_path(spec))
+    p = f"{PREFIX}layers.{layer}.mlp."
+    return TtDenseMLP(mesh, *(loader.get(p + n + ".weight") for n in ("gate_proj", "up_proj", "down_proj")))
+
+
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
     """TtSlidingAttention for a sliding layer, loading only its attention weights (not the experts)."""
     import os
@@ -127,6 +141,8 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _norm_module(mesh, spec, layer, step))
     if step in _RESIDUAL_STEPS:
         return _residual_host_fn(mesh)
+    if step == "mlp":
+        return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "attention":
         from models.demos.gemma4_a4b_d_p.tt.attention import TtKVCacheSliding
 
@@ -198,6 +214,8 @@ class HybridDeviceModel:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
+            if "mlp" in steps:
+                ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, self.cfg, lambda ctx: ctx.extra["dev_cache"])
