@@ -160,37 +160,25 @@ class WanTransformerBlock(Module):
         if "scale_shift_table" in state:
             state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
 
-    def forward(
-        self,
-        spatial_1BND: ttnn.Tensor,
-        prompt_1BLP: ttnn.Tensor,
-        temb_1BTD: ttnn.Tensor,
-        N: int,
-        rope_cos: ttnn.Tensor,
-        rope_sin: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
-        cross_attn_mask: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
-        """
-        spatial_1BND: fractured N on SP, fractured D on TP
-        prompt_1BLP: replicated on SP, replicated D on TP
-        temb_1BTD: replicated on SP, fractured D on TP
-        N: logical sequence length of the spatial input
-        rope_cos_BANH: fractured N on SP, A (num_heads) on TP
-        rope_sin_BANH: fractured N on SP, A (num_heads) on TP
-        trans_mat: replicated on SP, replicated D on TP
+    def prepare_modulation(self, temb_1BTD: ttnn.Tensor) -> tuple[ttnn.Tensor, ...]:
+        """AdaLN modulation of this block for one timestep embedding.
 
-        Outputs:
-        spatial_1BND: fractured N on SP, fractured D on TP
-        """
+        Returns ``(shift_msa, 1 + scale_msa, gate_msa, c_shift_msa, 1 + c_scale_msa, c_gate_msa)``
+        -- the six tensors `forward` consumes, with the gates already cast to bf16 and the two
+        LayerNorm weights already offset by one. This depends only on `temb_1BTD` and the block's
+        table, so under classifier-free guidance `combined_step` computes it once per block and
+        hands the same tensors to the conditional and unconditional passes (`forward(modulation=)`).
+        The ops here are exactly the ones `forward` ran inline before, in the same order, so the
+        hoisted result is bit-identical (gate: `test_cfg_hoist_ti2v_5b.py`).
 
-        # Two timestep layouts are supported, discriminated by width rather than by an extra
-        # argument, so `combined_step`'s traced signature is untouched:
-        #   scalar   temb (1, B, 6, D/tp) -- one timestep per batch  (T2V, 14B I2V)
-        #   per-token temb (1, B, N, 6*D/tp) -- one timestep per token (TI2V-5B I2V)
-        # The per-token arm works because time_proj's per-device output is already laid out
-        # group-major [g0|g1|...|g5] (see WanTimeTextImageEmbedding._prepare_torch_state), which
-        # is exactly the row-major flattening of the (1,1,6,D/tp) table.
+        Two timestep layouts are supported, discriminated by width rather than by an extra
+        argument, so `combined_step`'s traced signature is untouched:
+          scalar    temb (1, B, 6, D/tp)    -- one timestep per batch  (T2V, 14B I2V)
+          per-token temb (1, B, N, 6*D/tp)  -- one timestep per token (TI2V-5B I2V)
+        The per-token arm works because time_proj's per-device output is already laid out
+        group-major [g0|g1|...|g5] (see WanTimeTextImageEmbedding._prepare_torch_state), which
+        is exactly the row-major flattening of the (1,1,6,D/tp) table.
+        """
         table_width = self.scale_shift_table.data.shape[-1]
         per_token = temb_1BTD.shape[-1] != table_width
 
@@ -214,9 +202,50 @@ class WanTransformerBlock(Module):
         gate_msa_1B1D = ttnn.typecast(gate_msa_1B1D, dtype=ttnn.bfloat16)
         c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
 
-        spatial_normed_1BND = self.norm1(
-            spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
+        return (
+            shift_msa_1B1D,
+            1.0 + scale_msa_1B1D,
+            gate_msa_1B1D,
+            c_shift_msa_1B1D,
+            1.0 + c_scale_msa_1B1D,
+            c_gate_msa_1B1D,
         )
+
+    def forward(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        temb_1BTD: ttnn.Tensor,
+        N: int,
+        rope_cos: ttnn.Tensor,
+        rope_sin: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        cross_attn_mask: ttnn.Tensor | None = None,
+        *,
+        modulation: tuple[ttnn.Tensor, ...] | None = None,
+    ) -> ttnn.Tensor:
+        """
+        spatial_1BND: fractured N on SP, fractured D on TP
+        prompt_1BLP: replicated on SP, replicated D on TP
+        temb_1BTD: replicated on SP, fractured D on TP
+        N: logical sequence length of the spatial input
+        rope_cos_BANH: fractured N on SP, A (num_heads) on TP
+        rope_sin_BANH: fractured N on SP, A (num_heads) on TP
+        trans_mat: replicated on SP, replicated D on TP
+        modulation: `prepare_modulation(temb_1BTD)` when the caller already has it (CFG shares
+            one per block between its two passes); computed here otherwise.
+
+        Outputs:
+        spatial_1BND: fractured N on SP, fractured D on TP
+        """
+
+        if modulation is None:
+            modulation = self.prepare_modulation(temb_1BTD)
+        shift_msa_1B1D, scale1_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale1_msa_1B1D, c_gate_msa_1B1D = (
+            modulation
+        )
+
+        spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=scale1_msa_1B1D, dynamic_bias=shift_msa_1B1D)
 
         # Self attention on spatial with fused residual addcmul
         # Fuses: spatial_1BND = spatial_1BND + to_out(attn_output) * gate_msa_1B1D
@@ -242,9 +271,7 @@ class WanTransformerBlock(Module):
         spatial_1BND = spatial_1BND + attn_output_1BND
 
         # Feed Forward
-        spatial_normed_1BND = self.norm3(
-            spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
-        )
+        spatial_normed_1BND = self.norm3(spatial_1BND, dynamic_weight=c_scale1_msa_1B1D, dynamic_bias=c_shift_msa_1B1D)
 
         if self.ccl_manager.topology == ttnn.Topology.Linear:
             if self.parallel_config.tensor_parallel.factor > 1:
@@ -477,6 +504,12 @@ class WanTransformer3DModel(Module):
 
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_prompt_1BLP
+
+    def prepare_norm_out_modulation(self, temb_11BD):
+        """`(shift, 1 + scale)` for `norm_out`: `_apply_norm_out_modulation` plus the offset the
+        norm consumes, so CFG can compute it once per step and share it between its two passes."""
+        shift_11BD, scale_11BD = self._apply_norm_out_modulation(temb_11BD)
+        return shift_11BD, 1 + scale_11BD
 
     def _apply_norm_out_modulation(self, temb_11BD):
         """Add the model-level scale/shift table to `temb` and split it into (shift, scale).
@@ -727,6 +760,8 @@ class WanTransformer3DModel(Module):
         *,
         timestep_conditioning=None,
         spatial_1BND=None,
+        block_modulations=None,
+        norm_out_modulation=None,
     ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
@@ -740,11 +775,13 @@ class WanTransformer3DModel(Module):
         Spatial output is an fp32 ttnn.Tensor on device with same layout.
 
         `timestep_conditioning` (the `(temb_11BD, timestep_proj_1BTD)` pair from
-        `prepare_timestep_conditioning(timestep)`) and `spatial_1BND` (the patch-embedded
-        input) are computed here when not given. `combined_step` passes both so the
-        conditional and unconditional passes, which share the timestep and the spatial input,
-        do not recompute them. Nothing downstream writes into either: the blocks' fused
-        addcmul kernels return fresh outputs and the modulation tensors are only read.
+        `prepare_timestep_conditioning(timestep)`), `spatial_1BND` (the patch-embedded input),
+        `block_modulations` (one `WanTransformerBlock.prepare_modulation` result per block) and
+        `norm_out_modulation` (`prepare_norm_out_modulation`) are computed here when not given.
+        `combined_step` passes all four so the conditional and unconditional passes, which share
+        the timestep and the spatial input, do not recompute them. Nothing downstream writes
+        into any of them: the blocks' fused addcmul kernels return fresh outputs and the
+        modulation tensors are only read.
         """
         if timestep_conditioning is None:
             timestep_conditioning = self.prepare_timestep_conditioning(timestep)
@@ -753,7 +790,11 @@ class WanTransformer3DModel(Module):
         if spatial_1BND is None:
             spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        for block in self.blocks:
+        if block_modulations is None:
+            block_modulations = [None] * len(self.blocks)
+        assert len(block_modulations) == len(self.blocks), "expected one modulation per block"
+
+        for block, modulation in zip(self.blocks, block_modulations):
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
@@ -762,11 +803,14 @@ class WanTransformer3DModel(Module):
                 rope_cos=rope_cos_1HND,
                 rope_sin=rope_sin_1HND,
                 trans_mat=trans_mat,
+                modulation=modulation,
             )
-        shift_11BD, scale_11BD = self._apply_norm_out_modulation(temb_11BD)
+        if norm_out_modulation is None:
+            norm_out_modulation = self.prepare_norm_out_modulation(temb_11BD)
+        shift_11BD, scale1_11BD = norm_out_modulation
 
         spatial_norm_1BND = self.norm_out(
-            spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
+            spatial_1BND, dynamic_weight=scale1_11BD, dynamic_bias=shift_11BD, dtype=ttnn.float32
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -803,14 +847,17 @@ class WanTransformer3DModel(Module):
         *,
         gather_output: bool = True,
     ) -> ttnn.Tensor:
-        # The timestep embedding and the patch embedding depend only on `timestep` and
-        # `spatial_1BNI`, which the conditional and unconditional passes share, so under CFG
-        # they are computed once here instead of once per pass.
+        # The timestep embedding, the patch embedding and every block's AdaLN modulation depend
+        # only on `timestep` and `spatial_1BNI`, which the conditional and unconditional passes
+        # share, so under CFG they are computed once here instead of once per pass.
         shared = {}
         if do_classifier_free_guidance:
+            temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
             shared = {
-                "timestep_conditioning": self.prepare_timestep_conditioning(timestep),
+                "timestep_conditioning": (temb_11BD, timestep_proj_1BTD),
                 "spatial_1BND": self.patch_embedding(spatial_1BNI),
+                "block_modulations": [block.prepare_modulation(timestep_proj_1BTD) for block in self.blocks],
+                "norm_out_modulation": self.prepare_norm_out_modulation(temb_11BD),
             }
 
         cond = self.inner_step(
