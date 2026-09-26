@@ -974,3 +974,16 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - BRINGUP_IMPL=reference: pass (PCC 0.999997, rel 0.0024, ratio [0.9974, 1.0021]). BRINGUP_IMPL=stub: fails PCC. Default impl (device): pass (PCC 0.999996, rel 0.0030, ratio [0.9954, 1.0031]).
 - The `FAIL pcc_ffn_norm_L05: pcc=0.000000` line at the top of every run comes from run_safe_pytest's precompile pass, not from the test.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_ffn_norm.py`
+
+## S.full_moe.04 test (attempt 1), 2026-09-26
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_04_ffn_norm.py` with the body of
+  `test_swap_full_moe_03_attn_residual.py`, SWAPPED + ffn_norm. The ffn_norm checks use the component test's limits
+  (`test_c_full_moe_ffn_norm.py`): PCC >= 0.99, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]. All swap 03
+  checks are kept. pcc_swap_out is gated at 0.98.
+- BRINGUP_IMPL=reference: PASS (out rel 0.0025; ffn_norm rel 0.0024, ratio [0.9976, 1.0024]). BRINGUP_IMPL=stub: FAIL
+  on every check. The precompile pass (zero attention) fails h_mid, coef and ffn_norm (rel 0.60, ratio up to 1.23).
+- Device (default) gate: PASS. pcc_swap_out 0.999986, out rel 0.0053 / first rows 0.0046; ffn_norm pcc 0.999991,
+  rel 0.0043, ratio [0.9954, 1.0034], worst row 0.0074; earlier steps as swap 03 (attention rel 0.0056, h_mid 0.0041,
+  coef 1.0007). Trail: router 0.9955, experts_out 0.9987.
+- Tightest margin: block out rel 0.0053 against 0.01 (CPU router flips caused by upstream device error).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_04_ffn_norm.py`
