@@ -200,4 +200,10 @@ void kernel_main() {
         dfb_exps_obj.pop_front(static_cast<uint16_t>(Wt));
 #endif
     }
+    // The mask and the two reduce scalers are each a single tile pushed once by the reader and
+    // re-read on every iteration, so they are waited once up front. Pop them here to leave the
+    // buffers balanced.
+    dfb_mask_obj.pop_front(onetile);
+    dfb_max_scaler_obj.pop_front(onetile);
+    dfb_sum_scaler_obj.pop_front(onetile);
 }

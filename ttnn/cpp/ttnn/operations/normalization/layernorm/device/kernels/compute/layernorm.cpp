@@ -417,4 +417,8 @@ void kernel_main() {
         "width or dfb_scaler push/pop counts diverge (issue #48487)");
     constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     dfb_scaler.pop_front(num_scaler_tiles);
+
+    // The epsilon tile is pushed once by the reader and read on every block, so it is waited once
+    // up front rather than per block. Pop it here, after the last block, to balance the buffer.
+    dfb_eps.pop_front(1);
 }

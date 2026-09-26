@@ -143,6 +143,9 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn);
 #endif
+#ifdef MASK_PADDED_DATA
+    DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
+#endif
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
 #ifdef NUMERIC_STABLE
 #if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
@@ -234,7 +237,7 @@ void kernel_main() {
 #endif  // CAUSAL_MASK
 
         reconfig_data_format(dfb_exps, dfb_sum_scaler);
-#else
+#else  // !FUSED_SCALE_MASK
         reconfig_data_format(dfb_in0, dfb_in0);
         pack_reconfig_data_format(dfb_exps);
         copy_init(dfb_in0);  // need to copy from CB to DST to be able to run sfpu math
@@ -284,7 +287,7 @@ void kernel_main() {
             calc_numeric_stable<dfb_x, dfb_max_scaler, dfb_max, dfb_exps>(Wt, ndst);
 #endif
         }
-#else
+#else  // !MASK_PADDED_DATA
         {
 // add numeric_stable
 // fuse exp with sub tiles
@@ -358,5 +361,21 @@ void kernel_main() {
     dfb_sum_scaler_obj.pop_front(1);
 #ifdef FUSED_SCALE_MASK
     dfb_fused_scale_obj.pop_front(1);
+#ifndef CAUSAL_MASK
+    // A non-causal mask row is waited on the first row of each Ht group and popped when that group
+    // completes. A core can start part-way through a group (start_ht) and can stop before the group
+    // ends, which leaves the last mask waited but not popped; wait_mask is false exactly in that
+    // case, so pop it here to leave the buffer balanced.
+    if (!wait_mask) {
+        dfb_fused_attn_obj.pop_front(Wt);
+        drain_dfb_pad(dfb_fused_attn, attn_pad);
+    }
+#endif  // !CAUSAL_MASK
+#endif  // FUSED_SCALE_MASK
+#if defined(MASK_PADDED_DATA) && !defined(FUSED_SCALE_MASK)
+    // The padding mask is a single tile pushed once by the reader and re-waited on the last column
+    // tile of every row; pop it once here so the buffer is left balanced. Only the non-fused path
+    // applies this mask, so the pop carries the same pair of conditions as the wait.
+    dfb_mask_padded_obj.pop_front(1);
 #endif
 }

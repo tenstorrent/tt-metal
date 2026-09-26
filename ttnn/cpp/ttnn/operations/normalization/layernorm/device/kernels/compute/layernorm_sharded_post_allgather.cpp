@@ -305,10 +305,12 @@ void kernel_main() {
     dfb_im_obj.push_back(num_tiles_per_block);
 
     dfb_xmm_obj.pop_front(num_tiles_per_block);
-    dfb_im_obj.wait_front(num_tiles_per_block);
 
 #ifdef FUSE_GAMMA
     {
+        // The intermediate tiles were packed and pushed above. Wait for them before the loop
+        // below reads them back by tile index. The gamma stage is their only reader and pops them.
+        dfb_im_obj.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_im, dfb_gamma);
         if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out);
@@ -370,5 +372,24 @@ void kernel_main() {
         dfb_out_obj.push_back(num_tiles_per_block);
         dfb_beta_src_obj.pop_front(num_tiles_per_block);
     }
+#endif
+
+#ifdef IS_ALLGATHER_WORKER
+    if (enable_sqrt) {
+        // The global-reduce scaler tile is pushed once and read by tile index across the reductions
+        // above without being popped. Pop it under the same guard that gated the wait, so the buffer
+        // is left balanced on every core.
+        dfb_scaler_global_obj.pop_front(1);
+    }
+#endif
+#ifdef FUSE_GAMMA
+    // Gamma is pushed once by the reader and read by tile index across every row of the block, so it
+    // is waited once rather than per row. Pop it here to balance the buffer.
+    dfb_gamma_obj.pop_front(block_w);
+#endif
+#ifdef FUSE_BETA
+    // Beta is pushed once by the reader and read by tile index across every row of the block, so it
+    // is waited once rather than per row. Pop it here to balance the buffer.
+    dfb_beta_obj.pop_front(block_w);
 #endif
 }

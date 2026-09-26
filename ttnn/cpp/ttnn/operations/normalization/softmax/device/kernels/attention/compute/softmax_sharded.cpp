@@ -75,8 +75,12 @@ void kernel_main() {
 
     DataflowBuffer dfb_exps_obj(dfb::exps);
     DataflowBuffer dfb_x_obj(dfb_x_id);
+    DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
 
 #ifdef FUSED_SCALE_MASK
+    DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
+    DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
     constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
     constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
@@ -157,4 +161,23 @@ void kernel_main() {
             ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w));
     }
+#ifdef FUSED_SCALE_MASK
+    // The fused-scale scalar is a single tile pushed once by the reader and re-waited on every row
+    // of the block; pop it once here so the buffer is left balanced.
+    dfb_fused_scale_obj.pop_front(1);
+#if !defined(CAUSAL_MASK) && !defined(SHARDED_CAUSAL_MASK)
+    // A non-causal attention mask is one row of block_w tiles that every row of the block re-waits
+    // and reuses, so it is popped once here rather than per row. The causal paths consume a fresh
+    // mask per row and pop it inside the loop instead.
+    dfb_fused_attn_obj.pop_front(block_w);
+#endif
+#endif  // FUSED_SCALE_MASK
+    // The reduce scalers are each a single tile pushed once by the reader and waited by every
+    // reduction over the block. The waits are not written in this file: compute_kernel_lib::reduce
+    // waits the buffer it is given as the scaler and never pops it. Pop them here so the buffers
+    // are left balanced.
+#ifdef NUMERIC_STABLE
+    dfb_max_scaler_obj.pop_front(1);
+#endif
+    dfb_sum_scaler_obj.pop_front(1);
 }

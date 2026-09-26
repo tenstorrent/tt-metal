@@ -220,6 +220,18 @@ void kernel_main() {
         }
 
         dfb_partial_obj.pop_front(static_cast<uint16_t>(num_tiles_per_partial_result * block_h));
+
+        // Pop the same count that was waited for. Compute routes its reduction into the first-stage
+        // reduce buffer only under two-stage reduction, writing straight to the output buffer
+        // otherwise, so the pop carries that condition even though the wait above is written
+        // more broadly. The second-stage reader gathers from the first-stage reduce buffer over the
+        // NOC after the signal; popping here is safe not because that read has finished, which
+        // nothing here enforces, but because no code on this core reserves the buffer again, so its
+        // pages are never overwritten.
+        if constexpr (is_all_to_all_worker && use_two_stage_reduce) {
+            dfb_reduce_first_stage_obj.pop_front(
+                static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_to_read));
+        }
     };
     global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2);
     noc.async_atomic_barrier();
