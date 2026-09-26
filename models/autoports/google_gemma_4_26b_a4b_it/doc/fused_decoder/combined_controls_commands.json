@@ -1,0 +1,80 @@
+[
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention",
+      "--group-size",
+      "16384",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_attention_sliding.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_attention_softmax",
+      "--group-size",
+      "16384",
+      "--layer",
+      "0",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/softmax_only_sliding.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--fusion",
+      "broadcast_pack_gelu_router_tail_norm_attention",
+      "--group-size",
+      "16384",
+      "--layer",
+      "5",
+      "--length",
+      "4096",
+      "--real",
+      "--decode",
+      "--steps",
+      "128",
+      "--timing",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_attention_full.json"
+    ],
+    "exit_code": 0
+  }
+]

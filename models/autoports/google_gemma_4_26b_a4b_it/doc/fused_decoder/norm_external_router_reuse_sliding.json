@@ -1,0 +1,103 @@
+{
+  "candidate": "norm_external_weight",
+  "norm_site": "router",
+  "phase": "all",
+  "layer": 0,
+  "runner": "request_reuse",
+  "real_weights": true,
+  "threshold": 0.995,
+  "same_input": [
+    {
+      "boundary": "router_prefill",
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "pcc": 0.9999998714003806,
+      "max_abs_error": 0.03142547607421875,
+      "relative_l2": 0.0006714973715133965,
+      "passed": true
+    },
+    {
+      "boundary": "router_decode",
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "pcc": 0.9999999029927146,
+      "max_abs_error": 0.006801605224609375,
+      "relative_l2": 0.0004344515618868172,
+      "passed": true
+    }
+  ],
+  "harness_output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_external_router_reuse_sliding.harness.json",
+  "performance_evidence": false,
+  "integrated_harness_passed": true,
+  "passed": true,
+  "harness": {
+    "layer_type": "sliding_attention",
+    "real_weights": true,
+    "requests": [
+      {
+        "length": 31,
+        "prefill_pcc": 0.9956859897643323,
+        "decode_pcc": 0.9997869706371554,
+        "passed": true
+      },
+      {
+        "length": 32,
+        "prefill_pcc": 0.9988181307692152,
+        "decode_pcc": 0.9999067151723265,
+        "passed": true
+      },
+      {
+        "length": 33,
+        "prefill_pcc": 0.9992737252225729,
+        "decode_pcc": 0.9999470078007764,
+        "passed": true
+      },
+      {
+        "length": 1023,
+        "prefill_pcc": 0.9984195842720378,
+        "decode_pcc": 0.9998388713310808,
+        "passed": true
+      },
+      {
+        "length": 1024,
+        "prefill_pcc": 0.9985429333563401,
+        "decode_pcc": 0.9998455740530358,
+        "passed": true
+      },
+      {
+        "length": 1025,
+        "prefill_pcc": 0.9987009241232766,
+        "decode_pcc": 0.9998785795162275,
+        "passed": true
+      },
+      {
+        "length": 2049,
+        "prefill_pcc": 0.9987077139124144,
+        "decode_pcc": 0.9998608897796466,
+        "passed": true
+      },
+      {
+        "length": 33,
+        "prefill_pcc": 0.9988898993108843,
+        "decode_pcc": 0.9998110873082519,
+        "passed": true
+      },
+      {
+        "length": 2047,
+        "prefill_pcc": 0.998445030422372,
+        "decode_pcc": 0.9998116194119709,
+        "passed": true
+      }
+    ],
+    "runtime_audit": "clean",
+    "trace_reused": true
+  }
+}

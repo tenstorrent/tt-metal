@@ -1,0 +1,13 @@
+{
+  "command": [
+    "python_env/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_fused_decoder.py",
+    "-k",
+    "mixed_expert_tail"
+  ],
+  "exit_code": 0,
+  "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c"
+}

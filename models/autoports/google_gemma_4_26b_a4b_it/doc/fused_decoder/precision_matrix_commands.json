@@ -1,0 +1,200 @@
+[
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "norm_fp32",
+      "--norm-site",
+      "input",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_input_batch_sliding.json"
+    ],
+    "exit_code": 0,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_input_batch_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "norm_fp32",
+      "--norm-site",
+      "post",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_post_batch_sliding.json"
+    ],
+    "exit_code": 0,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_post_batch_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "norm_fp32",
+      "--norm-site",
+      "head",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_head_batch_sliding.json"
+    ],
+    "exit_code": 0,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_head_batch_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "norm_fp32",
+      "--norm-site",
+      "router",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_router_batch_sliding.json"
+    ],
+    "exit_code": 0,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/norm_router_batch_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_native_fp32",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_native_fp32_sliding.json"
+    ],
+    "exit_code": 1,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_native_fp32_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_native_fp32",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_native_fp32_full.json"
+    ],
+    "exit_code": 1,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_native_fp32_full.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_hf_fp32",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_hf_fp32_sliding.json"
+    ],
+    "exit_code": 0,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_hf_fp32_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "rope_hf_fp32",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_hf_fp32_full.json"
+    ],
+    "exit_code": 0,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/rope_hf_fp32_full.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "sdpa_exact",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "0",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/sdpa_exact_sliding.json"
+    ],
+    "exit_code": 1,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/sdpa_exact_sliding.json"
+  },
+  {
+    "command": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_precision",
+      "--candidate",
+      "sdpa_exact",
+      "--runner",
+      "batched",
+      "--batch",
+      "32",
+      "--layer",
+      "5",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/sdpa_exact_full.json"
+    ],
+    "exit_code": 1,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/sdpa_exact_full.json"
+  }
+]

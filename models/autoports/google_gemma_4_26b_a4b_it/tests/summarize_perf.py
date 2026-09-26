@@ -64,6 +64,12 @@ def traffic(row):
             # Reader and writer transfer num_heads * width_tiles cache tiles.
             cache_pages = int(re.findall(r"\d+", row["INPUT_0_W_PAD[LOGICAL]"])[0])
             count = tensor_elements(row, "INPUT_0") / cache_pages
+        if "pagedfusedupdatecache" in op and (prefix in ("INPUT_0", "INPUT_2") or prefix.startswith("OUTPUT_")):
+            # The fused operation updates K and V together; each cache transfers
+            # one page, not its entire allocated pool.
+            cache_prefix = "INPUT_2" if prefix in ("INPUT_2", "OUTPUT_1") else "INPUT_0"
+            cache_pages = int(re.findall(r"\d+", row[f"{cache_prefix}_W_PAD[LOGICAL]"])[0])
+            count = tensor_elements(row, cache_prefix) / cache_pages
         if "embedding" in op and prefix == "INPUT_1":
             count = tensor_elements(row, "OUTPUT_0", logical=True)
         if ("slice" in op or "unpad" in op) and prefix == "INPUT_0":
@@ -189,7 +195,7 @@ def main():
             "Time is first native firmware start to last native firmware end, including all intervening layer operations and gaps. Decode is mean of128 individual trace replay windows; inter-replay input-copy/host gaps are excluded.",
             "Useful FLOPs count logical projection/MLP/router and causal attention work, with only8 active experts. Padding, masked attention, extra prefill expert computation, scalar normalization and transcendental work are excluded from numerator; their time remains in denominator.",
             "Estimated DRAM bytes sum one padded DRAM input read/output write per native operation. Sparse weights use the recorded nnz/128 fraction (8/128 in decode); cache update reads/writes one 32-token page across KV heads; embedding/slices count selected inputs; whole-cache layout conversions count full pool. Op metadata caching is disabled to preserve invocation-specific shapes. Extra per-core rereads, metadata and profiler traffic are excluded. This is an estimate, not hardware counters.",
-            "BF16 weights/cache, mixed BF16/FP32 activations, HiFi4 attention/QKV and expert prefill, inherited shared/expert decode fidelity, exact SFPU decode QKV/router/norm/rotary. No percentages are clamped.",
+            "BF16 weights/cache, mixed BF16/FP32 activations, HiFi4 attention/QKV and expert prefill, shared gate-up/prefill HiFi2, expert sparse decode LoFi, and policy-specific shared-down decode fidelity (selected fused LoFi; functional HiFi2), SFPU decode QKV/router with policy-specific native or SFPU normalization/rotary (see measured decoder config). No percentages are clamped.",
         ],
     )
     args.output.write_text(json.dumps(result, indent=2) + "\n")

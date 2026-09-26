@@ -1,0 +1,96 @@
+{
+  "cache_shape": [
+    160,
+    8,
+    32,
+    256
+  ],
+  "selected_pages": 33,
+  "page_ids": [
+    86,
+    35,
+    45,
+    90,
+    32,
+    129,
+    133,
+    57,
+    3,
+    67,
+    149,
+    112,
+    141,
+    20,
+    137,
+    70,
+    153,
+    93,
+    88,
+    115,
+    159,
+    1,
+    105,
+    150,
+    55,
+    135,
+    19,
+    91,
+    21,
+    126,
+    96,
+    117,
+    92
+  ],
+  "repeats": 30,
+  "timing_samples": 3,
+  "results": [
+    {
+      "candidate": "embedding",
+      "exact_equal": true,
+      "trace_replay_equal": true,
+      "timed_index_expansion": false,
+      "traced_host_us": 138.87186666666668,
+      "traced_host_us_samples": [
+        310.65133333333335,
+        138.87186666666668,
+        138.5122
+      ]
+    },
+    {
+      "candidate": "tiled_gather",
+      "exact_equal": true,
+      "trace_replay_equal": true,
+      "timed_index_expansion": false,
+      "traced_host_us": 24391.751533333332,
+      "traced_host_us_samples": [
+        24387.355766666667,
+        24400.2684,
+        24391.751533333332
+      ]
+    },
+    {
+      "candidate": "page_axis_gather",
+      "exact_equal": true,
+      "trace_replay_equal": true,
+      "timed_index_expansion": false,
+      "traced_host_us": 3980.2069666666666,
+      "traced_host_us_samples": [
+        3980.2069666666666,
+        3982.9281333333333,
+        3975.5176666666666
+      ]
+    },
+    {
+      "candidate": "page_axis_gather_dynamic",
+      "exact_equal": true,
+      "trace_replay_equal": true,
+      "timed_index_expansion": true,
+      "traced_host_us": 4106.6668666666665,
+      "traced_host_us_samples": [
+        4103.3332,
+        4106.6668666666665,
+        4109.270833333333
+      ]
+    }
+  ]
+}

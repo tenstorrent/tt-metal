@@ -1,0 +1,49 @@
+{
+  "decoder": "fused",
+  "fusion": "broadcast_pack_gelu_router_tail_norm_attention_common_tied_ropepolicy_cache_kvnorm",
+  "runtime_prefill_audit": "clean",
+  "program_cache_miss_guard": false,
+  "prefill_cache_entries": 85,
+  "prefix_length": 0,
+  "layer_type": "full_attention",
+  "phase": "prefill",
+  "length": 33,
+  "real_weights": true,
+  "pcc": 0.9994390985686576,
+  "passed": true,
+  "decode": {
+    "pcc": 0.9998913192015249,
+    "passed": true,
+    "traced": true,
+    "runtime_decode_audit": "clean",
+    "repeated_equal": true,
+    "steps": 3,
+    "min_pcc": 0.9998913192015249,
+    "positions": [
+      33,
+      35
+    ],
+    "checks": [
+      {
+        "position": 33,
+        "pcc": 0.9998913192015249,
+        "passed": true
+      },
+      {
+        "position": 33,
+        "pcc": 0.9998913192015249,
+        "passed": true
+      },
+      {
+        "position": 34,
+        "pcc": 0.9998932189666041,
+        "passed": true
+      },
+      {
+        "position": 35,
+        "pcc": 0.9999100678328652,
+        "passed": true
+      }
+    ]
+  }
+}

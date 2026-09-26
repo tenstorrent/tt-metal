@@ -1,0 +1,214 @@
+[
+  {
+    "name": "shared_fidelity_sliding_HiFi2",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "0",
+      "--candidate-fidelity",
+      "HiFi2",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_fidelity_sliding_HiFi2.json"
+    ],
+    "started_at": "2026-09-26T09:33:48.769878+00:00",
+    "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "exit_code": 0
+  },
+  {
+    "name": "shared_fidelity_sliding_LoFi",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "0",
+      "--candidate-fidelity",
+      "LoFi",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_fidelity_sliding_LoFi.json"
+    ],
+    "started_at": "2026-09-26T09:33:57.383299+00:00",
+    "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "exit_code": 0
+  },
+  {
+    "name": "shared_fidelity_full_HiFi2",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "5",
+      "--candidate-fidelity",
+      "HiFi2",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_fidelity_full_HiFi2.json"
+    ],
+    "started_at": "2026-09-26T09:34:04.076313+00:00",
+    "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "exit_code": 0
+  },
+  {
+    "name": "shared_fidelity_full_LoFi",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.probe_fused_shared_sharding",
+      "--layer",
+      "5",
+      "--candidate-fidelity",
+      "LoFi",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/shared_fidelity_full_LoFi.json"
+    ],
+    "started_at": "2026-09-26T09:34:10.877859+00:00",
+    "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "exit_code": 0
+  },
+  {
+    "name": "verified_tail65_sliding",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--real",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--decode",
+      "--steps",
+      "8",
+      "--verify-program-cache",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_sliding.json"
+    ],
+    "started_at": "2026-09-26T09:34:17.575014+00:00",
+    "source_fused_decoder_sha256": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "exit_code": 1
+  },
+  {
+    "name": "verified_tail65_sliding_functional_control",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "functional",
+      "--real",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--decode",
+      "--steps",
+      "8",
+      "--verify-program-cache",
+      "--save-output-tensors",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_sliding_functional_control.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_sliding_functional_control.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "name": "verified_tail65_full_fused_control",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--real",
+      "--layer",
+      "5",
+      "--length",
+      "65",
+      "--decode",
+      "--steps",
+      "8",
+      "--verify-program-cache",
+      "--save-output-tensors",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_full_fused_control.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_full_fused_control.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "verified_tail65_full_functional_control",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "functional",
+      "--real",
+      "--layer",
+      "5",
+      "--length",
+      "65",
+      "--decode",
+      "--steps",
+      "8",
+      "--verify-program-cache",
+      "--save-output-tensors",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_full_functional_control.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/verified_tail65_full_functional_control.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "tail65_sliding_functional_paired",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "functional",
+      "--real",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--decode",
+      "--steps",
+      "8",
+      "--verify-program-cache",
+      "--save-output-tensors",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_sliding_functional_paired.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_sliding_functional_paired.json"
+    ],
+    "exit_code": 1
+  },
+  {
+    "name": "tail65_sliding_fused_paired",
+    "command": [
+      "python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder",
+      "--decoder",
+      "fused",
+      "--real",
+      "--layer",
+      "0",
+      "--length",
+      "65",
+      "--decode",
+      "--steps",
+      "8",
+      "--verify-program-cache",
+      "--save-output-tensors",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_sliding_fused_paired.pt",
+      "--output",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/fused_decoder/tail65_sliding_fused_paired.json"
+    ],
+    "exit_code": 1
+  }
+]

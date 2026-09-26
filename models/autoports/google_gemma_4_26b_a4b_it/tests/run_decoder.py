@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import torch
@@ -49,6 +50,10 @@ def load_layer(config, layer_idx, real):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--timing", action="store_true")
+    parser.add_argument("--fusion", help="Explicit fusion ablation; default selects the layer-kind policy")
+    parser.add_argument("--group-size", type=int, default=16384)
+    parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
     parser.add_argument("--layer", type=int, default=0)
     parser.add_argument("--length", type=int, default=32)
     parser.add_argument("--real", action="store_true")
@@ -59,7 +64,11 @@ def main():
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--prefix-length", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--save-output-tensors", type=Path, help="Save already-read outputs for paired decoder checks")
     args = parser.parse_args()
+    if args.save_output_tensors and args.profile:
+        parser.error("Paired output capture is a correctness check, separate from profiling")
+    saved_outputs = {}
     torch.manual_seed(42)
     torch.set_num_threads(8)
     config = AutoConfig.from_pretrained(Path(__file__).parent).text_config
@@ -87,8 +96,17 @@ def main():
     print("HF_FORWARD_READY", flush=True)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FunctionalDecoder.from_state_dict(
-            hf.state_dict(), hf_config=config, layer_idx=args.layer, mesh_device=mesh
+        decoder_class = FunctionalDecoder
+        if args.decoder == "fused":
+            from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import FusedDecoder
+
+            decoder_class = FusedDecoder
+        decoder = decoder_class.from_state_dict(
+            hf.state_dict(),
+            hf_config=config,
+            layer_idx=args.layer,
+            mesh_device=mesh,
+            **({"fusion": args.fusion, "group_size": args.group_size} if args.decoder == "fused" else {}),
         )
         print("TT_LAYER_READY", flush=True)
 
@@ -139,8 +157,13 @@ def main():
             if args.profile:
                 signpost("PERF_PREFILL_END")
         actual = ttnn.to_torch(out).squeeze(0).float()
+        if args.save_output_tensors:
+            saved_outputs["prefill"] = actual
+            saved_outputs["decode"] = []
         passing, pcc = comp_pcc(ref, actual, 0.995)
         result = dict(
+            decoder=args.decoder,
+            fusion=decoder.fusion if args.decoder == "fused" else None,
             runtime_prefill_audit="clean",
             program_cache_miss_guard=args.verify_program_cache,
             prefill_cache_entries=prefill_cache_entries,
@@ -298,6 +321,8 @@ def main():
                 ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
                 if not args.profile:
                     got = ttnn.to_torch(traced).squeeze(0).float()
+                    if args.save_output_tensors:
+                        saved_outputs["decode"].append(got)
                     ok, value = comp_pcc(decode_refs[step], got, 0.995)
                     decode_pccs.append(float(value))
                     decode_checks.append(dict(position=pos + step, pcc=float(value), passed=bool(ok)))
@@ -310,6 +335,15 @@ def main():
                 decode_pccs.append(float(value))
                 decode_checks.append(dict(position=pos + args.steps - 1, pcc=float(value), passed=bool(ok)))
                 dpass = dpass and ok
+            if args.timing:
+                durations = []
+                for repeat_index in range(5):
+                    start = time.perf_counter_ns()
+                    for _ in range(30):
+                        ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh)
+                    durations.append((time.perf_counter_ns() - start) / 30000)
+                result["traced_decode_host_us"] = durations
             result["decode"].update(
                 steps=args.steps,
                 min_pcc=min(decode_pccs),
@@ -320,7 +354,11 @@ def main():
             args.output.write_text(json.dumps(result, indent=2) + "\n")
             print(result, flush=True)
             ttnn.release_trace(mesh, trace)
+            if args.save_output_tensors:
+                torch.save(saved_outputs, args.save_output_tensors)
             assert dpass and torch.equal(da, repeat), result
+        if args.save_output_tensors:
+            torch.save(saved_outputs, args.save_output_tensors)
         assert passing, result
     finally:
         ttnn.close_mesh_device(mesh)

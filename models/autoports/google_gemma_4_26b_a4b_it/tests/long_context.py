@@ -29,7 +29,20 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reference-only", action="store_true")
     parser.add_argument("--reference-file", type=Path)
+    parser.add_argument("--decoder", choices=("functional", "fused"), default="functional")
+    parser.add_argument("--fusion")
+    parser.add_argument("--group-size", type=int)
     args = parser.parse_args()
+    decoder_options = {}
+    if args.decoder == "fused":
+        decoder_options = {
+            k: v for k, v in {"fusion": args.fusion, "group_size": args.group_size}.items() if v is not None
+        }
+    decoder_class = FunctionalDecoder
+    if args.decoder == "fused":
+        from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import FusedDecoder
+
+        decoder_class = FusedDecoder
     torch.manual_seed(123)
     torch.set_num_threads(8)
     config = AutoConfig.from_pretrained(MODEL, revision=REVISION).text_config
@@ -99,8 +112,8 @@ def main():
         return
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     try:
-        decoder = FunctionalDecoder.from_state_dict(
-            hf.state_dict(), hf_config=config, layer_idx=args.layer, mesh_device=mesh
+        decoder = decoder_class.from_state_dict(
+            hf.state_dict(), hf_config=config, layer_idx=args.layer, mesh_device=mesh, **decoder_options
         )
 
         def device(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
