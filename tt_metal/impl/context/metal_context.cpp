@@ -28,6 +28,8 @@
 #include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
+#include "llrt/core_descriptor.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
@@ -658,7 +660,25 @@ void MetalContext::initialize_fabric_config() {
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().initialize_fabric_tensix_datamover_config();
+    auto& env_impl = MetalEnvAccessor(*env_).impl();
+    if (!tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) ||
+        env_impl.get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+        return;
+    }
+
+    tt_fabric::FabricTensixSessionInputs inputs{.active_devices = device_manager_->get_all_active_devices()};
+    if (!inputs.active_devices.empty()) {
+        // Mux core placement is the same on every device, so take it from the first one.
+        const auto device_id = inputs.active_devices.front()->id();
+        auto& dispatch_core_manager = get_dispatch_core_manager();
+        const auto num_hw_cqs = dispatch_core_manager.get_num_hw_cqs();
+        const auto dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
+        inputs.logical_fabric_mux_cores =
+            tt::get_logical_fabric_mux_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+        inputs.logical_dispatch_mux_cores =
+            tt::get_logical_dispatch_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+    }
+    env_impl.initialize_fabric_tensix_datamover_config(inputs);
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
