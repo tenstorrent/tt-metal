@@ -16,6 +16,11 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b
+          - llama3.3-70b-galaxy
+          - gemma-4-26b-a4b
+          - qwen3.6-27b
+          - qwen3.6-35b-a3b
+          - gpt-oss-120b
           - sampling-common
           - tt-transformers-common
           - deepseek-v3

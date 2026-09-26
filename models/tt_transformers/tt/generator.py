@@ -1041,6 +1041,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return tt_out_trace
 
+    def release_request(self, slot: int) -> None:
+        """Release finished-request seed state through the serving lifecycle hook.
+
+        'slot' is the request's current state slot, after any decode remap.
+        KV pages and traces remain reusable; surviving requests retain their
+        RNG streams. Hosts must notify completion before admitting replacements.
+        """
+        per_model_slots = self.model_args[0].max_batch_size
+        if not 0 <= slot < per_model_slots * self.data_parallel:
+            raise ValueError(f"Request slot {slot} is outside the configured batch")
+        model_id, local_slot = divmod(slot, per_model_slots)
+        sampling = getattr(self.model[model_id], "sampling", None)
+        if sampling is not None:
+            sampling.seed_manager.release_slot(local_slot)
+        getattr(self, "_slots_prefilled_since_decode", set()).discard(slot)
+
     # Note: This function is called by vLLM
     def prefill_forward_text(self, *args, **kwargs):
         """Flush deferred trace captures once the prefill that armed them ends successfully.

@@ -427,16 +427,20 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
+  # Request-behavior additions reserve declared job timeouts, not measured usage.
+  # See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
   sweep_tier1:
     wh_llmbox: 131
-    wh_n150: 30
+    wh_n150: 75
     wh_galaxy: 40
-    wh_galaxy_perf: 55
-    bh_p150: 30
+    wh_galaxy_perf: 205
+    bh_p150: 75
+    bh_quietbox_2: 405
+    bh_galaxy: 90
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 60
-    bh_quietbox_2: 30
+    wh_llmbox_perf: 225
+    bh_quietbox_2: 75
     bh_p150: 30
   vllm:
     wh_galaxy_perf: 430

@@ -138,8 +138,11 @@ class TTSampling(LightweightModule):
         Changing this state between decode steps invalidates captured traces, so
         SamplingGenerator maintains separate trace slots keyed by force_argmax.
         """
+        calculator = getattr(self, "log_probs_calculator", None)
+        needs_topk_logprobs = calculator is not None and calculator.enable_log_probs and calculator._use_topk_logprobs
         return (
             self._allow_force_argmax_sampling
+            and not needs_topk_logprobs
             and is_default_value(k, 1)
             and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
@@ -634,6 +637,11 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
+        # Top-k reporting needs the candidate pipeline, even for greedy tokens.
+        # Resolve reporting before choosing the path so its parameters update too.
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -684,10 +692,6 @@ class TTSampling(LightweightModule):
                 ),
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
-
-        self.log_probs_calculator.set_log_probs_mode(
-            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
-        )
 
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
@@ -841,6 +845,9 @@ class TTSampling(LightweightModule):
         """
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
+            # Logprobs consume the original vocabulary shards, before argmax's
+            # gather/slice. Keep token selection identical when reporting toggles.
+            logits_for_log_probs = x
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
             # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
             # (0,0) on the DRAM-interleaved path (it does not honor sub_core_grids there) and spills
@@ -912,10 +919,17 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 sub_core_grids=self._force_argmax_sub_core_grids,
             )
-            # Argmax fast-path does not compute logprobs (it never runs a softmax over
-            # the vocab). On single-chip, on-device logprobs are unsupported anyway
-            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
-            self.tt_log_probs = None
+            if self.log_probs_calculator.enable_log_probs:
+                # argmax drops the final axis; the calculator takes the ordinary
+                # sampler's [1,1,1,B] ROW_MAJOR index layout.
+                logprob_indices = (
+                    ttnn.reshape(tt_out_tok, (1, 1, 1, tt_out_tok.shape[-1]))
+                    if len(tt_out_tok.shape) == 3
+                    else tt_out_tok
+                )
+                self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, logprob_indices)
+            else:
+                self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
         # Decode logits normally arrive in bfloat16 already; a bf16->bf16 ttnn.typecast is
