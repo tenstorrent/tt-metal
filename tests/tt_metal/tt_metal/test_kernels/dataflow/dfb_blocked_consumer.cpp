@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) BLOCKED DFB consumer.
-// Parallel to dfb_consumer_2_0.cpp, but waits on and drains block_size contiguous entries
-// per NoC transaction, then strides by block_size * num_consumers.
+// Drains block_size contiguous entries per wait/pop; blocks are interleaved across consumers.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -30,7 +29,6 @@ void kernel_main() {
 
     const uint32_t num_blocks = num_entries_per_consumer / block_size;
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        // This thread's b-th block: block_size contiguous pages, blocks interleaved across consumers.
         const uint32_t block_base_page = chunk_offset + (b * num_consumers + consumer_idx) * block_size;
         if (block_base_page >= chunk_offset + entries_per_core) {
             break;
@@ -40,8 +38,7 @@ void kernel_main() {
             noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = block_base_page});
 #endif
         } else {
-            // One wait/pop per block; the pages are written one at a time so the test does not depend
-            // on the block being contiguous in DRAM (see dfb_blocked_producer.cpp).
+            // Pages are written one at a time: an interleaved tensor's block is not contiguous in DRAM.
             dfb.wait_front(block_size);
             for (uint32_t i = 0; i < block_size; ++i) {
                 noc.async_write(

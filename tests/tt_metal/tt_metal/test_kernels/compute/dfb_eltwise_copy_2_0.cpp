@@ -36,12 +36,9 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
     copy_init(dfb_in.get_id());
 
-    // Input ops are this hart's whole share of the input ring (a block, its part of a block, or
-    // one tile); tile j of a strided share sits `stride` tiles from the bookmark. Output ops are
-    // this hart's whole share of the output ring: one tile on a STRIDED ring, a whole block when
-    // this producer is BLOCKED (reserve once, pack share_out tiles in order, push once). The
-    // acquire/release handshake stays per tile: the MATH TRISC has no DFB interface and sees a
-    // share of 1, so a per-share handshake would run different trip counts on MATH and PACK.
+    // One wait/pop covers share_in input tiles and one reserve/push covers share_out output tiles
+    // (a whole block on a BLOCKED side, one tile otherwise). acquire/release stays per tile so
+    // MATH, which has no DFB interface, runs the same trip count as PACK.
 #ifdef ARCH_QUASAR
     const uint32_t share_in = dfb_in.get_consume_share();
     const uint32_t stride_in = dfb_in.get_consume_stride_tiles();

@@ -744,7 +744,7 @@ public:
     private:
         friend class PrefetcherPipe;
         FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
-        DataflowBufferAnyPattern& dfb_;  // opened from a raw relay id: pattern-agnostic specialization
+        DataflowBufferAnyPattern& dfb_;
     };
 
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::

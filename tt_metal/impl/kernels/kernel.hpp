@@ -101,11 +101,11 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding, plus what the generated token must carry.
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
 // Normal DFBs may carry LLK metadata; relays do not. prefetcher_pipe_id is 0xFF
-// (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for PrefetcherPipe relays, where it names the
-// persistent slot baked into the token so the TRISC constructor can O(1)-align the borrowed iface
-// to the durable checkpoint. pap / cap are both sides' access patterns (dfb::AccessPattern
+// (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for PrefetcherPipe relays, where it names
+// the persistent slot baked into the token so the TRISC constructor can O(1)-align the borrowed
+// iface to the durable checkpoint. pap / cap are both sides' access patterns (dfb::AccessPattern
 // numbering) so DFBBindingToken<Pap, Cap> can specialize the device DataflowBuffer at compile time.
 struct DataflowBufferBindingHandle {
     uint16_t logical_dfb_id = 0;

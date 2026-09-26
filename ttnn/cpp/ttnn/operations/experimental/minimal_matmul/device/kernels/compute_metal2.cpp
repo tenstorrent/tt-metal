@@ -33,8 +33,6 @@ inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
 #endif
 }
 
-// The helpers take each binding token by its own type: a token's type carries its ring's access-pattern
-// pair, so the DataflowBuffer built from it inside is specialized exactly as the ones in kernel_main.
 template <typename InTok, typename OutTok>
 void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);

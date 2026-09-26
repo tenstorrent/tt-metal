@@ -32,9 +32,7 @@ inline DataflowBuffer<Pap, Cap>::DataflowBuffer(uint16_t logical_dfb_id)
     : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {
     dfb_ensure_ready(g_dfb_config_base_addr, static_cast<uint8_t>(logical_dfb_id));
     if constexpr (!kKnown) {
-        // A pattern-agnostic DataflowBuffer keeps the wire bits at runtime and only supports rings
-        // where nothing is BLOCKED: its share is always 1 and, a split op being a whole block, it is
-        // never split (producer_split() / consumer_split() are false for it).
+        // UNKNOWN (raw id) only supports rings with no BLOCKED side.
         ASSERT(local_dfb_interface_.block_size <= 1u);
     }
     // Declare this DFB's L1 extent to the NOC-debug tracker so a write into it without holding the
@@ -118,19 +116,16 @@ namespace {
 #if !DFB_IS_COMPUTE_MATH
 
 #ifndef COMPILE_FOR_TRISC
-// The wire stride in entries (see DataflowBuffer::wire_stride_tiles for what it means per side). The
-// host serializes stride_size = entry_size * stride with stride >= 1 (checked at DM init).
+// The stride in entries (the host sends it in bytes).
 inline uint32_t dfb_dm_stride_entries(const LocalDFBInterface& intf) { return intf.stride_size / intf.entry_size; }
 
-// A split op's n tiles belong to every one of this hart's counters, per_tc each. The host only
-// builds rings where the block divides evenly over the counters.
+// Split op: n tiles shared evenly over this hart's counters.
 inline uint16_t dfb_dm_per_tc(const LocalDFBInterface& intf, uint16_t n) {
     ASSERT(n % intf.num_tcs_to_rr == 0);
     return static_cast<uint16_t>(n / intf.num_tcs_to_rr);
 }
 
-// Spin until every counter can absorb (producer) or supply (consumer) per_tc tiles. Used when
-// one transaction spans all the counters (split_tc) or posts to all of them (broadcast_tc).
+// Wait until every counter has room for (producer) or holds (consumer) per_tc tiles.
 template <bool is_write>
 inline void dfb_dm_all_tc_wait(const LocalDFBInterface& intf, uint32_t per_tc) {
     bool ready = false;
@@ -151,13 +146,10 @@ inline void dfb_dm_all_tc_wait(const LocalDFBInterface& intf, uint32_t per_tc) {
     }
 }
 
-// Implicit-sync availability on one counter. The HW free-space / occupancy registers only reflect
-// transfers whose ISR credit has already landed, so a transfer this hart issued moments ago still
-// looks free (producer) or still counts as available (consumer). Measure against this hart's own
-// bookkeeping instead: `mine` is how many entries this hart has issued on (producer) or claimed
-// from (consumer) the counter, and the op needs `need` more. A producer has room when
-// capacity - (mine - acked) >= need; a consumer has data when posted - mine >= need. The HW
-// values are 16-bit and wrap, hence the modular subtractions.
+// Wait until this counter has room (producer) or data (consumer) for `need` more entries.
+// The HW free-space / occupancy value is not used directly: it only updates when the ISR lands the
+// credits, so entries this hart just sent or took would still look free. `mine` is this hart's own
+// count of those, and the check is done against it.
 template <bool is_write>
 inline void dfb_dm_implicit_wait(const LocalDFBInterface& intf, uint8_t slot, uint16_t mine, uint16_t need) {
     dfb::PackedTileCounter ptc = intf.tc_slots[slot].packed_tile_counter;
@@ -173,8 +165,7 @@ inline void dfb_dm_implicit_wait(const LocalDFBInterface& intf, uint8_t slot, ui
     }
 }
 
-// Post (producer) or ack (consumer) per_tc credits on every counter, each counter's peer
-// gets its share of the one transaction.
+// Post (producer) or ack (consumer) per_tc credits on every counter.
 template <bool is_write>
 inline void dfb_dm_all_tc_credit(const LocalDFBInterface& intf, uint16_t per_tc) {
     for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
@@ -190,52 +181,41 @@ inline void dfb_dm_all_tc_credit(const LocalDFBInterface& intf, uint16_t per_tc)
     }
 }
 
-// Each tile counter keeps its own cursor, a bookmark into its tiles of the ring. Move one
-// counter's bookmark past an n-tile op of its own: n - 1 strides to the op's last tile, then
-// `jump` bytes to this counter's next tile (past the other counters'); a bookmark that runs off
-// the end of the ring wraps to its base.
-template <bool is_write>
+// Move one counter's cursor past an n-tile op: to the op's last tile, then `jump` bytes to
+// this counter's next tile. Wraps to the ring base at the end.
 inline void dfb_dm_step_slot(const LocalDFBInterface& intf, DFBTCSlot& slot, uint32_t n) {
-    uint32_t& ptr = is_write ? slot.wr_ptr : slot.rd_ptr;
-    ptr += (n - 1u) * intf.stride_size + intf.jump;
-    if (ptr >= slot.limit) {
-        ptr = slot.base_addr;
+    slot.ptr += (n - 1u) * intf.stride_size + intf.jump;
+    if (slot.ptr >= slot.limit) {
+        slot.ptr = slot.base_addr;
     }
 }
 
-// After a split transaction: every counter just received (producer) or gave up (consumer) its
-// per_tc share of the block, so every slot's bookmark steps past it. tc_idx stays at index 0
-// because each TC takes part in a split transaction, so the next one is still addressed from
-// slot 0's cursor.
-template <bool is_write>
+// Split op: every counter took part (per_tc tiles each), so step every cursor and stay on
+// counter 0.
 inline void dfb_dm_all_slots_advance(LocalDFBInterface& intf, uint32_t per_tc) {
     for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
-        dfb_dm_step_slot<is_write>(intf, intf.tc_slots[i], per_tc);
+        dfb_dm_step_slot(intf, intf.tc_slots[i], per_tc);
     }
 }
 
-// One op is always this hart's whole share of a counter visit (asserted by the caller), so every
-// op hands off: step this counter's bookmark past the op and rotate to the next counter, whose
-// bookmark is already waiting exactly where the stream continues.
-template <bool is_write>
+// Normal op: step the current counter's cursor, then move on to the next counter.
 inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
-    dfb_dm_step_slot<is_write>(intf, intf.tc_slots[intf.tc_idx], n);
+    dfb_dm_step_slot(intf, intf.tc_slots[intf.tc_idx], n);
     intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
 }
 
-// BROADCAST producer: every counter received all n entries, so only slot 0's bookmark is kept.
-// Step it past the n contiguous entries (wrapping to base); tc_idx stays at 0.
+// Broadcast op: every counter got all n entries; only counter 0's cursor is used.
 inline void dfb_dm_broadcast_advance(LocalDFBInterface& intf, uint32_t n) {
     DFBTCSlot& slot = intf.tc_slots[0];
-    slot.wr_ptr += n * intf.stride_size;
-    if (slot.wr_ptr >= slot.limit) {
-        slot.wr_ptr = slot.base_addr;
+    slot.ptr += n * intf.stride_size;
+    if (slot.ptr >= slot.limit) {
+        slot.ptr = slot.base_addr;
     }
 }
 #endif  // !COMPILE_FOR_TRISC
 
 #if defined(COMPILE_FOR_TRISC)
-// Tiles one op puts on / takes from a single counter: the whole op, or its share of it on a split hart.
+// Tiles one op moves on a single counter (the whole op, or 1/N of it when split).
 inline uint32_t dfb_trisc_per_counter(const LocalDFBInterface& intf, uint32_t n) {
     return intf.split_tc ? n / intf.num_tcs_to_rr : n;
 }
@@ -274,18 +254,12 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_ring_span_num_entries() const {
 #endif
 }
 
-// The stride field as serialized for this hart, in entries. On a STRIDED side (and on every Tensix
-// hart) it is the spacing between the entries the hart touches in turn; on a BLOCKED DM side it is
-// the per-tile hop its cursor arithmetic uses to land on its next block, not a spacing inside the
-// block. Only the share getters below and the cursor code should read it.
+// The stride the host serialized for this hart, in entries: entry spacing on a STRIDED side,
+// the per-tile cursor hop on a BLOCKED DM side.
 #ifndef COMPILE_FOR_TRISC
 template <DFBAccess Pap, DFBAccess Cap>
 inline bool DataflowBuffer<Pap, Cap>::producer_broadcast() const {
     if constexpr (kKnown) {
-        // The host sets the wire flag only for a DM -> DM ALL ring (one counter per consumer). A
-        // DM -> Tensix ALL producer owns a single counter that the remapper fans out, and with one
-        // counter the broadcast arm IS the plain one-counter post (jump == stride, so the bookmark
-        // math agrees too). Pin that layout so a host change cannot desync the two.
         if constexpr (Cap == DFBAccess::ALL) {
             ASSERT(local_dfb_interface_.broadcast_tc || local_dfb_interface_.num_tcs_to_rr == 1);
         }
@@ -307,9 +281,8 @@ inline uint16_t DataflowBuffer<Pap, Cap>::wire_stride_tiles() const {
 #endif
 }
 
-// Spacing between two consecutive entries of one op's share. A BLOCKED side's share is a whole
-// block and so contiguous whatever hop the wire stride encodes for its cursor; only a STRIDED side
-// of a mixed ring walks a share whose entries sit the wire stride apart.
+// Spacing between the entries of one op: 1 on a BLOCKED side (a whole block), the stride on a
+// STRIDED side facing BLOCKED peers.
 template <DFBAccess Pap, DFBAccess Cap>
 inline uint16_t DataflowBuffer<Pap, Cap>::get_produce_stride_tiles() const {
     if constexpr (kProducerBlocked) {
@@ -328,9 +301,7 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_consume_stride_tiles() const {
     }
 }
 
-// The share is derived, not sent: the ring's block_size and this hart's stride say how many of
-// the block's tiles this hart handles in one counter visit. UNKNOWN (raw-id) DataflowBuffers only
-// support rings where nothing is BLOCKED.
+// Tiles per op on this side, derived from block_size and this hart's stride.
 template <DFBAccess Pap, DFBAccess Cap>
 inline uint16_t DataflowBuffer<Pap, Cap>::get_produce_share() const {
 #if DFB_IS_COMPUTE_MATH
@@ -339,9 +310,9 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_produce_share() const {
     const uint32_t block = local_dfb_interface_.block_size;
     const uint32_t stride = wire_stride_tiles();
     if constexpr (kProducerBlocked) {
-        return static_cast<uint16_t>(block);                                   // whole block per op
+        return static_cast<uint16_t>(block);
     } else if constexpr (kConsumerBlocked) {
-        return static_cast<uint16_t>((block > stride) ? block / stride : 1u);  // my part of each consumer block
+        return static_cast<uint16_t>((block > stride) ? block / stride : 1u);
     } else {
         return 1u;
     }
@@ -356,9 +327,9 @@ inline uint16_t DataflowBuffer<Pap, Cap>::get_consume_share() const {
     const uint32_t block = local_dfb_interface_.block_size;
     const uint32_t stride = wire_stride_tiles();
     if constexpr (kConsumerBlocked) {
-        return static_cast<uint16_t>(block);                                   // whole block per op
+        return static_cast<uint16_t>(block);
     } else if constexpr (kProducerBlocked) {
-        return static_cast<uint16_t>((block > stride) ? block / stride : 1u);  // my part of each producer block
+        return static_cast<uint16_t>((block > stride) ? block / stride : 1u);
     } else {
         return 1u;
     }
@@ -381,7 +352,7 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
         // BROADCAST: every consumer reads every entry, so every counter must have room for all of them.
         dfb_dm_all_tc_wait<true>(local_dfb_interface_, num_entries);
     } else if (producer_split()) {
-        // SPLIT: the block belongs to every counter -- wait for each one's share.
+        // SPLIT: the block belongs to every counter, wait for each one's share.
         dfb_dm_all_tc_wait<true>(local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, num_entries));
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -411,12 +382,12 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
         // SPLIT: post each counter its share of the block and step every bookmark past it.
         const uint16_t per_tc = dfb_dm_per_tc(local_dfb_interface_, num_entries);
         dfb_dm_all_tc_credit<true>(local_dfb_interface_, per_tc);
-        dfb_dm_all_slots_advance<true>(local_dfb_interface_, per_tc);
+        dfb_dm_all_slots_advance(local_dfb_interface_, per_tc);
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
         ASSERT(overlay::fast_llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, num_entries);
-        dfb_dm_advance_slot</*is_write=*/true>(local_dfb_interface_, num_entries);
+        dfb_dm_advance_slot(local_dfb_interface_, num_entries);
     }
 #endif
 #endif
@@ -437,7 +408,7 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
     llk_wait_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split()) {
-        // SPLIT: the block belongs to every counter -- wait for each one's share.
+        // SPLIT: the block belongs to every counter, wait for each one's share.
         dfb_dm_all_tc_wait<false>(local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, num_entries));
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -466,12 +437,12 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
         // SPLIT: ack each counter its share of the block and step every bookmark past it.
         const uint16_t per_tc = dfb_dm_per_tc(local_dfb_interface_, num_entries);
         dfb_dm_all_tc_credit<false>(local_dfb_interface_, per_tc);
-        dfb_dm_all_slots_advance<false>(local_dfb_interface_, per_tc);
+        dfb_dm_all_slots_advance(local_dfb_interface_, per_tc);
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
         ASSERT(overlay::fast_llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, num_entries);
-        dfb_dm_advance_slot</*is_write=*/false>(local_dfb_interface_, num_entries);
+        dfb_dm_advance_slot(local_dfb_interface_, num_entries);
     }
 #endif
 #endif
@@ -501,8 +472,6 @@ template <DFBAccess Pap, DFBAccess Cap>
 inline void DataflowBuffer<Pap, Cap>::finish_impl() {
 #if !DFB_IS_COMPUTE_MATH
 #ifndef COMPILE_FOR_TRISC
-    // A STRIDED side's implicit-sync share must be complete: finish() mid-share means the kernel
-    // issued a number of entries that is not a multiple of the share.
     ASSERT(pshare_pos_ == 0 && cshare_pos_ == 0);
     if (ptiles_read_ > 0) {
         handle_final_credits<true>(ptiles_read_, ptxn_id_index_);
@@ -559,7 +528,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
         return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.wr_entry_idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
-    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr;
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
 #else
     // Unpack TRISC does not use wr_ptr; return ring base for any accidental caller.
     ASSERT(false);
@@ -577,7 +546,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
         return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
-    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr;
+    return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
 #else
     // Pack TRISC does not use rd_ptr; return ring base for any accidental caller.
     ASSERT(false);
@@ -650,14 +619,9 @@ inline void DataflowBuffer<Pap, Cap>::handle_final_credits(uint32_t tiles_issued
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    // finish() cannot return until the ISR has credited every tile this hart issued. To know
-    // what to wait for, compute how many tiles each counter should have been credited. Every op
-    // is one whole share (`visit` tiles): normally the hart fills one counter with a share, then
-    // the next, wrapping around all N; under SPLIT every counter gets 1/N of every op; under
-    // BROADCAST every counter gets all of every op.
-    // Computed in 32 bits from the exact running total, then reduced to the HW counter's 16 bits
-    // for the modular comparison below -- so a launch moving more than 65535 tiles still agrees
-    // with the hardware.
+    // How many tiles each counter should have been credited by now: shares go round-robin over
+    // the N counters, or 1/N of every op when split, or all of every op when broadcast. Computed in
+    // 32 bits, compared in the HW counter's 16 bits.
     const uint32_t visit = is_producer ? get_produce_share() : get_consume_share();
     const bool split = is_producer ? producer_split() : consumer_split();
     const bool broadcast = is_producer && producer_broadcast();
@@ -788,15 +752,13 @@ inline void DataflowBuffer<Pap, Cap>::handle_final_credits(uint32_t tiles_issued
 template <DFBAccess Pap, DFBAccess Cap>
 template <bool is_write>
 inline typename DataflowBuffer<Pap, Cap>::ScopedLockRegion DataflowBuffer<Pap, Cap>::lock_acquire_impl(uint16_t num_entries) {
-    // A lock covers this hart's whole share (or n consecutive entries on a plain ring): its entries
-    // sit one stride_tiles apart from the cursor (contiguous on a BLOCKED side, `stride` apart on the
-    // STRIDED side of a mixed ring), the same spacing the implicit-sync path and in-order pack use.
+    // A lock covers one op: num_entries entries from the cursor, stride_tiles apart.
     ASSERT(num_entries == (is_write ? get_produce_share() : get_consume_share()) || !kShareStrict);
     const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
     const uint32_t entry = local_dfb_interface_.entry_size;
     const uint32_t stride = entry * (is_write ? get_produce_stride_tiles() : get_consume_stride_tiles());
     // Snapshot the start pointer + this slot's wrap bounds so release replays the identical walk.
-    const ScopedLockRegion region{is_write ? s.wr_ptr : s.rd_ptr, s.base_addr, s.limit};
+    const ScopedLockRegion region{s.ptr, s.base_addr, s.limit};
     uint32_t addr = region.start;
     for (uint16_t k = 0; k < num_entries; ++k) {
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
@@ -868,12 +830,9 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_read(uint32_t num_til
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    // One op is this hart's whole share; wait for room for all of it. The HW free-space register
-    // only discounts reads that have already POSTED, so a read this hart issued but whose ISR credit
-    // is still pending would look like a free slot: count this hart's own issues instead (see
-    // dfb_dm_implicit_wait). Under BROADCAST every consumer's counter must have room for the share;
-    // under SPLIT each counter takes its part; otherwise only this round's counter matters, which
-    // holds one share per full round so far.
+    // Wait until there is room for the whole op. Which counters to check depends on the ring:
+    // broadcast waits on every counter for all of it, split waits on every counter for its part,
+    // otherwise only this round's counter. `mine` is what this hart already sent to that counter.
     ASSERT(num_tiles == get_produce_share());
     const uint8_t num_tcs = local_dfb_interface_.num_tcs_to_rr;
     if (producer_broadcast()) {
@@ -898,15 +857,15 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_read(uint32_t num_til
 // Postamble for implicit-sync read: advance wr_ptr, tile/txn counters, and tc_idx.
 template <DFBAccess Pap, DFBAccess Cap>
 inline void DataflowBuffer<Pap, Cap>::commit_implicit_read(uint32_t num_tiles) {
-    // Runs once per op (a whole share); the ISR posts the credits, this only moves the bookmarks.
+    // Runs once per op; the ISR posts the credits, this only moves the bookmarks.
     const uint32_t block = num_tiles;
     if (producer_broadcast()) {
         dfb_dm_broadcast_advance(local_dfb_interface_, block);
     } else if (producer_split()) {
-        dfb_dm_all_slots_advance<true>(
+        dfb_dm_all_slots_advance(
             local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, static_cast<uint16_t>(block)));
     } else {
-        dfb_dm_advance_slot</*is_write=*/true>(local_dfb_interface_, block);
+        dfb_dm_advance_slot(local_dfb_interface_, block);
     }
     ptiles_read_ += block;
     if (ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
@@ -929,11 +888,8 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_write(uint32_t num_ti
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    // One op is this hart's whole share; wait until all of it is there. The HW occupancy register
-    // still counts entries this hart has claimed but whose ACK is batched and pending, so it could
-    // hand the same posted entry out twice: count this hart's own claims instead (see
-    // dfb_dm_implicit_wait). Under SPLIT each counter supplies its part; otherwise only this round's
-    // counter matters, which has supplied one share per full round so far.
+    // Wait until the whole op has arrived. Split waits on every counter for its part, otherwise
+    // only on this round's counter. `mine` is what this hart already took from that counter.
     ASSERT(num_tiles == get_consume_share());
     const uint8_t num_tcs = local_dfb_interface_.num_tcs_to_rr;
     if (consumer_split()) {
@@ -954,13 +910,13 @@ inline uint32_t DataflowBuffer<Pap, Cap>::prepare_implicit_write(uint32_t num_ti
 // Postamble for implicit-sync write: advance rd_ptr, tile/txn counters, and tc_idx.
 template <DFBAccess Pap, DFBAccess Cap>
 inline void DataflowBuffer<Pap, Cap>::commit_implicit_write(uint32_t num_tiles) {
-    // Runs once per op (a whole share); the ISR acks the credits, this only moves the bookmarks.
+    // Runs once per op; the ISR acks the credits, this only moves the bookmarks.
     const uint32_t block = num_tiles;
     if (consumer_split()) {
-        dfb_dm_all_slots_advance<false>(
+        dfb_dm_all_slots_advance(
             local_dfb_interface_, dfb_dm_per_tc(local_dfb_interface_, static_cast<uint16_t>(block)));
     } else {
-        dfb_dm_advance_slot</*is_write=*/false>(local_dfb_interface_, block);
+        dfb_dm_advance_slot(local_dfb_interface_, block);
     }
     ctiles_written_ += block;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
@@ -980,9 +936,7 @@ Noc::async_read(
     DataflowBuffer<Pap, Cap>& dst,
     const typename noc_traits_t<Src>::src_args_type& src_args,
     const DataflowBufferArgs& dst_args) const {
-    // Implicit sync lands data at the bookmark and moves it by whole entries; offset_bytes is
-    // ignored, so a non-zero offset would land data in the wrong place while still posting
-    // whole-entry credits.
+    // Implicit sync always lands data at the cursor; offset_bytes is ignored.
     ASSERT(dst_args.offset_bytes == 0);
     const uint32_t entry_bytes = dst.get_entry_size();
     const uint32_t share = dst.get_produce_share();
@@ -993,17 +947,12 @@ Noc::async_read(
             get_src_ptr<AddressType::NOC>(src, src_args), l1_addr, bytes, noc_id_, NOC_UNICAST_WRITE_VC);
     };
     if constexpr (Pap == DFBAccess::BLOCKED) {
-        // A BLOCKED producer moves its whole block per call: contiguous in L1 and in the tensor, one
-        // NoC transaction (the host sizes the implicit-sync ISR threshold for one packet per block).
+        // BLOCKED producer: one whole block per call, as one NoC transaction.
         const uint32_t txn_id = dst.prepare_implicit_read(share);
         issue(txn_id, dst.get_noc_write_addr(), entry_bytes * share);
         dst.commit_implicit_read(share);
     } else {
-        // A STRIDED producer moves one entry per call (one NoC transaction, which is how the host
-        // sizes the ISR threshold for this side) and the DFB completes the share itself: the first
-        // entry waits for room for the whole share and fixes the txn id, entry i lands at
-        // bookmark + i * stride, the last entry moves the bookmark. The kernel only supplies the
-        // page of each entry, exactly as on a plain ring.
+        // STRIDED producer: one entry per call, as one NoC transaction.
         if (dst.pshare_pos_ == 0) {
             dst.pshare_txn_id_ = dst.prepare_implicit_read(share);
         }
@@ -1023,9 +972,8 @@ Noc::async_write(
     const Dst& dst,
     const DataflowBufferArgs& src_args,
     const typename noc_traits_t<Dst>::dst_args_type& dst_args) const {
-    // Same contract as async_read above, from the consumer side: a BLOCKED consumer drains its
-    // whole block per call, a STRIDED consumer one entry per call with the DFB completing the
-    // share; offset_bytes is ignored.
+    // Consumer side of the async_read contract: a BLOCKED consumer writes one whole block per
+    // call, otherwise one entry per call; offset_bytes is ignored.
     ASSERT(src_args.offset_bytes == 0);
     const uint32_t entry_bytes = src.get_entry_size();
     const uint32_t share = src.get_consume_share();
@@ -1048,10 +996,12 @@ Noc::async_write(
             txn_id);
     };
     if constexpr (Cap == DFBAccess::BLOCKED) {
+        // BLOCKED consumer: one whole block per call, as one NoC transaction.
         const uint32_t txn_id = src.prepare_implicit_write(share);
         issue(txn_id, src.get_noc_read_addr(), entry_bytes * share);
         src.commit_implicit_write(share);
     } else {
+        // STRIDED consumer: one entry per call, as one NoC transaction.
         if (src.cshare_pos_ == 0) {
             src.cshare_txn_id_ = src.prepare_implicit_write(share);
         }

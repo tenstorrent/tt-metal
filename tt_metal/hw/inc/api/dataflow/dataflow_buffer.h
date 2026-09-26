@@ -84,9 +84,8 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
-// Only the UNPACK and PACK TRISCs own a DFB interface (g_dfb_interface, see trisc.cc). True on
-// MATH and on any other TRISC: such a DataflowBuffer carries logical_dfb_id_ alone and no-ops the
-// sync / runtime-interface accessors.
+// Only UNPACK and PACK own a DFB interface. On MATH a DataflowBuffer is just an id and the
+// sync calls do nothing.
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_PACK) && !defined(UCK_CHLKC_UNPACK)
 #define DFB_IS_COMPUTE_MATH 1
 #else
@@ -96,20 +95,15 @@ template <bool IsWrite, typename ReleaseFunc>
 DFB_TEMPLATE_DECL
 class DataflowBuffer {
 #ifdef ARCH_QUASAR
-    // The pattern pair is a template parameter, so these fold to constants and every pattern
-    // branch compiles to straight-line code. UNKNOWN (a DataflowBuffer built from a raw id or by
-    // DataflowBuffer<>) is the one shape that still reads the wire bits at runtime -- and it only
-    // supports rings where nothing is BLOCKED (asserted at construction).
+    // Compile-time facts about the pattern pair. UNKNOWN (built from a raw id) reads them at
+    // runtime instead and only supports rings with no BLOCKED side.
     static constexpr bool kKnown = Pap != DFBAccess::UNKNOWN && Cap != DFBAccess::UNKNOWN;
     static constexpr bool kProducerBlocked = Pap == DFBAccess::BLOCKED;
     static constexpr bool kConsumerBlocked = Cap == DFBAccess::BLOCKED;
-    // One producer op (a whole block) belongs to every one of its counters: BLOCKED -> STRIDED.
+    // Split: one whole-block op is shared by all of this side's counters.
     static constexpr bool kProducerSplit = kProducerBlocked && Cap == DFBAccess::STRIDED;
-    // One consumer op (a whole block) belongs to every one of its counters: STRIDED -> BLOCKED.
     static constexpr bool kConsumerSplit = Pap == DFBAccess::STRIDED && kConsumerBlocked;
-    // Ops must move exactly the share once a side is BLOCKED (the cursor and credit math count on
-    // it). On a plain ring the share is 1 and larger counts are still fine: n tiles are n
-    // consecutive entries of this counter's stream.
+    // With a BLOCKED side every op must be exactly one whole block.
     static constexpr bool kShareStrict = kProducerBlocked || kConsumerBlocked;
 #endif
 
@@ -124,17 +118,12 @@ public:
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
 #ifdef ARCH_QUASAR
-    // Deduces the class's pattern pair from the token: DataflowBuffer dfb(dfb::out).
+    // The token carries the pattern pair: DataflowBuffer dfb(dfb::out) deduces it.
     DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
-    // The pattern-agnostic DataflowBuffer<> also takes a token of any pattern pair and reads the
-    // wire bits at runtime, so a kernel that may or may not have a binding can write
-    //   std::optional<DataflowBuffer<>> dfb;  dfb.emplace(*dfb::get_token_if_present<"x">());
-    // (Agnostic is a parameter of this template so the condition is a substitution failure, not an
-    // error, when the class is instantiated.)
+    // DataflowBuffer<> (UNKNOWN) accepts any token, e.g. std::optional<DataflowBuffer<>>::emplace(token).
     template <DFBAccess TokPap, DFBAccess TokCap, bool Agnostic = !kKnown, std::enable_if_t<Agnostic, int> = 0>
     DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
-    // A known pair takes only its own token: every other pair's token is rejected outright. Without
-    // this the token would decay to its id (operator uint32_t) and silently build the wrong shape.
+    // A known pair rejects any other pair's token (otherwise it would silently convert to an id).
     template <
         DFBAccess TokPap,
         DFBAccess TokCap,
@@ -226,25 +215,13 @@ public:
     uint32_t get_ring_span_num_entries() const;
 
 #ifdef ARCH_QUASAR
-    // The share: how many tiles one op on this hart handles per counter visit -- a whole block
-    // when this side is BLOCKED, this side's part of a block (block_size / stride) when only the
-    // other side is BLOCKED, otherwise 1. On a ring with a BLOCKED side every reserve_back /
-    // push_back (producer) and wait_front / pop_front (consumer) must pass exactly this count
-    // (asserted); on a plain ring larger counts are still allowed (n consecutive entries of this
-    // counter's stream). Kernels read it here instead of guessing.
-    //
-    // MATH TRISC caveat: only the UNPACK and PACK TRISCs own a DFB interface, so on MATH both
-    // getters return 1 (and the stride getters below return 1). A compute kernel must therefore
-    // keep its dest handshake (acquire/release, tile_regs_*) per tile, not per share, or MATH and
-    // PACK run different trip counts and the core deadlocks; drive only the DFB ops themselves
-    // (reserve/push/wait/pop) by the share. See dfb_eltwise_copy_2_0.cpp for the pattern.
+    // Tiles per op on this side: the block when this side is BLOCKED, block / stride when only the
+    // other side is, else 1. With a BLOCKED side every reserve/push/wait/pop must pass this count.
+    // MATH returns 1 here, so compute kernels keep the dest handshake per tile, not per share.
     uint16_t get_produce_share() const;
     uint16_t get_consume_share() const;
-    // Spacing, in entries, between two consecutive entries of one op's share (1 = contiguous). A
-    // BLOCKED side's share is a whole block, so it is always contiguous; only a STRIDED side of a
-    // mixed ring walks a share whose entries sit `stride` apart: entry i is at bookmark + i * stride
-    // (the implicit-sync NoC path and the in-order pack_tile path apply it by themselves; copy_tile
-    // takes it as its tile index).
+    // Spacing between the entries of one op (1 = contiguous). Only a STRIDED side facing BLOCKED
+    // consumers/producers has a stride > 1; copy_tile takes it as the tile index.
     uint16_t get_produce_stride_tiles() const;
     uint16_t get_consume_stride_tiles() const;
 #endif
@@ -529,16 +506,14 @@ private:
     uint16_t logical_dfb_id_;
 
 #ifdef ARCH_QUASAR
-    // The stride field as serialized for this hart, in entries (see dataflow_buffer.inl).
+    // The stride the host serialized for this hart, in entries.
     uint16_t wire_stride_tiles() const;
-    // A split op is a whole block, so the UNKNOWN shape (block_size <= 1, asserted at
-    // construction) is never split and both predicates are compile-time for every shape.
+    // UNKNOWN never splits (it has no blocks), so these are compile-time for every shape.
     static constexpr bool producer_split() { return kProducerSplit; }
     static constexpr bool consumer_split() { return kConsumerSplit; }
 #if !defined(COMPILE_FOR_TRISC)
-    // ALL consumers read every entry, so a DM producer's op goes to every one of its counters
-    // (BROADCAST): compile-time from the consumer pattern; only the UNKNOWN shape reads the wire
-    // flag (see dataflow_buffer.inl).
+    // ALL consumers: a DM producer posts every op to all of its counters. Compile-time except
+    // for UNKNOWN, which reads the wire flag.
     bool producer_broadcast() const;
 #endif
 #endif
@@ -557,10 +532,8 @@ private:
     uint8_t ctxn_id_index_ = 0;
     uint32_t ctiles_written_ = 0;  // running total of tiles written (32-bit so it never wraps in a launch)
 
-    // Implicit sync on a STRIDED side: one Noc::async_read / async_write<TXN_ID> call moves one
-    // entry and the DFB completes the share itself. Position inside the current share (0 = at a
-    // share boundary) and the txn id fixed for it. A BLOCKED side moves its whole block per call
-    // and never leaves 0.
+    // Implicit sync: position inside the current share and its txn id. A STRIDED side moves one
+    // entry per NoC call; a BLOCKED side moves the whole block, so it stays at 0.
     uint16_t pshare_pos_ = 0;
     uint32_t pshare_txn_id_ = 0;
     uint16_t cshare_pos_ = 0;

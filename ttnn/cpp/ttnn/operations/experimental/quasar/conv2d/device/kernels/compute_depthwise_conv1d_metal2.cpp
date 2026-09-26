@@ -55,8 +55,6 @@ inline void mul_and_accumulate_block(
     const uint32_t in1_cb_id = in1_cb.get_id();
     const uint32_t scratch_cb_id = scratch_cb.get_id();
     // Last tap writes the finished output to out_cb; earlier taps write the partial to scratch_cb.
-    // scratch_cb and out_cb may be different DataflowBuffer specializations (Quasar), so the pack
-    // target is selected around the use rather than through a common-typed alias.
     const bool is_last_tap = (idx + 1 == num_taps);
     auto pack_dst_tile = [&](auto& dst_cb) {
         const uint32_t dst_cb_id = dst_cb.get_id();

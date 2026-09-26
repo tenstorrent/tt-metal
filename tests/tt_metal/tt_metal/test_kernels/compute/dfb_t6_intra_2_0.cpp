@@ -14,8 +14,7 @@
 // though they resolve to the same DFB — M2 maps duplicate names oddly for INTRA
 // (only one Neo's slice gets touched). Reference dfb::out only.
 //
-// Both sides of this self-loop are STRIDED, so each hart's share is one entry and every
-// reserve_back / push_back / wait_front / pop_front below moves exactly that share.
+// Both sides of this self-loop are STRIDED, so every reserve/push/wait/pop below moves one entry.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_buffer.h"

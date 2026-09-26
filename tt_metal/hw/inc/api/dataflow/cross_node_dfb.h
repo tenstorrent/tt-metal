@@ -324,7 +324,6 @@ public:
 
     private:
         friend class CrossNodeDFB;
-        // Opened from a raw relay id, so the pattern-agnostic specialization.
         FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
         DataflowBufferAnyPattern& dfb_;
     };

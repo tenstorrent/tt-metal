@@ -72,8 +72,6 @@ FORCE_INLINE void write_summary(
     const uint32_t row_base = head * Kt * VtFull;
 
     if (head_active) {
-        // The split-head and full buffers may be distinct DataflowBuffer specializations, so select the
-        // buffer per branch rather than through a common reference.
         if (straddles) {
             // Split-head buffers hold one tile-row each. Drain the same packets
             // compute publishes instead of waiting for a full matrix to fit.

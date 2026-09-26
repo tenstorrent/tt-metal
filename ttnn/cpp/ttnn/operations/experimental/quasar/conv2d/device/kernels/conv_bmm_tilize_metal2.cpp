@@ -619,9 +619,6 @@ void kernel_main() {
 #endif
                         tile_regs_commit();
                         {
-                            // cb_matmul_partials and cb_mm_out may be different DataflowBuffer specializations
-                            // (Quasar), so the pack target is selected around the use rather than through a
-                            // common-typed alias.
                             auto pack_subblock_to = [&](auto& curr_out_cb) {
                                 curr_out_cb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
