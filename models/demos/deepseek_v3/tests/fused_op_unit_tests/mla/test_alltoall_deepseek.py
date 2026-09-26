@@ -184,12 +184,10 @@ def test_deepseek_v3_mla_wq_a2a_all_to_all_trace_mode(
     # Memory config (matching mla1d.py line 1301)
     # Input: L1 interleaved
     input_mem_config = ttnn.L1_MEMORY_CONFIG
-    # Output: L1 HEIGHT sharded 8x9 grid [32, 576] (matching flash_mla_reshard config)
+    # Output: L1 HEIGHT sharded across 64 available compute cores [32, 576]
     # After all-to-all, shape is [1, 4, 128, 576], total height = 1 * 4 * 128 = 512
-    # Using 64 cores (8x9 grid minus 8 cores = 64 cores), shard height = 512 / 64 = 8 -> nearest_y = 32
-    output_core_grid = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}  # 8x8 grid = 64 cores
-    )
+    # Use 64 logical compute cores so harvested rows or columns remain valid.
+    output_core_grid = ttnn.num_cores_to_corerangeset(64, compute_grid_size, row_wise=True)
     output_shard_shape = [32, 576]
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=output_shard_shape,
