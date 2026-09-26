@@ -236,11 +236,51 @@ def test_opportunity_list_stops_for_picks(orch):
     o = orch(
         [
             {"id": "X.2", "title": "opportunities", "step": "perf", "gate": {"cmd": "true"}},
-            {"id": "X.3", "title": "picked", "step": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}},
+            {"id": "K.9", "title": "after", "step": "contract", "deps": ["X.2"], "gate": {"cmd": "true"}},
         ],
         {},
     )
-    assert o.run() == HUMAN and o.led.status("X.3") == "TODO"
+    assert o.run() == HUMAN and o.led.status("K.9") == "TODO"
+
+
+def test_opportunity_list_does_not_stop_when_the_picks_are_in(orch):
+    """F35: the overseer added the picks (perf tasks after X.2) before X.2 ran; nothing to wait for."""
+    o = orch(
+        [
+            {"id": "X.2", "title": "opportunities", "step": "perf", "gate": {"cmd": "true"}},
+            {"id": "P.1", "title": "picked", "step": "perf", "deps": ["X.2"], "gate": {"cmd": "true"}},
+        ],
+        {},
+    )
+    assert o.run() == DONE and o.led.status("P.1") == "PASS"
+
+
+def test_full_model_gates_skip_the_precompile_pass():
+    """F35: the precompile pass runs a model-sized test twice; full-model steps skip it, component tests keep it."""
+    from models.demos.common.bringup.core.gate import gate_command
+
+    t = lambda step, cmd: {"step": step, "gate": {"cmd": cmd}}  # noqa: E731
+    assert (
+        gate_command(t("integrate", "X=1 scripts/run_safe_pytest.sh a.py"))
+        == "X=1 scripts/run_safe_pytest.sh --no-precompile a.py"
+    )
+    assert gate_command(t("implement", "scripts/run_safe_pytest.sh a.py")) == "scripts/run_safe_pytest.sh a.py"
+    assert gate_command(t("perf", "scripts/run_safe_pytest.sh --no-precompile a.py")).count("precompile") == 1
+
+
+def test_a_task_shows_running_while_its_agent_works(orch):
+    """F35: the dashboard showed the pre-agent check's FAIL while the agent was working."""
+    seen = []
+    o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
+    real = o.run_agent
+
+    def spy(task, role, attempt, brief):
+        if role == "implement":
+            seen.append(o.led.state().get(task["id"], {}).get("status"))
+        return real(task, role, attempt, brief)
+
+    o.run_agent = spy
+    assert o.run() == DONE and seen[-1] == "RUNNING"
 
 
 def test_resume_after_a_fix(orch):

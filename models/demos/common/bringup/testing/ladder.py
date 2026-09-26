@@ -46,11 +46,15 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
 
     model = s.hooks().device_model(mesh, s, layers, lm_head=ends_at_last)
     metrics.record("model_load_s", round(getattr(model, "load_seconds", 0.0), 1))
+    metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))  # dashboard: which model a row ran on
+    metrics.record("rung_seq", rung["seq"])
+    metrics.record("rung_chunk", rung["chunk"])
     metrics.record("covered_layers", len(layers))
     metrics.record("subset", int(not full_stack))
     state = model.new_state(rung["seq"])
 
     first = 0
+    metrics.record("rung_start", (n_chunks - 1) * chunk if rung.get("prefix_from_golden") else 0)
     if rung.get("prefix_from_golden"):
         for i in layers:
             state.load_prefix(i, g.state(i), last * chunk)

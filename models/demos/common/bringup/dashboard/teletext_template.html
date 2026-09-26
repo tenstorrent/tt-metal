@@ -448,10 +448,13 @@ function pTiming(){
   if (!T.length){ lines.push(gapLine); lines.push({h:2, draw(b, r){ b.fill(r, 13, 25, RED); b.t(r, 15, "NO DATA", YEL, RED); }});
     lines.push(gapLine);
     wrap("No device runs yet." + (lad.length ? " Ladder gates: " + gates(lad) : ""), 38).forEach(l => lines.push({draw(b, r){ b.t(r, 1, l, WHT); }})); }
-  else { lines.push({draw(b, r){ b.t(r, 0, "RUN", CYN); b.tr(r, 16, "N", CYN); b.tr(r, 24, "FIRST", CYN); b.tr(r, 32, "STEADY", CYN); b.tr(r, 39, "TOTAL", CYN); }});
-    T.forEach(t => { const v = t.chunks.map(c => c[1]), rest = v.slice(1).sort((a, b2) => a - b2), med = rest.length ? rest[Math.floor(rest.length / 2)] : v[0];
-      lines.push({draw(b, r){ b.t(r, 0, trunc(t.label, 13), WHT); b.tr(r, 16, String(v.length), WHT); b.tr(r, 24, v[0].toFixed(2) + "s", YEL);
-        b.tr(r, 32, med.toFixed(2) + "s", GRN); b.tr(r, 39, v.reduce((a, x) => a + x, 0).toFixed(1) + "s", WHT); }}); }); }
+  else { lines.push({draw(b, r){ b.t(r, 0, "TOKENS", CYN); b.tr(r, 24, "TIME", CYN); b.tr(r, 32, "TOK/S", CYN); b.tr(r, 39, "RUN", CYN); }});
+    const cur = T.filter(t => t.model !== "hybrid harness"), old = T.length - cur.length;
+    cur.forEach(t => { const warm = /^warm/.test(t.how), tps = t.tokens ? (t.tokens / t.seconds).toFixed(0) : "";
+      lines.push({draw(b, r){ b.t(r, 0, trunc(t.headline, 14), warm ? GRN : WHT); b.tr(r, 24, t.seconds.toFixed(t.seconds < 10 ? 2 : 1) + "s", warm ? YEL : WHT);
+        b.tr(r, 32, tps, WHT); b.tr(r, 39, trunc(t.task, 6), CYN); }});
+      lines.push({draw(b, r){ b.t(r, 1, trunc(t.how, 38), warm ? GRN : MAG); }}); });
+    if (old) lines.push({draw(b, r){ b.t(r, 0, trunc(`+${old} older runs on the hybrid harness`, 40), YEL); }}); }
   lines.push(gapLine);
   lines.push(hdrLine("Device profile", P ? `${(P.wall_ms / 1e3).toFixed(2)}s wall` : "", BLU, YEL));
   if (!P){ lines.push(gapLine); lines.push({h:2, draw(b, r){ b.fill(r, 13, 25, RED); b.t(r, 15, "NO DATA", YEL, RED); }});

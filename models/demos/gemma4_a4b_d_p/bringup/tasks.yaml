@@ -2024,12 +2024,40 @@ tasks:
       device_ms_attention: < 250
       chunk_wall_ms: < 620
       device_ms_total: '> 0'
+- id: P.3
+  title: Profile sub-sections inside attention (qkv, head norms, rope, kv write, sdpa,
+    o_proj)
+  step: perf
+  role: perf
+  deps:
+  - P.2
+  device: true
+  paths: *id003
+  brief:
+    details: After P.2 attention is 248 ms of the 609 ms chunk (last 5120 tokens on
+      the 51200 golden prefix), but the profile shows it as one section, so SDPA cannot
+      be told apart from the projections. In tt/attention.py (sliding and global),
+      call models.demos.common.bringup.testing.profiler.signpost(name) before each
+      sub-step, with names attention.qkv, attention.head_norm, attention.rope, attention.kv_write,
+      attention.sdpa, attention.o_proj (plus attention.ccl if the output all-reduce
+      is separate). signpost is a no-op unless the profiler is on, so timing and serving
+      are unchanged. Change nothing else; the numbers must stay as P.2's.
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_chunk_out: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_attention_sdpa: '> 0'
+      device_ms_attention_qkv: '> 0'
+      device_ms_attention_o_proj: '> 0'
+      chunk_wall_ms: < 640
 - id: X.3
   title: 'Final: full 56k accuracy and warm full-prefill time (no readback) on the
     tuned model'
   step: perf
   deps:
-  - P.2
+  - P.3
   device: true
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py
