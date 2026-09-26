@@ -20,5 +20,10 @@ the best starting point first.
 | Device profile without Tracy | `models/demos/common/bringup/testing/profiler.py` (`signpost`) |
 | Reference plans (sharding) | Kimi K2.7 4x4 artifact https://claude.ai/artifact/4MC3c1hvkErCYxByJwdPZ9; `models/demos/ernie45_d_p/SHARDING.md` + `plan.yaml` shape in `models/demos/common/bringup/plan/memory.py` |
 | A worked bring-up | `models/demos/ernie45_d_p/` (reference, tt, tests, bringup/ ledger, BREADCRUMBS.md) |
+| Contiguous KV cache at a chunk offset | `ttnn.fill_cache(cache [1, Hkv, max_seq, D], kv [1, Hkv, S, D], batch_idx=0, update_idx=start)`; read back with `ttnn.slice` (`models/demos/gemma4_a4b_d_p/tt/attention.py`) |
+| GQA with fewer KV heads than chips | `models/demos/gemma4_a4b_d_p/tt/attention.py:TtKVCacheGlobal` / `TtGlobalAttention` (KV head replicated over chips, fused per-chip QKV, paged-shaped cache with an identity page table for `paged_fill_cache` + chunked SDPA) |
+| Serving KV contract, mixed KV shapes per layer | `models/demos/gemma4_a4b_d_p/tt/runners/kv_contract.py` (one per-chip slab on the gpt_oss_d_p GQA substrate) + adapter-side read-back in `tt/runners/adapter.py` |
+| All-device model, blocks through `run_block` | `models/demos/gemma4_a4b_d_p/tt/model.py:TtGemma4Block` (step fns keyed by the reference block graph, last-use free schedule); ladder/profile adapter `gemma4_a4b_d_p/bringup/hooks.py:Gemma4DeviceModel` |
+| A worked bring-up with perf (Gemma-4 26B-A4B) | `models/demos/gemma4_a4b_d_p/` (ledger, supervision.md, component/swap tests with rel-L2 + norm-ratio checks) |
 
 ## Proposed
