@@ -1,4 +1,5 @@
 set(FABRIC_JIT_API_HEADERS
+    hw/inc/equal_cost_unicast.h
     hw/inc/tt_fabric_api.h
     hw/inc/tt_fabric_mux.hpp
     hw/inc/tt_fabric_mux_interface.hpp
@@ -41,6 +42,7 @@ set(FABRIC_SOURCES
     channel_trimming_import.cpp
     channel_trimming_io.cpp
     channel_trimming_report.cpp
+    equal_cost_unicast.cpp
     fabric.cpp
     fabric_vc2_connection.cpp
     fabric_init.cpp
