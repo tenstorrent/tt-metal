@@ -354,3 +354,12 @@ def test_a_stale_waiting_note_is_cleared_when_the_task_runs_again(orch):
     o = orch([impl_task()], {"C.1.implement.1.md": {"write": {"src/impl.txt": "1.0"}}})
     o.led.update("C.1", waiting="approve something")
     assert o.run() == DONE and not o.led.state()["C.1"].get("waiting")
+
+
+def test_a_perf_task_brief_carries_its_details(orch):
+    """F31: picked performance items run as role perf; the brief carries the exact change and the policy escalates."""
+    t = impl_task(step="perf", role="perf", brief={"details": "SDPA config A: HiFi2, approx exp"})
+    o = orch([t], {})
+    text = o.brief(o.led.task("C.1"), "perf", 1).read_text()
+    assert "Role: perf" in text and "SDPA config A: HiFi2, approx exp" in text
+    assert o.policy(o.led.task("C.1"), "perf")["escalate"] == "debugger"

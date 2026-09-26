@@ -73,6 +73,7 @@ DEFAULT_POLICY = {
     "plan": {"attempts": 3, "escalate": "stop"},
     "contract": {"attempts": 3, "escalate": "stop"},
     "test": {"attempts": 3, "escalate": "stop"},
+    "perf": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
 }
 ROLE_OF_STEP = {"reference": "reference", "plan": "plan", "implement": "implement", "contract": "contract"}
 IGNORED = (
@@ -318,6 +319,7 @@ class Orchestrator:
             "component_desc": desc,
             "component_entry": yaml.safe_dump(comp).strip() if comp else "(none in components.yaml)",
             "gate_cmd": task["gate"]["cmd"],
+            "details": brief.get("details", ""),
             "repo": str(s.repo),
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
         }
