@@ -24,7 +24,6 @@ void kernel_main() {
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
 #ifdef FUSE_GAMMA
@@ -89,7 +88,6 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
     DataflowBuffer dfb_ex_global_obj(dfb_ex_global);
-    DataflowBuffer dfb_fusion_obj(dfb_fusion);
     DataflowBuffer dfb_out_obj(dfb_out);
     DataflowBuffer dfb_ex_sqr_obj(dfb_ex_sqr);
 #ifdef IS_ALLGATHER_WORKER
@@ -134,6 +132,10 @@ void kernel_main() {
     DataflowBuffer dfb_im_obj(dfb_im);
     constexpr uint32_t dfb_outgamma = do_beta ? dfb_fusion : dfb_out;
     DataflowBuffer dfb_outgamma_obj(dfb_outgamma);
+    // Beta reads gamma's fusion output when gamma ran. Without gamma, fusion is
+    // never packed (and on layer_norm it aliases xmm), so beta reads dfb_im.
+    constexpr uint32_t dfb_beta_src = do_gamma ? dfb_fusion : dfb_im;
+    DataflowBuffer dfb_beta_src_obj(dfb_beta_src);
 
     // global reduce over the gathered statistics
 #ifdef IS_ALLGATHER_WORKER
@@ -222,8 +224,8 @@ void kernel_main() {
         tile_regs_acquire();
         add_tiles(dfb_var, dfb_eps, 0, 0, dst0);
         tile_regs_wait();
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, dfb_stats_reduced);
@@ -340,10 +342,10 @@ void kernel_main() {
 
 #ifdef FUSE_BETA
     {
-        dfb_outgamma_obj.wait_front(num_tiles_per_block);
-        reconfig_data_format(dfb_fusion, dfb_beta);
+        dfb_beta_src_obj.wait_front(num_tiles_per_block);
+        reconfig_data_format(dfb_beta_src, dfb_beta);
         pack_reconfig_data_format(dfb_out);
-        add_bcast_rows_init(dfb_fusion, dfb_beta);
+        add_bcast_rows_init(dfb_beta_src, dfb_beta);
         dfb_beta_obj.wait_front(block_w);
         index_h_offset = 0;
         dfb_out_obj.reserve_back(num_tiles_per_block);
@@ -353,7 +355,7 @@ void kernel_main() {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(dfb_fusion, dfb_beta, index + index_h_offset, index, w);
+                    add_tiles_bcast_rows(dfb_beta_src, dfb_beta, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -366,7 +368,7 @@ void kernel_main() {
             index_h_offset += block_w;
         }
         dfb_out_obj.push_back(num_tiles_per_block);
-        dfb_fusion_obj.pop_front(num_tiles_per_block);
+        dfb_beta_src_obj.pop_front(num_tiles_per_block);
     }
 #endif
 }

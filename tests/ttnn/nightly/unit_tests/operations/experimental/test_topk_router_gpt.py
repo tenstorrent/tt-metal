@@ -169,6 +169,48 @@ def test_topk_router_gpt_random_matmul(device, B, K, N, TOP_K, seed):
     "B, K, N, TOP_K",
     TEST_SHAPES,
 )
+def test_topk_router_gpt_program_cache(device, B, K, N, TOP_K):
+    """Cache hits must rebind the input, weight, bias and output addresses."""
+    torch.manual_seed(42)
+
+    spacers = []
+    num_entries_before = device.num_program_cache_entries()
+    for i in range(3):
+        # A growing live allocation moves every tensor run_fused_op allocates to a new address on each cache
+        # hit, and fresh data per iteration makes a stale address show up as an accuracy failure.
+        spacers.append(ttnn.from_torch(torch.zeros((32, 32 * (i + 1))), layout=ttnn.TILE_LAYOUT, device=device))
+        torch_input = (torch.randn(B, K) * 0.1).to(torch.bfloat16)
+        torch_weight = (torch.randn(K, N) * 0.01).to(torch.bfloat16)
+        torch_bias = (torch.randn(1, N) * 0.1).to(torch.bfloat16)
+        weights_tt, indices_tt = run_fused_op(device, torch_input, torch_weight, torch_bias, B, K, N, TOP_K)
+
+        ref_logits = (torch_input.float() @ torch_weight.float() + torch_bias.float()).to(torch.bfloat16).float()
+        ref_vals, ref_idxs = torch.topk(ref_logits, TOP_K, dim=-1)
+        idx_match_pct = (indices_tt == ref_idxs).sum().item() / (B * TOP_K) * 100
+        _pcc_passed, pcc_val = comp_pcc(F.softmax(ref_vals, dim=-1), weights_tt)
+        assert idx_match_pct >= 90.0, f"iteration {i}: index match {idx_match_pct:.1f}% below threshold 90%"
+        assert pcc_val >= PCC_THRESHOLD, f"iteration {i}: weight PCC {pcc_val} below threshold {PCC_THRESHOLD}"
+
+    assert device.num_program_cache_entries() - num_entries_before == 1
+
+
+@skip_for_blackhole("topk_router_gpt requires 12 DRAM-aligned cores; Blackhole only has 8")
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            },
+            id="dispatch_row",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "B, K, N, TOP_K",
+    TEST_SHAPES,
+)
 def test_topk_router_gpt_dtype_verification(device, B, K, N, TOP_K):
     """Verify output dtypes are uint16 for indices and bfloat16 for weights."""
     torch.manual_seed(42)

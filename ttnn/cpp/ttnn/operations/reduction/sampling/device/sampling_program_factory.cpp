@@ -122,12 +122,9 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // is gated on !(WH || BH) so new architectures default to the safe 32-bit path.
     const bool use_32bit_index = !(device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
 
-    // The stable bitonic top-k network (ties keep the lowest candidate position, so the sampled
-    // token id for an exact tie does not depend on how the network swaps equal values) is only
-    // implemented in the WH/BH LLKs; the Quasar LLK static_asserts STABLE_SORT == false. Gate on
-    // the architectures that implement it so new architectures fall back to the unstable network
-    // instead of failing to build the kernel.
-    const bool stable_sort = (device->arch() == tt::ARCH::WORMHOLE_B0 || device->arch() == tt::ARCH::BLACKHOLE);
+    // Use the stable bitonic top-k network: on exact value ties the candidate at the lowest position
+    // wins, so the sampled index does not depend on how the network swaps equal values.
+    const bool stable_sort = true;
 
     tt::DataFormat input_values_dfb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
@@ -289,13 +286,13 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"tile_height", tile_height},
              {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
              {"num_users", num_users}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
     // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off. Every
     // other field keeps its default, matching what the compute config defaulted to before.
-    const ComputeGen1Config compute_config{
+    const ComputeHardwareConfig compute_config{
         .enable_32_bit_dest = use_32bit_index,
     };
 
@@ -521,7 +518,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"num_cores", num_cores},
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 

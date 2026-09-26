@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -45,6 +46,21 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
 // Is the link that would close this mesh axis into a ring wired? Always false for an axis of 2 or
 // fewer devices, which closes on the link it already uses.
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
+
+// Where to allocate a GlobalSemaphore whose value is CARRIED across invocations (a barrier or arrival
+// counter, written once and thereafter only incremented). A fabric mux carves raw L1 upward from the
+// unreserved base, outside the allocator, and one clobber of a carried counter is unrecoverable
+// (#56769). L1_SMALL sits above the mux's ceiling, so prefer it; with no L1_SMALL region configured
+// there is nowhere safer than general L1, and an op that cannot tolerate that is expected to say so
+// itself (see selective_reduce_combine, whose mux is by far the greediest).
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
+// from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
+// size IS reduced by a sub-device manager's bottom-up reservation
+// (sub_device_manager_tracker.cpp), which would drag a floor computed as base + L1 bank size below the
+// real one and cost a V1 mux buffers -- or make a V2 mux reject a map that physically fits.
+size_t l1_small_floor_address(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // Resolve the topology (Ring vs Linear) for a single mesh axis
 tt::tt_fabric::Topology get_axis_topology(
@@ -186,14 +202,6 @@ struct RingTopology {
     uint32_t ring_size;
     uint32_t ring_index;
     bool is_linear;
-};
-
-struct TensorPartition {
-    TensorPartition(uint32_t partition_size, uint32_t partition_index) :
-        partition_size(partition_size), partition_index(partition_index) {}
-
-    uint32_t partition_size;
-    uint32_t partition_index;
 };
 
 class CclOpTensorConfig {
@@ -670,16 +678,6 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
-
-std::vector<TensorSlice> generate_slice_sequence_on_dim_v2(
-    TensorSlice::ords_t tensor_shape,
-    TensorSlice::ords_t worker_slice_shape,
-    TensorSlice::ords_t worker_slice_offset,
-    std::size_t fracture_dim,
-    std::size_t num_slices,
-    std::int64_t start_slice_index,
-    std::int64_t end_slice_index_exclusive,
-    std::size_t worker_index);
 
 class GenericWrappedTensorSlicer {
 public:

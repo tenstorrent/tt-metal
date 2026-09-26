@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::randn {
@@ -26,24 +28,19 @@ struct RandnDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct ProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            std::vector<CoreCoord> cores;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
 
+        // Redraws the per-core seeds (hash-excluded) and re-applies the output address in place on
+        // every cache hit; supersedes the address binding. No rebuild.
         static void override_runtime_arguments(
-            cached_program_t& cached_program,
+            tt::tt_metal::Program& program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -52,6 +49,8 @@ struct RandnDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    // Hashes every attribute except `seed`; the seed is re-applied per dispatch by
+    // ProgramFactory::override_runtime_arguments.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 

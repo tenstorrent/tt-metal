@@ -16,7 +16,7 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 
 1. **Kernel starts**: TRISC1 calls `start_perf_counter()` which writes the start bit to all enabled counter banks. All counters begin accumulating from zero.
 
-2. **Kernel runs**: While the kernel executes, each counter increments every cycle its input signal is high. All counters within a bank run simultaneously — there is no multiplexing during measurement.
+2. **Kernel runs**: While the kernel executes, each counter increments every cycle its input signal is high. All counters within a bank run simultaneously — there is no multiplexing during measurement. The signals are Tensix engine signals: a RISC-V loop that polls a register, such as `cb_wait_front` spinning on a circular buffer's tiles-received count, issues no Tensix instruction and moves no counter (see Hardware Limitations).
 
 3. **Kernel ends**: TRISC1 calls `stop_perf_counter()` which freezes all counters. The counter values remain latched in the debug registers.
 
@@ -48,9 +48,10 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 3` | 8 | L1 bank 0 (ring0 NOC, L1 arbitration) |
 | `1 << 4` | 16 | L1 bank 1 (ring1 NOC, TDMA extended) |
 | `1 << 5` | 32 | INSTRN (instruction thread) |
-| `1 << 6` | 64 | L1 bank 2 (BH only: NOC Ring 2) |
-| `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
-| `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
+| `1 << 6` | 64 | L1 bank 2 (BH only: extended unpackers 4-7, ring0 NOC ports 2-3) |
+| `1 << 7` | 128 | L1 bank 3 (BH only: ring1 NOC ports 2-3, extended packers 2-5) |
+| `1 << 8` | 256 | L1 bank 4 (BH only: extended packers 6-7, packer interface 1 with the tag-search accelerator, unpacker 0 extended interfaces 1-5) |
+| `1 << 9` | 512 | L1 bank 5 (BH only: extended unpackers 13-14; the mux wires only two slots here) |
 
 The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) = FPU | PACK | UNPACK.
 
@@ -64,7 +65,7 @@ export TT_METAL_PROFILE_PERF_COUNTERS=7
 
 | | Wormhole | Blackhole |
 |---|---|---|
-| Tensix counters read | 135 | 154 |
+| Tensix counters read (sum of the per-group tables) | 130 | 173 |
 | Derived metrics | 60+ | 60+ |
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
@@ -155,8 +156,8 @@ Measures how often the packer has valid destination data available when it's bus
 | **Counter group** | PACK |
 
 ```
-Primary:  Packer Efficiency = PACKER_DEST_READ_AVAILABLE / PACKER_BUSY * 100
-Fallback: Packer Efficiency = DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE * 100
+Primary:  Packer Efficiency = PACKER0_DEST_READ_REQ / PACKER_BUSY * 100
+Fallback: Packer Efficiency = DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ * 100
 ```
 
 The primary formula applies whenever `PACKER_BUSY > 0` (any op where the packer runs). For ops that never trigger the packer (e.g. pure SFPU ops like relu/sqrt), `PACKER_BUSY = 0` and the formula falls back to the dest-read grant rate — fraction of dest-read requests that were granted.
@@ -178,11 +179,11 @@ Measures pipeline balance between math output and packer consumption.
 | **Counter group** | PACK |
 
 ```
-Primary:  Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
-Fallback: Math-to-Pack Handoff = AVAILABLE_MATH / ref_cnt * 100
+Primary:  Math-to-Pack Handoff = MATH_NOT_SCOREBOARD_STALLED / PACKER_BUSY * 100
+Fallback: Math-to-Pack Handoff = MATH_NOT_SCOREBOARD_STALLED / ref_cnt * 100
 ```
 
-`AVAILABLE_MATH` counts cycles where the math instruction was valid AND not scoreboard-stalled. Dividing by `PACKER_BUSY` gives a ratio that can exceed 100% when math produces output faster than the packer consumes it. When `PACKER_BUSY = 0` (packer not used) the formula falls back to math availability as a fraction of total cycles.
+`MATH_NOT_SCOREBOARD_STALLED` counts cycles where the math instruction was valid AND not scoreboard-stalled. Dividing by `PACKER_BUSY` gives a ratio that can exceed 100% when math produces output faster than the packer consumes it. When `PACKER_BUSY = 0` (packer not used) the formula falls back to math availability as a fraction of total cycles.
 
 - **>100%**: Math produces output faster than packer consumes (packer is the consumer bottleneck).
 - **~100%**: Math and packer balanced.
@@ -202,12 +203,12 @@ Measures backpressure from math stage to unpackers.
 | **Counter group** | UNPACK |
 
 ```
-Unpacker-to-Math Data Flow = avg(SRCA_WRITE_AVAILABLE, SRCB_WRITE_AVAILABLE) /
+Unpacker-to-Math Data Flow = avg(SRCA_WRITE_REQ, SRCB_WRITE_REQ) /
                              avg(UNPACK0_BUSY_THREAD0, UNPACK1_BUSY_THREAD0) * 100
 ```
 
 - **High value (>80%)**: Unpackers can write to source registers when busy. Good data flow.
-- **Low value (<30%)**: Unpackers are busy but source register buffers are full. Math is not consuming data fast enough.
+- **Low value (<30%)**: Unpackers are busy but rarely request a source register write. Math is not consuming data fast enough.
 
 **Use case:** Detects math stage backpressure causing unpacker stalls. Compare with **Unpacker Write Efficiency** (#42) to distinguish backpressure from other stall types.
 
@@ -231,7 +232,7 @@ Thread N Stall Rate = THREAD_STALLS_N / ref_cnt * 100
 Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
 
 - **High value (>30%)**: Thread is frequently stalled. For Thread 0 this usually means waiting for data (NOC, semaphore). For Thread 1, waiting for math hardware. For Thread 2, waiting for pack hardware.
-- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread.
+- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread. A low value does not rule out a data wait: the unpack thread may be spending its time in `cb_wait_front`, a RISC-V poll that is not counted here.
 
 **Use case:** First-order indicator of where time is being lost. The stall breakdown metrics (below) identify the specific stall reason.
 
@@ -276,7 +277,7 @@ SrcB Valid Wait = WAITING_FOR_SRCB_VALID / ref_cnt * 100
 ```
 
 - **High value (>5%)**: Math is waiting for unpacker to provide data. Data starvation.
-- **Low value (~0%)**: Data is ready when math needs it.
+- **Low value (~0%)**: Data is ready when math needs it, or the unpack thread is still waiting in `cb_wait_front` and has not issued the unpack yet. A kernel starved by DRAM reads reports 0 here.
 
 **Use case:** Detects data starvation from the unpacker side.
 
@@ -341,7 +342,7 @@ Semaphore Zero Wait TN = WAITING_FOR_NONZERO_SEM_N / ref_cnt * 100
 Semaphore Full Wait TN = WAITING_FOR_NONFULL_SEM_N / ref_cnt * 100
 ```
 
-- **Semaphore Zero Wait high (>10%)**: Thread is waiting for a producer to signal (semaphore is 0). Common for tilize (7%) where unpack waits for data.
+- **Semaphore Zero Wait high (>10%)**: Thread is waiting for a producer to signal (semaphore is 0). Common for tilize (7%) where unpack waits for data. Only Tensix semaphore instructions count; the circular buffer wait in `cb_wait_front` is a RISC-V poll and does not appear here.
 - **Semaphore Full Wait high (>5%)**: Thread is waiting for a consumer to drain (semaphore is at max). Indicates backpressure from downstream.
 - **Both low (~0%)**: Good producer-consumer balance.
 
@@ -361,11 +362,11 @@ Fraction of math-valid cycles stalled by destination-to-source data hazards (MOV
 | **Counter group** | UNPACK |
 
 ```
-Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A)
+Data Hazard Stall Rate = (MATH_INSTRN_AVAILABLE - MATH_NOT_D2S_STALLED)
                          / MATH_INSTRN_AVAILABLE * 100
 ```
 
-The RTL counter `DATA_HAZARD_STALLS_MOVD2A` is `math_instrn_valid & ~dest2src_post_stall` — cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
+The RTL counter `MATH_NOT_D2S_STALLED` is `math_instrn_valid & ~dest2src_post_stall`: cycles math was available AND *not* D2A-stalled. Subtracting from MATH_INSTRN_AVAILABLE gives the actual stall count.
 
 - **High value (>20%)**: Significant dest-to-src data movement stalls. Expected for concat (22% max).
 - **Low value (~0%)**: No data hazard stalls. Expected for matmul and simple eltwise ops.
@@ -385,8 +386,8 @@ Fraction of srcA DMA write attempts blocked by overwrite protection (data not ye
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                     SRCA_WRITE_AVAILABLE * 100
+SrcA Write Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                     SRCA_WRITE_REQ * 100
 ```
 
 On WH, `SRCA_WRITE_NOT_BLOCKED_OVR` (counter_sel 261) directly measures srcA DMA writes not blocked by overwrite. On BH, counter_sel 260 is used (verified empirically).
@@ -408,8 +409,8 @@ Fraction of srcB DMA write attempts blocked by port unavailability.
 | **Counter group** | UNPACK |
 
 ```
-SrcB Write Port Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_NOT_BLOCKED_PORT) /
-                          SRCB_WRITE_AVAILABLE * 100
+SrcB Write Port Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_PORT) /
+                          SRCB_WRITE_REQ * 100
 ```
 
 On WH, `SRCB_WRITE_NOT_BLOCKED_PORT` (counter_sel 260) directly measures srcB DMA writes not blocked by the write port. On BH, counter_sel 262 is used (verified empirically).
@@ -431,8 +432,8 @@ Fraction of packer destination register reads that were blocked.
 | **Counter group** | PACK |
 
 ```
-Dest Read Backpressure = (PACKER_DEST_READ_AVAILABLE - DEST_READ_GRANTED_0) /
-                         PACKER_DEST_READ_AVAILABLE * 100
+Dest Read Backpressure = (PACKER0_DEST_READ_REQ - DEST_READ_GRANTED_0) /
+                         PACKER0_DEST_READ_REQ * 100
 ```
 
 - **High value (>20%)**: Packer can't read destination register (math still writing).
@@ -475,7 +476,7 @@ Fraction of math cycles stalled by FPU data hazard scoreboard.
 | **Counter group** | PACK |
 
 ```
-Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - AVAILABLE_MATH) /
+Math Scoreboard Stall = (MATH_INSTRN_AVAILABLE - MATH_NOT_SCOREBOARD_STALLED) /
                         MATH_INSTRN_AVAILABLE * 100
 ```
 
@@ -528,7 +529,7 @@ Fraction of srcA write attempts that actually succeeded.
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Actual Efficiency = SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE * 100
+SrcA Write Actual Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ * 100
 ```
 
 - **High value (100%)**: Every srcA write attempt succeeds. No write port blocking.
@@ -552,7 +553,7 @@ Fraction of total cycles each thread spent waiting for specific hardware units.
 | **Counter group** | INSTRN |
 
 ```
-MMIO Idle Wait T0 = WAITING_FOR_MMIO_IDLE_0 / ref_cnt * 100
+MMIO Idle Wait T0 = WAITING_FOR_CFG_IDLE_0 / ref_cnt * 100
 SFPU Idle Wait T1 = WAITING_FOR_SFPU_IDLE_1 / ref_cnt * 100
 THCON Idle Wait T0 = WAITING_FOR_THCON_IDLE_0 / ref_cnt * 100
 MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
@@ -565,23 +566,24 @@ MOVE Idle Wait T0 = WAITING_FOR_MOVE_IDLE_0 / ref_cnt * 100
 
 ---
 
-**22. RISC Core L1 Util**
+**22. L1 Packer Port 8 Util**
 
-RISC core L1 memory access utilization.
+Packer L1 port utilization on port 8: `L1_1_TDMA_PACKER_2` on Wormhole, `L1_1_PACKER_IF_0` (the packer's L1 interface 0) on Blackhole.
 
 | | |
 |---|---|
-| **Architectures** | Blackhole only |
+| **Architectures** | Wormhole, Blackhole |
 | **Counter group** | L1_1 |
 
 ```
-RISC Core L1 Util = L1_1_RISC_CORE / ref_cnt * 100
+L1 Packer Port 8 Util = L1_1_TDMA_PACKER_2 / ref_cnt * 100   # Wormhole
+L1 Packer Port 8 Util = L1_1_PACKER_IF_0 / ref_cnt * 100     # Blackhole
 ```
 
-- **High value (>10%)**: RISC core is actively accessing L1. Indicates firmware memory overhead.
-- **Low value (~0%)**: Minimal RISC L1 traffic.
+- **High value (>10%)**: the packer writes L1 through this port for a large share of the window.
+- **Low value (~0%)**: little packer traffic on port 8.
 
-**Use case:** Measures firmware memory access overhead on BH. Requires L1_1 group enabled.
+**Use case:** Packer output pressure on L1. Requires the L1_1 group.
 
 ---
 
@@ -598,7 +600,7 @@ Fraction of cycles each L1 port had a transaction attempt.
 
 ```
 L1 Unpacker Port Util = L1_0_UNPACKER_0 / ref_cnt * 100
-L1 Packer Port Util = L1_0_PORT1 / ref_cnt * 100
+L1 Packer Port Util = L1_0_UNPACKER_1_ECC_PACK1 / ref_cnt * 100   # Wormhole only; Blackhole's port 1 (L1_0_UNPACKER_1_ECC) carries unpacker 1 and the ECC scrubber, no packer
 ```
 
 - **High value (>20%)**: Port is heavily used. Matmul shows 15% on unpacker.
@@ -959,7 +961,7 @@ Fraction of srcB write attempts that were not blocked by port contention.
 | **Counter group** | UNPACK |
 
 ```
-SrcB Write Actual Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE * 100
+SrcB Write Actual Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ * 100
 ```
 
 Mirrors **SrcA Write Actual Efficiency** (#20); both measure "fraction of writes not blocked by the DMA write port" for their respective source registers.
@@ -1000,7 +1002,7 @@ Source register write throughput per unpacker — fraction of unpacker-busy cycl
 | **Counter group** | UNPACK |
 
 ```
-Unpacker0 Write Efficiency = SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0 * 100
+Unpacker0 Write Efficiency = SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0 * 100
 Unpacker1 Write Efficiency = SRCB_WRITE_NOT_BLOCKED_PORT / UNPACK1_BUSY_THREAD0 * 100
 ```
 
@@ -1021,7 +1023,7 @@ FPU active cycles as fraction of math instruction availability on the math threa
 | **Counter group** | FPU + INSTRN |
 
 ```
-FPU Execution Efficiency = FPU_COUNTER / FPU_INSTRN_AVAILABLE_1 * 100
+FPU Execution Efficiency = FPU_COUNTER / MATH_INSTRN_AVAILABLE_1 * 100
 ```
 
 - **High value (>80%)**: FPU executes whenever math work is available (compute-efficient).
@@ -1041,10 +1043,10 @@ Fraction of srcA/srcB DMA write attempts blocked by overwrite protection (previo
 | **Counter group** | UNPACK |
 
 ```
-SrcA Write Overwrite Blocked = (SRCA_WRITE_AVAILABLE - SRCA_WRITE_NOT_BLOCKED_OVR) /
-                               SRCA_WRITE_AVAILABLE * 100
-SrcB Write Overwrite Blocked = (SRCB_WRITE_AVAILABLE - SRCB_WRITE_ACTUAL) /
-                               SRCB_WRITE_AVAILABLE * 100
+SrcA Write Overwrite Blocked = (SRCA_WRITE_REQ - SRCA_WRITE_NOT_BLOCKED_OVR) /
+                               SRCA_WRITE_REQ * 100
+SrcB Write Overwrite Blocked = (SRCB_WRITE_REQ - SRCB_WRITE_NOT_BLOCKED_OVR) /
+                               SRCB_WRITE_REQ * 100
 ```
 
 Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
@@ -1098,3 +1100,11 @@ Because the software must toggle bit [16] and re-read to get both `req` and `gra
 Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter exposed via the `hw_counters.h` arrays is driven by a real RTL signal — signals that are hardwired to a constant, or whose grant/req line is an alias of another counter we already expose, are omitted from the arrays entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
 Some counters will still be 0 for a given workload, for example `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU. Those are workload-dependent zeros rather than dead counters. The fidelity counters were a different case: they were tied off in hardware on both architectures and have been removed.
+
+### Waits the counters cannot see
+
+The counters measure Tensix engine signals. `cb_wait_front` and `cb_reserve_back` are RISC-V loops that poll the circular buffer's tiles-received and tiles-acked counts, and a NOC read barrier is a RISC-V poll on the NOC status registers. While a thread spins in one of these, no Tensix instruction is issued, so `THREAD_STALLS_N`, `WAITING_FOR_SRCA_VALID`, `WAITING_FOR_SRCB_VALID` and the semaphore waits all stay where they were. A kernel that waits on DRAM for most of its runtime can therefore report a stall rate near zero.
+
+Measured on a Blackhole causal SDPA prefill: the unpack thread spent 38 percent of the kernel in `cb_wait_front` on the K and V buffers, while `WAITING_FOR_SRCA_VALID` and `WAITING_FOR_SRCB_VALID` read 0 and `WAITING_FOR_NONZERO_SEM_0` read 1.4 percent of the window. The same holds for `L1_*_NOC_RING*_INCOMING`: it counts the NIU interface that serves requests other cores make to this L1, while the data of a DRAM read this core issued comes back through the interface that carries its own requests, the `OUTGOING` one, so it stays at 0 when every core reads its data from DRAM itself.
+
+When the question is whether a kernel is memory bound, put a `DeviceZoneScopedN` around the wait or read the RISC-V cycle counter; the stall metrics on their own cannot answer it.

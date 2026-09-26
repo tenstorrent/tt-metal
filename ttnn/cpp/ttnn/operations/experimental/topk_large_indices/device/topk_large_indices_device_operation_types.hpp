@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -28,11 +29,15 @@ inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
 
 struct operation_attributes_t {
     uint32_t k{};
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
+    std::optional<CoreRangeSet> sub_core_grid;
+    tt::tt_metal::SubDeviceManagerId subdevice_manager_id;
+    CoreRangeSet resolved_worker_core_grid;
     // Restrict the search to the first `valid_length` columns of each row instead of the full last
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
-    std::optional<uint32_t> valid_length{};
+    std::optional<uint32_t> valid_length;
     // Constant added to valid_length_tensor[0] on-device. Included in the program hash.
     uint32_t valid_length_offset{0};
 };
@@ -42,6 +47,13 @@ struct tensor_args_t {
     // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe valid lengths.
     std::optional<Tensor> valid_length_tensor{std::nullopt};
     bool has_valid_length_metadata() const { return valid_length_tensor.has_value(); }
+    // Optional 1-element UINT32 row-major DRAM tensor holding the REAL token end. Without it the derived
+    // search length is valid_length_tensor[0] + valid_length_offset, i.e. the end of the PADDED window, so
+    // a partial chunk ranks columns the request never wrote. Supply it and the search length is capped at
+    // ceil32(valid_end), matching the score op's own cap -- pass BOTH ops the same bound or they drift: a
+    // looser score with a tighter top-k drops real keys, the reverse ranks a stale tail.
+    std::optional<Tensor> valid_end_tensor{std::nullopt};
+    bool has_valid_end_metadata() const { return valid_end_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

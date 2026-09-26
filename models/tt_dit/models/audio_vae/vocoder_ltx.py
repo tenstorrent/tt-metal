@@ -374,6 +374,7 @@ class Vocoder(Module):
         The same device graph as :meth:`forward`, minus the mel-specific input reshape.
         Used by MiniMax-H3's audio decoder, whose input is already channels-over-time.
         """
+        self._tpad_mask_cache = {}
         return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
 
     def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:

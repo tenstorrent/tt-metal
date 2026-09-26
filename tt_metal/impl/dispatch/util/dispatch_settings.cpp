@@ -139,7 +139,7 @@ uint32_t DispatchSettings::get_prefetch_q_entries(
 std::vector<std::string> DispatchSettings::get_errors() const {
     std::vector<std::string> msgs;
 
-    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
+    if (!prefetch_q_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
         msgs.push_back(fmt::format("configuration with_alignment() is a required\n"));
     }
 
@@ -177,7 +177,6 @@ DispatchSettings& DispatchSettings::build() {
 
 bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
-           prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
            dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
            prefetch_q_entry_size_bytes_ == other.prefetch_q_entry_size_bytes_ &&
            prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
@@ -258,8 +257,9 @@ DispatchSettings& DispatchSettings::dispatch_s_buffer_size(uint32_t val) {
 
 // Sets pointer values based on L1 alignment
 DispatchSettings& DispatchSettings::with_alignment(uint32_t l1_alignment) {
-    this->prefetch_q_rd_ptr_size_ = sizeof(prefetch_q_ptr_type);
-    this->prefetch_q_pcie_rd_ptr_size_ = l1_alignment - sizeof(prefetch_q_ptr_type);
+    // Only the first sizeof(prefetch_q_ptr_type) bytes hold the pointer; the rest pads the slot to
+    // L1 alignment so the completion queue pointers that follow stay aligned.
+    this->prefetch_q_rd_ptr_size_ = l1_alignment;
     this->dispatch_s_sync_sem_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
     this->other_ptrs_size = l1_alignment;
 

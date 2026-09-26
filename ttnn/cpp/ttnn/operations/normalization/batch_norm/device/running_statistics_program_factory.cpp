@@ -36,9 +36,6 @@ const DFBSpecName MOMENTUM_DFB{"momentum"};
 const DFBSpecName ONE_DFB{"one"};                                  // one tile filled with 1.0
 const DFBSpecName UPDATED_MEAN_DFB{"updated_mean"};                // FP32 staging when typecasting
 const DFBSpecName UPDATED_VAR_DFB{"updated_var"};                  // FP32 staging when typecasting
-const DFBSpecName TMP1_DFB{"tmp1"};                                // 1 - momentum
-const DFBSpecName TMP2_DFB{"tmp2"};                                // momentum * batch stat
-const DFBSpecName TMP3_DFB{"tmp3"};                                // (1 - momentum) * running stat
 const DFBSpecName WRITER_UPDATED_MEAN_DFB{"writer_updated_mean"};  // only when typecasting the mean
 const DFBSpecName WRITER_UPDATED_VAR_DFB{"writer_updated_var"};    // only when typecasting the var
 
@@ -187,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     const auto& running_mean_tensor = tensor_args.running_mean;
     const auto& running_var_tensor = tensor_args.running_var;
 
-    IDevice* device = &batch_mean_tensor.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = batch_mean_tensor.mutable_device();
 
     const bool running_mean_has_value = running_mean_tensor.has_value();
     const bool running_var_has_value = running_var_tensor.has_value();
@@ -221,7 +218,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     const bool needs_var_typecast = running_var_has_value && stat_format_needs_typecast;
 
     // we parallelize the computation across the output tiles
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = NodeRangeSet(NodeRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
@@ -251,11 +248,6 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             needs_var_typecast ? interm_data_format : e_data_format,
             needs_var_typecast ? interm_single_tile_size : e_single_tile_size,
             b_num_tiles_per_cb),
-        // Intermediates required for updating the running stats; produced and consumed entirely
-        // inside the compute kernel.
-        make_dfb(TMP1_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(TMP2_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(TMP3_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
     };
     if (needs_mean_typecast) {
         dataflow_buffers.push_back(
@@ -302,7 +294,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         .compile_time_args = {{"fill_momentum_fp32", static_cast<uint32_t>(any_float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"momentum", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // WRITER KERNEL
@@ -378,14 +370,14 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             {{"old_stat_is_fp32", static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // COMPUTE KERNEL
     // fp32_dest_acc_en selects the compute source and gates the unpack_modes list below, so it is
     // read directly. to_compute_hardware_config carries the four knobs it covers -- math_fidelity,
     // math_approx_mode, fp32_dest_acc_en and dst_full_sync_en -- into hw_config; packer_l1_acc and
-    // throttle_level are deliberately not translated. ComputeGen1Config has no packer_l1_acc field,
+    // throttle_level are deliberately not translated. ComputeHardwareConfig has no packer_l1_acc field,
     // so the value this op resolves for it stays unapplied, as it also was under the descriptor API.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     const bool use_sfpu_kernel = fp32_dest_acc_en || any_float32;
@@ -438,38 +430,6 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             .accessor_name = "updated_var",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        // tmp1..tmp3 never leave the compute kernel: it packs a partial result and reads it straight
-        // back, so it holds both ends of each FIFO.
-        DFBBinding{
-            .dfb_spec_name = TMP1_DFB,
-            .accessor_name = "tmp1",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP1_DFB,
-            .accessor_name = "tmp1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP2_DFB,
-            .accessor_name = "tmp2",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP2_DFB,
-            .accessor_name = "tmp2",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP3_DFB,
-            .accessor_name = "tmp3",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP3_DFB,
-            .accessor_name = "tmp3",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
     };
 
     KernelSpec::CompileTimeArgs compute_compile_time_args{
@@ -515,18 +475,13 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         });
     }
 
-    auto compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. The
         // writer-facing stat buffers are producer-only for this kernel, so they get no entry. An
         // omitted DFB keeps the UnpackToSrc default.
-        // Reach unpack_modes through the generation-neutral accessor rather than
-        // std::get<ComputeGen1Config>: the helper above returns whichever alternative matches
-        // `arch`, so naming Gen1 here would throw std::bad_variant_access on Quasar. (The local is
-        // named dfb_unpack_modes so it does not shadow the accessor.)
         // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        auto& dfb_unpack_modes = unpack_modes(compute_hw_config);
+        auto& dfb_unpack_modes = compute_hw_config.unpack_modes;
         for (const auto& dfb_name :
              {BATCH_MEAN_DFB,
               BATCH_VAR_DFB,
@@ -536,10 +491,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
               UPDATED_MEAN_DFB,
               UPDATED_VAR_DFB,
               MOMENTUM_DFB,
-              ONE_DFB,
-              TMP1_DFB,
-              TMP2_DFB,
-              TMP3_DFB}) {
+              ONE_DFB}) {
             dfb_unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
         }
     }

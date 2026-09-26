@@ -160,18 +160,13 @@ void send_eth_msg_to_links(const std::vector<ResetLink>& links, const BHEthMsg& 
 void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
-    const BHEthMsg ETH_MSG_PORT_DOWN = {
-        tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION,
-        {2, 0, 0},
-        "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
-
     const BHEthMsg ETH_MSG_PORT_REINIT = {
         tt_metal::FWMailboxMsg::ETH_MSG_PORT_REINIT_MACPCS,
         {1, 2, 0},
         "Sending ETH_MSG_PORT_REINIT_MACPCS to reinitialize MAC/PCS on all links"};
 
     // Send port down messages to all links
-    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_DOWN);
+    send_port_down_msg_to_links(links_to_reset);
 
     // Barrier to ensure all hosts have brought their links down before reinitialization
     distributed_context.barrier();
@@ -183,6 +178,17 @@ void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
 // ============================================================================
 // Consolidated helpers (should be arch agnostic)
 // ============================================================================
+
+void send_port_down_msg_to_links(const std::vector<ResetLink>& links_to_reset) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    TT_FATAL(cluster.arch() == tt::ARCH::BLACKHOLE, "Port-down messages are only supported on Blackhole");
+
+    const BHEthMsg eth_msg_port_down = {
+        tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION,
+        {2, 0, 0},
+        "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
+    send_eth_msg_to_links(links_to_reset, eth_msg_port_down);
+}
 
 void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

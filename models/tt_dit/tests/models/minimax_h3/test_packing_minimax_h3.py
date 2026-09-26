@@ -156,56 +156,60 @@ def test_keyframe_anchor_times():
     assert float(last_time - video_time.max()) == pytest.approx(5.0)
 
 
-@pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
-def test_row_timesteps_pin_condition_rows(case):
+@pytest.mark.parametrize("case", [BRINGUP, CANONICAL, T2VA], ids=lambda c: c[0])
+def test_slot_routing_pins_condition_rows(case):
+    """Condition rows stay on their own slot; generated video/text share the video slot; audio is separate."""
     _, latent_height, latent_width, num_frames, anchors = case
     layout = _layout(latent_height, latent_width, num_frames, anchors)
-    # expectations round through fp32: 0.7 is not representable
-    video_t, audio_t, cond_t = torch.tensor([0.7, 0.5, p.MINIMAX_H3_KEYFRAME_NOISE_AUG], dtype=torch.float32).tolist()
-    timesteps, indices = p.build_row_timesteps(layout, video_t, audio_t, cond_t, cond_t)
+    row_slot, roles = p.build_slot_routing(layout)
 
-    assert timesteps.tolist() == sorted({video_t, audio_t, cond_t})
-    resolved = timesteps[indices]
+    expected = ("video", "audio", "condition_video") if anchors else ("video", "audio")
+    assert roles == expected
+
+    video_t, audio_t, cond_t = 0.7, 0.5, p.MINIMAX_H3_KEYFRAME_NOISE_AUG
+    kwargs = dict(video_timestep=video_t, audio_timestep=audio_t)
+    if "condition_video" in roles:
+        kwargs["condition_video_timestep"] = cond_t
+    levels = p.slot_levels(roles, **kwargs)
+    resolved = levels[row_slot]
+
     condition_rows = layout.video_indices[: layout.num_condition_video_rows]
     target_rows = layout.video_indices[layout.num_condition_video_rows :]
-
-    assert (resolved[condition_rows] == cond_t).all()
+    if condition_rows.numel():
+        assert (resolved[condition_rows] == cond_t).all()
     assert (resolved[target_rows] == video_t).all()
     assert (resolved[layout.audio_indices] == audio_t).all()
     assert (resolved[layout.text_indices] == video_t).all()
 
-
-@pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
-def test_adaln_index_ranges_round_trip(case):
-    _, latent_height, latent_width, num_frames, anchors = case
-    layout = _layout(latent_height, latent_width, num_frames, anchors)
-    _, indices = p.build_row_timesteps(layout, 0.7, 0.5, 0.999, 0.999)
-    table_rows = p.adaln_indices(layout.token_tags, indices)
-
-    runs = p.adaln_index_ranges(table_rows)
-    rebuilt = torch.empty_like(table_rows)
-    for start, stop, value in runs:
-        rebuilt[start:stop] = value
-    assert torch.equal(rebuilt, table_rows)
-    assert len(runs) <= 8
+    kwargs["video_timestep"] = kwargs["audio_timestep"] = 0.0
+    merged = p.slot_levels(roles, **kwargs)
+    assert merged.shape == (len(roles),)
+    assert merged[roles.index("video")].item() == merged[roles.index("audio")].item() == 0.0
 
 
-def test_adaln_index_ranges_are_shard_local():
-    _, latent_height, latent_width, num_frames, anchors = CANONICAL
-    layout = _layout(latent_height, latent_width, num_frames, anchors)
-    _, indices = p.build_row_timesteps(layout, 0.7, 0.5, 0.999, 0.999)
-    table_rows = p.adaln_indices(layout.token_tags, indices)
-
-    sp_factor = 8
-    shard = layout.sequence_length // sp_factor
-    counts = [len(p.adaln_index_ranges(table_rows[i * shard : (i + 1) * shard])) for i in range(sp_factor)]
-
-    assert sum(count == 1 for count in counts) >= sp_factor - 2
-    assert max(counts) <= 8
+def test_slot_levels_requires_present_roles(expect_error):
+    with expect_error(ValueError, "missing values for roles"):
+        p.slot_levels(("video", "audio", "condition_video"), video_timestep=0.1, audio_timestep=0.2)
 
 
-def test_adaln_index_ranges_empty():
-    assert p.adaln_index_ranges(torch.empty(0, dtype=torch.long)) == []
+def test_slot_routing_pins_roles_across_presence():
+    """Pinned roles fix the slot set regardless of which roles have rows."""
+    _, latent_height, latent_width, num_frames, _ = T2VA
+    layout = _layout(latent_height, latent_width, num_frames, ())
+    pinned = ("video", "audio", "condition_video")
+
+    row_slot, roles = p.build_slot_routing(layout, roles=pinned)
+    assert roles == pinned
+    assert row_slot.max().item() < len(pinned)
+    assert (row_slot != 2).all()
+
+
+def test_slot_routing_rejects_a_role_it_would_drop(expect_error):
+    """A layout with rows for a role outside the pinned set is an error, not a silent mis-slot."""
+    _, latent_height, latent_width, num_frames, _ = CANONICAL
+    layout = _layout(latent_height, latent_width, num_frames, ("first",))
+    with expect_error(ValueError, "rows for roles"):
+        p.build_slot_routing(layout, roles=("video", "audio"))
 
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])

@@ -8,6 +8,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -44,14 +45,14 @@ void kernel_main() {
 
     const Noc noc;
     const DataflowBuffer src_dfb(dfb::src);
-    const DataflowBuffer dst_dfb(dfb::dst);
+    const Scratchpad<uint32_t> dst(scratch::dst);
 
     // DFB for input data.
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(dfb::src);
 
-    // DFB for output data.
-    const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
+    // Scratchpad for output data.
+    const uint32_t dst_addr = dst.get_base_address();
 
     auto default_val = get_default_value<src_data_format>();
     // C++ type representation of the src/dst data formats
@@ -97,7 +98,7 @@ void kernel_main() {
         src_dfb_addr);
 
     OutputContext output_ctx(
-        reinterpret_cast<uint32_t*>(accumulated_arg_max), tile_height, dst_dfb_addr, output_page_elements);
+        reinterpret_cast<uint32_t*>(accumulated_arg_max), tile_height, dst_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {

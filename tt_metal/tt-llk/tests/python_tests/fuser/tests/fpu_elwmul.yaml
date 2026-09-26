@@ -14,12 +14,13 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 128]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         math_fidelity: "HiFi2"
-    block_size: [64, 128]
     pack:
       - output: "elwmul_out"
+        block_size: [64, 128]
         packer: "Packer"

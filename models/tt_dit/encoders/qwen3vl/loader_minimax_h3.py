@@ -38,6 +38,7 @@ from loguru import logger
 from safetensors import safe_open
 
 from ...parallel.manager import CCLManager
+from ...utils import cache
 from .model_qwen3vl import Qwen3VlTextEncoder
 from .vision_qwen3vl import Qwen3VlVisionModel
 
@@ -70,7 +71,7 @@ def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layer
     """The `model.language_model.*` sub-tree, layers `[0, num_layers)`, prefix stripped.
 
     Reads only the shards that hold wanted tensors, so the vision tower and `lm_head` are never
-    materialized -- with 50 of 64 layers that is ~50 GB of the checkpoint's 63 GB. `norm.weight`
+    materialized. `norm.weight`
     *is* kept even though the tap bypasses the final norm: the module owns that parameter and the
     load is strict, so dropping it would fail as a missing key rather than save anything
     meaningful (one 5120-element vector).
@@ -160,13 +161,38 @@ def build_minimax_h3_text_encoder(
     )
 
     if load_weights:
-        state = load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers)
-        # Strict: an unconsumed or missing key here is a real mapping bug, and this is the only
-        # place it is cheap to catch.
-        encoder.load_torch_state_dict(state)
-        del state
+        load_minimax_h3_text_encoder_weights(
+            encoder,
+            weights_dir,
+            parallel_config=parallel_config,
+            mesh_device=mesh_device,
+            is_fsdp=is_fsdp,
+            num_layers=num_layers,
+        )
 
     return encoder, config
+
+
+def load_minimax_h3_text_encoder_weights(
+    encoder: Qwen3VlTextEncoder,
+    weights_dir: str | os.PathLike,
+    *,
+    parallel_config,
+    mesh_device,
+    is_fsdp: bool = True,
+    num_layers: int = MINIMAX_H3_TEXT_ENCODER_LAYER,
+) -> None:
+    """Upload the truncated conditioner through ``cache.load_model``. Reload-safe."""
+    cache.load_model(
+        encoder,
+        model_name="minimax-h3",
+        subfolder="text_encoder",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
+        is_fsdp=is_fsdp,
+        get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers),
+    )
 
 
 _VISION_PREFIX = "model.visual."
@@ -217,13 +243,16 @@ def build_minimax_h3_vision_tower(
     weights_dir: str | os.PathLike,
     *,
     mesh_device,
+    parallel_config=None,
+    ccl_manager=None,
     load_weights: bool = True,
+    high_fidelity_linears: bool = True,
 ) -> tuple[Qwen3VlVisionModel, dict]:
     """Build the released vision tower and load its weights. Returns `(tower, vision_config)`.
 
-    No parallel config: the tower is **replicated**, not tensor-parallel. At ~1.2 GB bf16 against the
-    conditioner's ~50 GB it is not worth sharding, and it runs once per request outside the denoise
-    loop. Every config value is read from the checkpoint rather than defaulted, because two of them are
+    TP+SP `parallel_config` with a `ccl_manager` enables the sharded path; `None` keeps the tower replicated.
+
+    Every config value is read from the checkpoint rather than defaulted, because two of them are
     load-bearing and easy to get wrong silently -- `head_dim` is `1152 // 16 = 72`, which is not tile
     aligned and is padded to 96 internally with the softmax `scale` passed explicitly as `72 ** -0.5`,
     and `num_position_embeddings` is 2304 = 48^2, smaller than any production patch grid, so the
@@ -245,6 +274,9 @@ def build_minimax_h3_vision_tower(
         norm_eps=config.get("rms_norm_eps", 1e-6),
         deepstack_visual_indexes=config["deepstack_visual_indexes"],
         mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        high_fidelity_linears=high_fidelity_linears,
     )
     if load_weights:
         # Strict: `pos_embed.weight` is popped to the host by `_prepare_torch_state` and every other

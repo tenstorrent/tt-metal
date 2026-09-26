@@ -4,12 +4,29 @@
 
 #include "scheduler_base.hpp"
 
+#include "optimizers/optimizer_base.hpp"
+
 namespace ttml::schedulers {
 
-core::not_null<optimizers::OptimizerBase *> ttml::schedulers::LRSchedulerBase::get_optimizer() const {
+LRSchedulerBase::LRSchedulerBase(optimizers::OptimizerBase *optimizer) : m_optimizer(optimizer) {
+    m_last_lr = m_optimizer->get_initial_lr();
+}
+
+core::not_null<optimizers::OptimizerBase *> LRSchedulerBase::get_optimizer() const {
     return m_optimizer;
 }
-LRSchedulerBase::LRSchedulerBase(optimizers::OptimizerBase *optimizer) : m_optimizer(optimizer) {
+
+float LRSchedulerBase::get_last_lr() const {
+    return m_last_lr;
+}
+
+float LRSchedulerBase::get_current_lr() const {
+    return m_optimizer->get_lr();
+}
+
+void LRSchedulerBase::update_lr(float lr) {
+    m_optimizer->set_lr(lr);
+    m_last_lr = lr;
 }
 
 }  // namespace ttml::schedulers

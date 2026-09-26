@@ -9,7 +9,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <bit>
-#include <cmath>
 #include <variant>
 
 namespace ttnn::prim {
@@ -41,14 +40,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         "ReduceSingleCoreHwProgramFactory supports HW dim only, got dim enum value {}",
         static_cast<int>(operation_attributes.dim));
 
-    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
-    // scaler twice internally (once per dimension). Here we compensate with
-    // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
-    // must not reach this code path. Instead negative scalers are handled via the two-step
-    // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
-    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
-    float scaler = std::sqrt(operation_attributes.scaler);
-
     TT_FATAL(
         H % tile_height == 0 && W % tile_width == 0, "Reduce HW expects tile-aligned padded shape H={}, W={}", H, W);
     uint32_t num_tensor_tiles = NC * H * W / tile_hw;
@@ -79,11 +70,8 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
-    // exponent, so the device reduces with scaler=1.0 and the user scalar is applied after the
-    // reduction via SFPU mul_unary_tile inside the compute kernel.
-    const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
-    uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
+    // PostMul means the compute kernel applies the scalar after the reduction.
+    const bool use_post_mul = operation_attributes.scaler_mode == ScalerMode::PostMul;
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
     // Declared function-local: the reduce factory .cpp files land in the same unity-build
@@ -172,10 +160,12 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
+        // REDUCE_SCALAR applies the tile once per reduced dimension, which would square the
+        // scalar. The HW path is therefore always PostMul, so this tile only carries the identity.
         .compile_time_args =
-            {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}, {"tiles_per_batch", reader_tiles_per_batch}},
+            {{"scaler_bits", std::bit_cast<uint32_t>(1.0f)}, {"tiles_per_batch", reader_tiles_per_batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -192,7 +182,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Compute kernel ----
@@ -201,31 +191,23 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     // at the *Metal* descriptor defaults (both false). Reproduce that exactly: the TTNN helper would
     // otherwise carry the caller's math_approx_mode into sfpu_precision_mode and the caller's
     // dst_full_sync_en into double_buffer_dest, silently changing precision / Dest buffering.
-    auto compute_hw = ttnn::to_compute_hardware_config(a.device().arch(), operation_attributes.compute_kernel_config);
-    // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
-    // ComputeGen2Config on Quasar, and the three fields set below exist on both generations.
-    // The explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a
-    // Gen1-only branch would leave FP32 + 32-bit-Dest programs failing ProgramSpec validation there.
-    std::visit(
-        [&](auto& compute_cfg) {
-            compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            compute_cfg.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
-            // Legacy left unpack_to_dest_mode unset (all Default = UnpackToSrc). Metal 2.0 nonetheless
-            // requires an explicit mode for every Float32 buffer this kernel consumes under a 32-bit
-            // Dest register, so state the legacy value for those.
-            auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
-                if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
-                    compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
-                }
-            };
-            require_explicit_unpack_mode(IN_DFB, src0_cb_data_format);
-            require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
-            if (operation_attributes.negate) {
-                require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
-                require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
-            }
-        },
-        compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    compute_hw.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
+    compute_hw.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
+    // Legacy left unpack_to_dest_mode unset (all Default = UnpackToSrc). Metal 2.0 nonetheless
+    // requires an explicit mode for every Float32 buffer this kernel consumes under a 32-bit
+    // Dest register, so state the legacy value for those.
+    auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
+        if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
+        }
+    };
+    require_explicit_unpack_mode(IN_DFB, src0_cb_data_format);
+    require_explicit_unpack_mode(SCALER_DFB, scaler_cb_data_format);
+    if (operation_attributes.negate) {
+        require_explicit_unpack_mode(ACC_DFB, dst_cb_data_format);
+        require_explicit_unpack_mode(INEG_DFB, dst_cb_data_format);
+    }
 
     Group<DFBBinding> compute_dfb_bindings = {
         DFBBinding{
@@ -287,11 +269,10 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 {"Ht", Ht},
                 {"Wt", Wt},
                 {"NC", NC},
-                // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-                {"post_mul_scaler_bits", post_mul_scaler_bits},
                 // enable_fp32_sfpu: always 0 (accurate fp32 HW is forced to the two-step W-then-H path)
                 {"enable_fp32_sfpu", 0u},
             },
+        .runtime_arg_schema = {.common_runtime_arg_names = {"post_mul_scaler_bits"}},
         .hw_config = compute_hw,
     });
 
@@ -320,10 +301,40 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             selected_node_coord, {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}}),
     });
 
+    run_args.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = COMPUTE,
+        .common_runtime_arg_values =
+            {{"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}},
+    });
+
     run_args.tensor_args.emplace(INPUT_TENSOR, TensorArgument{a});
     run_args.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{output});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs
+ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace tt::tt_metal::experimental;
+
+    // Names must match create_program_artifacts.
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName INPUT_TENSOR{"input"};
+    const TensorParamName OUTPUT_TENSOR{"output"};
+
+    // compute_program_hash excludes the scalars, so a cache hit must re-apply them.
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(KernelRunArgs{
+        .kernel = COMPUTE,
+        .common_runtime_arg_values = {
+            {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}}});
+    params.tensor_args.emplace(INPUT_TENSOR, TensorArgument{tensor_args.mesh_tensor()});
+    params.tensor_args.emplace(OUTPUT_TENSOR, TensorArgument{tensor_return_value.mesh_tensor()});
+    return params;
 }
 
 }  // namespace ttnn::prim

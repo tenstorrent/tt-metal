@@ -11,6 +11,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
     DestSync,
@@ -22,9 +23,11 @@ from helpers.llk_params import (
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
     generate_perf_input_dimensions,
-    generate_unary_input_dimensions,
+    generate_reduced_input_dimensions,
+    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
 )
@@ -37,9 +40,11 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    NUM_BLOCKS,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -107,11 +112,13 @@ def generate_eltwise_unary_datacopy_combinations(
                                 dest_acc, dest_sync, tile_shape
                             )
                             if is_perf
-                            else generate_unary_input_dimensions(
+                            else generate_reduced_input_dimensions(
                                 dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
                             )
                         )
                         for dimensions in dimensions_list:
+                            # calculate_edgecase_dest_indices returns dest_index = 0 when the
+                            # matrix is larger than full dest
                             dest_indices = (
                                 [0]
                                 if is_perf
@@ -151,12 +158,8 @@ DATACOPY_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ]
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
@@ -214,6 +217,15 @@ def test_eltwise_unary_datacopy_quasar(
 
     num_faces = tile_shape.total_num_faces()
 
+    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync_mode,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
     golden_src = src_B if data_copy_type == DataCopyType.B2D else src_A
     generate_golden = get_golden_generator(DataCopyGolden)
     golden_tensor = generate_golden(
@@ -249,6 +261,8 @@ def test_eltwise_unary_datacopy_quasar(
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             DEST_INDEX(dest_index),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(tiles_in_block),
             LOOP_FACTOR(loop_factor),
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions

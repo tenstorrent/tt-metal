@@ -290,8 +290,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
             "slice_write_reader_sharded.cpp"};
     reader.dfb_bindings = {ProducerOf(SWT_IN_DFB, "in0")};
     reader.runtime_arg_schema = {.runtime_arg_names = {"num_sticks"}};
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // Writer: drain the input DFB -> interleaved output, writing each TILE at start_id + the padded-tile-dim walk.
     KernelSpec writer{
@@ -313,8 +312,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
             "num_sticks_per_core_read",
             "num_read_per_barrier"}};
     writer.advanced_options.num_runtime_varargs = 3 * num_dims;
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     spec.kernels = {reader, writer};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {SWT_READER, SWT_WRITER}, .target_nodes = input_cores}};

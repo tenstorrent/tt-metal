@@ -27,8 +27,6 @@ std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
 // Finds the maximum divisor (excluding 5 or 7) of val starting at start_max_div and below
 int find_max_divisor(uint32_t val, uint32_t start_max_div);
 
-int find_max_block_size(uint32_t val, uint32_t max_block_size = 8);
-
 CoreRangeSet num_cores_to_corerangeset(
     CoreCoord start_core, uint32_t target_num_cores, CoreCoord grid_size, bool row_wise = false);
 

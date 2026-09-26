@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 //
 // KDA scan reader: the initial state S [K,V] once, then vector-decay prep
 // intermediates v_beta, kd, q_decay, intra, k_dec_t, dl[K,1], t_inv. FP32 by default; selected intermediates may be
@@ -58,6 +60,14 @@ FORCE_INLINE void read_and_publish_value_slice(
     buffer.push_back(rows * Vt);
 }
 
+template <uint32_t Tiles>
+FORCE_INLINE void seed_zero(DataflowBuffer& state, Noc& noc) {
+    state.reserve_back(Tiles);
+    noc.async_write_zeros(state, Tiles * state.get_entry_size());
+    noc.write_zeros_l1_barrier();
+    state.push_back(Tiles);
+}
+
 template <uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
@@ -85,7 +95,17 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
     buffer.push_back(tile_count);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t Vt_full,
+    uint32_t summary,
+    uint32_t groups_per_head,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
@@ -102,28 +122,81 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
 
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        chronology.reserve_back(1);
+        const auto actual_start = TensorAccessor(tensor::actual_start);
+        noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
+        const uint32_t start = words[0];
+        if constexpr (has_actual_end) {
+            const auto end = TensorAccessor(tensor::actual_end);
+            noc.async_read(end, chronology, sizeof(uint32_t), {.page_id = 0}, {});
+            noc.async_read_barrier();
+            topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
+        } else {
+            topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
+        }
+        kda_chronology::store(words, topology);
+        chronology.push_back(1);
+    }
+    const uint32_t reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
+    if constexpr (summary || has_actual_end) {
+        DataflowBuffer writer_chronology(*dfb::get_token_if_present<"chronology_writer">());
+        writer_chronology.reserve_back(1);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_chronology.get_write_ptr());
+        kda_chronology::store(words, topology);
+        writer_chronology.push_back(1);
+    }
+    const uint32_t valid_chunks = topology.valid_chunks(head % groups_per_head, groups_per_head);
+    if (valid_chunks == 0) {
+        return;
+    }
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
-    if constexpr (summary_pair) {
-        state.reserve_back(key_value_tiles);
-        noc.async_write_zeros(state, key_value_tiles * state.get_entry_size());
-        noc.write_zeros_l1_barrier();
-        state.push_back(key_value_tiles);
+    if constexpr (summary) {
+        seed_zero<key_value_tiles>(state, noc);
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
+
     } else {
-        const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
+        const auto group_entry_states_accessor = TensorAccessor(tensor::group_entry_states);
         read_and_publish_value_slice<Vt, Vt_full>(
-            initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
+            group_entry_states_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
     }
 
-    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+    for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk;
-        if constexpr (summary_pair) {
+        // Publish the restart seed just in time, never before the loop. The state
+        // DFB holds one kv payload and compute frees it only via pop_front at the
+        // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
+        // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
+        // whenever it is non-zero, so chunk 0 has always been consumed by now.
+        if constexpr (summary) {
+            if (reset_chunk != 0 && chunk == reset_chunk) {
+                seed_zero<key_value_tiles>(state, noc);
+                seed_identity<Kt, Vt>(summary_seed, noc, value_block);
+            }
+        } else {
+            if (reset_chunk != 0 && chunk == reset_chunk) {
+                const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
+                read_and_publish_value_slice<Vt, Vt_full>(
+                    tail_entry_states_accessor,
+                    tail_entry_states,
+                    noc,
+                    (head / groups_per_head) * Kt * Vt_full,
+                    Kt,
+                    value_block);
+            }
+        }
+        if constexpr (summary) {
             read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
             read_and_publish_value_slice<Vt, Vt_full>(
                 v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);

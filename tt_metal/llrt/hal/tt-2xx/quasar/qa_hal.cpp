@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
@@ -18,7 +19,7 @@
 #include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
-#include "overlay/meta/registers/overlay_reg_defines_core.h"
+#include "overlay/meta/registers/overlay_reg.h"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -340,7 +341,43 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
-        defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        // Snapshot the env once: defines() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const att_map = std::getenv("TT_METAL_NOC_ATT");
+        if (att_map != nullptr) {
+            // ATT enabled => the ATT backend and the V3 API everywhere, one map
+            // per build. The defines reach the JIT build key through the
+            // define hash, so toggling can never reuse stale binaries.
+            const std::string_view map(att_map);
+            if (map == "grendel_qsr1") {
+                defines.push_back("NOC_ATT_CONFIG_GRENDEL_QSR1");
+            } else if (map == "quasar_aether_2x3") {
+                defines.push_back("NOC_ATT_CONFIG_QUASAR_AETHER_2X3");
+            } else {
+                TT_THROW("Unknown TT_METAL_NOC_ATT map '{}' (expected grendel_qsr1 or quasar_aether_2x3)", map);
+            }
+            // Fast dispatch runs on the V3 CQ flag family (cq_dispatch/cq_prefetch
+            // reject non-DRAM-backed CQs at compile time). The watcher NoC sanitizer
+            // decodes XY operands and cannot run under ATT currently; the rest of the
+            // watcher never decodes an address, so allow it when the sanitizer
+            // is explicitly disabled.
+            TT_FATAL(
+                !params.rtoptions.get_watcher_enabled() || params.rtoptions.watcher_noc_sanitize_disabled(),
+                "TT_METAL_NOC_ATT supports the watcher only with the NoC sanitizer disabled "
+                "(TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1)");
+            defines.push_back("NOC_ATT_ENABLED");
+            defines.push_back("NOC_API_V3");
+            static const bool att_program_for_test = std::getenv("TT_METAL_ATT_PROGRAM_FOR_TEST") != nullptr;
+            if (params.is_fw && att_program_for_test) {
+                // Firmware-only bring-up hook: replay the generated ATT image
+                // during noc_init on targets whose boot leaves the tables
+                // unprogrammed (the emulator).
+                defines.push_back("ATT_PROGRAM_FOR_TEST");
+            }
+        } else {
+            defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
+        }
         return defines;
     }
 
@@ -376,8 +413,7 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -401,11 +437,9 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/quasar/{}_dm.ld",
-                            params.is_fw ? "firmware" : "kernel");
+                            "runtime/hw/toolchain/quasar/{}_dm.ld", params.is_fw ? "firmware" : "kernel");
                     }
-                    case HalProcessorClassType::COMPUTE:
-                        TT_THROW("DISPATCH cores do not have compute processors");
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
                 }
             default:
                 TT_THROW(

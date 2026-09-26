@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
@@ -14,6 +15,7 @@
 #include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include <host_api.hpp>
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
@@ -74,7 +76,7 @@
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
-#include "impl/emulation/emulated_program_runner.hpp"
+#include "emulated_program_runner.hpp"
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
@@ -242,7 +244,8 @@ bool WriteToDeviceDRAMChannel(
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    metal_ctx.get_cluster().write_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    metal_ctx.get_cluster().write_dram_vec(
+        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address, tt::umd::IoOrdering::Relaxed);
     return true;
 }
 
@@ -417,6 +420,56 @@ std::map<ChipId, IDevice*> CreateDevices(
 
 namespace experimental {
 
+void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
+    ZoneScoped;
+    // Debug breadcrumbs, one per step: a hang in this path has no Python frame below it, and the
+    // step name is what says where it stopped.
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] enter", device->id());
+
+    // Same prologue as LaunchProgram: compile, finalize offsets, write configs and binaries, then
+    // runtime args (configure first: it allocates the scratchpads whose addresses become CRTAs).
+    detail::CompileProgram(device, program);
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] compiled", device->id());
+    program.impl().finalize_dataflow_buffer_configs();
+    if (!program.impl().is_finalized()) {
+        program.impl().finalize_offsets(device);
+    }
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] finalized", device->id());
+    detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] configured", device->id());
+    detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] rtargs written", device->id());
+
+    auto device_id = device->id();
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    metal_ctx.get_cluster().dram_barrier(device_id);
+    metal_ctx.get_cluster().l1_barrier(device_id);
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] barriers done", device->id());
+
+    // Only the launch message: it names kernel_config_base and the text offsets. send_go=false
+    // leaves firmware parked.
+    const auto& hal = metal_ctx.hal();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
+            local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
+            auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(metal_ctx.get_env()).impl(),
+                device_id,
+                physical_core,
+                local_launch_msg.view(),
+                kg->go_msg.view(),
+                /*send_go=*/false);
+        }
+    }
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] launch msgs written, done", device_id);
+}
+
 void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
@@ -486,6 +539,50 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
                 hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
         }
     }
+}
+
+struct CapturedKernelConfig::Impl {
+    uint32_t kernel_config_base;
+    uint32_t kernel_config_size;
+    std::vector<uint8_t> launch_kernel_config;
+};
+
+CapturedKernelConfig::CapturedKernelConfig(std::shared_ptr<const Impl> impl) : impl_(std::move(impl)) {}
+
+uint32_t CapturedKernelConfig::kernel_config_base() const { return impl_->kernel_config_base; }
+
+uint32_t CapturedKernelConfig::kernel_config_size() const { return impl_->kernel_config_size; }
+
+const std::vector<uint8_t>& CapturedKernelConfig::launch_kernel_config() const { return impl_->launch_kernel_config; }
+
+CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logical_core) {
+    // Decode through the generated view firmware compiles against, so the layout is stated once.
+    const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
+    const auto core_type = HalProgrammableCoreType::TENSIX;
+    auto factory = hal.get_dev_msgs_factory(core_type);
+    auto launch = factory.create<dev_msgs::launch_msg_t>();
+
+    std::vector<uint32_t> raw;
+    detail::ReadFromDeviceL1(
+        device,
+        logical_core,
+        hal.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX) +
+            factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::launch),
+        launch.size(),
+        raw);
+
+    auto view = factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<const std::byte*>(raw.data()));
+    auto kc = view.kernel_config();
+
+    uint32_t kernel_config_size = 0;
+    for (uint32_t i = 0; i < kc.kernel_text_offset().size(); i++) {
+        kernel_config_size = std::max(kernel_config_size, kc.kernel_text_offset()[i] + kc.kernel_text_size()[i]);
+    }
+
+    std::vector<uint8_t> launch_kernel_config(kc.size());
+    std::memcpy(launch_kernel_config.data(), kc.data(), kc.size());
+    return CapturedKernelConfig(std::make_shared<CapturedKernelConfig::Impl>(
+        kc.kernel_config_base()[0], kernel_config_size, std::move(launch_kernel_config)));
 }
 
 }  // namespace experimental
@@ -1065,7 +1162,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = metal_ctx.hal();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    uint32_t max_dfbs = hal.get_num_dataflow_buffers();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
@@ -1083,7 +1180,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 const bool scans_remote_cb_configs =
-                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_dfbs;
                 if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
@@ -1106,7 +1203,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
                                 remote_offset_index +
-                                ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                                ((max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
@@ -1184,25 +1281,11 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     TT_FATAL(
                         prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
                         "PrefetcherPipe participants present but prefetcher_pipe_offset is NONE");
-                    const uint8_t num_program_slots = program.impl().num_prefetcher_pipe_slots();
-                    const uint32_t payload_words = remote_dfb_config_region_words(num_program_slots);
-                    std::vector<uint32_t> prefetcher_pipe_vec(payload_words, 0u);
-                    prefetcher_pipe_vec[0] = num_program_slots;
-                    for (const auto& participant : persistent_it->second) {
-                        TT_FATAL(
-                            participant.prefetcher_pipe_id < num_program_slots,
-                            "PrefetcherPipe sparse participant prefetcher_pipe_id {} exceeds program slot count {}",
-                            participant.prefetcher_pipe_id,
-                            num_program_slots);
-                        const uint32_t base = REMOTE_DFB_REGION_HEADER_WORDS +
-                                              participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
-                        prefetcher_pipe_vec[base + 0] = participant.config_page_addr;
-                        prefetcher_pipe_vec[base + 1] = participant.entry_size;
-                        prefetcher_pipe_vec[base + 2] = participant.relay_dfb_id;
-                    }
+                    // Same encoding as fast dispatch (relay word carries the active lane count).
+                    std::vector<uint32_t> prefetcher_pipe_vec =
+                        program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), persistent_it->second);
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, prefetcher_pipe_vec, addr);
+                    metal_ctx.get_cluster().write_core(device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -1777,31 +1860,21 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
-    return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
+    return BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type);
 }
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address) {
-    return Buffer::create(config.device, address, config.size, config.page_size, config.buffer_type);
+    return BufferImpl::create(config.device, address, config.size, config.page_size, config.buffer_type);
 }
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         config.size,
         config.page_size,
@@ -1809,7 +1882,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
         BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         address,
         config.size,
@@ -1818,7 +1891,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
         BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         config.size,
         config.page_size,
@@ -1828,7 +1901,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
+void DeallocateBuffer(Buffer& buffer) { buffer.impl().deallocate(buffer); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
@@ -1968,22 +2041,6 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 }
 
 namespace experimental {
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    distributed::MeshDevice& device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
 
 CBHandle CreateCircularBuffer(
     Program& program,

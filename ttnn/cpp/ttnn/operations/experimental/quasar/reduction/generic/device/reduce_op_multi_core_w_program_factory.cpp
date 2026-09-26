@@ -52,7 +52,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    tt_metal::IDevice* device = &a.mutable_device();
+    tt_metal::distributed::MeshDevice& device = a.mutable_device();
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the H one.
@@ -71,7 +71,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             ReduceOpDim::W);
     }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     // RM splits NC*H_logical row-wise so each core gets contiguous logical rows; tile path
     // keeps the existing NC*Ht slicing.
     const uint32_t num_rows = rm_path ? (NC * plan.H_logical) : (NC * Ht);

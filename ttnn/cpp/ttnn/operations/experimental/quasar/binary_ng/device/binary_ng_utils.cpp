@@ -901,8 +901,8 @@ const NativeTuning& native_tuning() {
             return v != nullptr && v[0] != '\0' && v[0] != '0';
         };
         // max_value is per-knob and required: strtol returns long, so 4294967296 passes `> 0` and then
-        // truncates to 0, and std::lcm(0, x) makes the gate divide by zero. Depth 40 is a normal sweep
-        // point; 40 reader threads is not -- hence different bounds.
+        // truncates to 0, and the gate's max(p,c) % min(p,c) then divides by zero. Depth 40 is a normal
+        // sweep point; 40 reader threads is not -- hence different bounds.
         const auto env_u32 = [](const char* name, uint32_t fallback, uint32_t max_value) {
             const char* v = std::getenv(name);
             if (v == nullptr || v[0] == '\0') {
@@ -926,6 +926,10 @@ const NativeTuning& native_tuning() {
         t.enabled = env_bool("TTNN_QSR_NATIVE");
         t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
         t.entries_per_thread = env_u32("TTNN_QSR_ENTRIES_PER_THREAD", 2, kMaxEntriesPerThread);
+        // EXPERIMENTAL: 0 keeps the derived value. env_u32 rejects 0, so read it separately.
+        t.tiles_per_cycle =
+            std::getenv("TTNN_QSR_TILES_PER_CYCLE") == nullptr ? 0u : env_u32("TTNN_QSR_TILES_PER_CYCLE", 1, 8);
+        t.dm_batch = env_u32("TTNN_QSR_DM_BATCH", 1, 8);
         t.reader_threads = env_u32("TTNN_QSR_READER_THREADS", 1, kMaxThreads);
         t.compute_threads = env_u32("TTNN_QSR_COMPUTE_THREADS", 1, kMaxThreads);
         t.writer_threads = env_u32("TTNN_QSR_WRITER_THREADS", 1, kMaxThreads);
@@ -934,7 +938,8 @@ const NativeTuning& native_tuning() {
         // would have no protective value and would kill the fallback reference arm on any arch.
         if (!t.enabled) {
             const bool any_knob_set = t.implicit_sync || t.entries_per_thread != 2 || t.reader_threads != 1 ||
-                                      t.compute_threads != 1 || t.writer_threads != 1;
+                                      t.compute_threads != 1 || t.writer_threads != 1 || t.tiles_per_cycle != 0 ||
+                                      t.dm_batch != 1;
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
@@ -943,6 +948,13 @@ const NativeTuning& native_tuning() {
             }
             return t;
         }
+        // Inert today (the factory hardcodes explicit sync), and it cannot simply be switched on: under
+        // implicit sync a thread that drew zero tiles skips handle_final_credits' barrier while its
+        // siblings enter it, which deadlocks. Uneven tile counts are now admitted, so that is reachable.
+        TT_FATAL(
+            !t.implicit_sync,
+            "TTNN_QSR_IMPLICIT_SYNC is parsed but not consumed. Enabling it requires restoring the "
+            "guarantee that no thread draws zero tiles, which the uneven-tile-count support removed.");
         // Also enforced in program_spec.cpp, but a throw here names the knob.
         TT_FATAL(
             t.compute_threads == 1 || t.compute_threads == 2 || t.compute_threads == 4,
@@ -959,13 +971,14 @@ const NativeTuning& native_tuning() {
         // number.
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={}. Sync is EXPLICIT; "
-            "TTNN_QSR_IMPLICIT_SYNC={} is parsed but NOT wired to the program.",
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={} "
+            "dm_batch={}. Sync is EXPLICIT.",
             t.reader_threads,
             t.compute_threads,
             t.writer_threads,
             t.entries_per_thread,
-            t.implicit_sync);
+            t.tiles_per_cycle,
+            t.dm_batch);
         return t;
     }();
     return tuning;

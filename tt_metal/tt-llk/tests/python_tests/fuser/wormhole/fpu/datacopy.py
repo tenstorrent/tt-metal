@@ -2,39 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_fpu import Fpu
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.fpu.datacopy import datacopy_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import DataFormat
 
 
 class DatacopyFpu(Fpu):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(datacopy_golden)
 
     def get_headers(self) -> List[str]:
         return [
             "llk_math_common.h",
             "llk_math_eltwise_unary_datacopy.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        tensor_dst: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.datacopy_golden(
-            tensor_a, tensor_b, tensor_dst, config, operation, compute_unit
-        )
 
     def init(
         self,
@@ -84,7 +72,7 @@ class DatacopyFpu(Fpu):
 
         code = (
             f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
-            f"        {block.tile_id_block}, {config.sentinel.math_format}, {config.sentinel.math_format}\n"
+            f"        {block.tile_id_dest}, {config.sentinel.math_format}, {config.sentinel.math_format}\n"
             f"    );\n"
         )
 

@@ -71,7 +71,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     const bool cos_sin_sharded = cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
     const bool trans_mat_sharded = trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
-    tt_metal::IDevice* device = tensor_args.input_tensor.device();
+    tt_metal::distributed::MeshDevice* device = tensor_args.input_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -182,11 +182,13 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .entry_size = output_single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = output_cb_data_format};
-    DataflowBufferSpec zero_dfb{
-        .unique_id = ZERO_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = num_interm_tiles,
-        .data_format_metadata = output_cb_data_format};
+    // Zero-fill staging region for the writer (legacy c_27). Ported first as a self-looped DFB
+    // (writer = PRODUCER + CONSUMER), a shape Gen2 rejects on DM kernels; now a Scratchpad
+    // (dm_self_loop_dfbs.md). The writer only ever used it as raw local memory (fill once, read
+    // repeatedly from the base), so no FIFO semantics are lost. data_format_metadata had no
+    // consumer: the writer takes raw addresses / NOC-sources it, and no LLK touches it.
+    ScratchpadSpec zero_scratchpad{
+        .unique_id = ZERO_SCRATCH, .size_per_node = output_single_tile_size * num_interm_tiles};
 
     // ------------------------------------------------------------------
     // Tensor parameters. INPUT/OUTPUT always accessor-read. COS/SIN and TRANS_MAT are borrowed_from
@@ -199,8 +201,16 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     TensorParameter output_param{.unique_id = OUTPUT_PARAM, .spec = output.tensor_spec()};
 
     // hw_config — Style B (see the interleaved factory for the rationale).
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config =
+        ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar sets the same common fields (gen2_hardware_configs.md shape 4).
+        // TODO(#52269): Quasar unpack_modes are copied from TT-1.x.x and not yet optimized for Quasar.
+        compute_hw_config = ComputeHardwareConfig{
+            .fpu_math_fidelity = math_fidelity,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+        };
+    }
 
     // ------------------------------------------------------------------
     // Reader kernel. cos_sin_sharded / trans_mat_use_global_cb move from CTAs to preprocessor defines
@@ -250,7 +260,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_reader_datamovement_config(device->arch())};
+        .hw_config = create_reader_datamovement_config()};
 
     // Writer / compute — identical to the interleaved factory (shared kernel sources).
     const KernelSpec::CompilerOptions::Defines reload_define{{"RELOAD_IMPL", use_reload_impl ? "1" : "0"}};
@@ -259,16 +269,15 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .unique_id = WRITER,
         .source = kWriterSource,
         .compiler_options = {.defines = reload_define},
-        .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
-             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{
-                 .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        // ZERO is a single-toucher (writer fills + reads it): a Scratchpad, not a DFB (see above).
+        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = ZERO_SCRATCH, .accessor_name = "zero"}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
         .compile_time_args =
             {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
-        .hw_config = create_writer_datamovement_config(device->arch())};
+        .hw_config = create_writer_datamovement_config()};
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -377,15 +386,8 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
         .name = "rotary_embedding_llama_multi_core_prefill_sharded",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers =
-            {input_dfb,
-             cos_dfb,
-             sin_dfb,
-             trans_mat_dfb,
-             rotated_interm_dfb,
-             cos_interm_dfb,
-             sin_interm_dfb,
-             out_dfb,
-             zero_dfb},
+            {input_dfb, cos_dfb, sin_dfb, trans_mat_dfb, rotated_interm_dfb, cos_interm_dfb, sin_interm_dfb, out_dfb},
+        .scratchpads = {zero_scratchpad},
         .tensor_parameters = {input_param, cos_param, sin_param, trans_mat_param, output_param},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}}};
 

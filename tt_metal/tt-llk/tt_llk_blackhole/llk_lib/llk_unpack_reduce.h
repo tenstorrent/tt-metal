@@ -65,6 +65,12 @@ template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_init_(
     const std::uint32_t unpB_src_format, const std::uint32_t unpB_dst_format, const std::uint32_t within_face_16x16_transpose = 0)
 {
+    // This path's MOP clears SrcA to zero for every pool type, which a min reduce would lose to.
+    static_assert(
+        type != PoolType::MIN,
+        "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+
     // Configure SrcB format registers
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
 

@@ -32,21 +32,24 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
     uint16_t tiles_received = get_local_cb_interface(output).tiles_received;
 
     std::int32_t free_tiles;
-    do {
-        std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
-        // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
-        std::uint16_t free_tiles_wrap = get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
-        free_tiles = (std::int32_t)free_tiles_wrap;
-    } while (free_tiles < num_tiles);
+    {
+        SYNC_WAIT("SYNC-CB-RESERVE", operand);
+        do {
+            std::uint16_t tiles_acked = (std::uint16_t)reg_read((std::uint32_t)tiles_acked_ptr);
+            // Perform 16-bit subtractions because inputs are 16 bits and may wrap due to overflow.
+            std::uint16_t free_tiles_wrap =
+                get_local_cb_interface(output).fifo_num_pages - (tiles_received - tiles_acked);
+            free_tiles = (std::int32_t)free_tiles_wrap;
+        } while (free_tiles < num_tiles);
+    }
 }
 
 inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t num_words) {
     std::uint32_t output = operand;
 
-    // Tensix uses 4B addresses (tiles_received_ptr byte address but div-by-4)
-    volatile tt_l1_ptr std::uint32_t* tiles_received_ptr_tensix =
-        (volatile tt_l1_ptr std::uint32_t*)((((volatile std::uint32_t)get_cb_tiles_received_ptr(operand)) >> 2) &
-                                            0x3ffff);
+    // Convert the counter's byte address to a Tensix 4-byte word address, masked to 18 bits.
+    const std::uint32_t tiles_received_addr_tensix = static_cast<std::uint32_t>(
+        (reinterpret_cast<std::uintptr_t>(get_cb_tiles_received_ptr(operand)) >> 2) & 0x3ffff);
 
     // get_local_cb_interface(output).tiles_received is used only by the TRISC2 (the one driving packer)
     // we need it because tiles_received_ptr is updated by the packer, and in cb_reserve_back func (see above) we want
@@ -64,12 +67,13 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
     // and it will eventually see the updated value
     TT_SETDMAREG(0, tiles_received_new, 0, LO_16(p_gpr_pack::NUM_MSGS_RECEIVED));
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
-    TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, (uint32_t)&tiles_received_ptr_tensix[0]);
+    TT_STOREREG(p_gpr_pack::NUM_MSGS_RECEIVED, tiles_received_addr_tensix);
 }
 
 // Push N tiles to stream buffer (increment write pointer)
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
+    SYNC_SIGNAL("SYNC-CB-PUSH", operand);
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);

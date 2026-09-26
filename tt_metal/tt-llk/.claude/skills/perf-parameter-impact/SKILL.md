@@ -232,8 +232,8 @@ For matmul-style reports with format, fidelity, and destination-accumulation
 axes, use this design unless the user requests another:
 
 1. Add clickable fidelity options for values the **current sweep actually
-   emits**. Quasar matmul keeps LoFi–HiFi4 for Float16 / Float16_b and
-   LoFi-only for MX; do not show empty HiFi2/3/4 MX panels as if they were
+   emits**. Quasar matmul keeps LoFi–HiFi4 for Float16 and LoFi-only for
+   Float16_b, Int8, and MX; do not show empty HiFi panels as if they were
    measured.
 2. Under the selected fidelity, show absolute cycles by composite
    input/register mode, output format, and geometry/destination accumulation.

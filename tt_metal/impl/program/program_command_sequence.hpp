@@ -68,6 +68,7 @@ struct ProgramCommandSequence {
     MetalContext* ctx = nullptr;
     HostMemDeviceCommand preamble_command_sequence;
     uint32_t current_stall_seq_idx = 0;
+    // NOLINTNEXTLINE(modernize-use-default-member-init) -- Initialization needs the constructor parameter metal_ctx.
     HostMemDeviceCommand stall_command_sequences[2];
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     HostMemDeviceCommand program_config_buffer_command_sequence;

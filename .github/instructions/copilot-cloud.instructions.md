@@ -73,9 +73,6 @@ you pass go straight through to `build_metal.sh`:
 `--enable-ccache` is always applied for you. Build the narrowest thing that
 actually exercises your change; do not reach for `--build-all`.
 
-If the wrapper warns that Garage credentials are missing, you are building
-against a cold cache and it will most likely not finish. Say so in the PR
-rather than burning the session on it.
 
 ## What to do about a build
 
@@ -85,9 +82,9 @@ rather than burning the session on it.
   a compile error you could have caught.
 - **Did not need a build** (see the table above) — say which check you ran
   instead, e.g. that it is a docs-only change.
-- **Genuinely cannot build** (cold cache, docker unavailable, environment
-  problem) — open the PR anyway, and state in the description that the change
-  is **unverified**, and why.
+- **Cannot complete a build** (Docker unavailable, an environment failure,
+  or an observed timeout or resource limit) — open the PR anyway, and state
+  in the description that the change is **unverified**, and why.
 
 Do not claim you ran anything you did not run.
 

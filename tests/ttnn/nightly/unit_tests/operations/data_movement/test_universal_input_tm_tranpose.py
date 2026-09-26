@@ -485,6 +485,18 @@ _RM = ttnn.ROW_MAJOR_LAYOUT
             _interleaved,
             id="WH_RM_height_to_interleaved",
         ),
+        # H-sharded RM in -> W-sharded RM out at 2/4/8 cores exercises the shard_height < H fallback path.
+        *[
+            pytest.param(
+                (1, 1, 64, 128),
+                2,
+                3,
+                lambda d, nc=nc: _height_shard_config((1, 1, 64, 128), d, num_cores=nc, layout=_RM),
+                lambda d, nc=nc: _width_shard_config((1, 1, 128, 64), d, num_cores=nc, layout=_RM),
+                id=f"WH_RM_height_to_width_c{nc}",
+            )
+            for nc in (2, 4, 8)
+        ],
     ],
 )
 def test_transpose_universal_io_row_major(shape, dim0, dim1, input_factory, output_factory, dtype, device):

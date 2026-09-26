@@ -61,14 +61,21 @@ class MeshConfig:
     Use MeshConfig.detect() to create an instance with all values resolved.
     """
 
-    # Galaxy hardware constants
+    # Galaxy hardware constants. A Galaxy is 32 devices on either architecture, so the device count
+    # alone does not fix the grid -- Blackhole is 12x10 and Wormhole 8x9. Keyed separately because
+    # every core count downstream (`sdpa_cores`, and so the chunk sizes swept against it) is derived
+    # from this: 11x10 = 110 SDPA cores on Blackhole against 7x9 = 63 on Wormhole.
     GALAXY_DEVICE_COUNT: ClassVar[int] = 32
-    GALAXY_GRID: ClassVar[Tuple[int, int]] = (12, 10)  # (cols, rows)
+    GALAXY_GRID: ClassVar[Tuple[int, int]] = (12, 10)  # (cols, rows), Blackhole
+    WH_GALAXY_GRID: ClassVar[Tuple[int, int]] = (8, 9)  # (cols, rows), Wormhole
     GALAXY_TP_SIZE: ClassVar[int] = 4
     GALAXY_SP_SIZE: ClassVar[int] = 8
 
     # Non-Galaxy hardware constants
     # 11x10 full grid -> 10x10 (100 cores) for SDPA after reserving the last column for CCL.
+    # NOTE: this is a Blackhole quiet-box grid and is returned for non-Galaxy hosts of either
+    # architecture. It has not been checked against a Wormhole T3000, whose compute grid is smaller;
+    # left as-is rather than guessed at, since the Galaxy path above is the one measured here.
     NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (11, 10)  # (cols, rows)
 
     # Instance fields (set by detect())
@@ -98,7 +105,15 @@ class MeshConfig:
         """Detect hardware and create config with all values resolved."""
         num_devices = _detect_devices_without_opening()
         is_galaxy = num_devices == cls.GALAXY_DEVICE_COUNT
-        grid = cls.GALAXY_GRID if is_galaxy else cls.NON_GALAXY_GRID
+        if is_galaxy:
+            # `ttnn.get_arch_name()` reads the cluster descriptor and does not open or lock a
+            # device, which is what this whole detection path exists to avoid -- verified by
+            # calling it while all 32 devices were held by another profiled run.
+            import ttnn
+
+            grid = cls.GALAXY_GRID if "blackhole" in ttnn.get_arch_name() else cls.WH_GALAXY_GRID
+        else:
+            grid = cls.NON_GALAXY_GRID
         return cls(
             is_galaxy=is_galaxy,
             num_devices=num_devices,

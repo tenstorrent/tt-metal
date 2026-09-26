@@ -20,13 +20,13 @@
 //
 // Why this works safely:
 //   - Host allocates space for the maximum CB count in all data structures
-//   - Runtime validation (via hal.get_arch_num_circular_buffers()) prevents using
+//   - Runtime validation (via hal.get_num_dataflow_buffers()) prevents using
 //     CB indices beyond the device's actual limit
 //   - Device firmware only processes CBs valid for that architecture
 //
 // For NEW CODE:
 //   DO NOT USE NUM_CIRCULAR_BUFFERS to get the actual device limit
-//   USE: tt::tt_metal::hal::get_arch_num_circular_buffers() instead (See tt_metal/api/tt-metalium/hal.hpp)
+//   USE: tt::tt_metal::hal::get_num_dataflow_buffers() instead (See tt_metal/api/tt-metalium/hal.hpp)
 //
 // TODO: This is TEMPORARY code structure - eventually will be replaced by Dataflow Buffers (DFBs)
 

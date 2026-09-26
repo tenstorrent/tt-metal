@@ -23,17 +23,6 @@ using namespace ttnn::operations::unary::utils;
 using ttnn::operations::unary::EltwiseUnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
 
-void apply_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
-    if (dtype == DataType::FLOAT32) {
-        defines["INP_FLOAT32"] = "1";
-    } else if (dtype == DataType::INT32) {
-        defines["INP_INT32"] = "1";
-    } else if (dtype == DataType::UINT32) {
-        defines["INP_UINT32"] = "1";
-    } else {
-        defines["INP_FLOAT"] = "1";
-    }
-}
 
 bool pack_first_op_scalars(
     const EltwiseUnaryWithParam& op, DataType input_dtype, uint32_t& packed_scalar1, uint32_t& packed_scalar2) {
@@ -179,8 +168,8 @@ void enumerate_core_rt_args(
     const uint32_t tile_width = output.tensor_spec().tile().get_width();
     const uint32_t tile_hw = tile_height * tile_width;
 
-    const auto input_df = datatype_to_dataformat_converter(input.dtype());
-    const auto output_df = datatype_to_dataformat_converter(output.dtype());
+    const auto input_df = cb_dataformat_for(input.dtype());
+    const auto output_df = cb_dataformat_for(output.dtype());
     const uint32_t input_tile_bytes = tile_size(input_df);
     const uint32_t output_tile_bytes = tile_size(output_df);
 
@@ -220,7 +209,7 @@ void enumerate_core_rt_args(
         auto compute_shard_pages = [&](const ShardSpec& spec,
                                        const auto& tensor) -> std::function<uint32_t(CoreCoord)> {
             if (is_row_major) {
-                auto df = datatype_to_dataformat_converter(tensor.dtype());
+                auto df = cb_dataformat_for(tensor.dtype());
                 uint32_t ts = tile_size(df);
                 uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
                 uint32_t pages = shard_bytes / ts;
@@ -363,9 +352,9 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
-    DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    DataFormat cb_data_format = cb_dataformat_for(input.dtype());
     uint32_t single_tile_size = tile_size(cb_data_format);
-    DataFormat cb_data_format_output = datatype_to_dataformat_converter(output.dtype());
+    DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     uint32_t single_tile_size_output = tile_size(cb_data_format_output);
 
     Buffer* src_buffer = input.buffer();
@@ -384,7 +373,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
-            auto df = datatype_to_dataformat_converter(t.dtype());
+            auto df = cb_dataformat_for(t.dtype());
             uint32_t ts = tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
             TT_ASSERT(
@@ -416,7 +405,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
-    CMAKE_UNIQUE_NAMESPACE::apply_input_dtype_defines(input.dtype(), unary_defines);
+    add_input_dtype_defines(input.dtype(), unary_defines);
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 

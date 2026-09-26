@@ -34,6 +34,11 @@
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/checkpoint.h"
+#if defined(BLAZE_RUNTIME_RELOAD)
+#include "runtime_reload.h"
+#else
+#include "internal/runtime_reload.h"
+#endif
 
 // clang-format on
 
@@ -436,140 +441,146 @@ int main() {
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
-            uint32_t enables = launch_msg_address->kernel_config.enables;
-            // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
-            if (enables &
-                (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
-                subordinate_sync->dm1 = RUN_SYNC_MSG_LOAD;
-            }
-            // Copies from L1 to IRAM on chips where NCRISC has IRAM
-            uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, internal_::get_hw_thread_idx());
-            // Invalidate the i$ now the kernels have loaded and before running
-            volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
-                RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+            uint32_t reload_stage = 0;
+            uint32_t reload_round = 0;
+            do {
+                uint32_t enables = launch_msg_address->kernel_config.enables;
+                // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
+                if (enables &
+                    (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
+                    subordinate_sync->dm1 = RUN_SYNC_MSG_LOAD;
+                }
+                // Copies from L1 to IRAM on chips where NCRISC has IRAM
+                uint32_t kernel_config_base =
+                    firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, internal_::get_hw_thread_idx());
+                // Invalidate the i$ now the kernels have loaded and before running
+                volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+                cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
+                    RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
 #ifdef DEBUG_CHECKPOINT_ENABLED
-            debug_checkpoint_init(enables);
+                debug_checkpoint_init(enables);
 #endif
-            run_triscs(enables);
+                ArmPerfCounters();
+                run_triscs(enables);
 
-            noc_index = launch_msg_address->kernel_config.brisc_noc_id;
-            noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
-            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
-            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+                noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+                noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
+                my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+                my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
-            // re-initialize the NoCs
-            uint8_t cmd_buf;
-            if (noc_mode == DM_DEDICATED_NOC) {
-                if (prev_noc_mode != noc_mode) {
-                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-                }
+                // re-initialize the NoCs
+                uint8_t cmd_buf;
+                if (noc_mode == DM_DEDICATED_NOC) {
+                    if (prev_noc_mode != noc_mode) {
+                        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                    }
 #ifdef ARCH_BLACKHOLE
-                // Need to add this to allow adding barrier after setup_remote_cb_interfaces
-                noc_local_state_init(noc_index);
+                    // Need to add this to allow adding barrier after setup_remote_cb_interfaces
+                    noc_local_state_init(noc_index);
 #endif
-                cmd_buf = BRISC_AT_CMD_BUF;
-            } else {
-                if (prev_noc_mode != noc_mode) {
-                    dynamic_noc_init();
+                    cmd_buf = BRISC_AT_CMD_BUF;
+                } else {
+                    if (prev_noc_mode != noc_mode) {
+                        dynamic_noc_init();
+                    }
+                    dynamic_noc_local_state_init();
+                    cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
                 }
-                dynamic_noc_local_state_init();
-                cmd_buf = DYNAMIC_NOC_BRISC_AT_CMD_BUF;
-            }
-            prev_noc_mode = noc_mode;
+                prev_noc_mode = noc_mode;
 
-            uint32_t tt_l1_ptr* cb_l1_base =
-                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
-            start_ncrisc_kernel_run_early(enables);
+                uint32_t tt_l1_ptr* cb_l1_base =
+                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                start_ncrisc_kernel_run_early(enables);
 
-            // Run the BRISC kernel
-            WAYPOINT("R");
-            int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-            if (enables & (1u << index)) {
-                // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
-                // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
+                // Run the BRISC kernel
+                WAYPOINT("R");
+                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                if (enables & (1u << index)) {
+                    // Split 64-bit CB mask into 32-bit halves for efficient RISC-V processing
+                    // Wormhole: lower half only (TRISC memory constraint), Blackhole: both halves
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_CB_SANITIZE)
-                // Zero all CB interfaces so stale entries from previous programs
-                // don't cause false positives in the CB sanitize check.
-                for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
-                    get_local_cb_interface(i).fifo_size = 0;
-                }
+                    // Zero all CB interfaces so stale entries from previous programs
+                    // don't cause false positives in the CB sanitize check.
+                    for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+                        get_local_cb_interface(i).fifo_size = 0;
+                    }
 #endif
-                uint64_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
-                uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
-                setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
+                    uint64_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
+                    uint32_t local_cb_mask_low = static_cast<uint32_t>(local_cb_mask & 0xFFFFFFFFULL);
+                    setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 0, local_cb_mask_low);
 #ifdef ARCH_BLACKHOLE
-                uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
-                setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 32, local_cb_mask_upper);
+                    uint32_t local_cb_mask_upper = static_cast<uint32_t>(local_cb_mask >> 32);
+                    setup_local_cb_read_write_interfaces<true, true, false, false>(cb_l1_base, 32, local_cb_mask_upper);
 #endif
-                cb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
-                uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                experimental::setup_remote_cb_interfaces<true>(
-                    cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
-                barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
-                start_ncrisc_kernel_run(enables);
-                uint32_t kernel_lma =
-                    (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
-                auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
-                record_stack_usage(stack_free);
-            } else {
-#if defined(PROFILE_KERNEL)
-                // This was not initialized in the kernel
-                // Currently FW does not issue a barrier except when using profiler
-                if (noc_mode == DM_DEDICATED_NOC) {
-                    noc_local_state_init(noc_index);
-                }
-#endif
-                // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
-                // So have brisc setup remote cb interfaces even when brisc is not in use
-                if (launch_msg_address->kernel_config.enables) {
                     cb_l1_base =
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
                         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                     barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
-                }
-                start_ncrisc_kernel_run(enables);
-                wait_for_go_message();
-            }
-            WAYPOINT("D");
-
-            wait_ncrisc_trisc();
-
-            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
-            ReadPerfCounters();
-
-            trigger_sync_register_init();
-
-            if constexpr (ASSERT_ENABLED) {
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    WAYPOINT("NKFW");
-                    // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
-                    // and the NOC interface is in a known idle state for the next kernel.
-                    invalidate_l1_cache();
-                    for (int noc = 0; noc < NUM_NOCS; noc++) {
-                        ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
-                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-                        ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-                        ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
-                        ASSERT(ncrisc_noc_packet_tags_cleared(noc), DebugAssertNCriscNOCPacketTagClearedTripped);
+                    start_ncrisc_kernel_run(enables);
+                    uint32_t kernel_lma =
+                        (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                    auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+                    record_stack_usage(stack_free);
+                } else {
+#if defined(PROFILE_KERNEL)
+                    // This was not initialized in the kernel
+                    // Currently FW does not issue a barrier except when using profiler
+                    if (noc_mode == DM_DEDICATED_NOC) {
+                        noc_local_state_init(noc_index);
                     }
-                    WAYPOINT("NKFD");
+#endif
+                    // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
+                    // So have brisc setup remote cb interfaces even when brisc is not in use
+                    if (launch_msg_address->kernel_config.enables) {
+                        cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                                           launch_msg_address->kernel_config.remote_cb_offset);
+                        uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
+                        experimental::setup_remote_cb_interfaces<true>(
+                            cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
+                        barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
+                    }
+                    start_ncrisc_kernel_run(enables);
+                    wait_for_go_message();
                 }
-            }
+                WAYPOINT("D");
+
+                wait_ncrisc_trisc();
+
+                // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
+                ReadPerfCounters();
+
+                trigger_sync_register_init();
+
+                if constexpr (ASSERT_ENABLED) {
+                    if (noc_mode == DM_DYNAMIC_NOC) {
+                        WAYPOINT("NKFW");
+                        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
+                        // landed and the NOC interface is in a known idle state for the next kernel.
+                        invalidate_l1_cache();
+                        for (int noc = 0; noc < NUM_NOCS; noc++) {
+                            ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
+                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
+                            ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
+                            ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
+                            ASSERT(ncrisc_noc_packet_tags_cleared(noc), DebugAssertNCriscNOCPacketTagClearedTripped);
+                        }
+                        WAYPOINT("NKFD");
+                    }
+                }
 
 #if defined(PROFILE_KERNEL)
-            if (noc_mode == DM_DYNAMIC_NOC) {
-                // re-init for profiler to able to run barrier in dedicated noc mode
-                noc_local_state_init(noc_index);
-            }
+                if (noc_mode == DM_DYNAMIC_NOC) {
+                    // re-init for profiler to able to run barrier in dedicated noc mode
+                    noc_local_state_init(noc_index);
+                }
 #endif
+
+            } while (reload_next_stage(launch_msg_address, reload_stage, reload_round));
 
             uint32_t go_message_index = mailboxes->go_message_index;
             mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;

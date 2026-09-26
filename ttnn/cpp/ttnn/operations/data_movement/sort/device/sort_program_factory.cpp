@@ -557,7 +557,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
                 {"W_index_bytes", W_index_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -581,10 +581,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
                 {"W_value_bytes", W_value_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     // UINT16 keys also route through the fp32 sort path (sort_value_cb_data_format
     // is Float32 for UINT16 — the reader's software conversion writes Float32 into
     // INPUT_TENSOR), so treat UINT16 the same as Float32 here: the value buffers
@@ -1292,8 +1292,6 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
     // -----------------------------------------------------------------------
     // Kernels
     // -----------------------------------------------------------------------
-    auto* const device = tensor_args.input_tensor.device();
-
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/"
@@ -1327,7 +1325,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"input_tensor_tile_size_bytes", input_tensor_tile_size},
                 {"index_tensor_tile_size_bytes", index_tensor_tile_size},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -1351,10 +1349,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"is_32_bit_data", static_cast<uint32_t>(is_32_bit_data)},
                 {"W_value_slice_bytes", W_value_slice_bytes},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
         // Only buffers this configuration actually binds may appear here, and an absent entry
         // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full
@@ -1388,6 +1386,15 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"number_of_tiles_per_core", number_of_tiles_per_core},
                 {"number_of_cores_used", all_core_utilization_count},
                 {"ascending", static_cast<uint32_t>(!attributes.descending)},
+                // #54043: this factory ALWAYS runs the index-aware comparator network. The two
+                // peers of a spanning tile pair merge with swapped operand order and keep
+                // opposite halves; a positional (raw SFPSWAP) tie decision can therefore differ
+                // between them, duplicating indices inside tie groups. The comparator's
+                // (value, index) total order is operand-order independent, and a stable ordering
+                // is a valid unstable ordering. Cost is noise here: the factory is
+                // data-movement-bound (~0.3% at W=8192). Pinned host-side so stable=True and
+                // stable=False produce one identical JIT binary.
+                {"stable", 1u},
             },
         .hw_config = ComputeHardwareConfig{compute_hw_config},
     });
@@ -1989,7 +1996,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
                   "end_core_physical_coord_y",
                   "number_of_workers",
                   "num_multicast_dests"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // The workers read their input from the value-output buffer: the coordinator has already copied
@@ -2026,7 +2033,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         // of one per worker node.
         .runtime_arg_schema =
             {.common_runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -2057,10 +2064,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         // See the reader above: one fixed coordinator core means one value for every worker.
         .runtime_arg_schema =
             {.common_runtime_arg_names = {"coordinator_core_physical_coord_x", "coordinator_core_physical_coord_y"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = is_32_bit_data};
     if (input_tensor_cb_data_format == tt::DataFormat::Float32 || is_uint16_input) {
         // Only buffers this configuration actually binds may appear here, and an absent entry
         // means UnpackToSrc. Float32 operands are unpacked straight to Dest so the sort keeps full

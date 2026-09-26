@@ -1261,3 +1261,122 @@ def test_sparse_matmul_rejects_indivisible_per_core_M(device, expect_error):
             output_tile=ttnn.Tile([tile_h, tile_w]),
             program_config=bad_pc,
         )
+
+
+@pytest.mark.parametrize(
+    "fp32_dest_acc_en, packer_l1_acc, dtype",
+    [
+        (True, False, ttnn.bfloat16),
+        (False, True, ttnn.bfloat8_b),
+    ],
+)
+def test_sparse_matmul_interm0_format_tile_size(device, fp32_dest_acc_en, packer_l1_acc, dtype):
+    """interm0 CB must be sized from interm0_data_format, not the output dtype.
+
+    fp32 dest acc packs Float32 tiles into interm0 while bf16 output is half that size.
+    packer L1 acc packs Float16_b while bfp8 output is smaller. Kt/in0_block_w > 1 so
+    the compute kernel spills through cb_intermed0.
+    """
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, k, _, num_experts, tile_h, tile_w = dims
+    assert (k // 32) // pc.in0_block_w > 1, "Regression setup must exercise an interm0 spill"
+
+    output_t = ttnn.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=nnz,
+        is_input_a_sparse=False,
+        is_input_b_sparse=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=dtype,
+        output_tile=ttnn.Tile([tile_h, tile_w]),
+        program_config=pc,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
+        ),
+    )
+    output_tensor = ttnn.to_torch(output_t)
+    in0_ref = ttnn.to_torch(in0).float()
+    in1_ref = ttnn.to_torch(in1).float()
+    b, s = in0_ref.shape[0], in0_ref.shape[1]
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        pt_out = torch.matmul(in0_ref[b_i, s_i, :, :], in1_ref[0, e_i, :, :])
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            atol=0.008 * k,
+            rtol=6.313 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "fp32_dest_acc_en, packer_l1_acc, dtype",
+    [
+        (True, False, ttnn.bfloat16),
+        (False, True, ttnn.bfloat8_b),
+    ],
+)
+def test_quasar_sparse_matmul_interm0_format_tile_size(device, fp32_dest_acc_en, packer_l1_acc, dtype):
+    """Quasar interm0 CB must be sized from interm0_data_format, not the output dtype."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only API")
+    qsr = ttnn.experimental.quasar
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, k, _, num_experts, tile_h, tile_w = dims
+    assert (k // 32) // pc.in0_block_w > 1, "Regression setup must exercise an interm0 spill"
+
+    qsr_pc = qsr.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=pc.out_block_h,
+        out_block_w=pc.out_block_w,
+        per_core_M=pc.per_core_M,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    output_t = qsr.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=nnz,
+        is_input_a_sparse=False,
+        is_input_b_sparse=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=dtype,
+        output_tile=ttnn.Tile([tile_h, tile_w]),
+        program_config=qsr_pc,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
+        ),
+    )
+    output_tensor = ttnn.to_torch(output_t)
+    in0_ref = ttnn.to_torch(in0).float()
+    in1_ref = ttnn.to_torch(in1).float()
+    b, s = in0_ref.shape[0], in0_ref.shape[1]
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        pt_out = torch.matmul(in0_ref[b_i, s_i, :, :], in1_ref[0, e_i, :, :])
+        assert_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            atol=0.008 * k,
+            rtol=6.313 * k,
+            frobenius_threshold=0.001 * k,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )

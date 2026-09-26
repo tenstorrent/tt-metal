@@ -29,7 +29,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_in
     to_device,
     glx_config,
     indexer_score_dsa_ref,
-    indexer_score_msa_ref,
     _global_inputs,
     _axis_dims,
     _msa_per_sp_ref,
@@ -47,7 +46,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_in
     QB_SP,
     QB_T,
     QB_HISTORY,
-    QB_DIM,
     QB_CASES,
     QB_IDS,
     QB2_CHUNK,
@@ -509,7 +507,6 @@ def test_indexer_score_ring4_true_ring_bfp8_bank_owned_reference_cache_hit(heads
     chunk_global = sp * q_per_rank
     k_capacity = 256 * 1024
     kv_lens = (56320, 112640)
-    dim = 128
     mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
         (sp, 1), fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     )
