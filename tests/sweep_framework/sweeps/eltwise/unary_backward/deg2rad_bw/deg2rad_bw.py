@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,10 +15,6 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, start_measuring_time, 
 from models.common.utility_functions import torch_random
 
 
-# Parameters provided to the test vector generator are defined here.
-# They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
-# Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
@@ -34,22 +30,12 @@ parameters = {
 }
 
 
-# If invalidated, the vector will still be stored but will be skipped.
-# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
-    ):
-        return True, "bfloat8_b is only supported on tiled layout"
     return False, None
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
     grad_dtype,
@@ -74,7 +60,7 @@ def run(
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
 
-    golden_function = ttnn.get_golden_function(ttnn.rad2deg_bw)
+    golden_function = ttnn.get_golden_function(ttnn.deg2rad_bw)
     torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a)[0]
 
     grad_tensor = ttnn.from_torch(
@@ -93,10 +79,11 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    reference_tensor = ttnn.multiply(grad_tensor, 57.29577951308232, memory_config=output_memory_config)
+    scale = 0.017453292519943295
+    reference_tensor = ttnn.multiply(grad_tensor, scale, memory_config=output_memory_config)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rad2deg_bw(grad_tensor, input_tensor_a, memory_config=output_memory_config)[0]
+    output_tensor = ttnn.deg2rad_bw(grad_tensor, input_tensor_a, memory_config=output_memory_config)[0]
     output_tensor_device = output_tensor
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
