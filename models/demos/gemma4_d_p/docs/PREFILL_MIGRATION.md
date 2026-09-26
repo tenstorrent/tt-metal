@@ -41,6 +41,8 @@ The test prints a table with one row per layer and an overall row, pooling all c
 | Relative RMSE | RMS error divided by the GPU reference's RMS magnitude; lower is better. |
 | RMSE | Root mean squared error in the tensor's units; lower is better. |
 
-The JSON report also includes per-head PCC, minimum PCC by cache type, and validation timings. Pass/fail criteria are defined in the [test](../tests/test_prefill_migration.py).
+The test also identifies the worst head by PCC, with its zero-based layer and head indices and cache type.
+
+The JSON report includes the worst head, per-head PCC, minimum PCC by cache type, and validation timings. Pass/fail criteria are defined in the [test](../tests/test_prefill_migration.py).
 
 Each case saves `runner.log`, `producer.log`, and `gemma4_slot*.json` in its pytest temporary directory. Follow `runner.log` for live progress; the metrics table appears in the pytest console after validation.

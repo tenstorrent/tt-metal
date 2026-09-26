@@ -148,6 +148,11 @@ def test_prefill_migration(migration_environment, context_len):
         print(f"{entry['layer']:>7} {entry['pcc']:>12.6f} {entry['relative_rmse']:>16.6f} {entry['rmse']:>12.6f}")
     overall = metrics["overall"]
     print(f"{'Overall':>7} {overall['pcc']:>12.6f} {overall['relative_rmse']:>16.6f} {overall['rmse']:>12.6f}")
+    worst_head = report["worst_head"]
+    print(
+        f"Worst head: layer={worst_head['layer']} head={worst_head['head']} "
+        f"type={worst_head['cache_type']} PCC={worst_head['pcc']:.6f}"
+    )
     if gate == "loopback":
         assert "[migration] WORKER_READY:" in (output_dir / "runner.log").read_text()
         assert "verify bytes PASSED" in (output_dir / "producer.log").read_text()
