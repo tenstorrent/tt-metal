@@ -305,6 +305,10 @@ class Orchestrator:
         reads = list(task.get("tests") or []) + list(extra_read) + list(brief.get("read") or [])
         reads += [r for r in (s.get(f"agents.read.{role}") or []) if r not in reads]
         vals["read_list"] = "\n".join(f"- `{r}`" for r in reads)
+        rules = s.get("agents.rules") or []
+        vals["rules"] = (
+            ("## Rules from the owner (must follow)\n" + "\n".join(f"- {r}" for r in rules) + "\n") if rules else ""
+        )
         vals["allowed"] = "\n".join(f"- `{p}`" for p in self.allowed_paths(task, role))
         vals["thresholds"] = (
             "\n".join(f"- `{k}` {v}" for k, v in (task["gate"].get("metrics") or {}).items()) or "- (exit code only)"
