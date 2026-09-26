@@ -319,7 +319,7 @@ class TtV4PrefillRuntime:
             actual_end=int(actual_end),
             input_ids=ids,
             on_layer_complete=cb,
-            on_layer_hidden=self._hidden_probe_hook(int(actual_start)) if not warmup else None,
+            on_layer_hidden=self._layer_hidden_hook(int(actual_start)) if not warmup else None,
         )
         t_issue1 = time.perf_counter()
         if deferred:
@@ -362,6 +362,101 @@ class TtV4PrefillRuntime:
     _hidden_probe_starts = frozenset(
         int(x) for x in os.environ.get("PREFILL_HIDDEN_PROBE_STARTS", "").split(",") if x.strip()
     )
+
+    # DS4F-0273 (disaggregated prefill + speculative decode): the ring's DSpark drafter conditions on
+    # main_x = main_norm(main_proj(cat(lane means of layers 40..42))) for the anchor and a 128-position window. Those lane
+    # means (the mean over the 4 hyper-connection streams of each target layer's output) are ours to export: per chunk,
+    # the hook keeps a device copy of each target layer's stream mean; after the chunk the runner pulls the last
+    # PREFILL_DRAFTER_WINDOW rows (tile-aligned slices, like tail_hidden_row) and publishes them next to the tail row.
+    _drafter_window = int(os.environ.get("PREFILL_DRAFTER_WINDOW", "0"))  # 0 = off
+    _drafter_layers = tuple(
+        int(x) for x in os.environ.get("PREFILL_DRAFTER_LAYERS", "40,41,42").split(",") if x.strip()
+    )
+    _lane_means: dict = {}
+
+    def _drafter_hook(self):
+        if self._drafter_window <= 0:
+            return None
+
+        def hook(layer_idx, streams):
+            if layer_idx not in self._drafter_layers or not isinstance(streams, (list, tuple)):
+                return
+            ts = [t for t in streams if isinstance(t, ttnn.Tensor)]
+            if not ts:
+                return
+            acc = ttnn.add(ts[0], ts[1]) if len(ts) > 1 else ttnn.clone(ts[0])
+            for t in ts[2:]:
+                nxt = ttnn.add(acc, t)
+                ttnn.deallocate(acc)
+                acc = nxt
+            mean = ttnn.multiply(acc, 1.0 / len(ts))
+            ttnn.deallocate(acc)
+            old = self._lane_means.pop(int(layer_idx), None)
+            if old is not None:
+                ttnn.deallocate(old)
+            self._lane_means[int(layer_idx)] = mean
+
+        return hook
+
+    def _layer_hidden_hook(self, actual_start: int):
+        """The per-layer hook the model calls with each layer's residual streams: the DS4F-0272 probe (when its chunk is
+        probed) and/or the drafter-window lane means (when PREFILL_DRAFTER_WINDOW > 0)."""
+        probe = self._hidden_probe_hook(actual_start)
+        drafter = self._drafter_hook()
+        if probe is None:
+            return drafter
+        if drafter is None:
+            return probe
+
+        def both(layer_idx, streams):
+            probe(layer_idx, streams)
+            drafter(layer_idx, streams)
+
+        both.detail = getattr(probe, "detail", False)
+        return both
+
+    def _rows_from_all_chips(self, t, lo_local: int, hi_local: int):
+        """Tile-aligned rows [lo_local, hi_local) of a per-chip [1, 1, S_l, D_l] tensor from EVERY chip -> host
+        [sp, hi_local - lo_local, hidden] fp32 (the TP shards concatenated on the hidden dim)."""
+        c = self.config
+        tile0, tile1 = (lo_local // 32) * 32, -(-hi_local // 32) * 32
+        d_l = int(t.shape[-1])
+        sl = ttnn.slice(t, [0, 0, tile0, 0], [1, 1, tile1, d_l])
+        dims = [0, 0]
+        dims[c.sp_axis], dims[c.tp_axis] = 2, 3
+        host = ttnn.to_torch(
+            sl,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(c.mesh_shape), dims=tuple(dims)),
+        )
+        ttnn.deallocate(sl)
+        n = tile1 - tile0
+        host = host[0, 0].float().view(c.sp_factor, n, -1)  # [sp, n, hidden]
+        return host[:, lo_local - tile0 : hi_local - tile0]
+
+    def drafter_window_rows(self, real_len: int):
+        """The last ``min(PREFILL_DRAFTER_WINDOW, real_len)`` rows of every target layer's stream mean for the chunk just
+        computed -> (chunk-local row indices, host fp32 [W, len(layers) * hidden] = cat over layers, host ms)."""
+        c = self.config
+        t0 = time.perf_counter()
+        W = min(int(self._drafter_window), int(real_len))
+        lo, hi = int(real_len) - W, int(real_len)
+        s_l = c.chunk_size // c.sp_factor
+        per_layer = []
+        for layer in self._drafter_layers:
+            m = self._lane_means.get(int(layer))
+            if m is None:
+                raise RuntimeError(f"[drafter window] no lane mean for layer {layer} (hook did not run?)")
+            pieces = []
+            r = lo
+            while r < hi:
+                sp_idx, local = divmod(r, s_l)
+                hi_local = min(s_l, local + (hi - r))
+                rows = self._rows_from_all_chips(m, local, hi_local)  # [sp, k, hidden]
+                pieces.append(rows[sp_idx])
+                r += hi_local - local
+            per_layer.append(torch.cat(pieces, 0))  # [W, hidden]
+        lanes = torch.cat(per_layer, dim=-1)  # [W, layers * hidden]
+        return list(range(lo, hi)), lanes, (time.perf_counter() - t0) * 1e3
 
     def _hidden_probe_hook(self, actual_start: int):
         if actual_start not in self._hidden_probe_starts:

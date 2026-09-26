@@ -558,6 +558,16 @@ class MigrationDriver:
                         "head_ms": (time.perf_counter() - t_head) * 1e3,
                     }
                     os.remove(ft_path)  # consumed: a later request of the same length must not read a stale row
+                    # DS4F-0273: the drafter-window sidecar (lane means of layers 40..42 at the last W positions), when the
+                    # runner exports it (PREFILL_DRAFTER_WINDOW > 0). Renamed per request so the consumer never reads a
+                    # stale one; the orchestrator copies it to the decode host by this path.
+                    lanes_path = os.path.join(ft_dir, f"slot{int(src)}_end{int(real_len)}_lanes.pt")
+                    if os.path.exists(lanes_path):
+                        final_lanes = os.path.join(
+                            ft_dir, f"slot{int(src)}_end{int(real_len)}_lanes_{int(time.time())}.pt"
+                        )
+                        os.replace(lanes_path, final_lanes)
+                        entry["main_x_tail"] = final_lanes
                     logger.info(
                         f"[migration_driver] first token for slot {src} (len {real_len}): {entry['first_token']} "
                         f"(host LM head {entry['first_token_ms']['head_ms']:.1f} ms)"

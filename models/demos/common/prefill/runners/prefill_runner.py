@@ -486,6 +486,26 @@ def _emit_first_token(runtime, out, meta: dict, rank: int) -> None:
             f"[pp rank {rank}] TAIL_ROW slot={meta['slot_id']} end={meta['actual_end']} |h|={float(hidden.norm()):.3f} "
             f"({host_ms:.1f} ms host) -> {path}"
         )
+        if int(getattr(runtime, "_drafter_window", 0) or 0) > 0:
+            # DS4F-0273: the decode ring's DSpark drafter window (lane means of layers 40..42 at the last W positions)
+            rows, lanes, w_ms = runtime.drafter_window_rows(n_valid)
+            lpath = os.path.join(FIRST_TOKEN_DIR, f"slot{int(meta['slot_id'])}_end{int(meta['actual_end'])}_lanes.pt")
+            ltmp = lpath + ".tmp"
+            torch.save(
+                {
+                    "slot_id": int(meta["slot_id"]),
+                    "positions": [int(meta["actual_start"]) + int(r) for r in rows],
+                    "layers": list(getattr(runtime, "_drafter_layers", ())),
+                    "lanes": lanes,
+                    "host_ms": w_ms,
+                },
+                ltmp,
+            )
+            os.replace(ltmp, lpath)
+            logger.info(
+                f"[pp rank {rank}] DRAFTER_WINDOW slot={meta['slot_id']} end={meta['actual_end']} rows={len(rows)} "
+                f"lanes={tuple(lanes.shape)} ({w_ms:.1f} ms host) -> {lpath}"
+            )
     except Exception as e:  # noqa: BLE001 -- best effort; the KV is what the request is for
         logger.error(f"[pp rank {rank}] tail-row emission failed: {type(e).__name__}: {e}")
 
