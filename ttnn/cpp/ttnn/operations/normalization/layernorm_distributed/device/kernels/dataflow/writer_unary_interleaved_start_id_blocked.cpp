@@ -47,6 +47,6 @@ void kernel_main() {
             noc.async_write_barrier();
             dfb_out_buf.pop_front(blk);
         }
-        tile_id += (Wt_full - Wt);
+        tile_id += Wt_full - Wt;
     }
 }

@@ -71,8 +71,8 @@ void kernel_main() {
     // In the 1D path Wt_full == Wt, so this is a no-op and the walk stays bit-identical.
     const uint32_t row_jump = Wt_full - Wt;
 
-    // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.
-    // Loop-invariant ship state, hoisted out of the per-row loop below.
+    // Partial statistics use the intermediate format (Float32 with fp32_dest_acc_en).
+    // Loop-invariant shipment state, hoisted out of the per-row loop below.
     const uint32_t o_write_size = dfb_out_buf.get_tile_size();
     const uint32_t worker_offset = o_write_size * y;
     UnicastEndpoint reduce_ep;
@@ -112,7 +112,6 @@ void kernel_main() {
         }  // wt loop
         inp_tile_idx += row_jump;
 
-        // wait on this row's partial output and then write it to the merge core over the NoC.
         // Per-row (not once after the loop): each row's partial must be shipped independently,
         // otherwise rows beyond the first are never merged for NCHt > 1.
         dfb_out_buf.wait_front(onetile);
@@ -131,7 +130,6 @@ void kernel_main() {
         noc.async_write_barrier();
         dfb_out_buf.pop_front(onetile);
 
-        // increase semaphore
         reducer_sem.up(noc, reduce_core_noc_x, reduce_core_noc_y, 1);
         noc.async_atomic_barrier();
 

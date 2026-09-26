@@ -66,18 +66,6 @@ NUM_SIMULATED_DEVICES = 4
 TILE = 32
 
 
-def _grid_decomposition(seq_len, hidden_per_dev):
-    """Replicate the 2D factory's core-grid math for logging/failure attribution.
-
-    Returns (cores_x, tiles_per_core_x, cores_y, tiles_per_core_y).
-    """
-    num_tile_rows = seq_len // TILE
-    wt = hidden_per_dev // TILE
-    cores_x = max(d for d in range(1, 9) if num_tile_rows % d == 0)
-    cores_y = max(d for d in range(1, 9) if wt % d == 0)
-    return cores_x, num_tile_rows // cores_x, cores_y, wt // cores_y
-
-
 def _assert_layout_exercised(device, seq_len, hidden_per_dev, expect_tpcx, tag):
     """Layout guard: fail LOUD unless the 2D factory's actual core decomposition on
     THIS device crosses the intended tiles_per_core_x boundary for this shape.
@@ -172,14 +160,19 @@ def _run_distributed_norm_single_device(
 
     if use_2d_core_grid:
         # Layout guard: the bug boundary must actually be exercised on this device.
-        _assert_layout_exercised(device, seq_len, hidden_per_dev, expect_tpcx, "norm")
-
-    cores_x, tpcx, cores_y, tpcy = _grid_decomposition(seq_len, hidden_per_dev)
-    logger.info(
-        f"shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
-        f"cores_x={cores_x} tiles_per_core_x={tpcx} cores_y={cores_y} tiles_per_core_y={tpcy} "
-        f"is_rmsnorm={is_rmsnorm} use_2d_core_grid={use_2d_core_grid}"
-    )
+        cores_x, tpcx, cores_y, tpcy = _assert_layout_exercised(
+            device, seq_len, hidden_per_dev, expect_tpcx, "norm"
+        )
+        logger.info(
+            f"shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
+            f"cores_x={cores_x} tiles_per_core_x={tpcx} cores_y={cores_y} tiles_per_core_y={tpcy} "
+            f"is_rmsnorm={is_rmsnorm} use_2d_core_grid={use_2d_core_grid}"
+        )
+    else:
+        logger.info(
+            f"shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
+            f"is_rmsnorm={is_rmsnorm} use_2d_core_grid=False"
+        )
 
     # Deterministic input; the seed only affects the gamma/beta tensors below.
     torch.manual_seed(1234)
@@ -195,7 +188,6 @@ def _run_distributed_norm_single_device(
         packer_l1_acc=False,
     )
 
-    # Chunk input and gamma/beta along hidden dim to simulate per-device shards.
     input_chunks = torch.chunk(torch_input, NUM_SIMULATED_DEVICES, dim=-1)
     gamma_chunks = torch.chunk(torch_gamma, NUM_SIMULATED_DEVICES, dim=-1)
     beta_chunks = torch.chunk(torch_beta, NUM_SIMULATED_DEVICES, dim=-1)
@@ -204,10 +196,7 @@ def _run_distributed_norm_single_device(
     tt_gammas = [_to_device(w.reshape(1, 1, 1, hidden_per_dev), device) for w in gamma_chunks]
     tt_betas = [_to_device(b.reshape(1, 1, 1, hidden_per_dev), device) for b in beta_chunks]
 
-    # NOTE: ttnn.layer_norm_pre_all_gather now exposes use_2d_core_grid (threaded
-    # through layernorm_pre_all_gather.{hpp,cpp} and the nanobind binding as part of
-    # the #56908 fix, mirroring ttnn.rms_norm_pre_all_gather). ttnn.layer_norm_post_all_gather
-    # exposes it as well (added alongside the post-all-gather stride fix).
+    # use_2d_core_grid is exposed by both rmsnorm and layernorm pre/post_all_gather.
     if is_rmsnorm:
         pre_op, post_op = ttnn_rms_norm_pre_all_gather, ttnn_rms_norm_post_all_gather
     else:
@@ -266,14 +255,19 @@ def _run_distributed_welford_layernorm_single_device(
     hidden_per_dev = hidden_dim_total // NUM_SIMULATED_DEVICES
 
     if use_2d_core_grid:
-        _assert_layout_exercised(device, seq_len, hidden_per_dev, expect_tpcx, "welford")
-
-    cores_x, tpcx, cores_y, tpcy = _grid_decomposition(seq_len, hidden_per_dev)
-    logger.info(
-        f"[welford] shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
-        f"cores_x={cores_x} tiles_per_core_x={tpcx} cores_y={cores_y} tiles_per_core_y={tpcy} "
-        f"use_2d_core_grid={use_2d_core_grid}"
-    )
+        cores_x, tpcx, cores_y, tpcy = _assert_layout_exercised(
+            device, seq_len, hidden_per_dev, expect_tpcx, "welford"
+        )
+        logger.info(
+            f"[welford] shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
+            f"cores_x={cores_x} tiles_per_core_x={tpcx} cores_y={cores_y} tiles_per_core_y={tpcy} "
+            f"use_2d_core_grid={use_2d_core_grid}"
+        )
+    else:
+        logger.info(
+            f"[welford] shape=(1,1,{seq_len},{hidden_dim_total}) per-dev=({seq_len},{hidden_per_dev}) "
+            f"use_2d_core_grid=False"
+        )
 
     torch.manual_seed(1234)
     torch_input = _make_ramp_input(seq_len, hidden_dim_total)
@@ -438,20 +432,10 @@ def test_distributed_2d_core_grid_row_stride_welford(
     assert passing, f"Welford PCC check failed (use_2d_core_grid={use_2d_core_grid}): {pcc_msg}"
 
 
-# ============================================================================
-# Merge-race regression: skewed rows with distinct per-row partials.
-#
-# Review follow-up on tenstorrent/tt-metal#57039 (QIU-Guanzong): the 2D
-# pre-all-gather merge protocol has no consumer acknowledgement between rows.
-# Each worker NoC-writes its partial into a merge buffer sized to exactly one
-# row (cores_y tiles) at an offset depending on y but not ncht, then bumps the
-# reducer semaphore. The semaphore orders worker-write -> merge-publish and the
-# circular buffer orders merge-publish -> merge-consume, but nothing orders a
-# worker's row-(r+1) write against the merge compute's read of row r -- a worker
-# running ahead can overwrite row r's slots while the merge compute still reads
-# them.
-#
-# ============================================================================
+# Merge-race regression: skewed rows with distinct per-row partials (review on #57039).
+# The 2D pre-all-gather merge protocol has no consumer acknowledgement between rows:
+# a worker's row-(r+1) write can overwrite row r's merge-buffer slots while the merge
+# compute still reads them. Full mechanism in the test docstring below.
 
 _MERGE_RACE_MIN_SEPARATION = 4.0  # min |c_r^2 - c_{r+1}^2| between consecutive rows
 
