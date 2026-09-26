@@ -1,5 +1,14 @@
 include(sources.cmake)
 
+# Deterministic SAT engine: kissat_extras (incremental Kissat fork), which will replace CaDiCaL's role in the
+# min-host solver. Source is fetched via CPM (not checked in) and built by ../third_party/kissat/CMakeLists.txt.
+# See tt_metal/fabric/KISSAT_SWAP_PLAN.md for the design/decision. Gated so it can be toggled off during
+# rollout; kept alongside CaDiCaL until the engine swap lands.
+option(TT_METAL_FABRIC_KISSAT "Build and link the kissat SAT engine into fabric" ON)
+if(TT_METAL_FABRIC_KISSAT)
+    add_subdirectory(../third_party/kissat ${CMAKE_CURRENT_BINARY_DIR}/kissat)
+endif()
+
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
@@ -90,8 +99,19 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
+        # TODO(kissat-swap): remove cadical once kissat is the deterministic engine and the CaDiCaL engine
+        # path is deleted (see tt_metal/fabric/KISSAT_SWAP_PLAN.md §4/§7). Kept as the fallback engine
+        # (TT_TOPO_SAT_ENGINE=cadical) during rollout.
         cadical::cadical
+        # Deterministic SAT engine: kissat_extras, fetched via CPM (see KISSAT_SWAP_PLAN.md). Linked when
+        # TT_METAL_FABRIC_KISSAT is ON (default).
+        $<$<BOOL:${TT_METAL_FABRIC_KISSAT}>:kissat>
 )
+
+# Let the solver engine code detect the vendored kissat at compile time (mirrors the gimsatul gate).
+if(TT_METAL_FABRIC_KISSAT)
+    target_compile_definitions(fabric PRIVATE TT_METAL_FABRIC_KISSAT=1)
+endif()
 
 tt_reuse_precompile_headers(fabric TT::CommonPCH)
 

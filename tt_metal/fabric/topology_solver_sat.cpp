@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -24,7 +25,34 @@
 
 namespace tt::tt_fabric::detail {
 
-static constexpr int kHostCapConflictBudget = 300'000;
+// Per-solve conflict budget for the host-cap solve. Raised from the original 300k: on satisfiable-but-hard
+// exact-fit rings the solution can sit well past 300k conflicts (measured: the 144-stage SC36 ring needs
+// ~1.48M), so the old budget cut the search off at ~1/5 of the way and the give-up (solve_limited -> 0/UNKNOWN)
+// was indistinguishable from a real UNSAT -> the mapper falsely reported "no solution". 20M gives >10x margin
+// for these instances while still bounding a genuinely infeasible hard cap before the fall-back to soft
+// minimize. Set TT_TOPO_SAT_CAP_CONFLICTS=0 to remove the cap entirely (unbounded; bounded only by the outer
+// operation timeout) for very large rings.
+static constexpr int kHostCapConflictBudgetDefault = 20'000'000;
+
+// Per-solve conflict budget for the host-cap / soft-minimize solves (solve_limited). Overridable via
+// TT_TOPO_SAT_CAP_CONFLICTS for diagnosing hard instances: on a large exact-fit ring (e.g. the 144-stage
+// SC36 case) 300k conflicts can be exhausted before a satisfying full-packing is found, and a budget
+// give-up (solve_limited -> 0/UNKNOWN) is indistinguishable from a genuine UNSAT to the caller. Raising the
+// budget lets us establish whether such an instance is actually SAT. <= 0 disables the limit (unbounded).
+static int host_cap_conflict_budget() {
+    static const int budget = [] {
+        const char* env = std::getenv("TT_TOPO_SAT_CAP_CONFLICTS");
+        if (env != nullptr && env[0] != '\0') {
+            const long v = std::strtol(env, nullptr, 10);
+            if (v > 0) {
+                return static_cast<int>(std::min<long>(v, std::numeric_limits<int>::max()));
+            }
+            return 0;  // <=0 -> unbounded
+        }
+        return kHostCapConflictBudgetDefault;
+    }();
+    return budget;
+}
 
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
@@ -1064,41 +1092,52 @@ void topology_sat_encode_same_rank_groups(
     if (target_to_group.empty() || global_rank.empty()) {
         return;
     }
-    for (size_t t1 = 0; t1 < nt; ++t1) {
-        if (t1 >= target_to_group.size()) {
-            continue;
+    // Label-channeling encoding (O(sum of grouped domains) clauses) instead of the naive pairwise exclusion
+    // (O(group_size^2 * domain^2) binary clauses — which generated tens of millions of clauses on dense
+    // instances like the QuadGalaxy torus mapping). Semantics are identical: all targets in a group must map
+    // to globals sharing one label. Per group we introduce one auxiliary "group uses label L" variable per
+    // distinct candidate label; each assignment implies its label's group-var (x_{t,g} -> grp_has[label(g)])
+    // and each group is constrained at-most-one label. Two grouped targets picking different labels then both
+    // force their group-var, tripping the at-most-one -> exactly the pairwise-excluded assignments, but linear
+    // in the grouped domain size. Unlabeled candidates (glob out of global_rank range) stay unconstrained,
+    // matching the prior behavior.
+    std::map<size_t, std::vector<size_t>> targets_by_group;
+    for (size_t t = 0; t < nt && t < target_to_group.size(); ++t) {
+        const size_t tg = target_to_group[t];
+        if (tg != SIZE_MAX) {
+            targets_by_group[tg].push_back(t);
         }
-        const size_t tg = target_to_group[t1];
-        if (tg == SIZE_MAX) {
-            continue;
+    }
+    for (const auto& [tg, tlist] : targets_by_group) {
+        if (tlist.size() < 2) {
+            continue;  // a single-target group has no same-rank constraint
         }
-        for (size_t t2 = t1 + 1; t2 < nt; ++t2) {
-            if (t2 >= target_to_group.size() || target_to_group[t2] != tg) {
-                continue;
-            }
-            const auto& gidx1 = enc.allowed_global_idx[t1];
-            const auto& lit1 = enc.assign_lit[t1];
-            const auto& gidx2 = enc.allowed_global_idx[t2];
-            const auto& lit2 = enc.assign_lit[t2];
-            for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
-                const size_t glob1 = gidx1[i1];
-                if (glob1 >= global_rank.size()) {
-                    continue;
+        std::map<int, int> label_var;  // distinct label -> "group uses this label" aux var (created lazily)
+        for (size_t t : tlist) {
+            const auto& gidx = enc.allowed_global_idx[t];
+            const auto& lit = enc.assign_lit[t];
+            for (size_t k = 0; k < gidx.size(); ++k) {
+                const size_t glob = gidx[k];
+                if (glob >= global_rank.size()) {
+                    continue;  // unlabeled candidate: unconstrained by same-rank
                 }
-                const int L1 = global_rank[glob1];
-                for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
-                    const size_t glob2 = gidx2[i2];
-                    if (glob2 >= global_rank.size()) {
-                        continue;
-                    }
-                    const int L2 = global_rank[glob2];
-                    if (L1 != L2) {
-                        solver.add(-lit1[i1]);
-                        solver.add(-lit2[i2]);
-                        solver.add(0);
-                    }
+                const int label = global_rank[glob];
+                auto it = label_var.find(label);
+                if (it == label_var.end()) {
+                    it = label_var.emplace(label, solver.declare_one_more_variable()).first;
                 }
+                solver.add(-lit[k]);   // x_{t,g} -> grp_has[label(g)]
+                solver.add(it->second);
+                solver.add(0);
             }
+        }
+        if (label_var.size() >= 2) {
+            std::vector<int> group_label_vars;
+            group_label_vars.reserve(label_var.size());
+            for (const auto& [label, var] : label_var) {
+                group_label_vars.push_back(var);
+            }
+            topology_sat_add_at_most_one_sequential(solver, group_label_vars);
         }
     }
 }
@@ -1204,6 +1243,48 @@ bool topology_sat_encode_hard_constraints(
 
     // 3. Create assignment variables (preferred globals listed first in each row).
     topology_sat_create_assignment_variables(solver, constraint_data, enc, domain);
+
+    // DEBUG (TT_TOPO_SAT_DUMP_GRAPH=<path>): dump the *pure* embedding problem — logical ring adjacency,
+    // physical inter-mesh adjacency, and the AC-3-pruned per-target domains — so it can be solved by a fully
+    // independent solver, isolating whether an UNSAT comes from adjacency/injectivity alone or from the extra
+    // constraints (full-packing, bijection-completeness, cardinality, preferred). Zero cost when unset.
+    if (const char* dump_path = std::getenv("TT_TOPO_SAT_DUMP_GRAPH"); dump_path != nullptr && dump_path[0] != '\0') {
+        if (std::FILE* fp = std::fopen(dump_path, "w"); fp != nullptr) {
+            std::fprintf(fp, "NT %zu\nNG %zu\n", graph_data.n_target, graph_data.n_global);
+            for (size_t t = 0; t < graph_data.n_target && t < graph_data.target_adj_idx.size(); ++t) {
+                std::fprintf(fp, "TADJ %zu:", t);
+                for (size_t nb : graph_data.target_adj_idx[t]) {
+                    std::fprintf(fp, " %zu", nb);
+                }
+                std::fprintf(fp, "\n");
+            }
+            for (size_t g = 0; g < graph_data.n_global && g < graph_data.global_adj_idx.size(); ++g) {
+                std::fprintf(fp, "GADJ %zu:", g);
+                for (size_t nb : graph_data.global_adj_idx[g]) {
+                    std::fprintf(fp, " %zu", nb);
+                }
+                std::fprintf(fp, "\n");
+            }
+            for (size_t t = 0; t < enc.allowed_global_idx.size(); ++t) {
+                std::fprintf(fp, "DOM %zu:", t);
+                for (size_t g : enc.allowed_global_idx[t]) {
+                    std::fprintf(fp, " %zu", g);
+                }
+                std::fprintf(fp, "\n");
+            }
+            // AL <t>: <global>:<cnf_var> ...  — maps each (target, global) candidate to its assignment
+            // literal, so external tooling can append symmetry-breaking / helper clauses to the dumped CNF.
+            for (size_t t = 0; t < enc.assign_lit.size(); ++t) {
+                std::fprintf(fp, "AL %zu:", t);
+                for (size_t k = 0; k < enc.assign_lit[t].size() && k < enc.allowed_global_idx[t].size(); ++k) {
+                    std::fprintf(fp, " %zu:%d", enc.allowed_global_idx[t][k], enc.assign_lit[t][k]);
+                }
+                std::fprintf(fp, "\n");
+            }
+            std::fclose(fp);
+            log_warning(tt::LogFabric, "TT_TOPO_SAT_DUMP_GRAPH: wrote pure embedding graph to {}", dump_path);
+        }
+    }
 
     // 4. Exactly one global choice per target.
     topology_sat_encode_exactly_one_per_target(solver, enc);
@@ -1676,6 +1757,16 @@ bool SatSearchBackend::start(
         topology_sat_build_shape_blocking_clause(s.enc, shape_key, forbid_clause);
         topology_sat_add_shape_clause_or_unsat(s.solver, s.enc, forbid_clause);
     }
+
+    // Protect the assignment variables from variable elimination: every blocking clause added between solves
+    // (both the per-mapping and unique-shape paths) is built solely from these literals, so an engine that
+    // eliminated one during an earlier solve would make a later blocking clause unsound. No-op on CaDiCaL;
+    // real on kissat_extras (KISSAT_SWAP_PLAN.md §3.5). Done once here, before the first next()/solve().
+    for (const auto& target_lits : s.enc.assign_lit) {
+        for (int lit : target_lits) {
+            s.solver.protect_variable(std::abs(lit));
+        }
+    }
     return true;
 }
 
@@ -1703,7 +1794,10 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                     s.solver.assume(lit);
                 }
                 ++s.solve_calls;
-                bool limited = s.cap_active;
+                // The HARD host-group cap solve is the one whose verdict decides feasibility; the optional
+                // minimize/preferred stages are objectives we are happy to abandon.
+                const bool hard_cap_solve = s.cap_active;
+                bool limited = hard_cap_solve;
                 if (!limited && s.minimize_lit != 0) {
                     for (int lit : optional_lits) {
                         if (lit == s.minimize_lit) {
@@ -1712,7 +1806,24 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                         }
                     }
                 }
-                const int status = limited ? s.solver.solve_limited(kHostCapConflictBudget) : s.solver.solve();
+                const int budget = host_cap_conflict_budget();
+                int status = (limited && budget > 0) ? s.solver.solve_limited(budget) : s.solver.solve();
+                // A conflict-budget give-up returns 0 (UNKNOWN), which is NOT UNSAT. For the HARD cap that
+                // distinction is load-bearing: treating a give-up as UNSAT silently drops a valid mapping (the
+                // 144-stage ring bug). So on an unknown hard-cap result, re-solve UNBOUNDED to get a real
+                // verdict (SAT -> use it; UNSAT -> honest fall-back to soft minimize), bounded only by the
+                // outer operation timeout. Soft/preferred stages keep the give-up: abandoning the objective and
+                // advancing to the next (relaxed) stage is the intended behaviour there.
+                if (hard_cap_solve && status != TopologySatSolver::kSat && status != TopologySatSolver::kUnsat) {
+                    if (with_symmetry_hint) {
+                        s.solver.assume(s.symmetry_lit);
+                    }
+                    for (int lit : optional_lits) {
+                        s.solver.assume(lit);
+                    }
+                    ++s.solve_calls;
+                    status = s.solver.solve();
+                }
                 return status == TopologySatSolver::kSat;
             };
             if ((s.symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||

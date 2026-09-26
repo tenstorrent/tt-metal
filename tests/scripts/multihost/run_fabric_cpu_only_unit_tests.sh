@@ -744,23 +744,25 @@ if run_group "bh-ring-stress"; then
 # so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
 # The 96+ stage rings get the longer SC24-style budget (their solves are much bigger).
 RING_STRESS_TIMEOUT=300
-LONG_RING_STRESS_TIMEOUT=600
-# TODO(https://github.com/tenstorrent/tt-metal/issues/51629): the LONG (96/112/128/144-stage) 4x2
-# multimesh rings are DISABLED in this sweep for mapper performance: on these lengths the pipeline
-# builder / general-SAT host-minimization solve does not finish in a CI-compatible budget. Measured:
-# the 112-stage exact-fit solve was still running after ~5.5 min locally on a 64-core host, and the
-# 128-stage ring on the SC36 mock was still solving ~40 min into the cpu_medium CI shard (run
-# 33221850239), blowing the 45-min step timeout -- the 600 s TT_METAL_OPERATION_TIMEOUT does not
-# cover the phase-1 solve. Re-add "96"/"112"/"128"/"144" to the stage lists below once #51629
-# lands. (The standalone SC24 96-stage exact-fit entry further down stays: its solve is ~27 s.)
+# The 144-stage SC36 exact-fit ring is a genuinely hard SAT solve (~1.48M conflicts, ~6 min local -O3);
+# the cpu_medium CI runner is ~2-4x slower per core, so budget ~30 min for it. (112 on SC28 is easier.)
+LONG_RING_STRESS_TIMEOUT=1800
+# The LONG exact-fit rings (112 on SC28, 144 on SC36) are re-enabled now that kissat is the default SAT
+# engine (#51629 context): these were disabled under CaDiCaL, where the general-SAT host-minimization solve
+# did not finish in a CI budget (112-stage still running after ~5.5 min locally; 128-stage still solving
+# ~40 min into a cpu_medium shard, run 33221850239, blowing the 45-min step timeout). Under kissat the same
+# solves complete: measured locally ~4.5 min for 112 (two ~105-127 s solves) and ~5-6 min for 144, each solve
+# well under the 600 s TT_METAL_OPERATION_TIMEOUT. (128 needs an SC32 mock not in the entry list; 96 exact-fit
+# stays as the standalone SC24 entry below, ~27 s.) NOTE: the cpu_medium runner is slower than a 64-core host,
+# so if these push the bh-ring-stress job past its step wall, trim back to 112 only or bump the step timeout.
 # ALSO disabled per #51629: 64-stage on the SC24 110-aisleC mock -- the 64-ring-into-96-slots
 # embedding hung the mapper >40 min on CI (run 33224879320; solver went silent right after phase-1
 # setup) even though 64-into-144 (SC36, ~3 min) and 64-into-80 (SC20 aisleC, ~42 s) solve fine;
 # the general-SAT host-minimization cost is erratic in the embedded case.
 for entry in \
-    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 144" \
     "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 112" \
     "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
