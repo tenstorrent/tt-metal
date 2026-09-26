@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections import defaultdict
 
@@ -65,6 +66,8 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     t = once()
     total = t[-1] - t[0]
     metrics.record("prefill_ms_full", round(total * 1e3, 1))
+    metrics.record("prefill_seq", seq)
+    metrics.record("prefill_chunk", chunk)
     metrics.record("prefill_tok_s", round(seq / total, 1))
     t = once(sync_each=True)
     per = [round((b - a) * 1e3, 1) for a, b in zip(t[:-2], t[1:-1])]
@@ -137,6 +140,9 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         phases[profiler.phase_of(sec)] += ns
     for ph, ns in phases.items():
         metrics.record(f"device_ms_{ph}", round(ns / 1e6, 2))
+    for sec, ns in prof["kernel_ns"].items():  # sub-sections a module marks itself ("attention.sdpa")
+        if "." in sec:
+            metrics.record(f"device_ms_{re.sub(r'[^A-Za-z0-9]+', '_', sec)}", round(ns / 1e6, 2))
     per_chip = defaultdict(float)
     for d in prof["kernel_ns_dev"].values():
         for c, ns in d.items():
@@ -144,6 +150,9 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     for c, ns in sorted(per_chip.items()):
         metrics.record(f"device_ms_chip{c}", round(ns / 1e6, 2))
     metrics.record("chunk_wall_ms", round(wall * 1e3, 1))
+    metrics.record("chunk_start", start)
+    metrics.record("chunk_len", chunk)
+    metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))
     metrics.record("device_ms_total", round(total / 1e6, 2))
     metrics.record("host_overhead_ms", round(wall * 1e3 - total / 1e6, 1))
     metrics.record("profiled_programs", sum(prof["programs"].values()))
