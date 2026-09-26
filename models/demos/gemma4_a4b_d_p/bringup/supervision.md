@@ -18,3 +18,20 @@ Framework fixes are the `[bringup][F<n>]` commits; the owner's decisions are mar
 | 23:40 | C.sliding.attn_residual | CPU-only golden analysis flagged; then the supervisor edited during the agent step | framework + supervisor error | stopped attempt 3 within seconds; only device-opening code is flagged (F19) |
 | 01:00 | C.sliding.experts | device open fails on all chips (active ethernet core timeout) twice | box | stopped the run; owner reset the board and set "always 2D fabric" (F20) |
 | 01:50 | C.global.attn_norm | skill, dashboard styles, intake sanity gate, pause, infra stop | planned framework work | stopped the just-started test agent; F21 |
+| 02:10 | S.global.04 | supervising session at 80% context | hand-off | paused before C.global.ffn_norm; hand-off below |
+
+## Hand-off (2026-09-26 02:10)
+
+- **State:** 36 of 56 implement tasks passed (all 28 sliding-layer tasks; global layer 5 through S.global.04). Every
+  task before implementation (R, G, B, PL) passed. Run `run1` is PAUSED before `C.global.ffn_norm`.
+- **Resume:** `PYTHONPATH=$PWD python -u -m models.demos.common.bringup.orchestrator resume --spec models/demos/gemma4_a4b_d_p/bringup/spec.yaml >> /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/orchestrator.log 2>&1`
+  (background), then watch that log (filter: gate PASS|FAIL|HANG, attempts, STOPPED, WAITING, paused, problems, exit).
+- **Next:** C/S.global.ffn_norm .. ffn_residual (10 tasks), then L.s4096, L.s16384, L.last, L.s56320 (ladder),
+  K.1 (contract: registering the adapter touches shared `models/demos/common/prefill/adapter.py`, ask the owner
+  first), X.1 (profile), X.2 (opportunity list, stops for the owner's picks).
+- **Owner rules in force:** always FABRIC_2D; experts use unified_routed_expert_moe with the GeluTanh hack (committed
+  ce75b1f0d7f); ask before shared-code changes; never tt-smi -r; short device checks; pause before any edit.
+- **Open items:** the 28 sliding tasks passed on FABRIC_1D_RING before the 2D rule (the ladder re-exercises them on 2D);
+  hf.parity_seq is 512 < window 1024 (covered by the hand check in BREADCRUMBS); dashboards: standard
+  https://claude.ai/artifact/6PuG6EV3pyhchG1GTXBUuo and teletext https://claude.ai/artifact/C1yGG9j68BTTrcacwFc6nc
+  (republish after every gate: `python -m models.demos.common.bringup.dashboard.export --spec <spec>`).
