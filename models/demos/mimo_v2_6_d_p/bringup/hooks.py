@@ -49,7 +49,7 @@ def hf_model(spec, num_layers):
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp", "mlp_residual"},
-    "sliding_moe": {"attn_norm", "attention", "router"},
+    "sliding_moe": {"attn_norm", "attention", "router", "experts"},
 }
 
 # Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out; out = h_mid + mlp_out.
@@ -199,6 +199,51 @@ def _router_host_fn(mesh, module):
     return fn
 
 
+def _experts_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtExperts (EP=4, 64 experts per chip, bfp8, local dispatch -> per-expert SwiGLU -> combine) for one MoE layer. The mxfp4
+    experts are dequantized one at a time at load unless the bfp8 device cache for the layer is complete."""
+    import os
+
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p.tt.experts import LazyExpertWeights, TtExperts
+
+    loader = loader or WeightLoader(hf_path(spec))
+    cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
+    weights = LazyExpertWeights(loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts)
+    # "loop" (default): per-expert extract -> ttnn.linear SwiGLU (HiFi2, fp32 dest) -> insert; "unified":
+    # unified_routed_expert_moe (Silu forced to LoFi + bf16 dest, fails the norm-ratio check); "fused": moe_fused_swiglu.
+    mode = os.environ.get("MIMO_EXPERTS_MODE", "loop")
+    return TtExperts(
+        mesh,
+        layer,
+        weights,
+        emb_dim=cfg.hidden_size,
+        hidden_dim=cfg.moe_intermediate_size,
+        top_k=cfg.num_experts_per_tok,
+        max_seq_len=_max_chunk(spec),
+        mode=mode,
+    )
+
+
+def _experts_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H]."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x, r):
+        xd = to_device_replicated(mesh, x)
+        rd = to_device_replicated(mesh, r)
+        yd = module(xd, dense=rd)
+        y = replicated_to_host(yd)
+        for t in (xd, rd, yd):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def _new_kv_cache(mesh, cfg, layer, max_seq):
     """Empty device KV cache for one layer, V padded to 192: full layers 4 KV heads (head r on chip r, paged-shaped),
     sliding layers 8 KV heads (heads 2r, 2r+1 on chip r, contiguous)."""
@@ -253,6 +298,8 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "router":
         return _router_host_fn(mesh, _router_module(mesh, spec, layer))
+    if step == "experts":
+        return _experts_host_fn(mesh, _experts_module(mesh, spec, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -300,6 +347,8 @@ class HybridDeviceModel:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "router" in steps:
                 ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader, self.cfg))
+            if "experts" in steps:
+                ov["experts"] = _experts_host_fn(mesh, _experts_module(mesh, spec, i, loader, self.cfg))
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, lambda ctx: ctx.extra["dev_cache"])
