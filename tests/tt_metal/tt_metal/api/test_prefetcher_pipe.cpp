@@ -953,9 +953,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_ConfigRejects) {
             c.receiver_domain = CoreRangeSet{};
         })),
         std::exception);
-    // DRAM-sender capacity is not carvable yet (tt-metal#55285).
-    EXPECT_THROW(
-        m2::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.num_dram_senders = 1; })), std::exception);
+    // Worker and DRAM sender capacity may coexist; exact DRAM senders are selected later.
+    EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, with([](auto& c) { c.num_dram_senders = 1; })));
     EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(*mesh_device, config));
 }
 
@@ -1040,6 +1039,7 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
     auto mesh_device = devices_[0];
     uint32_t first_ring_address = 0;
     uint32_t first_config_address = 0;
+    m2::PrefetcherPipeIdentity first_pipe_identity{0};
     {
         // Spaces are scoped here rather than parked on the fixture: the replacement below can only
         // land back at the first addresses once both spaces have released their persistent L1.
@@ -1050,6 +1050,7 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
         auto pipe0 = space0.create_pipe(CoreCoord(0, 0), shared_receiver);
         first_ring_address = pipe0.buffer_address();
         first_config_address = pipe0.config_address();
+        first_pipe_identity = pipe0.identity();
 
         // A second space sharing (1,0) cannot alias the first one's L1 there.
         auto space1 =
@@ -1061,6 +1062,7 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
     auto replacement = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), 1024);
     EXPECT_EQ(replacement.buffer_address(), first_ring_address);
     EXPECT_EQ(replacement.config_address(), first_config_address);
+    EXPECT_NE(replacement.identity(), first_pipe_identity);
 }
 
 // ============================================================================
@@ -1767,12 +1769,17 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_CreditLanesHostProgramming
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 1u);  // reserved, not yet bound
         m2::SetProgramRunArgs(receiver_program, pipe_run_args(pipe));
         EXPECT_EQ(pipe.impl().num_credit_lanes(), 2u);
-        // P is not in the persistent page (word[9] stays reserved); it travels in the program's
-        // kernel-config slot, packed above relay_dfb_id, on sender and receiver cores alike.
+        // P is not in the persistent page; it travels in the program's kernel-config slot, packed
+        // above relay_dfb_id, on sender and receiver cores alike. word[9] keeps the peer counter
+        // offset, which for a worker sender is the same slot offset on the peer's page.
         Program sender_program = make_sender_program(*mesh_device, pipe, {.entry_size = 256});
-        for (const CoreCoord core : {sender_core, receiver_core}) {
-            EXPECT_EQ(pipe.impl().config_page(core)[9], 0u);
-        }
+        const auto& sender_page = pipe.impl().config_page(sender_core);
+        const auto& receiver_page = pipe.impl().config_page(receiver_core);
+        EXPECT_EQ(
+            sender_page[PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET], sender_page[PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET]);
+        EXPECT_EQ(
+            receiver_page[PREFETCHER_PIPE_CFG_PEER_COUNTER_OFFSET],
+            receiver_page[PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET]);
         const uint32_t recv_word = slot_relay_word(receiver_program, receiver_core);
         EXPECT_EQ(prefetcher_pipe_slot_credit_lanes(recv_word), 2u);
         EXPECT_EQ(prefetcher_pipe_slot_relay_id(recv_word), std::numeric_limits<uint8_t>::max());

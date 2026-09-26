@@ -1154,7 +1154,7 @@ void ValidatePrefetcherPipeSpec(const ProgramSpec& spec, const CollectedSpecData
 
         const NodeRangeSet& dfb_nodes = collected.dfb_node_set.at(dfb.unique_id);
         TT_FATAL(
-            dfb_nodes == relayed_receivers,
+            same_node_set(dfb_nodes, relayed_receivers),
             "DFB '{}' relays PrefetcherPipe(s) whose receiver nodes do not match the DFB's node set (union of its "
             "bound kernels' WorkUnitSpec nodes). The relay must live on exactly the receiver nodes.",
             dfb.unique_id);
@@ -2910,7 +2910,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const size_t n_banks = bank_coords.size();
 
     cta_payload.push_back(static_cast<uint32_t>(rank));
-    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+    TT_FATAL(
+        n_banks < tensor_accessor::ShardContiguousBit,
+        "TensorParameter '{}' has too many banks ({}) to pack the shard-contiguous flag",
+        tensor_parameter.unique_id,
+        n_banks);
+    cta_payload.push_back(tensor_accessor::pack_num_banks(
+        static_cast<uint32_t>(n_banks), bds.shard_distribution_strategy() == ShardDistributionStrategy::CONTIGUOUS_1D));
 
     if (!dyn_shape) {
         for (size_t i = 0; i < rank; ++i) {

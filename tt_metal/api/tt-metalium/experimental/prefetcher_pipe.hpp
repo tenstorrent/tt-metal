@@ -7,13 +7,17 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/sender_core_type.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal {
 
@@ -59,6 +63,9 @@ class PrefetcherPipeSpaceImpl;
  * Device kernel flows (sender / receiver / relay) are documented on the device API:
  *   tt_metal/hw/inc/api/dataflow/prefetcher_pipe.h
  */
+// A PrefetcherPipe's process-local identity (see PrefetcherPipe::identity()).
+using PrefetcherPipeIdentity = ttsl::StrongType<uint64_t, struct PrefetcherPipeIdentityTag>;
+
 class PrefetcherPipe {
 public:
     // Internal (PrefetcherPipeSpace): wrap a carved implementation object.
@@ -91,6 +98,39 @@ public:
     const CoreRangeSet& receiver_cores() const;
     const CoreRangeSet& all_cores() const;
     const distributed::MeshDevice* get_device() const;
+    SenderCoreType sender_core_type() const;
+
+    // Stable process-local identity. Unlike the implementation address, this is never reused
+    // after a pipe is destroyed, so program-cache keys can safely distinguish re-carved pipes.
+    PrefetcherPipeIdentity identity() const;
+
+    // Initial applied entry size stamped into a DRAM sender's persistent page. Programs and
+    // tensor-prefetcher requests may re-grid the pipe to any aligned entry size that fits.
+    uint32_t initial_entry_size() const;
+
+    // Reflection follows shared_ptr<PrefetcherPipe> through the pointer for profiler output and
+    // exact cache keys. identity() is monotonic, so destroying and re-carving the same geometry
+    // cannot collide even if the allocator reuses both addresses and the host implementation slot.
+    static constexpr bool ttsl_reflect_through_shared_ptr = true;
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "identity",
+        "sender_core",
+        "receiver_cores",
+        "config_address",
+        "buffer_address",
+        "initial_entry_size",
+        "ring_size");
+    std::tuple<PrefetcherPipeIdentity, CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t>
+    attribute_values() const {
+        return {
+            identity(),
+            sender_core(),
+            receiver_cores(),
+            config_address(),
+            buffer_address(),
+            initial_entry_size(),
+            ring_size()};
+    }
 
     // Internal (host runtime, tests): the implementation object this pipe owns.
     PrefetcherPipeImpl& impl() { return *pimpl_; }
@@ -113,8 +153,7 @@ struct PrefetcherPipeSpaceConfig {
     // Worker cores that may act as pipe senders. Never DRAM coordinates.
     CoreRangeSet sender_cores;
     // Capacity for DRAM-sender endpoints (0 = worker-only space). Names no cores; exact DRAM
-    // sender cores are bound through impl-only helpers, not through this public surface. Only 0
-    // is accepted until DRAM-sender pipes land (tt-metal#55285).
+    // sender cores are selected and reserved by the tensor-prefetcher factory before carving.
     uint32_t num_dram_senders = 0;
     // Worker cores that may act as pipe receivers. Non-empty: every pipe has at least one receiver.
     CoreRangeSet receiver_domain;
@@ -203,11 +242,26 @@ private:
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
     const distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config);
 
+// Select DRAM senders from `bank_to_receivers` and carve one pipe per selected sender from an
+// existing space. Each input pair names a DRAM bank and the complete worker receiver set served
+// by that bank; the factory may split that set across sender cores. The space owns the ring
+// geometry and all worker/DRISC L1 reservations.
+std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
+    PrefetcherPipeSpace& space,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool support_multi_receiver_shards = false);
+
 // A Program uses a pipe through the Metal 2.0 host API only: declare a PrefetcherPipeParameter
 // with the pipe's geometry in the ProgramSpec, bind it from data-movement kernels via
 // KernelAdvancedOptions::prefetcher_pipe_bindings (optionally aliasing its ring with a relay DFB through
 // DFBAdvancedOptions::prefetcher_pipe_relays), then supply the PrefetcherPipe object in
 // AdvancedProgramRunArgs::prefetcher_pipe_args. See metal2_host_api/prefetcher_pipe_parameter.hpp.
+
+// Return one (sender core, its receivers) entry for each pipe, preserving the caller's list order.
+std::vector<std::pair<CoreCoord, CoreRangeSet>> GetPrefetcherPipeSenderReceiverMapping(
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes);
+// The union of every pipe's receiver cores.
+CoreRangeSet GetPrefetcherPipeReceiverCores(const std::vector<std::reference_wrapper<const PrefetcherPipe>>& pipes);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

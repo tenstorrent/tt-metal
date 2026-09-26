@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -13,6 +14,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -80,6 +82,27 @@ void test_dram_prefetcher_validator(
     uint32_t num_layers,
     uint32_t print_stride,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    bool streaming = false,
+    const std::vector<uint32_t>& rotation = {});
+
+// Same validation against a PrefetcherPipe target (bound as
+// `ttnn.experimental.test_tensor_prefetcher_pipe_validator`). `streaming` / `rotation` mean what
+// they do above and must match what was queued; the consumer Attaches the pipes and reads them
+// through the device-side experimental::PrefetcherPipe. `bank_to_receivers` is the plan the pipes
+// were created from (create_prefetcher_pipes_for_tensor_prefetcher); it fixes which slab each
+// receiver expects, so `prefetcher_pipes` may be in any order.
+//
+// Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
+// its program directly. Every run wants a fresh program anyway -- the validator is checked once per
+// call against freshly delivered data -- so there is nothing for program caching to hit, and the
+// direct path keeps the test op's wiring visible next to what it validates.
+void test_tensor_prefetcher_pipe_validator(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool streaming = false,
     const std::vector<uint32_t>& rotation = {});
 

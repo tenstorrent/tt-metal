@@ -24,11 +24,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "api/debug/dprint.h"
 
-namespace {
-
-constexpr uint32_t kExtraPollCycles = 1u << 18;  // ~262k spin iterations
-
-}  // namespace
+#include "prefetcher_validator_common.h"
 
 void kernel_main() {
     // ---- Compile-time args ----
@@ -85,34 +81,22 @@ void kernel_main() {
             RemoteReceiverCBInterface& iface = get_remote_receiver_cb_interface(remote_cb_id);
             const uint32_t page_addr = iface.fifo_rd_ptr;
 
-            // Read expected tiles via TensorAccessor. Per tt_metal/impl/buffers/prefetcher_matmul_design.md §3,
-            // page row h = tiles (blk*kw + h, n_col_start + n) for n in [0, n_per_recv). One
-            // accessor call per tile keeps bank-routing logic out of this kernel.
+            // Streaming delivers each receiver's blocks ring-rotated, so FIFO position blk is
+            // physical block (lead_block + blk) mod num_blocks; batched delivery is the identity.
             const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
-            uint32_t scratch_cursor = scratch_addr;
-            for (uint32_t h = 0; h < k_block_w_tiles; ++h) {
-                const uint32_t k_row = phys_blk * k_block_w_tiles + h;
-                const uint32_t row_page_base = k_row * total_n_tiles + n_col_start;
-                for (uint32_t n = 0; n < n_per_recv_tiles; ++n) {
-                    const uint64_t src_noc = accessor.get_noc_addr(row_page_base + n);
-                    noc_async_read(src_noc, scratch_cursor, tile_bytes);
-                    scratch_cursor += tile_bytes;
-                }
-            }
-            noc_async_read_barrier();
+            prefetcher_validator::read_expected_block_tiles(
+                accessor,
+                scratch_addr,
+                tile_bytes,
+                phys_blk,
+                k_block_w_tiles,
+                total_n_tiles,
+                n_col_start,
+                n_per_recv_tiles);
 
-            // Byte-for-byte compare. Word-stride loop; report the first mismatching word.
-            volatile tt_l1_ptr uint32_t* received = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_addr);
-            volatile tt_l1_ptr uint32_t* expected = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_addr);
-            const uint32_t words = page_bytes / sizeof(uint32_t);
-            uint32_t mismatch_word = words;
-            for (uint32_t w = 0; w < words; ++w) {
-                if (received[w] != expected[w]) {
-                    mismatch_word = w;
-                    break;
-                }
-            }
-            if (mismatch_word != words) {
+            const uint32_t mismatch_word =
+                prefetcher_validator::first_mismatching_word(page_addr, scratch_addr, page_bytes);
+            if (mismatch_word != prefetcher_validator::kNoMismatch) {
                 DPRINT(
                     "VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
                     layer,
@@ -120,17 +104,15 @@ void kernel_main() {
                     bank_id,
                     recv_idx_in_bank,
                     mismatch_word,
-                    (uint32_t)received[mismatch_word],
-                    (uint32_t)expected[mismatch_word]);
+                    prefetcher_validator::l1_word(page_addr, mismatch_word),
+                    prefetcher_validator::l1_word(scratch_addr, mismatch_word));
                 // Hang so the dispatch timeout surfaces this core.
                 while (true) {
                     ;
                 }
             }
 
-            const bool log = (global_iter < 2) || (global_iter + 1 == num_layers * num_blocks) ||
-                             (print_stride > 0 && (global_iter % print_stride == 0));
-            if (log) {
+            if (prefetcher_validator::should_log(global_iter, num_layers * num_blocks, print_stride)) {
                 DPRINT("VALIDATOR ok layer={} blk={} bank={} recv_idx={}\n", layer, blk, bank_id, recv_idx_in_bank);
             }
 
@@ -146,7 +128,7 @@ void kernel_main() {
         get_remote_receiver_cb_interface(remote_cb_id).aligned_pages_acked_ptr);
     volatile tt_l1_ptr uint32_t* pages_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_remote_receiver_cb_interface(remote_cb_id).aligned_pages_acked_ptr - L1_ALIGNMENT);
-    for (uint32_t spin = 0; spin < kExtraPollCycles; ++spin) {
+    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
         invalidate_l1_cache();
         const uint32_t sent = *pages_sent_ptr;
         const uint32_t acked = *pages_acked_ptr;
