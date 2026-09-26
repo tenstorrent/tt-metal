@@ -318,6 +318,14 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
             f"readback={layer_seconds['readback_seconds']:.2f}s "
             f"comparison={layer_seconds['comparison_seconds']:.2f}s"
         )
+    worst_measurement = min(measurements, key=lambda entry: min(entry["pcc"].values()))
+    worst_cache_type = min(worst_measurement["pcc"], key=worst_measurement["pcc"].get)
+    worst_head = dict(
+        layer=worst_measurement["layer"],
+        head=int(worst_measurement["config"].rsplit("_h", 1)[1]),
+        cache_type=worst_cache_type,
+        pcc=worst_measurement["pcc"][worst_cache_type],
+    )
     overall_metrics = summarize_metrics(all_comparisons)
     timings["total_seconds"] = time.perf_counter() - started
     if summary_dir := os.getenv("PREFILL_PCC_SUMMARY_DIR"):
@@ -328,6 +336,7 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
             slot=slot_id,
             tokens=real_len,
             minima=minima,
+            worst_head=worst_head,
             timings=timings,
             layer_timings=layer_timings,
             measurements=measurements,
@@ -336,6 +345,7 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
         (directory / f"gemma4_slot{slot_id}.json").write_text(json.dumps(result, indent=2) + "\n")
     logger.info(
         f"[Gemma4 KV PCC] slot={slot_id} final_min_pcc={min(minima.values()):.8f} "
+        f"worst_head={worst_head} "
         f"overall_pcc={overall_metrics['pcc']:.8f} "
         f"rmse={overall_metrics['rmse']:.8f} relative_rmse={overall_metrics['relative_rmse']} timings={timings}"
     )

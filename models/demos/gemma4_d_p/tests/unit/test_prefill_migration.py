@@ -169,6 +169,8 @@ def test_shared_producer_checks_packed_global_and_sliding_kv(caches_and_mesh, mo
     node = table.get_device_group(location.device_group_index).fabric_node_ids[0]
     memory[int(node.chip_id), location.noc_addr] = bytes(location.size_bytes)
     assert read_slot_kv_and_check_pcc(table, {}, 0, 32, tmp_path)["global_v"] == 0.0
+    report = json.loads((tmp_path / "gemma4_slot0.json").read_text())
+    assert report["worst_head"] == dict(layer=5, head=3, cache_type="global_k_rotary", pcc=0.0)
 
 
 @pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
