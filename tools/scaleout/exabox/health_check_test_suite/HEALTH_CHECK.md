@@ -32,6 +32,17 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 | `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
 | `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
+| `pre_reboot` | `tt-smi -glx_reset` × 1 (the post-test reset; no pre-test resets) | — | host_side + device_side | yes, if installed | snapshot + reset + triage + ~7 min | Collect data before a BMC reboot |
+
+`pre_reboot` collects data; it does not check the unit. It runs on a unit that is
+about to be power cycled through the BMC, so it records the state first and runs
+nothing that would change it. The initial snapshot is taken before any reset, so
+it shows the unit as it was found. Then comes one bare `-glx_reset`, then the
+triage tools and the QSFP tests. There are no gtests or pytests: a stress run on
+a unit that is already going to be rebooted would change the state the later
+phases are meant to record. The reset loop and test phases are recorded as SKIP
+with the reason, not left out. `--skip-reset` also skips its `-glx_reset`,
+the same as on the other tiers.
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -62,7 +73,7 @@ The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
 
 ## Triage phase
 
-`medium` and `deploy` end with a post-test `tt-smi -glx_reset` followed by the
+`medium`, `deploy` and `pre_reboot` end with a post-test `tt-smi -glx_reset` followed by the
 first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
 node sweep). They live in `tools/scaleout/kmd_triage/`. Tables are
@@ -163,7 +174,7 @@ in the container's PID namespace — the holder count is right, the names are no
 
 ## QSFP tests phase
 
-`medium` and `deploy` finish by collecting an ETH dump with
+`medium`, `deploy` and `pre_reboot` finish by collecting an ETH dump with
 `tt-bh-glx-cluster-debug collect --parallelize`, when that binary is on PATH.
 
 **It answers a question nothing else in this suite reaches.** The snapshot phase
@@ -300,13 +311,13 @@ its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
 `run_health_check.py`'s whole-run `--timeout-minutes` (30 by default), which
 kills the process group and takes the report with it — so raise it when running
-`medium` or `deploy` on a host that has the package.
+`medium`, `deploy` or `pre_reboot` on a host that has the package.
 
 ## Flags
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {light,medium,deploy}` | required | Selects reset cadence + gtest matrix |
+| `--tier {light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
@@ -390,7 +401,7 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
 
-### QSFP tests (medium / deploy, when the package is installed)
+### QSFP tests (medium / deploy / pre_reboot, when the package is installed)
 
 Derived from the ETH dump; see [the phase section](#qsfp-tests-phase) above
 for how they get here. **The status column below is what the ingest assesses.**

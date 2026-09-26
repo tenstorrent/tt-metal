@@ -16,10 +16,13 @@
 #                   + didt matmul stress (pytest, galaxy mesh)
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
+#   pre_reboot      data collection before a BMC reboot: snapshot + -glx_reset
+#                   + triage (host_side + device_side)
+#                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
 # Can be used as the ENTRYPOINT of a docker image
-# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=light|medium|deploy).
+# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=light|medium|deploy|pre_reboot).
 
 set -euo pipefail
 
@@ -27,17 +30,19 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 show_help() {
     cat <<EOF
-Usage: $0 {light|medium|deploy} [diag_runner.py options]
+Usage: $0 {light|medium|deploy|pre_reboot} [diag_runner.py options]
 
 Tiers:
-  light    Smoke check: snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
-  medium   light + eth bandwidth + GDDR fast-pattern stress + post-test reset + triage
-           + QSFP tests
-  deploy   3 resets + full GDDR pattern set + eth bandwidth + didt matmul stress (pytest)
-           + post-test reset + triage + QSFP tests
+  light       Smoke check: snapshot validate + 1 PCI reset + GDDR train/BIST + eth link_up
+  medium      light + eth bandwidth + GDDR fast-pattern stress + post-test reset + triage
+              + QSFP tests
+  deploy      3 resets + full GDDR pattern set + eth bandwidth + didt matmul stress (pytest)
+              + post-test reset + triage + QSFP tests
+  pre_reboot  Data collection before a BMC reboot: snapshot + -glx_reset + triage
+              + QSFP tests. No tests.
 
 The QSFP tests check ETH link training, cabling and module state across all 448
-ports. They run on medium and deploy when \`tt-bh-glx-cluster-debug\` is on PATH
+ports. They run on medium, deploy and pre_reboot when \`tt-bh-glx-cluster-debug\` is on PATH
 (it ships in the syseng cluster-debug .deb); a host without the package skips the
 phase and says so. Nothing needs configuring to turn them on.
 
@@ -66,13 +71,13 @@ EOF
 
 TIER="${1:-}"
 case "$TIER" in
-    light|medium|deploy) ;;
+    light|medium|deploy|pre_reboot) ;;
     -h|--help|"")
         show_help
         exit 0
         ;;
     *)
-        echo "Error: unknown tier '$TIER'. Expected: light, medium, deploy" >&2
+        echo "Error: unknown tier '$TIER'. Expected: light, medium, deploy, pre_reboot" >&2
         show_help
         exit 1
         ;;

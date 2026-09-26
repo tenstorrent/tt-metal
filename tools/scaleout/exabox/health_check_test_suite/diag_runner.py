@@ -149,6 +149,7 @@ RESET_PLAN = {
     "light": ["-r"],
     "medium": ["-r", "-glx_reset"],
     "deploy": ["-r", "-glx_reset", "-glx_reset"],
+    "pre_reboot": [],
 }
 
 # tt-smi prints this banner before attempting `-r` on Galaxy units when the CPLD
@@ -212,10 +213,14 @@ PYTESTS = {
 #   light  -> eth link_up
 #   medium -> light + eth bandwidth + GDDR fast-pattern
 #   deploy -> full GDDR patterns + eth bandwidth + didt matmul stress (pytest)
+#   pre_reboot -> none: it collects data before a BMC reboot, and a stress test
+#                 on a unit already headed for a power cycle only disturbs the
+#                 state the triage and QSFP phases are there to record
 TIER_TESTS = {
     "light": ["eth_link_up"],
     "medium": ["gddr_fast", "eth_link_up", "eth_bandwidth"],
     "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"],
+    "pre_reboot": [],
 }
 
 # Reset run between the gtest phase and the triage phase, per tier. Two reasons
@@ -233,6 +238,7 @@ POST_TEST_RESET_PLAN = {
     "light": [],
     "medium": ["-glx_reset"],
     "deploy": ["-glx_reset"],
+    "pre_reboot": ["-glx_reset"],
 }
 
 # First-step triage tools, run after POST_TEST_RESET_PLAN. They live in
@@ -262,6 +268,7 @@ TIER_TRIAGE = {
     "light": [],
     "medium": ["host_side", "device_side"],
     "deploy": ["host_side", "device_side"],
+    "pre_reboot": ["host_side", "device_side"],
 }
 
 # Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. Both
@@ -304,11 +311,13 @@ QSFP_TIMEOUT_S = 1200
 
 # Tiers that collect a dump. Same shape as TIER_TRIAGE and for the same reason:
 # light is a ~75 s smoke check and a minutes-long ETH sweep does not belong in
-# it. medium and deploy already pay for the triage phase in the same slot.
+# it. medium, deploy and pre_reboot already pay for the triage phase in the
+# same slot.
 TIER_QSFP_TESTS = {
     "light": False,
     "medium": True,
     "deploy": True,
+    "pre_reboot": True,
 }
 
 # Where the conversion from the dump's records to checks lives. Kept out of this
@@ -1594,6 +1603,9 @@ def print_phase_summary(phase_name: str, phase_dict: dict) -> None:
 
 
 def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: Path) -> None:
+    if not TIER_TESTS[tier]:
+        phase.add(Check(name="tests", status=SKIP, details=f"no tests for tier '{tier}'", ip="other"))
+        return
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
@@ -2484,6 +2496,8 @@ def run_diag(
     t0 = time.time()
     if skip_reset:
         reset_phase.add(Check(name="reset_loop", status=SKIP, details="--skip-reset"))
+    elif not RESET_PLAN[tier]:
+        reset_phase.add(Check(name="reset_loop", status=SKIP, details=f"no pre-test resets for tier '{tier}'"))
     else:
         try:
             tt_smi = resolve_tt_smi(tt_smi_path)
