@@ -478,19 +478,11 @@ bool reader_datacopy_writer(
     if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
-    if (is_quasar) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-            .unpack_modes = unpack_modes,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-            .unpack_modes = unpack_modes,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+        .unpack_modes = unpack_modes,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =

@@ -431,11 +431,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         }
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
-        if (is_quasar) {
-            kspec.hw_config = experimental::ComputeHardwareConfig{};
-        } else {
-            kspec.hw_config = experimental::ComputeHardwareConfig{};
-        }
+        kspec.hw_config = experimental::ComputeHardwareConfig{};
     } else {
         TT_THROW("Unsupported processor class");
     }

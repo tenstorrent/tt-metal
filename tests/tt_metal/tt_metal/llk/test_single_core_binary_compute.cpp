@@ -548,19 +548,11 @@ bool single_core_binary(
             {INP2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
         };
     }
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.enable_32_bit_dest,
-            .unpack_modes = unpack_modes,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.enable_32_bit_dest,
-            .unpack_modes = unpack_modes,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .fpu_math_fidelity = test_config.math_fidelity,
+        .enable_32_bit_dest = test_config.enable_32_bit_dest,
+        .unpack_modes = unpack_modes,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =

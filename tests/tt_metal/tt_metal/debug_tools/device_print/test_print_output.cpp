@@ -98,13 +98,9 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
 // A single compute kernel on `node`, portable across generations. Gen1 runs it on TRISC0/1/2; Gen2
 // runs it on one Tensix engine's TRISCs. Both satisfy the tests that only assert on printed strings.
 experimental::ProgramSpec MakeComputePrintSpec(
-    tt::ARCH arch, std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
+    std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
     experimental::ComputeHardwareConfig hw_config;
-    if (arch == tt::ARCH::QUASAR) {
-        hw_config = experimental::ComputeHardwareConfig{};
-    } else {
-        hw_config = experimental::ComputeHardwareConfig{};
-    }
+    hw_config = experimental::ComputeHardwareConfig{};
 
     const experimental::KernelSpecName name{"compute_print"};
     return experimental::ProgramSpec{
@@ -659,8 +655,7 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        auto spec = MakeComputePrintSpec(
-            mesh_device->arch(), "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
+        auto spec = MakeComputePrintSpec("tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
         workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);

@@ -188,19 +188,11 @@ void run_single_core_copy_block_matmul_partials(
         if (test_config.fp32_dest_acc_en) {
             unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}};
         }
-        if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            compute_hw_config = experimental::ComputeHardwareConfig{
-                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-                .double_buffer_dest = !test_config.dst_full_sync_en,
-                .unpack_modes = unpack_modes,
-            };
-        } else {
-            compute_hw_config = experimental::ComputeHardwareConfig{
-                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-                .double_buffer_dest = !test_config.dst_full_sync_en,
-                .unpack_modes = unpack_modes,
-            };
-        }
+        compute_hw_config = experimental::ComputeHardwareConfig{
+            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            .double_buffer_dest = !test_config.dst_full_sync_en,
+            .unpack_modes = unpack_modes,
+        };
     }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,

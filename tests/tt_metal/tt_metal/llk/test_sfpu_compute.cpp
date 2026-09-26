@@ -853,23 +853,13 @@ std::vector<uint32_t> run_sfpu_pipeline(
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     const bool fp32_dest_acc_en = test_config.en_32bit_dest;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .sfpu_precision_mode =
-                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-            .unpack_modes = unpack_modes,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .sfpu_precision_mode =
-                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-            .unpack_modes = unpack_modes,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .sfpu_precision_mode =
+            test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+        .unpack_modes = unpack_modes,
+    };
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -1174,19 +1164,11 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .sfpu_precision_mode =
-                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-            .enable_32_bit_dest = is_int8_op,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .sfpu_precision_mode =
-                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-            .enable_32_bit_dest = is_int8_op,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .sfpu_precision_mode =
+            test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+        .enable_32_bit_dest = is_int8_op,
+    };
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -1360,17 +1342,10 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
         };
 
         experimental::ComputeHardwareConfig compute_hw_config;
-        if (mesh_device.arch() == tt::ARCH::QUASAR) {
-            compute_hw_config = experimental::ComputeHardwareConfig{
-                .sfpu_precision_mode =
-                    test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-            };
-        } else {
-            compute_hw_config = experimental::ComputeHardwareConfig{
-                .sfpu_precision_mode =
-                    test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-            };
-        }
+        compute_hw_config = experimental::ComputeHardwareConfig{
+            .sfpu_precision_mode =
+                test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
+        };
 
         experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE,

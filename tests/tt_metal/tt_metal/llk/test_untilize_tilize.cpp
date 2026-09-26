@@ -374,17 +374,10 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel,
@@ -698,17 +691,10 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unpack_tilizeA_B_reduce.cpp",
@@ -1089,17 +1075,10 @@ static void run_quasar_tilize_untilize_test(
     }
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .enable_32_bit_dest = fp32_dest_acc_en,
-            .double_buffer_dest = !dst_full_sync_en,
-        };
-    }
+    compute_hw_config = experimental::ComputeHardwareConfig{
+        .enable_32_bit_dest = fp32_dest_acc_en,
+        .double_buffer_dest = !dst_full_sync_en,
+    };
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel,
