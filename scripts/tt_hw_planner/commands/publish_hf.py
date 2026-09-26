@@ -638,26 +638,6 @@ def _enrich_card_with_accuracy(args, checkout: Path, demo_dir: Path, py: str, pc
         print(f"  [publish-hf] accuracy: skipped ({e}).")
 
 
-def _commit_for_clean_provenance(checkout: Path, code_paths: list) -> bool:
-    """Commit the model's shipping source in ``checkout`` so the OCI build records a clean commit SHA
-    (no "dirty tree" note). Stages only the given code paths, commits with the checkout's EXISTING git
-    identity (never a hardcoded name), skips hooks to avoid reformatting third-party model code, and is
-    best-effort. Returns True iff the working tree is clean afterwards."""
-    import subprocess
-
-    def _git(*a):
-        return subprocess.run(["git", "-C", str(checkout), *a], capture_output=True, text=True)
-
-    try:
-        for p in code_paths:
-            _git("add", "--", p)
-        if _git("diff", "--cached", "--quiet").returncode != 0:
-            _git("commit", "--no-verify", "-m", "Publish: optimized model + vLLM serving bundle (tt_hw_planner)")
-        return not (_git("status", "--porcelain").stdout or "").strip()
-    except Exception:
-        return False
-
-
 def _checkout_of(demo_dir: Path) -> Path:
     """The tt-metal checkout root a demo dir belongs to (the path before '/models/')."""
     parts = Path(demo_dir).resolve().parts
@@ -782,15 +762,10 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         )
         return 0
 
-    # Commit the model's own source (what ships) BEFORE building, so the image provenance records a
-    # clean commit SHA rather than "dirty tree — includes uncommitted changes". Best-effort, uses the
-    # checkout's existing git identity (never a hardcoded handle), and never blocks the build.
-    code_paths = ["models/common", f"models/demos/{slug}"]
-    if _commit_for_clean_provenance(checkout, code_paths):
-        print("  [publish-hf] provenance: committed the model source (clean tree for the build).")
-    else:
-        print("  [publish-hf] provenance: tree still has unrelated changes; SHA may be marked dirty.")
-
+    # Provenance note: the tool does NOT commit model source — that is model-specific and belongs on
+    # the model's own branch, committed by the model owner (never on this tool branch). If the model's
+    # working tree is committed on its branch before publishing, the image records a clean commit SHA;
+    # otherwise tt-model honestly marks the SHA "dirty". The tool stays out of the model's git state.
     pkg = [ttm, "package", "--container", str(yaml_path), "--out", out]
     print(f"  [publish-hf] building container (2.5-4h): {' '.join(pkg)}")
     rc = subprocess.run(pkg).returncode
