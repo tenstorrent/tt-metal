@@ -31,15 +31,23 @@ inline void calculate_lgamma_stirling() {
         v_if(in < 0.5f) { z = 1.0f - in; }
         v_endif;
 
-        // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
+        // 2. Argument shift (N=4) to move z in [0.5, 2.5] into stable Stirling domain [4.5, 6.5]
+        sfpi::vFloat shift_corr = 0.0f;
+        v_if(z < 2.5f) {
+            sfpi::vFloat prod = z * (z + 1.0f) * (z + 2.0f) * (z + 3.0f);
+            shift_corr = _calculate_log_body_no_init_(prod);
+            z = z + 4.0f;
+        }
+        v_endif;
+
+        // 3. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
         sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
 
-        // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
+        // 4. Bernoulli correction: (1/z)(r0 + r1/z^2).
         sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
         sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * r1);
-        res = res + correction;
+        res = (res + correction) - shift_corr;
 
-        // TODO: use a polynomial bridge here instead
         v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
         v_endif;
 
@@ -57,7 +65,6 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling_fp32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
-    constexpr float LOG_SQRT_PI = 0.57236494f;  // lgamma(0.5) = ln(sqrt(pi))
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Minimal coefficients for 0-3 ULP
@@ -75,47 +82,25 @@ inline void calculate_lgamma_stirling_fp32(
         v_if(in < 0.5f) { z = 1.0f - in; }
         v_endif;
 
-        sfpi::vFloat d1 = z - 1.0f;
-        sfpi::vFloat d2 = z - 2.0f;
-        sfpi::vFloat abs_range1 = sfpi::abs(d1);
-        sfpi::vFloat abs_range2 = sfpi::abs(d2);
-
-        sfpi::vFloat res = z;
-
-        // Polynomial bridge for small range inputs (z near 1 or 2 only)
-
-        v_if(abs_range1 <= 0.25f) {
-            // Taylor Expansion around z=1 (d = z - 1.0)
-            constexpr float p0 = -0.57721566f;  // -gamma
-            constexpr float p1 = 0.82246703f;   // zeta(2)/2
-            constexpr float p2 = -0.40068563f;  // -zeta(3)/3
-            constexpr float p3 = 0.27058081f;   // zeta(4)/4
-            constexpr float p4 = -0.20738555f;  // -zeta(5)/5
-            // res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
-            res = d1 * PolynomialEvaluator::eval(d1, p0, p1, p2, p3, p4);
-        }
-        v_elseif(abs_range2 <= 0.25f) {
-            // Taylor Expansion around z=2 (d = z - 2.0)
-            constexpr float q0 = 0.42278434f;   // 1 - gamma
-            constexpr float q1 = 0.32246703f;   // (zeta(2)-1)/2
-            constexpr float q2 = -0.06735230f;  // -(zeta(3)-1)/3
-            constexpr float q3 = 0.02058081f;   // (zeta(4)-1)/4
-            constexpr float q4 = -0.00738555f;  // -(zeta(5)-1)/5
-            res = d2 * PolynomialEvaluator::eval(d2, q0, q1, q2, q3, q4);
-        }
-        v_else {
-            // Stirling base + Bernoulli correction
-            res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
-            sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
-            sfpi::vFloat inv_z2 = (inv_z * inv_z);
-            // Bernoulli correction: r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
-            sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
-            res = res + inv_z * correction;
+        // 2. Argument shift (N=4) to move z in [0.5, 2.5] into stable Stirling domain [4.5, 6.5]
+        sfpi::vFloat shift_corr = 0.0f;
+        sfpi::vFloat l_z = log_z;
+        v_if(z < 2.5f) {
+            sfpi::vFloat prod = z * (z + 1.0f) * (z + 2.0f) * (z + 3.0f);
+            shift_corr = _calculate_log_body_no_init_(prod);
+            z = z + 4.0f;
+            l_z = _calculate_log_body_no_init_(z);
         }
         v_endif;
 
-        // Handle boundary case
-        v_if(sfpi::abs(z - 0.5f) < 0.01f) { res = LOG_SQRT_PI; }
+        // 3. Stirling base + Bernoulli correction on shifted argument
+        sfpi::vFloat res = ((z - 0.5f) * l_z - z + LOG_SQRT_2PI);
+        sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
+        sfpi::vFloat inv_z2 = (inv_z * inv_z);
+        sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
+        res = (res + inv_z * correction) - shift_corr;
+
+        v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
@@ -151,7 +136,9 @@ inline void calculate_lgamma_adjusted(
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         } else {
-            v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
+            sfpi::vInt exp = sfpi::exexp(in);
+            sfpi::vInt man = sfpi::exman(in);
+            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
             v_endif;
         }
 
