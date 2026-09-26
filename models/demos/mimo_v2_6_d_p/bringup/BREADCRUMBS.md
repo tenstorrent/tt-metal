@@ -143,3 +143,62 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_01_attn_norm.py
+
+## C.full_dense.attention test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_full_dense_attention.py` with the
+  gemma4_a4b_d_p `test_c_global_attention.py` pattern: gated PCC (spec 0.99) plus asserted finite output, rel L2 <= 0.015
+  over the whole chunk and over the first 128 rows, per-token norm ratio in [0.97, 1.03]. Records
+  `rel_l2_attention_L00`, `rel_l2_head_rows_attention_L00`, `row_norm_ratio_{min,max}_attention_L00` (informational).
+
+Why
+- Golden s4096 chunk 1 (start 2048). On it PCC passes nearly every bug: RoPE from 0 (0.99968, rel 0.025), non-causal
+  (0.99960, rel 0.0285, first rows 0.047), scale 128**-0.5 (0.99931, rel 0.040), no value scale (0.9986), no KV prefix
+  (0.9932). Gemma's rel 0.03 would pass the first two, hence 0.015.
+- Device noise estimate (CPU sim): reference rel 0.0017; bf16 rounding of act/weights/q/k/v/P 0.0017; bfp8 qkv/o
+  weights 0.0021; + bfp8 KV 0.0022. Gemma-4 device attention was rel 0.005-0.008. Full table in the test docstring;
+  mutation scripts were in /tmp (not kept).
+
+Results
+- BRINGUP_IMPL=reference: PASS (pcc 0.999999, rel 0.001697, first-128 0.001716, ratio [0.9992, 1.0008]).
+- BRINGUP_IMPL=stub: FAIL (PCC).
+- Default mode: FAIL, NotImplementedError (no device attention yet; implement step).
+
+Notes for implement
+- The KV prefix arrives in `dctx.extra["state_prefix"]` (bf16 key [4, 4096, 192], value [4, 4096, 128], the full rung
+  state: use only [:, :prefix_len]; value already x 0.707);
+  RoPE cos/sin must be at positions start..start+S (a from-0 table fails the rel checks).
+
+Re-run
+    PYTHONPATH=$PWD BRINGUP_IMPL=reference scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attention.py
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attention.py
+
+## C.full_dense.attention implement (attempt 1), 2026-09-26
+
+What was done
+- `tt/attention.py`: `TtFullAttention` + `TtKVCacheFull` (from gemma4_a4b_d_p TtGlobalAttention / TtKVCacheGlobal).
+  Chip r: Q heads 16r..16r+15, KV head r. Fused per-chip qkv [4096, 16*192 + 192 + 192] bf16 built from
+  `reference/weights.qkv_weight` (dequantized per TP rank); V rows x 0.707 and zero-padded 128 -> 192. o_proj
+  row-parallel [16*192, 4096] per chip with zero rows for the V pad dims (no slice after SDPA). Partial RoPE: slice
+  dims [0:64] -> `rotary_embedding` -> concat with [64:192]; cos/sin [1, 1, max_seq, 64] built once at load for the
+  longest rung/target seq (56320), sliced on device per chunk. Cache paged-shaped [nb, 1, 64, 192] per chip, identity
+  page table resident, per-chunk page-table slice cut on device; K and V both 192 wide, `to_torch` returns V[..., :128].
+  SDPA causal (chunk 0) / chunked (later), scale 192^-0.5, preset A (HiFi2, fp32 acc off, approx exp, q256/k256; env
+  `MIMO_SDPA_CFG=base` for HiFi4 + fp32, q128/k128). qkv and o_proj matmuls HiFi4 + fp32 acc. `ttnn.all_reduce(cluster_axis=1)`.
+- `bringup/hooks.py`: `_attention_module`, `_new_kv_cache`, `_attention_host_fn`; `device_component("attention")`
+  builds a fresh device cache holding the golden prefix per call; `DEVICE_STEPS["full_dense"]` now includes
+  `attention`; `_HybridState` keeps device KV caches for device-attention layers, `HybridDeviceModel.layer` passes
+  it as `ctx.extra["dev_cache"]`. Sliding layers raise NotImplementedError in `_attention_module`.
+
+Gotchas
+- The chunked SDPA binding (noconvert `scale`) rejects 192^-0.5 as a Python double: "incompatible function arguments"
+  with matching types. Scale is rounded to fp32 in the module (known_issues Proposed).
+- Forward has no host transfer; the harness wrapper (`_attention_host_fn`) does the host in/out.
+- The start == 0 path (plain causal SDPA) is not exercised by this gate (golden chunk 1); the ladder exercises it.
+
+Result
+- Gate: pcc_attention_L00 0.999987, rel_l2 0.005136, first-128 rel 0.005128, row_norm_ratio [0.9938, 1.0073]. PASS.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attention.py
