@@ -31,6 +31,22 @@ from ..optimize_dashboard import (
 from .optimize import _repo_root, _resolve_target
 
 
+def _hf_token(args) -> str | None:
+    """The Hugging Face token, in priority order: ``--token`` → ``HF_TOKEN`` → the CLI login file.
+    Single source of truth so every upload/download path resolves the token the same way."""
+    tok = getattr(args, "token", None) or os.environ.get("HF_TOKEN")
+    if tok:
+        return tok
+    for p in ("~/.cache/huggingface/token", "~/.huggingface/token"):
+        fp = Path(p).expanduser()
+        try:
+            if fp.is_file() and fp.read_text().strip():
+                return fp.read_text().strip()
+        except Exception:
+            pass
+    return None
+
+
 # box (planner) -> (arch, hardware, mesh_device) for the tt-model.yaml serve block. hardware and
 # mesh_device must be values the vLLM plugin's closed table accepts; override with --hardware/--mesh.
 _BOX_TARGET = {
@@ -404,13 +420,7 @@ def _upload_card_section(args, title: str, section: str) -> None:
     try:
         from huggingface_hub import HfApi, hf_hub_download
 
-        tok = getattr(args, "token", None) or os.environ.get("HF_TOKEN")
-        if not tok:
-            for p in ("~/.cache/huggingface/token", "~/.huggingface/token"):
-                fp = Path(p).expanduser()
-                if fp.is_file() and fp.read_text().strip():
-                    tok = fp.read_text().strip()
-                    break
+        tok = _hf_token(args)
         api = HfApi(token=tok)
         lp = hf_hub_download(repo_id=args.repo, filename="README.md", repo_type="model", token=tok)
         s = open(lp).read()
@@ -427,21 +437,49 @@ def _upload_card_section(args, title: str, section: str) -> None:
         print(f"  [publish-hf] card update skipped ({e}).")
 
 
-def _enrich_card_with_benchmarks(args, slug: str, staged: Path, ttm: str, checkout: Path) -> None:
-    """Measure the model ON REAL HARDWARE across an ISL x Users grid via its OWN perf harness
-    (test_main_perf, which takes TT_PERF_ISL_TOKENS/OSL_TOKENS/BATCH/LAYERS and prints
-    TRACE_PER_TOKEN_MS + TRACE_TOKENS_PER_SEC), and write a full sweep table into the card — the same
-    class of table the reference TT cards carry. Universal + best-effort; runs at the depth that fits
-    the device (its default), never raises, and the publish stands regardless."""
+def _discover_test_node(checkout: Path, demo_dir: Path, want: str) -> str | None:
+    """Find a pytest node for the model's own perf ('perf') or accuracy/PCC ('pcc') test by SCANNING
+    the model's test files — never a hardcoded test name. Matches on the function name the model
+    itself declares (``def test_*perf*`` / ``def test_*pcc*``/``*gate*``), so a renamed test still
+    resolves. Returns ``<file>::<func>`` or None."""
+    import re as _re
+
+    keys = ("perf",) if want == "perf" else ("pcc", "gate")
+    best = None
+    tests = list(Path(demo_dir).glob("**/test_*.py")) if Path(demo_dir).is_dir() else []
+    for f in tests:
+        try:
+            src = f.read_text(errors="replace")
+        except Exception:
+            continue
+        for fn in _re.findall(r"^def (test_[A-Za-z0-9_]+)", src, flags=_re.M):
+            low = fn.lower()
+            if any(k in low for k in keys) or any(k in f.name.lower() for k in keys):
+                node = f"{f}::{fn}"
+                # prefer a match whose function name (not just filename) carries the key
+                if any(k in low for k in keys):
+                    return node
+                best = best or node
+    return best
+
+
+def _enrich_card_with_benchmarks(
+    args, slug: str, checkout: Path, demo_dir: Path, perf_node: str | None, pcc_node: str | None
+) -> None:
+    """Measure the model ON REAL HARDWARE across an ISL x Users grid via its OWN perf harness, and
+    write a full sweep table into the card. The perf test is DISCOVERED (the run's ``config.perf_test``
+    or a scan of the model's own tests) — no hardcoded test/stage name. The harness takes
+    ``TT_PERF_ISL_TOKENS/OSL_TOKENS/BATCH/LAYERS`` and prints ``TRACE_PER_TOKEN_MS`` +
+    ``TRACE_TOKENS_PER_SEC``. Best-effort; never raises; the publish stands regardless."""
     import re as _re
     import subprocess
 
     if getattr(args, "no_bench", False):
         return
-    perf_rel = f"models/demos/{slug}/tests/e2e/test_main_perf.py"
-    perf_node = perf_rel + "::test_main_perf"
-    if not (Path(checkout) / perf_rel).is_file():
-        print("  [publish-hf] bench: no perf harness for this model; published without a sweep.")
+    if not perf_node:
+        perf_node = _discover_test_node(Path(checkout), Path(demo_dir), "perf")
+    if not perf_node:
+        print("  [publish-hf] bench: no perf test discovered for this model; published without a sweep.")
         return
     py = str(Path(checkout) / "python_env" / "bin" / "python")
     isls = [int(x) for x in (getattr(args, "bench_isl", None) or "128,1024").split(",")]
@@ -500,8 +538,10 @@ def _enrich_card_with_benchmarks(args, slug: str, staged: Path, ttm: str, checko
     if not any(r[3] or r[5] for r in rows):
         print("  [publish-hf] bench: no on-device numbers captured; published without a sweep.")
         return
+    import datetime as _dt
+
     tbl = [
-        "| ISL | OSL | Users | TPOT (ms) | Decode (tok/s/user) | Out tok/s (total) |",
+        "| ISL | OSL | Users | TPOT (ms) | Decode (tok/s/u) | Out (tok/s total) |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for isl, o, b, tpot, du, tot in rows:
@@ -511,36 +551,42 @@ def _enrich_card_with_benchmarks(args, slug: str, staged: Path, ttm: str, checko
             + " | "
             + (f"{du:.1f}" if du else "—")
             + " | "
-            + (f"{tot:.1f}" if tot else "—")
+            + (f"{tot:,.0f}" if tot else "—")
             + " |"
         )
-    depth_note = f" at depth {depth}" if depth else " at the depth that fits this device"
+    depth_note = f"the resident {depth}-block depth" if depth else "the depth resident on the device"
+    date = _dt.date.today().isoformat()
+    perf_name = perf_node.split("::")[-1] if "::" in perf_node else Path(perf_node).stem
     section = (
-        f"Measured on real Tenstorrent hardware by running this model's own on-device perf "
-        f"harness (`test_main_perf`){depth_note}, sweeping input length (ISL) and concurrent "
-        f"users. TPOT = decode ms/token; Decode tok/s/user = 1000/TPOT; Out tok/s = total "
-        f"decode throughput across users. OSL={osl}.\n\n" + "\n".join(tbl)
+        f"Measured on this package by its on-device perf harness (`{perf_name}`), decoding at "
+        f"{depth_note} on the device it was optimized on: fixed-length prompts of exactly ISL tokens, "
+        f"output pinned to OSL tokens, held at each concurrency (Users) as a batched decode. **TPOT** is "
+        f"the mean decode time per output token; **Decode (tok/s/u)** = 1000 / TPOT is the per-user "
+        f"decode rate; **Out (tok/s total)** is the aggregate output rate across all concurrent users. "
+        f"Every value is the mean over the run.\n\n" + "\n".join(tbl)
     )
-    _upload_card_section(args, "Measured performance (real hardware)", section)
+    _upload_card_section(args, f"Measured latency (real hardware, {date})", section)
     print("  [publish-hf] bench: real-hardware sweep added to the card.")
-    _enrich_card_with_accuracy(args, slug, checkout, py)
+    _enrich_card_with_accuracy(args, checkout, Path(demo_dir), py, pcc_node)
 
 
-def _enrich_card_with_accuracy(args, slug: str, checkout: Path, py: str) -> None:
-    """Add a real-hardware accuracy row: run the model's own PCC gate on device and record the pass +
-    PCC. (IFEval/GPQA/MMLU require a served OpenAI endpoint; for models the vLLM plugin can serve those
-    are added separately. The PCC gate is the accuracy signal every tool-brought-up model has.)"""
+def _enrich_card_with_accuracy(args, checkout: Path, demo_dir: Path, py: str, pcc_node: str | None) -> None:
+    """Add a real-hardware accuracy row: run the model's own accuracy/PCC gate on device and record the
+    pass + PCC. The gate test is DISCOVERED (the run's ``config.pcc_test`` or a scan of the model's own
+    tests) — no hardcoded test/stage name. (IFEval/GPQA/AIME/MMLU require a served OpenAI endpoint and
+    are added for models the vLLM plugin can serve.)"""
     import re as _re
     import subprocess
 
-    gate = f"models/demos/{slug}/tests/e2e/test_e2e_pipeline.py::test_gate3_e2e_pcc"
-    if not (Path(checkout) / f"models/demos/{slug}/tests/e2e/test_e2e_pipeline.py").is_file():
+    if not pcc_node:
+        pcc_node = _discover_test_node(Path(checkout), Path(demo_dir), "pcc")
+    if not pcc_node:
         return
-    print("  [publish-hf] accuracy: running the on-device PCC gate…")
+    print("  [publish-hf] accuracy: running the model's on-device accuracy gate…")
     try:
         env = dict(os.environ, TT_METAL_HOME=str(checkout), TT_HW_PLANNER_SHARD_RUN="1")
         r = subprocess.run(
-            [py, "-m", "pytest", gate, "-q", "-s"],
+            [py, "-m", "pytest", pcc_node, "-q", "-s"],
             cwd=str(checkout),
             env=env,
             capture_output=True,
@@ -551,16 +597,17 @@ def _enrich_card_with_accuracy(args, slug: str, checkout: Path, py: str) -> None
         passed = (r.returncode == 0) and (" passed" in out or "PASSED" in out)
         pccs = _re.findall(r"[Pp][Cc][Cc][^0-9]*([01]\.\d{3,})", out)
         pcc = max((float(x) for x in pccs), default=None)
-        row = (
-            "| E2E PCC vs HF reference (on device) | "
-            + ("**pass**" if passed else "fail")
-            + (f" | PCC {pcc:.4f} |" if pcc is not None else " | — |")
-        )
+        verdict = "pass" if passed else "fail"
+        pcc_s = f"{pcc:.4f}" if pcc is not None else "—"
         section = (
-            "Accuracy on real hardware, from the model's own end-to-end PCC gate "
-            "(TT output vs the HF reference, teacher-forced). IFEval/GPQA/AIME/MMLU require a "
-            "served OpenAI endpoint and are added for models the vLLM plugin can serve.\n\n"
-            "| Metric | Result |\n| --- | --- |\n" + row
+            "Correctness is verified on device by this model's end-to-end accuracy gate: the "
+            "Tenstorrent pipeline's output is compared against the Hugging Face reference "
+            "implementation (teacher-forced over the generated sequence) and must clear the pipeline's "
+            "PCC threshold. The generative benchmark suites (IFEval, GPQA Diamond, AIME 2025, MMLU) are "
+            "run through an OpenAI-compatible endpoint and are reported for models served via the "
+            "Tenstorrent vLLM plugin.\n\n"
+            "| Metric | Result | Score |\n| --- | --- | --- |\n"
+            f"| End-to-end PCC vs. HF reference | **{verdict}** | {pcc_s} |"
         )
         _upload_card_section(args, "Accuracy (real hardware)", section)
         print(
@@ -718,13 +765,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     except Exception:
         print("  [publish-hf] huggingface_hub not available to upload the bundle " "(pip install huggingface_hub).")
         return 4
-    token = getattr(args, "token", None) or os.environ.get("HF_TOKEN")
-    if not token:
-        for p in ("~/.cache/huggingface/token", "~/.huggingface/token"):
-            fp = Path(p).expanduser()
-            if fp.is_file() and fp.read_text().strip():
-                token = fp.read_text().strip()
-                break
+    token = _hf_token(args)
     try:
         api = HfApi(token=token)
         api.create_repo(
@@ -757,7 +798,8 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     # Auto-benchmark: serve the bundle and write a measured latency sweep into the card. Universal +
     # best-effort — measures any model that serves, skips (publish stands) for one that can't yet.
     if not getattr(args, "no_bench", False):
-        _enrich_card_with_benchmarks(args, slug, staged, ttm, checkout)
+        cfg = state.get("config") or {}
+        _enrich_card_with_benchmarks(args, slug, checkout, demo_dir, cfg.get("perf_test"), cfg.get("pcc_test"))
     return 0
 
 
@@ -900,7 +942,7 @@ def cmd_publish_hf(args) -> int:
         )
         return 3
 
-    token = getattr(args, "token", None) or os.environ.get("HF_TOKEN")
+    token = _hf_token(args)
     try:
         create_repo(
             args.repo, repo_type="model", private=bool(getattr(args, "private", False)), exist_ok=True, token=token
