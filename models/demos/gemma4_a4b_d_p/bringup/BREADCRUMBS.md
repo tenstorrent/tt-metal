@@ -717,3 +717,14 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Device gate: pass, pcc_swap_out 0.999988, block out rel 0.0048 / 0.0038; post_mlp_norm rel 0.0048 vs golden, iso 0.0019,
   ratio [0.9963, 1.0021]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py`
+
+## C.global.router test (run1, attempt 1)
+- Replaced the one-line template body with test_c_sliding_router.py (LAYER = 5). The gated metric stays `pcc_router_L05` >= 0.99. The test also asserts: exactly 8 nonzeros per row,
+  non-negative weights, top-8 selection overlap >= 0.995, matched-row weight rel L2 <= 0.005, and a per-row sum ratio in [0.99, 1.01]. Informational metrics are
+  `selection_overlap_router_L05`, `matched_rel_l2_router_L05` and `row_sum_ratio_{min,max}_router_L05`. The thresholds are unchanged from sliding.
+- Scored mutations on the CPU (layer 5 golden; per_expert_scale in [0.980, 1.023], same as layer 0). The numbers are in the test docstring. Every mutation that passes PCC
+  (no/by-rank per_expert_scale, top-7/9, zeroed rows, 1-3% noise, 2x) fails an extra check. Unlike layer 0, renorm-after-per_expert_scale also fails matched rel L2 here (0.0066),
+  as well as the row-sum check. Script /tmp/g5rt/v.py (CPU only, not kept).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999957, overlap 0.99957, mrel 0.0018). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999879, overlap 0.99854,
+  matched 2024/2048, mrel 0.00283, ratio [0.9961, 1.0034]), because the device router is the same TtRouter the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py`
