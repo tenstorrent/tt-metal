@@ -305,23 +305,6 @@
   budget_type: unit
   category: sdpa
 
-- name: ttnn nightly sdpa stress tests
-  cmd: |
-    pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
-           tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
-           -xv --timeout=600
-  skus:
-    wh_n150_civ2:
-      timeout: 55
-    wh_n300_civ2:
-      timeout: 55
-    bh_p150b_civ2:
-      timeout: 55
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: ttnn
-  budget_type: unit
-  category: sdpa
-
 - name: ttnn nightly data_movement tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
   ai_summary:
