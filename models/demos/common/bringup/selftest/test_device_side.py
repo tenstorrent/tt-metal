@@ -142,3 +142,33 @@ def test_device_tests_outlive_the_repo_pytest_timeout(fx):
     tests = Path(__file__).parents[1] / "tests"
     for name in ("test_ladder.py", "test_contract.py", "test_profile.py"):
         assert "pytestmark = device_timeout(S)" in (tests / name).read_text(), name
+
+
+def test_host_transfers_counts_round_trips_and_restores_ttnn():
+    """F27: the counter behind host_transfers_per_layer (agent rule 5)."""
+    import types
+
+    from models.demos.common.bringup.testing.host_transfers import HostTransfers
+
+    fake = types.SimpleNamespace(
+        from_torch=lambda t: ("dev", t), to_torch=lambda t: t[1], synchronize_device=lambda d: None
+    )
+    orig = fake.from_torch
+    with HostTransfers(fake) as h:
+        fake.to_torch(fake.from_torch(1))
+        fake.from_torch(2)
+    assert h.total == 3 and h.calls == {"from_torch": 2, "to_torch": 1}
+    assert fake.from_torch is orig
+
+
+def test_ladder_records_warm_host_transfers(gspec, noise):
+    """F27: multi-chunk rungs record host_transfers_per_layer from warm chunks; the fixture model does no host work."""
+    from models.demos.common.bringup.plan.ledger_gen import generate
+
+    s = gspec()
+    noise(1e-3)
+    run_ladder(s, "s256", None)
+    assert got()["host_transfers_per_layer"] == 0
+    tasks = generate(s, fixture_model.Reference())["tasks"]
+    gates = {t["id"]: t["gate"]["metrics"] for t in tasks if t["id"].startswith("L.")}
+    assert gates["L.s256"]["host_transfers_per_layer"] == "== 0" and "host_transfers_per_layer" not in gates["L.last"]

@@ -15,3 +15,10 @@ plan:
   note: 'owner approved 2026-09-25; experts: hack unified_routed_expert_moe to add
     GeluTanh (owner''s instruction)'
   ledger: b8edafa294386369c0d02b7858ffe53fbf98dd7b626259d50c2d9b5da7f2e941
+shared:
+  K.1:
+    by: dnijemcevic
+    at: '2026-09-26T04:24:29'
+    paths:
+    - models/demos/common/prefill/adapter.py
+    note: 'owner: yes, K.1 may register the Gemma adapter in adapter.py'
