@@ -22,6 +22,8 @@ from ...tests.test_factory import (
     get_pcc_threshold,
     num_layers_for_full_attention_group,
     parametrize_mesh_with_fabric,
+    skip_if_too_large_for_single_device,
+    with_l1_small,
 )
 
 
@@ -342,8 +344,7 @@ def test_full_model(mesh_device, reset_seeds, request):
     # MoE experts are replicated: ~764 MB/layer at bf8. Dense MLP: ~3*H*I/TP*2 bytes.
     if is_moe and tp < 8:
         pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
-    if hf_config_check.hidden_size > 4096 and tp < 2:
-        pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+    skip_if_too_large_for_single_device(hf_config_check, tp)
 
     # ── HF reference ─────────────────────────────────────────────────
     logger.info(f"Loading HF reference model from {model_path}...")
@@ -500,8 +501,7 @@ def test_full_model_decode(mesh_device, reset_seeds, request):
     hf_config_check = TestFactory.create_hf_config()
     if getattr(hf_config_check, "enable_moe_block", False) and tp < 8:
         pytest.skip(f"MoE model too large for TP={tp}")
-    if hf_config_check.hidden_size > 4096 and tp < 2:
-        pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+    skip_if_too_large_for_single_device(hf_config_check, tp)
 
     # ── HF reference: prefill, then one decode step ──────────────────────
     logger.info(f"Loading HF reference from {model_path}...")
@@ -676,7 +676,7 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000},
+            with_l1_small({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}),
             id="1x4",
         ),
     ],
@@ -804,8 +804,7 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     is_moe = getattr(hf_config_check, "enable_moe_block", False)
     if is_moe and tp < 8:
         pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
-    if hf_config_check.hidden_size > 4096 and tp < 2:
-        pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+    skip_if_too_large_for_single_device(hf_config_check, tp)
 
     seq_len = int(os.getenv("GEMMA4_PREFILL_PERF_SEQ_LEN", "4096"))
     page_block_size = 64
@@ -958,8 +957,7 @@ def test_single_decode(mesh_device, reset_seeds, request):
     is_moe = getattr(hf_config_check, "enable_moe_block", False)
     if is_moe and tp < 8:
         pytest.skip(f"MoE model too large for TP={tp} (expert weights replicated)")
-    if hf_config_check.hidden_size > 4096 and tp < 2:
-        pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
+    skip_if_too_large_for_single_device(hf_config_check, tp)
 
     # Position the single decode token attends from. The KV cache covers
     # [0, decode_pos]; a non-trivial position gives SDPA a realistic amount of

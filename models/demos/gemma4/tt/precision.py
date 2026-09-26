@@ -28,6 +28,10 @@ _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # with the constructors that accept these kwargs (Gemma4Model and below).
 KNOWN_MODULES = ("shared_mlp", "attention", "experts", "router", "lm_head", "embedding")
 
+# Non-dtype, model-wide numerics flags that live in the same table. They are not
+# module dtypes, so they are read separately from the KNOWN_MODULES loop.
+DEFAULT_SINGLE_TILE_DEST_ACC = True
+
 _DTYPE_BY_NAME = {
     "bf16": ttnn.bfloat16,
     "bfloat16": ttnn.bfloat16,
@@ -36,6 +40,19 @@ _DTYPE_BY_NAME = {
     "fp32": ttnn.float32,
     "float32": ttnn.float32,
 }
+
+
+_ARCH_KEYS = ("wormhole_b0", "blackhole")
+
+
+def _current_arch_key():
+    """Arch key for per-arch override objects."""
+    # Imported per call on purpose: test_precision_overrides monkeypatches
+    # ``models.common.utility_functions.is_blackhole``, which a module-level
+    # import would not see.
+    from models.common.utility_functions import is_blackhole
+
+    return "blackhole" if is_blackhole() else "wormhole_b0"
 
 
 def dtype_to_str(dtype):
@@ -58,14 +75,26 @@ class Gemma4Precision:
     """Per-module dtype mapping. Construct via ``Gemma4Precision.load(...)``
     or directly with ``Gemma4Precision({...})``."""
 
-    def __init__(self, overrides=None):
+    def __init__(self, overrides=None, single_tile_dest_acc=DEFAULT_SINGLE_TILE_DEST_ACC, ccl_topology=None):
         self._overrides = dict(overrides) if overrides else {}
+        # fp32 destination accumulation on the m<=32 projections. Per model, not
+        # global: it is what carries 12B's accuracy, and it is what collapses
+        # 31B's 128k decode into a repetition loop. See single_tile_matmul_ckc.
+        self.single_tile_dest_acc = bool(single_tile_dest_acc)
+        # Forced CCL topology ("ring" / "linear"), or None to let
+        # default_ccl_topology pick from the arch. Model-wide like
+        # single_tile_dest_acc: Ring and Linear reduce in different orders, so
+        # this is a numerics knob, not a perf-only one.
+        self.ccl_topology = ccl_topology
 
     def get(self, module_name, default=ttnn.bfloat16):
         return self._overrides.get(module_name, default)
 
     def __repr__(self):
-        return f"Gemma4Precision({self._overrides!r})"
+        return (
+            f"Gemma4Precision({self._overrides!r}, single_tile_dest_acc={self.single_tile_dest_acc}, "
+            f"ccl_topology={self.ccl_topology!r})"
+        )
 
     @classmethod
     def load(cls, model_path, mesh_shape, max_seq_len=None):
@@ -168,4 +197,71 @@ class Gemma4Precision:
                     f"{model_key}; downgrading {detail} bfp8 -> bf16 (bfp8 degenerates at very long "
                     "context). Costs memory/throughput; set GEMMA4_BFP8_MAX_CONTEXT=0 to disable."
                 )
-        return cls(resolved)
+
+        # Read from the MODEL entry, not the mesh dict. A mesh entry replaces
+        # "default" wholesale (see the lookup above), so a per-mesh flag would
+        # silently revert to the default the moment someone adds a mesh-specific
+        # dtype block -- and this flag going quietly back to true is a 128k
+        # repetition loop on 31B. Model-wide is also what makes
+        # default_single_tile_dest_acc()'s fixed (1, 1) lookup correct.
+        if "single_tile_dest_acc" in raw:
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][{mesh_key}][single_tile_dest_acc] — "
+                "this flag is model-wide; put it on the model entry, not a mesh entry"
+            )
+        dest_acc = model_entry.get("single_tile_dest_acc", DEFAULT_SINGLE_TILE_DEST_ACC)
+        if isinstance(dest_acc, dict):
+            # Per-arch form, for a flag that is a workaround rather than a
+            # preference: an arch the object does not name keeps the default.
+            # 31B needs it because its reason -- Wormhole #38306, HiFi3 paired
+            # with fp32 dest-accumulation -- is a Wormhole hardware bug, and
+            # writing the workaround model-wide also turned it off on Blackhole,
+            # where main runs 31B with the default and passes.
+            unknown = sorted(set(dest_acc) - set(_ARCH_KEYS))
+            if unknown:
+                raise ValueError(
+                    f"precision_overrides.json[{model_key}][single_tile_dest_acc] has unknown arch "
+                    f"key(s) {unknown} — expected one of {sorted(_ARCH_KEYS)}"
+                )
+            dest_acc = dest_acc.get(_current_arch_key(), DEFAULT_SINGLE_TILE_DEST_ACC)
+        if not isinstance(dest_acc, bool):
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][single_tile_dest_acc]={dest_acc!r} — "
+                f"expected true or false, or an object keyed by {sorted(_ARCH_KEYS)}"
+            )
+        # Same model-wide argument as single_tile_dest_acc above.
+        if "ccl_topology" in raw:
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][{mesh_key}][ccl_topology] — "
+                "this flag is model-wide; put it on the model entry, not a mesh entry"
+            )
+        topology = model_entry.get("ccl_topology")
+        if topology is not None and topology not in ("ring", "linear"):
+            raise ValueError(
+                f"precision_overrides.json[{model_key}][ccl_topology]={topology!r} — expected 'ring' or 'linear'"
+            )
+        return cls(resolved, single_tile_dest_acc=dest_acc, ccl_topology=topology)
+
+
+def default_single_tile_dest_acc():
+    """Fallback dest-accumulation policy, resolved from the environment.
+
+    Gemma4Model threads ``precision.single_tile_dest_acc`` down instead, so a run
+    selected by ``create_tt_model(model_path=...)`` reads it from the same
+    explicit checkpoint as the dtype overrides; this serves the unit tests, which
+    build the modules from an HF config with nothing threaded through. The env
+    chain matches ``create_tt_model``'s: reading only HF_MODEL returned the
+    default for a run selected with GEMMA4_MODEL_PATH, which on 31B is the fp32
+    dest-accumulation its long generation degenerates under. The mesh shape is
+    arbitrary; ``load`` reads the flag off the model entry, which no
+    mesh-specific block can shadow.
+    """
+    model_path = os.environ.get("HF_MODEL") or os.environ.get("GEMMA4_MODEL_PATH")
+    if not model_path:
+        return DEFAULT_SINGLE_TILE_DEST_ACC
+    return Gemma4Precision.load(model_path, (1, 1)).single_tile_dest_acc
+
+
+def resolve_single_tile_dest_acc(threaded=None):
+    """The threaded policy when a caller passed one, else the env fallback."""
+    return default_single_tile_dest_acc() if threaded is None else bool(threaded)

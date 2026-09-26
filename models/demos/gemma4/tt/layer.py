@@ -43,9 +43,11 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.dram_sharded import decode_tuning_enabled
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
-from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
+from models.demos.gemma4.tt.rms_norm import RMSNorm, decode_width_shard_memcfg
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
@@ -68,6 +70,7 @@ class Gemma4DecoderLayer:
         attention_dtype=None,
         experts_dtype=None,
         router_dtype=None,
+        single_tile_dest_acc=None,
         bounded_sliding_kv_cache: bool = False,
         transformation_mats=None,  # Legacy — ignored (HF-style RoPE needs no transformation mats)
     ):
@@ -124,6 +127,30 @@ class Gemma4DecoderLayer:
         else:
             self.layer_scalar = 1.0
 
+        # Dense 12B/31B on a full Wormhole T3K: keep the decode residual stream
+        # in the width-sharded L1 layout RMSNorm and the TP all-reduce share,
+        # instead of round-tripping it through DRAM between every op. Same gate
+        # as the tuned matmul path, and off for multi-user decode; see
+        # dram_sharded.decode_tuning_enabled.
+        self._tuned_decode = decode_tuning_enabled(mesh_device, hf_config)
+        # On that same target the layer scalar can ride the final residual add
+        # as an output activation instead of costing its own device op.
+        #
+        # Restricted to models that keep the m<=32 fp32 dest-accumulation on.
+        # ``single_tile_dest_acc=False`` marks a model already known to be
+        # fragile about where rounding happens in that path (31B and E2B set it;
+        # see precision_overrides.json), and 31B -- the one of those two that
+        # reaches here at all, E2B being held off by its per-layer inputs --
+        # proves the point: with the scalar fused, its long-context-128k answer
+        # collapses into the same 40x repetition loop that flag exists to
+        # prevent (532 chars, 27% unique words, reproduced twice), and
+        # test_full_model_decode PCC drops 0.99807 -> 0.99617. Gemma4-12B, which
+        # leaves the accumulation on, goes the other way: PCC 0.98840 -> 0.99121
+        # and 128k stays clean.
+        self._fuse_layer_scalar = (
+            self.layer_scalar != 1.0 and bool(resolve_single_tile_dest_acc(single_tile_dest_acc)) and self._tuned_decode
+        )
+
         # Attention
         attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
         attn_program_config = get_attention_program_config(attn_config, mesh_config, is_decode=True)
@@ -137,6 +164,7 @@ class Gemma4DecoderLayer:
             layer_idx=layer_idx,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
+            single_tile_dest_acc=single_tile_dest_acc,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
 
@@ -150,6 +178,7 @@ class Gemma4DecoderLayer:
             dtype=shared_mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,
             layer_idx=layer_idx,
+            single_tile_dest_acc=single_tile_dest_acc,
         )
 
         # MoE block (router + routed experts) — split dtypes between the two
@@ -234,9 +263,30 @@ class Gemma4DecoderLayer:
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
+        # Dense decode without per-layer inputs keeps the residual stream in the
+        # exact width-sharded L1 layout shared by RMSNorm and the TP all-reduce.
+        # ``stream_memcfg`` stays None everywhere else, and every placement below
+        # then resolves to the op default it uses today.
+        stream_memcfg = None
+        # Short-circuits on the fusion gate so this shape read is unreachable on
+        # every mesh and model the fusion does not apply to.
+        decode_users = int(hidden_states.shape[-2]) if (is_decode and self._fuse_layer_scalar) else 0
+        if is_decode and self._tuned_decode and not self.enable_moe_block and not self.hidden_size_per_layer_input:
+            stream_memcfg = decode_width_shard_memcfg(self.mesh_device, hidden_states.shape[-1])
+            if stream_memcfg is not None and not hidden_states.is_sharded():
+                sharded_hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
+                hidden_states.deallocate(True)
+                hidden_states = sharded_hidden_states
+        shard_stream = (
+            stream_memcfg is not None and hidden_states.is_sharded() and hidden_states.memory_config() == stream_memcfg
+        )
+
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        normed = self.input_layernorm.forward(
+            hidden_states,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if shard_stream else None,
+        )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -266,18 +316,26 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, keep_sharded=shard_stream)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            hidden_states = ttnn.add(
+                residual,
+                attn_output,
+                memory_config=stream_memcfg if shard_stream else None,
+            )
             residual.deallocate(True)
             attn_output.deallocate(True)
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        normed = self.pre_feedforward_layernorm.forward(
+            hidden_states,
+            keep_sharded=shard_stream,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if shard_stream else None,
+        )
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 
@@ -307,8 +365,38 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, keep_sharded=shard_stream)
+        # ``shard_stream`` is only set for dense decode with no per-layer inputs,
+        # which is exactly the case where nothing runs between this add and the
+        # layer_scalar multiply below, so the scalar can ride the add and save a
+        # device op per layer. Not bit-identical -- the fused form scales in the
+        # fp32 destination register where the two-op form packs the sum to bf16
+        # first -- which is why ``_fuse_layer_scalar`` is gated on the model's
+        # dest-accumulation policy.
+        #
+        # Restricted to one decode user, and the bound is measured, not derived.
+        # At batch-8 the fused form is not reproducible run to run: 13 repeats of
+        # the 12B batch-8 demo produced two distinct whole-batch outputs (10x and
+        # 3x), where 20 repeats of the two-op form produced one. Both outputs are
+        # coherent, so this is a token flip at an argmax near-tie rather than
+        # corruption, but a shipped bucket must not vary between runs. Batch-1 is
+        # stable over 15 repeats, and batch-32 does not reach the multi-user L1
+        # activation path at all. The root cause is not understood -- the
+        # arithmetic here is deterministic, so the suspicion is that being ~0.8%
+        # faster shifts timing in the CCL path -- so do not widen this without
+        # re-running the repeat test at the batch you are widening to.
+        fuse_scalar = self._fuse_layer_scalar and shard_stream and decode_users == 1
+        scalar_activation = (
+            {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)]}
+            if fuse_scalar
+            else {}
+        )
+        combined = ttnn.add(
+            residual,
+            hidden_states,
+            memory_config=stream_memcfg if shard_stream else None,
+            **scalar_activation,
+        )
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
@@ -329,7 +417,11 @@ class Gemma4DecoderLayer:
                 hidden_states = ttnn.reshape(hidden_states, (1, 1, hidden_states.shape[-2], self.hidden_size))
 
         # Layer scalar — AFTER PLI (matching HF order)
-        if self.layer_scalar != 1.0:
-            hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
+        if self.layer_scalar != 1.0 and not fuse_scalar:
+            hidden_states = ttnn.mul(
+                hidden_states,
+                self.layer_scalar,
+                memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else None,
+            )
 
         return hidden_states

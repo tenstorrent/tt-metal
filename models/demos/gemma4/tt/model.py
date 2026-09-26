@@ -24,6 +24,7 @@ from tracy import signpost
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.dram_sharded import linear_l1_safe, lm_head_decode_config, swept_decode_enabled
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -235,6 +236,13 @@ class Gemma4Model:
     # NOTE: This is a runtime capability (depends on mesh shape / per-device vocab).
     # It is set during __init__ after the sampling module is constructed.
     _supports_on_device_sampling = False
+    # Caller-gated: skip the 262k-wide vocab all-gather on the last-token PREFILL
+    # slice when the generator is about to device-sample TP-sharded logits and
+    # throw most of it away. Set per call by
+    # Gemma4Generator._set_prefill_sharded_logits, so host-sampling calls (the
+    # warmup pass) still gather. On the model rather than in the shared
+    # tt_transformers signature to keep the opt-in inside models/demos/gemma4.
+    _prefill_allow_sharded_logits = False
     # On-device greedy at B=sampling_max (#48037, mirrors qwen3_vl / qwen25_vl):
     # Gemma4 only captures the sampling *trace* at sampling_max (B=32). Replaying
     # that trace freezes ``all_gather_async`` semaphores from capture time, so the
@@ -279,6 +287,10 @@ class Gemma4Model:
         )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
+        # Dense 12B/31B on a full Wormhole T3K: the one target the tuned decode
+        # configs were measured on, minus 31B at 128k where the swept table
+        # loops the answer. See dram_sharded.swept_decode_enabled.
+        self._tuned_decode = swept_decode_enabled(mesh_device, hf_config)
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
         self.final_logit_softcapping = hf_config.final_logit_softcapping
@@ -314,6 +326,10 @@ class Gemma4Model:
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        # Threaded like the dtypes rather than re-resolved from the environment
+        # inside each module, so a run selected by ``create_tt_model(model_path=...)``
+        # gets the policy for THAT checkpoint, not whatever HF_MODEL holds.
+        single_tile_dest_acc = precision.single_tile_dest_acc
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -502,6 +518,7 @@ class Gemma4Model:
                 attention_dtype=attention_dtype,
                 experts_dtype=experts_dtype,
                 router_dtype=router_dtype,
+                single_tile_dest_acc=single_tile_dest_acc,
                 tensor_cache_path=tensor_cache_path,
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
@@ -864,6 +881,7 @@ class Gemma4Model:
         chunk_page_table=None,
         valid_seq_lens=None,
         keep_sharded_for_sampling=False,
+        allow_sharded_prefill_logits=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -877,6 +895,12 @@ class Gemma4Model:
         ``keep_sharded_for_sampling``: when True (decode + on-device sampling),
         leave lm_head logits TP-sharded. Host sampling / full-vocab reads must
         leave this False so decode all-gathers the 262k vocab.
+
+        ``allow_sharded_prefill_logits``: the same opt-in for the last-token
+        PREFILL slice, which is what skips the 262k-wide gather there. ``None``
+        (the default) takes ``_prefill_allow_sharded_logits``, which
+        Gemma4Generator scopes to a single call, so host-sample warmup still
+        gathers.
 
         Args:
             hidden_states: [1, 1, seq_len, hidden_size] on device (post-embedding)
@@ -1198,10 +1222,16 @@ class Gemma4Model:
                 (1, 1, tile_start + 32, hidden_states.shape[-1]),
             )
 
+        allow_sharded_prefill = (
+            self._prefill_allow_sharded_logits if allow_sharded_prefill_logits is None else allow_sharded_prefill_logits
+        )
         logits = self._apply_lm_head(
             hidden_states,
             is_decode=is_decode,
-            keep_sharded_for_sampling=bool(keep_sharded_for_sampling and is_decode),
+            # Prefill may also keep its logits TP-sharded when the caller opted
+            # in -- that is what skips the 262k vocab all-gather on the
+            # last-token slice.
+            keep_sharded_for_sampling=bool((keep_sharded_for_sampling and is_decode) or allow_sharded_prefill),
         )
         if not is_decode:
             # After lm_head only — mid-forward / pre-lm_head flush corrupts token-0 on TP.
@@ -1246,13 +1276,37 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            lm_head_pc = _get_lm_head_program_config(
-                self.mesh_device,
-                m=hidden_states.shape[2],
-                k=self.hidden_size,
-                n=self.lm_head_weight.shape[-1],
+            # On the tuned decode target the LM head takes the swept 1D config
+            # plus an explicit #38306-safe HiFi3 + fp32 dest-acc pairing, via
+            # linear_l1_safe like the other tuned matmuls: whether the in1 CB
+            # fits depends on the compute grid as well as the vocab shard, so
+            # the width bound inside lm_head_decode_config can still overflow
+            # and must fall back per shape rather than kill the run. Every other
+            # mesh keeps _get_lm_head_program_config and ttnn's own fidelity.
+            lm_head_pc = lm_head_out_memcfg = lm_head_ckc = None
+            if self._tuned_decode:
+                lm_head_pc, lm_head_out_memcfg, lm_head_ckc = lm_head_decode_config(
+                    self.mesh_device,
+                    m=hidden_states.shape[2],
+                    k=self.hidden_size,
+                    n=self.lm_head_weight.shape[-1],
+                    weight=self.lm_head_weight,
+                    tuned_decode=True,
+                )
+            if lm_head_pc is None and lm_head_ckc is None:
+                lm_head_pc = _get_lm_head_program_config(
+                    self.mesh_device,
+                    m=hidden_states.shape[2],
+                    k=self.hidden_size,
+                    n=self.lm_head_weight.shape[-1],
+                )
+            logits = linear_l1_safe(
+                hidden_states,
+                self.lm_head_weight,
+                program_config=lm_head_pc,
+                memory_config=lm_head_out_memcfg,
+                compute_kernel_config=lm_head_ckc,
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
             # ``deallocate_input=False`` is required when the caller owns a
             # *persistent* buffer that outlives this call — notably the batched
             # prefill-sampling trace, whose input is written by
@@ -1980,7 +2034,7 @@ class Gemma4Model:
             self._g4_retired_dev_tensors = lst
         lst.append(t)
 
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx, allow_sharded=None):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when
@@ -2028,7 +2082,8 @@ class Gemma4Model:
         if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
-            logits = self._apply_lm_head(sliced, is_decode=False)
+            keep_sharded = self._prefill_allow_sharded_logits if allow_sharded is None else allow_sharded
+            logits = self._apply_lm_head(sliced, is_decode=False, keep_sharded_for_sampling=bool(keep_sharded))
             if batched and logits is not sliced:
                 sliced.deallocate(True)
         else:
