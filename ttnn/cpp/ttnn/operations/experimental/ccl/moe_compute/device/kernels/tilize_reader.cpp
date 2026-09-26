@@ -362,6 +362,10 @@ void kernel_main() {
     // When compute_only=1, the fused selective_reduce_combine path is bypassed and no combine
     // kernels run on combine cores. Skip the metadata-ready signal to combine cores.
     constexpr bool compute_only = get_named_compile_time_arg_val("compute_only") == 1;
+    // When local_output=1 (moe_compute LocalOutput) there are no combine kernels either, and
+    // moe_compute's dm1 reads the e_t tensor (token id + k slot per entry) for its output rows as
+    // soon as metadata_ready releases it, so the drain publishes that tensor before the release.
+    constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
 
     Semaphore<> partial_metadata_ready_sem(partial_metadata_ready_semaphore_id);
     Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
@@ -621,10 +625,14 @@ void kernel_main() {
                     expert_activation_l1_ptr[1 + e] = k;
                     expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
 
-                    // Write to e_t buffer (16B aligned entries for NOC DMA compatibility)
+                    // Write to e_t buffer (16B aligned entries for NOC DMA compatibility): word 0 is
+                    // the token id (every consumer; the -1 sentinel), word 1 the token's k slot for
+                    // this expert (moe_compute's LOCAL_OUTPUT writer). Merges copy whole entries.
                     const uint32_t e_t_offset =
                         (e * (tokens + 1) + num_activated_tokens_per_expert[e]) * e_t_entry_size;
-                    *reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset) = t;
+                    uint32_t* e_t_entry = reinterpret_cast<uint32_t*>(e_t_buffer_base + e_t_offset);
+                    e_t_entry[0] = t;
+                    e_t_entry[1] = k;
                     num_activated_tokens_per_expert[e]++;
 
                     break;  // Each k can only match one local expert, no need to check others
@@ -703,6 +711,18 @@ void kernel_main() {
     cb_brisc_e_t.pop_front(one_page);
     cb_brisc_expert_activation.pop_front(one_page);
     cb_brisc_activated_count.pop_front(one_page);
+
+    // The drain writes the consolidated e_t buffer to the e_t output tensor, one page per expert.
+    auto write_e_t_output = [&]() {
+        for (uint32_t e = 0; e < experts_per_device; ++e) {
+            noc_obj.async_write(
+                cb_e_t,
+                e_t_output_tensor_addr_gen,
+                e_t_output_page_size,
+                {.offset_bytes = e * e_t_output_page_size},
+                {.page_id = e});
+        }
+    };
 
     // ========== CROSS-CORE CONSOLIDATION (Steps 4-6) ==========
     // Non-drain cores: send counts to drain and wait for consolidated buffer
@@ -900,6 +920,12 @@ void kernel_main() {
             per_expert_total_tokens_output_page_size,
             all_worker_cores_bounding_box_num_cores - 1);  // Exclude self
 
+        if constexpr (local_output) {
+            // moe_compute's dm1 reads the e_t pages as soon as metadata_ready releases it: publish
+            // them here so the barrier below orders those writes before the release.
+            write_e_t_output();
+        }
+
         // Ensure multicast completes before signaling semaphore
         noc_obj.async_write_barrier();
 
@@ -969,21 +995,16 @@ void kernel_main() {
     }
 
     if (is_drain_tilize_core) {
-        // write out e_t_output_tensor
-        for (uint32_t e = 0; e < experts_per_device; ++e) {
-            noc_obj.async_write(
-                cb_e_t,
-                e_t_output_tensor_addr_gen,
-                e_t_output_page_size,
-                {.offset_bytes = e * e_t_output_page_size},
-                {.page_id = e});
+        // write out e_t_output_tensor (under local_output it was published before the matmul release)
+        if constexpr (!local_output) {
+            write_e_t_output();
         }
 
         noc_obj.async_write_barrier();
 
         // signal to A2A combine that metadata is available. Separate signal from matmul because e_t write is also
-        // needed. Skipped in compute_only mode (no combine kernels listening).
-        if constexpr (!compute_only) {
+        // needed. Skipped when no combine kernels are built (compute_only, local_output).
+        if constexpr (!compute_only && !local_output) {
             // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
             // (combine_sync target on a different core) cannot be wrapped by Semaphore<>::inc which
             // binds to a per-program id

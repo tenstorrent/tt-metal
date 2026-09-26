@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
