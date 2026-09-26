@@ -90,10 +90,11 @@ TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
-assert not (DFLASH_ENABLED and USE_TRACE), (
-    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
-    "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
-)
+# DFLASH + USE_TRACE is supported: the drafter's FC tap fires INSIDE the verifier forward, so it is
+# captured with it, and TtDFlashDrafter.tap() is allocation-free after warmup (persistent accumulator,
+# written in place, first owned target layer overwrites so there is no per-chunk reset). The drafter's
+# own forward() -- KV finalize, reduce_scatter, D2H ack -- runs AFTER the captured forward returns and
+# stays eager, so nothing in it needs to be capture-safe.
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -335,7 +336,11 @@ def _compute_and_send(
             out,
             rank,
             meta,
-            deallocate=not runtime.config.use_trace,
+            # Traced runs hand back the PERSISTENT captured output buffer, which the next replay writes
+            # into -- freeing it corrupts the trace. The one exception is traced DFlash: the drafter
+            # partial is concatenated onto that buffer into a fresh tensor per chunk, so that one IS the
+            # caller's to free, and not freeing it leaks a 2H activation per chunk.
+            deallocate=(not runtime.config.use_trace) or runtime.config.dflash_enabled,
             metadata_msg=forward_md,
         )
     if d2d_out is not None:
