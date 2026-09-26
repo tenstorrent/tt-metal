@@ -4,7 +4,6 @@
 
 #include "rmsnorm_op.hpp"
 
-#include <cassert>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -23,17 +22,25 @@
 
 namespace ttml::ops {
 
-autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::TensorPtr &gamma, float epsilon) {
-    auto a_shape = tensor->get_value().logical_shape();
-    if (a_shape.rank() != 4) {
-        throw std::runtime_error("rmsnorm only supports rank-4 input tensors.");
+namespace {
+
+void validate_rmsnorm_shapes(const ttnn::Tensor &input, const ttnn::Tensor &gamma) {
+    const auto &input_shape = input.logical_shape();
+    if (input_shape.rank() != 4U) {
+        throw std::runtime_error(fmt::format("rmsnorm only supports rank-4 input tensors, got shape {}", input_shape));
     }
 
-    auto ashape_arr = a_shape.to_array_4D();
-    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
+    const auto expected_gamma_shape = ttnn::Shape({1U, 1U, 1U, input_shape[-1]});
+    if (gamma.logical_shape() != expected_gamma_shape) {
+        throw std::runtime_error(
+            fmt::format("rmsnorm gamma shape must be {}, got {}", expected_gamma_shape, gamma.logical_shape()));
+    }
+}
 
-    // one gain parameter per channel
-    assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
+}  // namespace
+
+autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::TensorPtr &gamma, float epsilon) {
+    validate_rmsnorm_shapes(tensor->get_value(), gamma->get_value());
 
     auto rmsnorm_fw_result = ttml::metal::rmsnorm_fw(tensor->get_value(), gamma->get_value(), true, epsilon);
     if (rmsnorm_fw_result.size() != 2U) {
@@ -67,16 +74,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
 
 autograd::TensorPtr rmsnorm_composite(
     const autograd::TensorPtr &tensor, const autograd::TensorPtr &gamma, float epsilon) {
-    auto a_shape = tensor->get_value().logical_shape();
-    if (a_shape.rank() != 4) {
-        throw std::runtime_error("rmsnorm only supports rank-4 input tensors.");
-    }
-
-    auto ashape_arr = a_shape.to_array_4D();
-    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
-
-    // one gain parameter per channel
-    assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
+    validate_rmsnorm_shapes(tensor->get_value(), gamma->get_value());
 
     [[maybe_unused]] auto device = &autograd::ctx().get_device();
 

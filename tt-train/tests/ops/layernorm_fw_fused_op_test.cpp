@@ -145,3 +145,36 @@ TEST_F(LayerNormForwardOpTest, NIGHTLY_MetalLayerNormFw_LargeTensor_DoesNotFitIn
 TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_HeadsDimNot1) {
     CompareKernelVsXArray(2, 8, 4, 512);
 }
+
+TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_ParameterShapeValidation) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    constexpr uint32_t width = 66U;
+    auto input = core::ones(ttnn::Shape({1U, 1U, 32U, width}), device);
+    auto valid_gamma = core::ones(ttnn::Shape({1U, 1U, 1U, width}), device);
+    auto valid_beta = core::ones(ttnn::Shape({1U, 1U, 1U, width}), device);
+    auto short_gamma = core::ones(ttnn::Shape({1U, 1U, 1U, width - 1U}), device);
+    auto long_beta = core::ones(ttnn::Shape({1U, 1U, 1U, width + 1U}), device);
+    auto wrong_leading_gamma = core::ones(ttnn::Shape({1U, 2U, 1U, width}), device);
+
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    EXPECT_THROW(metal::layernorm_fw(input, short_gamma, valid_beta), std::exception);
+    EXPECT_THROW(metal::layernorm_fw(input, valid_gamma, long_beta), std::exception);
+    EXPECT_THROW(metal::layernorm_fw(input, wrong_leading_gamma, valid_beta), std::exception);
+
+    auto valid_result = metal::layernorm_fw(input, valid_gamma, valid_beta);
+    ASSERT_TRUE(valid_result[0].has_value());
+    [[maybe_unused]] auto valid_output = core::to_xtensor(valid_result[0].value());
+    const auto cached_programs = device->num_program_cache_entries();
+    ASSERT_GT(cached_programs, 0U);
+
+    EXPECT_THROW(metal::layernorm_fw(input, short_gamma, valid_beta), std::exception);
+    EXPECT_EQ(device->num_program_cache_entries(), cached_programs);
+
+    auto repeated_valid_result = metal::layernorm_fw(input, valid_gamma, valid_beta);
+    ASSERT_TRUE(repeated_valid_result[0].has_value());
+    [[maybe_unused]] auto repeated_valid_output = core::to_xtensor(repeated_valid_result[0].value());
+}

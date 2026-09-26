@@ -13,6 +13,7 @@
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -88,6 +89,42 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     auto expected_gamma_grad =
         xt::xarray<float>({{{{0.0334F, 0.1338F, 0.2988F, 0.5352F, 0.0334F, 0.1338F, 0.2988F, 0.5352F}}}});
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
+}
+
+TEST_F(RMSNormOpTest, RMSNorm_ParameterShapeValidation) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    constexpr uint32_t width = 66U;
+    auto input = core::ones(ttnn::Shape({1U, 1U, 32U, width}), device);
+    auto valid_gamma = core::ones(ttnn::Shape({1U, 1U, 1U, width}), device);
+    auto short_gamma = core::ones(ttnn::Shape({1U, 1U, 1U, width - 1U}), device);
+    auto long_gamma = core::ones(ttnn::Shape({1U, 1U, 1U, width + 1U}), device);
+    auto wrong_leading_gamma = core::ones(ttnn::Shape({1U, 2U, 1U, width}), device);
+
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    EXPECT_THROW(metal::rmsnorm_fw(input, short_gamma), std::exception);
+    EXPECT_THROW(metal::rmsnorm_fw(input, long_gamma), std::exception);
+    EXPECT_THROW(metal::rmsnorm_fw(input, wrong_leading_gamma), std::exception);
+
+    auto input_ptr = autograd::create_tensor(input);
+    auto long_gamma_ptr = autograd::create_tensor(long_gamma);
+    EXPECT_THROW(ops::rmsnorm(input_ptr, long_gamma_ptr, 1e-6F), std::runtime_error);
+
+    auto valid_result = metal::rmsnorm_fw(input, valid_gamma);
+    ASSERT_TRUE(valid_result[0].has_value());
+    [[maybe_unused]] auto valid_output = core::to_xtensor(valid_result[0].value());
+    const auto cached_programs = device->num_program_cache_entries();
+    ASSERT_GT(cached_programs, 0U);
+
+    EXPECT_THROW(metal::rmsnorm_fw(input, long_gamma), std::exception);
+    EXPECT_EQ(device->num_program_cache_entries(), cached_programs);
+
+    auto repeated_valid_result = metal::rmsnorm_fw(input, valid_gamma);
+    ASSERT_TRUE(repeated_valid_result[0].has_value());
+    [[maybe_unused]] auto repeated_valid_output = core::to_xtensor(repeated_valid_result[0].value());
 }
 
 TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Forward_Batch) {
