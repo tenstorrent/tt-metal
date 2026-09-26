@@ -379,6 +379,13 @@ tasks:
     kind: mlp
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-26T20:22:31'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp.py: 7ceb6ee91a2141d77c6fc906acd0d635e111b4d67494f7a1fd1ec599debe9a5b
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_dense.05
   title: 'full_dense block with steps 1-5 on device (last: mlp)'
   step: implement
