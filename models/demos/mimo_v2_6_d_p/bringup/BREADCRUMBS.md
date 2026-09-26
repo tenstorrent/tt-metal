@@ -817,3 +817,37 @@ Results
   lower-fidelity experts perf change (unified / LoFi) will likely fail it.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_06_experts.py`
+
+## C.sliding_moe.ffn_residual.test.1, 2026-09-26
+
+What was done
+- Replaced the rendered one-liner in `tests/bringup/test_c_sliding_moe_ffn_residual.py` with the body of
+  `test_c_sliding_moe_attn_residual.py`, pointed at `ffn_residual`: `out = h_mid + experts_out` (reference
+  `mimo_ref.py:421`, plain add).
+- Asserted checks: PCC >= 0.99 (gated), output size, finite, rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01]. On
+  delta = out - h_mid: experts coefficient in [0.97, 1.03] and experts-term rel L2 <= 0.1.
+
+Decisions and why
+- The golden has ||h_mid|| 79.58, ||experts_out|| 12.44 and ||out|| 82.24. The experts term is about 15% of the output
+  norm, not 1% as in attn_residual, so rel L2 alone catches a dropped term (0.151), a half term (0.076), a one-row
+  shift (0.201) and a 2x error (1.0). All of these except the shift pass PCC 0.99.
+- The addend limits are tighter than in attn_residual (0.3 -> 0.1) because bf16 output rounding costs only 0.011 here.
+- Host measurements (PCC / rel / ratio): fp32 add 0.999997 / 0.0024 / [0.9991, 1.0010]; bf16 add 0.999996 / 0.0029 /
+  [0.9989, 1.0012]; last row zeroed 0.99981 / 0.0196 / min 0.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.0024, ratio [0.9991, 1.0010], coef 1.0, experts rel 0).
+- BRINGUP_IMPL=stub: FAIL (PCC 0).
+- Gate (device): FAIL with `NotImplementedError: no device module for ffn_residual yet`, which is expected before the
+  implement step.
+- The `FAIL pcc_ffn_residual_L01: pcc=0.000000` line printed during collection comes from the precompile stub.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_residual.py`
+
+## C.sliding_moe.ffn_residual implement (attempt 1)
+- Reused the existing `tt/residual.py` `TtResidualAdd` (replicated bf16 `ttnn.add`, no CCL). The only change is in `bringup/hooks.py`:
+  added `ffn_residual` to `_RESIDUAL_STEPS` (so `device_component` returns `_residual_host_fn`) and to `DEVICE_STEPS["sliding_moe"]` (hybrid `device_model`).
+- The inputs are (h_mid, experts_out), in the block graph's order; the add is commutative, so no reordering was needed.
+- Gate: pcc_ffn_residual_L01 = 0.999996, rel_l2 0.00289, row norm ratio [0.9993, 1.0016], experts coef 1.0014, rel 0.0114. PASS.
+- The log's first `FAIL pcc ... 0.000000` line comes from the precompile collect pass (stubbed outputs). Ignore it; the real pass is the second line.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_residual.py`
