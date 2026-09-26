@@ -201,10 +201,11 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     // Clamping s alone (without resetting e) leaves e still describing the rounding
     // error of the pre-clamp s. For a very negative true argument (e.g. pow(0.1, 1000),
     // true s around -3321) the clamped s-k is tiny (~1e-5) while a stale e can be ~1e-4,
-    // so a negative e can flip the reduced fraction f negative and push the result's
-    // biased exponent to 0 (from k_int = -127). setexp then wraps that 0 to 255 (NaN)
-    // instead of the correct underflow-to-zero. binary_pow (ckernel_sfpu_binary_pow.h)
-    // has the same clamp and resets e to 0 there for the same reason; mirror it here.
+    // so a negative e can flip the reduced fraction f negative, dropping p's own biased
+    // exponent from 127 to 126 and pushing the result's biased exponent to -1 (126 +
+    // k_int = 126 + (-127)). setexp then wraps that -1 to 255 (NaN) instead of the
+    // correct underflow-to-zero. binary_pow (ckernel_sfpu_binary_pow.h) has the same
+    // clamp and resets e to 0 there for the same reason; mirror it here.
     v_if(s < -0x7e.ffff8p0f) {
         s = -0x7e.ffff8p0f;
         e = 0.0f;
