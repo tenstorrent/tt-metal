@@ -511,8 +511,10 @@ class TtCSAIndexer(_TtHCABase):
         logits = ttnn.add(logits, mask_rm)
         return ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
 
-    def _chunk_cut_mask_tile(self, seq_local: int, n_cols: int):
-        """TILE twin of ``_chunk_cut_mask`` (for slice_write into the TILE score mask)."""
+    def _chunk_cut_mask_tile(self, seq_local: int, n_cols: int, cache: bool = True):
+        """TILE twin of ``_chunk_cut_mask`` (for slice_write into the TILE score mask). ``cache=False`` builds a TRANSIENT
+        copy the caller deallocates: a ragged final chunk's width is first seen after the islands were captured, and a
+        persistent tensor allocated then can sit on a replay's intermediate addresses (DS4F-0262 class)."""
         key = ("tile", seq_local, n_cols)
         dev = self._cut_masks.get(key)
         if dev is None:
@@ -520,9 +522,9 @@ class TtCSAIndexer(_TtHCABase):
             rows = torch.arange(S).view(S, 1)
             cols = torch.arange(n_cols).view(1, n_cols)
             m = torch.where(4 * cols + 3 <= rows, 0.0, float("-inf")).view(1, 1, S, n_cols)
-            dev = self._cut_masks[key] = self._from_torch(
-                m, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.bfloat16
-            )
+            dev = self._from_torch(m, mesh_mapper=self._mesh_mapper(sp_dim=2), dtype=ttnn.bfloat16)
+            if cache:
+                self._cut_masks[key] = dev
         return dev
 
     def _zeros_block_tile(self, seq_local: int, n_cols: int):
@@ -932,13 +934,23 @@ class TtCSA(TtHCA):
             )
             state.mask_zeroed_upto = state.entry_count
         if n_new > 0:
+            # tile-round the cut block's width (DS4F-0268): a ragged final chunk's n_new = real_len // 4 is arbitrary and every
+            # distinct width compiled a new slice_write program (~3 s host, once per length); the extra columns belong to
+            # entries past the real ones, whose tokens no real query can see, so the cut leaves them -inf anyway
+            n_cut = min(-(-n_new // ttnn.TILE_SIZE) * ttnn.TILE_SIZE, int(entries.shape[2]))
+            full_width = n_cut == int(
+                entries.shape[2]
+            )  # the captured (full-chunk) width: its constant predates the islands
+            cut = self.indexer._chunk_cut_mask_tile(S_l, n_cut, cache=full_width)
             ttnn.experimental.slice_write(
-                self.indexer._chunk_cut_mask_tile(S_l, n_new),
+                cut,
                 mask,
                 start=[0, 0, 0, state.entry_count],
-                end=[1, 1, S_l, state.entry_count + n_new],
+                end=[1, 1, S_l, state.entry_count + n_cut],
                 step=[1, 1, 1, 1],
             )
+            if not full_width:
+                ttnn.deallocate(cut)
 
     # The additive score mask [1,1,S_l,cap] of a slot has the SAME content in every CSA layer (it is a function of the slot's
     # entry_count / n_new only), so one tensor per (device, slot, shape) serves all 21 layers: 99 MB instead of 2.1 GB per
