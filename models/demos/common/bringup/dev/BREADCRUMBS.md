@@ -238,3 +238,9 @@ Drive this ledger with
 - Operating rule (learned twice): stop the orchestrator before editing framework code. The path check diffs the tree,
   so an edit made while an agent runs is charged to that agent, and the next brief tells it to revert the edit. Both
   times the run was stopped before an agent acted on it.
+
+## F20 (2026-09-26): owner rules in every brief
+- Gemma C.sliding.experts: two gate runs failed at device open (active ethernet core 31-25 timeout on all 4 chips; the
+  safe runner's reset did not clear it) right after the first runs of the new GeluTanh expert pipeline. The owner reset
+  the board and set the rule "always use 2D fabric". Spec `agents.rules` is now rendered at the top of every brief;
+  Gemma's spec opens the mesh with FABRIC_2D (box check passes on it).
