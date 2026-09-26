@@ -81,11 +81,11 @@ constexpr auto w_transmat_args = TensorAccessorArgs<SCB + 7>();
 
 void kernel_main() {
     size_t arg_idx = 0;
-    const uint32_t output_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t transformation_mat_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t stats_dram_addr = get_common_arg_val<uint32_t>(2);
     // Forwarder core NoC coords (which core to write the stick to / inc arrival),
     // plus this worker's per-core forwarder group + slot (runtime, differs per core).
     const uint32_t fwd_x = get_arg_val<uint32_t>(arg_idx++);
