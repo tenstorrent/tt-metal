@@ -728,3 +728,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999957, overlap 0.99957, mrel 0.0018). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999879, overlap 0.99854,
   matched 2024/2048, mrel 0.00283, ratio [0.9961, 1.0034]), because the device router is the same TtRouter the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py`
+
+## S.global.08.test.1 (swap test review, global router)
+- Replaced the rendered one-liner with global swap 7's checks (s4096 chunk 1, HEAD_ROWS = 128, attention head-row rel L2 and norm ratio, block out rel L2 <= 0.02,
+  norm/residual/mlp isolation vs the CPU step on the same device inputs), added router to SWAPPED, and copied sliding swap 8's router branch unchanged
+  (exactly 8 nnz/row, no negative weights; vs golden / vs CPU router on the same device h_mid: overlap >= 0.99 / 0.995, matched-row rel L2 <= 0.01 / 0.005,
+  row-sum ratio in [0.99, 1.01]; no whole-matrix rel L2 for the router). Why: PCC misses per_expert_scale, top-k and zeroed-row bugs (test_c_global_router.py).
+- BRINGUP_IMPL=reference: pass (pcc_swap_out 0.999996, router overlap 0.99933 / 1.0, matched rel 0.0019). BRINGUP_IMPL=stub: fails every check.
+- Device gate: pass, pcc_swap_out 0.999989, block out rel 0.0047 / 0.0038; router pcc 0.99983, whole-matrix rel 0.018, overlap 0.99805 / 0.99890,
+  matched rel 0.00337 / 0.00232, row-sum ratio [0.9958, 1.0033] / [0.9973, 1.0025]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py`
