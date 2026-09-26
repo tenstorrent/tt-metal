@@ -21,7 +21,6 @@ struct ConvertToHWCSharedVariables {
     std::vector<std::vector<uint32_t>> per_core_serialized_transfers;
     tt::tt_metal::KernelHandle writer_kernel_id0{};
     tt::tt_metal::KernelHandle writer_kernel_id1{};
-    uint32_t remote_address = 0;
 };
 
 struct ConvertToHWCProgramFactory {
@@ -78,7 +77,6 @@ struct ConvertToHwcConfig {
 
     // DRAM/L1 configuration
     bool is_input_in_dram{};
-    uint32_t remote_address{};
     tt::tt_metal::BufferType remote_buffer_type{};
     tt::CoreType remote_core_type{};
 
