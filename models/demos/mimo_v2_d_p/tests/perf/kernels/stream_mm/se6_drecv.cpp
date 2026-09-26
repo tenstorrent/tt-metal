@@ -77,7 +77,22 @@ void kernel_main() {
     se_dyn_publish(dyn, tt::CBIndex::c_6);
     const uint32_t num_v = dyn.num_v;
     uint32_t y_a = 0, y_s = 0;  // (active expert, sub-block) of output out_done
+#ifdef SE_SMALL_T
+    // Small-M role split: RT after the se_dyn.hpp args: extra slice's first y column, has an extra slice, successor
+    // is a reader tail, down cores only (the coordinator's count then); CT 23 PCX. The extra tiles come in CB 17.
+    const uint32_t xa = 10 + n_gu + 5 + num_e_dyn;
+    constexpr uint32_t pcx = get_compile_time_arg_val(23);
+    const uint32_t col0_x = get_arg_val<uint32_t>(xa);
+    const bool xs = dyn.small && get_arg_val<uint32_t>(xa + 1) != 0;
+    const uint32_t sxy_e = dyn.small && get_arg_val<uint32_t>(xa + 2) ? 0 : sxy;  // the chain ends before the reader
+    const uint32_t n_down_e = dyn.small ? get_arg_val<uint32_t>(xa + 3) : n_down;
 #else
+    const uint32_t sxy_e = sxy;
+    constexpr uint32_t n_down_e = n_down;
+#endif
+#else
+    const uint32_t sxy_e = sxy;
+    constexpr uint32_t n_down_e = n_down;
     constexpr uint32_t num_v = num_v_ct;
 #endif
 #ifdef SE_E2E
@@ -110,7 +125,7 @@ void kernel_main() {
     uint32_t h_pub = 0, h_cons = 0, h_iss = 0, h_fwd = 0, h_rep = 0, h_done = 0;
     uint32_t out_done = 0, go_sent = 0;
     bool y_pending = false;
-    while (out_done < num_v || (sxy && h_fwd < num_v * h_pieces) || (is_coord && go_sent + 1 < num_v)) {
+    while (out_done < num_v || (sxy_e && h_fwd < num_v * h_pieces) || (is_coord && go_sent + 1 < num_v)) {
         invalidate_l1_cache();
         if (head) {  // h(v) is complete once all slices of it are in its buffer
             while (h_done < num_v && *gath[h_done % hbuf] >= n_slices * (h_done / hbuf + 1)) {
@@ -118,7 +133,7 @@ void kernel_main() {
             }
         }
         const uint32_t arrived = head ? h_done * h_pieces : *harr;
-        while (sxy && h_iss < arrived && h_iss - h_fwd < link_depth && *hsfree + hbuf >= h_iss / h_pieces + 1) {
+        while (sxy_e && h_iss < arrived && h_iss - h_fwd < link_depth && *hsfree + hbuf >= h_iss / h_pieces + 1) {
             const uint32_t off = ((h_iss / h_pieces) % hbuf) * h_bytes + (h_iss % h_pieces) * piece_bytes;
             write_trid(h_all + off, succ_hall + off, piece_bytes, 1 + h_iss % link_depth);
             ++h_iss;
@@ -135,14 +150,20 @@ void kernel_main() {
         if (h_cons < h_pub && cb_pages_reservable_at_back(h_all_cb, (hbuf - (h_pub - h_cons) + 1) * h_all_tiles)) {
             ++h_cons;
         }
-        const uint32_t freed = sxy && h_fwd / h_pieces < h_cons ? h_fwd / h_pieces : h_cons;
+        const uint32_t freed = sxy_e && h_fwd / h_pieces < h_cons ? h_fwd / h_pieces : h_cons;
         if (freed > h_rep) {
             if (!head) {
                 noc_semaphore_inc(pred_free, freed - h_rep);
             }
             h_rep = freed;
         }
-        if (!y_pending && out_done < num_v && cb_pages_available_at_front(out_cb, out_tiles)) {
+#if defined(SE_DYN) && defined(SE_SMALL_T)
+        const bool x_ready = !xs || cb_pages_available_at_front(tt::CBIndex::c_17, mt * pcx);
+        const uint32_t src_x = xs ? get_read_ptr(tt::CBIndex::c_17) : 0;
+#else
+        constexpr bool x_ready = true;
+#endif
+        if (!y_pending && out_done < num_v && x_ready && cb_pages_available_at_front(out_cb, out_tiles)) {
             const uint32_t src = get_read_ptr(out_cb);
             for (uint32_t r = 0; r < mt; ++r) {
 #ifdef SE_E2E
@@ -164,11 +185,21 @@ void kernel_main() {
                 for (uint32_t c = 0; c < pcd; ++c) {
                     noc_async_write_tile(trow * ht + col0 + c, y, src + (r * pcd + c) * out_page);
                 }
+#if defined(SE_DYN) && defined(SE_SMALL_T)
+                for (uint32_t c = 0; xs && c < pcx; ++c) {
+                    noc_async_write_tile(trow * ht + col0_x + c, y, src_x + (r * pcx + c) * out_page);
+                }
+#endif
             }
             y_pending = true;
         }
         if (y_pending && ncrisc_noc_nonposted_writes_flushed(noc_index)) {
             cb_pop_front(out_cb, out_tiles);
+#if defined(SE_DYN) && defined(SE_SMALL_T)
+            if (xs) {
+                cb_pop_front(tt::CBIndex::c_17, mt * pcx);
+            }
+#endif
             noc_semaphore_inc(done_noc, 1);
             ++out_done;
 #ifdef SE_DYN
@@ -180,7 +211,7 @@ void kernel_main() {
             y_pending = false;
         }
         bool all_done = is_coord && go_sent + 1 < num_v;
-        for (uint32_t d = 0; all_done && d < n_down; ++d) {
+        for (uint32_t d = 0; all_done && d < n_down_e; ++d) {
             all_done = dw[d] >= go_sent + 1;
         }
         if (all_done) {
@@ -192,7 +223,7 @@ void kernel_main() {
         }
     }
     if (is_coord) {  // every core's last report is in once all words reach NUM_V; leave them zeroed for the next run
-        for (uint32_t d = 0; d < n_down; ++d) {
+        for (uint32_t d = 0; d < n_down_e; ++d) {
             while (true) {
                 invalidate_l1_cache();
                 if (dw[d] >= num_v) {
@@ -200,7 +231,7 @@ void kernel_main() {
                 }
             }
         }
-        for (uint32_t d = 0; d < n_down; ++d) {
+        for (uint32_t d = 0; d < n_down_e; ++d) {
             dw[d] = 0;
         }
     }

@@ -72,6 +72,9 @@ XHELP_ENV = os.environ.get(
     "MIMO_FL_XHELP", "auto"
 )  # e2e: one multicaster per rectangle, a helper core reads / tilizes half of x
 LAND_SLOTS = int(os.environ.get("MIMO_FL_LAND_SLOTS", "3"))  # helper -> primary landing ring (super-blocks)
+SMALL_T = int(
+    os.environ.get("MIMO_FL_SMALL_T", "0")
+)  # dyn + reader-down: <= this many tokens per expert -> readers drop down
 PREPASS = int(os.environ.get("MIMO_FL_PREPASS", "0"))  # extract + tilize x in a separate op, then the pre-tiled op
 PP_CORES = int(os.environ.get("MIMO_FL_PP_CORES", "110"))  # cores of the pre-pass op
 DYN = int(
@@ -154,13 +157,15 @@ def test_stream_expert_flat(device, m, wdtype):
     # sub-block zero-padded when M is not a multiple of it (FLOPs / bytes below count the real M only)
     MT = int(os.environ["MIMO_FL_MT"]) if os.environ.get("MIMO_FL_MT") else min(MT_MAX, m // 32)
     m_pad = -(-m // (MT * 32)) * MT * 32
-    RDOWN = m >= 256 if RDOWN_ENV == "auto" else bool(int(RDOWN_ENV))  # compute-bound M: readers help with down
+    # compute-bound M: readers help with down, end to end only when down would be heavy without them (> 6 output
+    # tile columns per down core over the 26 of the large layout: K2 / H 6144 yes, MiMo H 4096 no)
+    RDOWN = (m >= 256 and (not E2E or H // 32 > 6 * 26)) if RDOWN_ENV == "auto" else bool(int(RDOWN_ENV))
     banks = device.dram_grid_size().x
     # e2e x relays: below reader-down M one relay west of both rectangles (several collapse: overlapping multicasts),
     # with reader-down two per rectangle (X2), taking turns by super-block
-    XCOL = (1 if E2E and not RDOWN else 0) if XCOL_ENV == "auto" else int(XCOL_ENV)
-    X2 = not XCOL and (E2E and RDOWN if X2_ENV == "auto" else bool(int(X2_ENV)))  # two x relays per rectangle
-    XHELP = (E2E and RDOWN and not XCOL) if XHELP_ENV == "auto" else bool(int(XHELP_ENV))
+    XCOL = (1 if E2E and m < 256 else 0) if XCOL_ENV == "auto" else int(XCOL_ENV)
+    X2 = not XCOL and (E2E and m >= 256 if X2_ENV == "auto" else bool(int(X2_ENV)))  # two x relays per rectangle
+    XHELP = (E2E and m >= 256 and not XCOL) if XHELP_ENV == "auto" else bool(int(XHELP_ENV))
     if XHELP:  # the X2 cores, but relays 2 / 3 only read + tilize for relays 0 / 1 (one sender per rectangle)
         assert E2E and not XCOL
         X2 = True
@@ -254,6 +259,18 @@ def test_stream_expert_flat(device, m, wdtype):
     O_OFF = H_OFF + al(HBUF * h_tiles * H_TILE)
     D_OFF = O_OFF + al(2 * out_tiles * 2048)
     dn_bytes = D_OFF + 2048
+    SMALL = bool(SMALL_T) and DYN and RDOWN
+    if SMALL:  # small-M role split: the reader tails' columns in extra slices of PCX columns on the first down cores
+        xcols = n_rdn * pcd_r
+        pcx = -(-xcols // ND)
+        assert xcols % pcx == 0 and pcx <= 8, (xcols, pcx)
+        n_x = xcols // pcx
+        kd_x = kd_of(pcx)
+        nblk_x, slot_x = It // kd_x, kd_x * pcx
+        ring_x = int(round(float(os.environ.get("MIMO_FL_DRING_X", "1.5")) * nblk_x))
+        XW_OFF = dn_bytes
+        XO_OFF = XW_OFF + al(ring_x * slot_x * w_tile)
+        dn_bytes = XO_OFF + al(MT * pcx * BF8_TILE)  # one output slot (L1 is tight)
     tok_pad = -(-m // 32) * 32  # e2e: expert e's region starts at row e * tok_pad of the dispatch buffer
     # per-expert token counts (dynamic mode: read on device; the program is built for up to m per expert)
     cnts = (
@@ -328,6 +345,18 @@ def test_stream_expert_flat(device, m, wdtype):
         ]
         wr_dev = _bank_sharded(rregs, banks, w_dtype, device)
         wr_region = rregs[0].shape[0] * w_tile
+    if SMALL:
+
+        def xreg(d):
+            if d >= n_x:
+                return torch.zeros(E * nblk_x * slot_x, 32, 32)
+            c0 = rem_cols + d * pcx
+            return torch.cat(
+                [Wd_t[c * kd_x : (c + 1) * kd_x, c0 : c0 + pcx].reshape(-1, 32, 32) for c in range(nblk_x)]
+            ).repeat(E, 1, 1)
+
+        wx_dev = _bank_sharded([xreg(d) for d in range(ND)], banks, w_dtype, device)
+        wx_region = E * nblk_x * slot_x * w_tile
     # ---- x: blocks (v, K-block) of [128 x 256], block k in region k % 16 (bank-spread) ----
     xblocks = [
         xs[v][:, b * KBLK * 32 : (b + 1) * KBLK * 32].reshape(MT, 32, KBLK, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)
@@ -527,6 +556,32 @@ def test_stream_expert_flat(device, m, wdtype):
     xy_or0 = lambda lst, i: pk(lst[i]) if i is not None else 0
     head_xy = [pk(down[d]) for d in d_heads]
 
+    def _walk(h_):
+        out_ = [h_]
+        while out_[-1] in d_succ:
+            out_.append(d_succ[out_[-1]])
+        return out_
+
+    if os.environ.get("MIMO_FL_SHOW"):
+        logger.info(
+            "ROLEMAP "
+            + json.dumps(
+                {
+                    "readers": [(c.x, c.y) for c in readers],
+                    "gu": [(c.x, c.y) for c in gu],
+                    "relays": [(c.x, c.y) for c in relays],
+                    "down": [(c.x, c.y) for c in down],
+                    "rdown": [(readers[r].x, readers[r].y) for r, _ in rdn],
+                    "heads": [(down[d].x, down[d].y) for d in d_heads],
+                    "chains": [[(down[d].x, down[d].y) for d in _walk(h_)] for h_ in d_heads],
+                    "coord": (down[0].x, down[0].y),
+                    "xhelp": bool(XHELP),
+                    "xcol": XCOL,
+                    "pcds": pcds,
+                }
+            )
+        )
+
     rd_vals, fw_vals, gu_rt = {}, {}, ttnn.RuntimeArgs()
     for r, c in enumerate(readers):
         rd_vals[(c.x, c.y)] = [w_dev.buffer_address(), r % banks, (r // banks) * region_bytes, 0] + dyn_args
@@ -566,6 +621,7 @@ def test_stream_expert_flat(device, m, wdtype):
             )
     dr_rts = {p_: ttnn.RuntimeArgs() for p_ in dgroups}
     dw_rts = {p_: ttnn.RuntimeArgs() for p_ in dgroups}
+    dc_rts = {p_: ttnn.RuntimeArgs() for p_ in dgroups}
     gu_xy = [pk(c) for c in gu]
     for d, dc in enumerate(down):
         tail_succ = {t: pk(readers[r]) for r, t in rdn}
@@ -585,8 +641,14 @@ def test_stream_expert_flat(device, m, wdtype):
             ]
             + gu_xy
             + e2e_rt
+            + ([rem_cols + d * pcx, int(d < n_x), int(d in tail_succ), ND] if SMALL else [])
         )
-        dw_rt[dc.x][dc.y] = [wd_dev.buffer_address(), d % banks, (d // banks) * wd_region] + dyn_args
+        dw_rt[dc.x][dc.y] = (
+            [wd_dev.buffer_address(), d % banks, (d // banks) * wd_region]
+            + dyn_args
+            + ([wx_dev.buffer_address(), d % banks, (d // banks) * wx_region, int(d < n_x)] if SMALL else [])
+        )
+        dc_rts[pcds[d]][dc.x][dc.y] = [int(SMALL and d < n_x)]
     xr_rt, xm_rt, hl_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     vstride = XCOL or (2 if X2 else 1)
     rl_off = lambda idx: idx if XCOL else idx // 2
@@ -638,7 +700,12 @@ def test_stream_expert_flat(device, m, wdtype):
 
     dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
     FP = ttnn.KernelDescriptor.SourceType.FILE_PATH
-    dyn_def = [("SE_DYN", "1")] if DYN else []
+    DYN_HALF = int(os.environ.get("MIMO_FL_DYN_HALF", "512"))  # >= 4 x global experts (the counts row)
+    assert 4 * (2 * E + 2) <= DYN_HALF
+    dyn_def = ([("SE_DYN", "1"), ("SE_DYN_HALF", str(DYN_HALF))] if DYN else []) + (
+        [("SE_SMALL_T", str(SMALL_T))] if SMALL else []
+    )
+    x_ct = [pcx, kd_x, slot_x, ring_x] if SMALL else []
     FWD = max(FWD_DEPTH, 2) if DYN else FWD_DEPTH  # dynamic counts use the pipelined forwarder
     e2e_def = [("SE_E2E", "1")] if E2E else []
     tz_rt = ttnn.RuntimeArgs()
@@ -723,13 +790,16 @@ def test_stream_expert_flat(device, m, wdtype):
                     config=dm(ttnn.DataMovementProcessor.RISCV_0, rd_noc),
                 )
             )
+            rd_dc_rt = ttnn.RuntimeArgs()
+            for _, r, _ in mine:
+                rd_dc_rt[readers[r].x][readers[r].y] = [0]
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/se6_dcompute.cpp",
                     source_type=FP,
                     core_ranges=_crs([readers[r] for _, r, _ in mine]),
-                    compile_time_args=[MT, 1, It, kd_r, pcd_r, E, S, slot_dr, ring_dr],
-                    runtime_args=[],
+                    compile_time_args=[MT, 1, It, kd_r, pcd_r, E, S, slot_dr, ring_dr] + x_ct,
+                    runtime_args=rd_dc_rt,
                     defines=zones
                     + dyn_def
                     + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else []),
@@ -816,7 +886,8 @@ def test_stream_expert_flat(device, m, wdtype):
                         [("XRD_SKIP_READS", os.environ["MIMO_FL_XRD_SKIP"])]
                         if os.environ.get("MIMO_FL_XRD_SKIP")
                         else []
-                    ),
+                    )
+                    + ([("XHELP_SMALL", "1")] if XHELP else []),
                     config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0 if XNOC == 1 else ttnn.NOC.NOC_1),
                 ),
                 ttnn.KernelDescriptor(
@@ -977,7 +1048,8 @@ def test_stream_expert_flat(device, m, wdtype):
                     GATH1,
                     GATH2,
                     E,
-                ],
+                ]
+                + ([pcx] if SMALL else []),
                 defines=e2e_def + dyn_def,
                 runtime_args=dr_rts[p_],
                 config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1 if DN_NOC else ttnn.NOC.NOC_0),
@@ -994,7 +1066,8 @@ def test_stream_expert_flat(device, m, wdtype):
                     int(os.environ.get("MIMO_FL_DW_BATCH", "2")),
                     int(wdtype == "bf8"),
                     E,
-                ],
+                ]
+                + ([slot_x, nblk_x, 4] if SMALL else []),
                 runtime_args=dw_rts[p_],
                 defines=dyn_def
                 + ([("SE_DW_DELAY", os.environ["MIMO_FL_DW_DELAY"])] if os.environ.get("MIMO_FL_DW_DELAY") else []),
@@ -1004,8 +1077,8 @@ def test_stream_expert_flat(device, m, wdtype):
                 kernel_source=f"{KDIR}/se6_dcompute.cpp",
                 source_type=FP,
                 core_ranges=g_crs,
-                compile_time_args=[MT, 1, It, g_["kd"], p_, E, S, g_["slot"], g_["ring"]],
-                runtime_args=[],
+                compile_time_args=[MT, 1, It, g_["kd"], p_, E, S, g_["slot"], g_["ring"]] + x_ct,
+                runtime_args=dc_rts[p_],
                 defines=zones
                 + dyn_def
                 + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else []),
@@ -1067,8 +1140,15 @@ def test_stream_expert_flat(device, m, wdtype):
     ):  # CB 6: the counts page a data-movement kernel hands its compute; CB 7: DM scratch (BRISC low / NCRISC high half)
         all_crs = _crs(arena_cores)
         cbs += [
-            ttnn.CBDescriptor(total_size=64, core_ranges=all_crs, format_descriptors=fmt(6, ttnn.uint32, 64)),
-            ttnn.CBDescriptor(total_size=4096, core_ranges=all_crs, format_descriptors=fmt(7, ttnn.uint32, 4096)),
+            ttnn.CBDescriptor(total_size=128, core_ranges=all_crs, format_descriptors=fmt(6, ttnn.uint32, 128)),
+            ttnn.CBDescriptor(
+                total_size=4 * DYN_HALF, core_ranges=all_crs, format_descriptors=fmt(7, ttnn.uint32, 4 * DYN_HALF)
+            ),
+        ]
+    if SMALL:  # the extra slice's weight ring and output on the down cores
+        cbs += [
+            arena_cb(4, XW_OFF, ring_x * slot_x * w_tile, dn_crs, w_dtype, w_tile),
+            arena_cb(17, XO_OFF, MT * pcx * BF8_TILE, dn_crs, ttnn.bfloat8_b, BF8_TILE),
         ]
     program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
 
@@ -1116,7 +1196,10 @@ def test_stream_expert_flat(device, m, wdtype):
                 signpost(f"{tag}x_end")
         if it:
             signpost(f"{tag}_start")
-        ttnn.generic_op([w_dev, wd_dev, x_dev, arena, y_dram, words] + ([wr_dev] if RDOWN else []), program)
+        ttnn.generic_op(
+            [w_dev, wd_dev, x_dev, arena, y_dram, words] + ([wr_dev] if RDOWN else []) + ([wx_dev] if SMALL else []),
+            program,
+        )
         ttnn.synchronize_device(device)
         if it:
             signpost(f"{tag}_end")

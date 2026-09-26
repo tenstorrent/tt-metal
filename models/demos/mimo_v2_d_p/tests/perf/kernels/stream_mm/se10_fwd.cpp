@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t per_e = get_compile_time_arg_val(8);
     constexpr uint32_t num_e = get_compile_time_arg_val(11);
     SeDyn dyn;
-    se_dyn_load<num_e>(dyn, 1 + R, get_write_ptr(tt::CBIndex::c_7) + 2048, 1);  // NCRISC: upper half of CB 7
+    se_dyn_load<num_e>(dyn, 1 + R, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
     const uint32_t total = dyn.n_act * per_e;
 #else
     constexpr uint32_t total = get_compile_time_arg_val(8);

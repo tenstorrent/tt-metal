@@ -77,8 +77,23 @@ void kernel_main() {
     constexpr uint32_t gu_per_e = gu_chunks_ct / num_e, d_per_e = d_blocks_ct / num_e;
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 12, get_write_ptr(tt::CBIndex::c_7), mt * 32);
-    se_dyn_publish(dyn, tt::CBIndex::c_6);
-    const uint32_t gu_chunks = dyn.n_act * gu_per_e, d_blocks = dyn.n_act * d_per_e, num_v = dyn.num_v;
+#ifdef SE_SMALL_T
+    // Small-M role split: every active expert is small, so this core only streams gate/up weights; the down cores
+    // take its columns (its compute gets no experts, its chain predecessor forwards no h here).
+    const bool small = dyn.small;
+#else
+    constexpr bool small = false;
+#endif
+    {
+        SeDyn pub = dyn;
+        if (small) {
+            pub.n_act = 0;
+            pub.num_v = 0;
+        }
+        se_dyn_publish(pub, tt::CBIndex::c_6);
+    }
+    const uint32_t gu_chunks = dyn.n_act * gu_per_e;
+    const uint32_t d_blocks = small ? 0 : dyn.n_act * d_per_e, num_v = small ? 0 : dyn.num_v;
     const uint64_t gu_base = gu_src, d_base = d_src;
     uint32_t y_a = 0, y_s = 0;
 #else

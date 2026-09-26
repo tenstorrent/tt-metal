@@ -42,13 +42,24 @@ void kernel_main() {
         cb_push_back(rm_cb, 32 * in_batch);
         in_batch = 0;
     };
-    const uint32_t stride = get_arg_val<uint32_t>(1), soff = get_arg_val<uint32_t>(2);
+    uint32_t stride = get_arg_val<uint32_t>(1), soff = get_arg_val<uint32_t>(2);
     uint32_t g = 0;  // super-block index in stream order
 #ifdef SE_DYN
     // Dynamic counts: the active experts' regions (RT 3.. are the se_dyn.hpp args, CB 7 this RISC's scratch); the
     // tilizer gets this relay's super-block count in CB 6.
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7), mt * 32);
+#if defined(XHELP_SMALL) && defined(SE_SMALL_T)
+    // small-M role split with helper relays: the primary (offset 0) reads all of x itself, the helper nothing
+    if (dyn.small) {
+        if (soff) {
+            dyn.n_act = 0;
+            dyn.num_v = 0;
+        }
+        stride = 1;
+        soff = 0;
+    }
+#endif
     {
         const uint32_t tot = dyn.num_v * nsb;
         cb_reserve_back(tt::CBIndex::c_6, 1);

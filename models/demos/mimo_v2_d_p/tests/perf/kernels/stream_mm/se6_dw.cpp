@@ -7,7 +7,8 @@
 // which holds two experts so the next expert loads while the current one is still in use. Up to BATCH blocks per read
 // barrier.
 //
-// CT: 0 IN1_CB, 1 SLOT_TILES, 2 TILE_BYTES, 3 BLOCKS (all experts), 4 BATCH, 5 IS_BFP8, 6 NUM_E (SE_DYN)
+// CT: 0 IN1_CB, 1 SLOT_TILES, 2 TILE_BYTES, 3 BLOCKS (all experts), 4 BATCH, 5 IS_BFP8, 6 NUM_E (SE_DYN), 7 SLOT_X,
+//     8 PER_X, 9 X_CB (SE_SMALL_T: the small-M extra column slice)
 // RT: 0 weight bank base address, 1 bank id, 2 byte offset of this core's region in the bank, 3.. se_dyn.hpp args
 // (SE_DYN)
 #include <stdint.h>
@@ -39,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t num_e = get_compile_time_arg_val(6);
     constexpr uint32_t per_e = blocks / num_e;
     SeDyn dyn;
-    se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2048, 1);  // NCRISC: upper half of CB 7
+    se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
     const uint32_t total = dyn.n_act * per_e;
     auto blk = [&](uint32_t b) { return dyn.eid[b / per_e] * per_e + b % per_e; };
 #else
@@ -58,5 +59,27 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb, n * slot);
+#if defined(SE_DYN) && defined(SE_SMALL_T)
+        // Small-M role split: this core also computes an extra column slice (the reader tails' columns); its weights
+        // ([KBLK_X x PCX] blocks, CT 7 SLOT_X, 8 PER_X per expert) go into CB 9 after each expert's main blocks.
+        // RT after the se_dyn.hpp args: extra region bank base, bank id, byte offset, has an extra slice.
+        {
+            constexpr uint32_t x_cb = get_compile_time_arg_val(9), slot_x = get_compile_time_arg_val(7);
+            constexpr uint32_t per_x = get_compile_time_arg_val(8);
+            const uint32_t xa = 3 + 5 + num_e;
+            if (dyn.small && get_arg_val<uint32_t>(xa + 3) && (b + n) % per_e == 0) {
+                const uint64_t xsrc = get_noc_addr_from_bank_id<true>(
+                    get_arg_val<uint32_t>(xa + 1), get_arg_val<uint32_t>(xa) + get_arg_val<uint32_t>(xa + 2));
+                const uint32_t e = dyn.eid[(b + n) / per_e - 1];
+                for (uint32_t j = 0; j < per_x; ++j) {
+                    cb_reserve_back(x_cb, slot_x);
+                    noc_async_read(
+                        xsrc + (e * per_x + j) * slot_x * tile_bytes, get_write_ptr(x_cb), slot_x * tile_bytes);
+                    noc_async_read_barrier();
+                    cb_push_back(x_cb, slot_x);
+                }
+            }
+        }
+#endif
     }
 }

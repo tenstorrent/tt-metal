@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t dyn0 = 14;
 #endif
     SeDyn dyn;
-    se_dyn_load<num_e>(dyn, dyn0, get_write_ptr(tt::CBIndex::c_7) + 2048, mt * 32);
+    se_dyn_load<num_e>(dyn, dyn0, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
     const uint32_t tot_sb = dyn.num_v * nsb, st_ = get_arg_val<uint32_t>(8), of_ = get_arg_val<uint32_t>(9);
     const uint32_t num_sb = tot_sb > of_ ? (tot_sb - of_ + st_ - 1) / st_ : 0;
 #else
@@ -79,7 +79,11 @@ void kernel_main() {
         // Odd super-blocks were read and tilized by the helper core (se13_xhelp.cpp) into the landing ring here
         // (RT 14 helper xy, 15 landing address, 16 landing slots; DATA sem 4 here counts arrivals, CREDIT sem 5 on the
         // helper counts freed slots).
+#ifdef SE_SMALL_T
+        const bool from_helper = b % 2 == 1 && !dyn.small;  // small-M role split: the primary tilized everything
+#else
         const bool from_helper = b % 2 == 1;
+#endif
         const uint32_t hb = b / 2;
         uint32_t src;
         if (from_helper) {

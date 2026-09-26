@@ -29,8 +29,12 @@ void kernel_main() {
     // Dynamic counts: the odd super-blocks of the active experts' stream (CT 6 NUM_E, 7 NSB; RT 3.. se_dyn.hpp args,
     // CB 7's upper half this RISC's scratch)
     SeDyn dyn;
-    se_dyn_load<get_compile_time_arg_val(6)>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2048, mt * 32);
+    se_dyn_load<get_compile_time_arg_val(6)>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
+#ifdef SE_SMALL_T
+    const uint32_t num_sb = dyn.small ? 0 : dyn.num_v * get_compile_time_arg_val(7) / 2;  // small: the helper idles
+#else
     const uint32_t num_sb = dyn.num_v * get_compile_time_arg_val(7) / 2;
+#endif
 #else
     const uint32_t num_sb = get_arg_val<uint32_t>(2);
 #endif

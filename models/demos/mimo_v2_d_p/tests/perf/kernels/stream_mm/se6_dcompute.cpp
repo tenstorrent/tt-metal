@@ -41,6 +41,25 @@ static_assert(pcd <= 8 && kt_d % kblk_d == 0 && kt_d % hk == 0 && ring >= nblk);
 
 uint32_t popped = 0;
 
+#ifdef SE_SMALL_T
+// Small-M role split (with SE_DYN): when every active expert is small the reader tails drop their down columns and
+// cores with an extra slice (RT 0) also compute PCX more columns, a second pass per row (weights CB 4, out CB 17).
+// CT: 9 PCX, 10 KBLK_X, 11 SLOT_X, 12 RING_X.
+constexpr uint32_t x_cb = tt::CBIndex::c_4;
+constexpr uint32_t xo_cb = tt::CBIndex::c_17;
+constexpr uint32_t pcx = get_compile_time_arg_val(9);
+constexpr uint32_t kblk_x = get_compile_time_arg_val(10);
+constexpr uint32_t slot_x = get_compile_time_arg_val(11);
+constexpr uint32_t ring_x = get_compile_time_arg_val(12);
+constexpr uint32_t nblk_x = kt_d / kblk_x;
+uint32_t popped_x = 0;
+
+FORCE_INLINE uint32_t wblock_x(uint32_t a) {
+    cb_wait_front(x_cb, (a - popped_x + 1) * slot_x);
+    return static_cast<uint32_t>(static_cast<int32_t>(a % ring_x) - static_cast<int32_t>(popped_x % ring_x)) * slot_x;
+}
+#endif
+
 FORCE_INLINE uint32_t wblock(uint32_t a) {
     cb_wait_front(in1_cb, (a - popped + 1) * slot);
     return static_cast<uint32_t>(static_cast<int32_t>(a % ring) - static_cast<int32_t>(popped % ring)) * slot;
@@ -56,6 +75,10 @@ void kernel_main() {
     const uint32_t n_act = read_tile_value(tt::CBIndex::c_6, 0, 0);
     const uint32_t num_v = read_tile_value(tt::CBIndex::c_6, 0, 1);
     uint32_t e = 0, s = 0, subs_e = n_act ? read_tile_value(tt::CBIndex::c_6, 0, 2) : 0;
+#ifdef SE_SMALL_T
+    // the meta page's `small` sits at 2 + SE_MAX_E (se_dyn.hpp, SE_MAX_E = 16)
+    const bool xs = read_tile_value(tt::CBIndex::c_6, 0, 18) != 0 && get_arg_val<uint32_t>(0) != 0;
+#endif
     for (uint32_t v = 0; v < num_v; ++v) {
         const bool last_sub = s + 1 == subs_e;
 #else
@@ -98,6 +121,35 @@ void kernel_main() {
             }
             tile_regs_release();
         }
+#ifdef SE_SMALL_T
+        if (xs) {
+            matmul_block_init(h_all_cb, x_cb, false, pcx, 1, hk);
+            cb_reserve_back(xo_cb, mt * pcx);
+            for (uint32_t r = 0; r < mt; ++r) {
+                const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
+                tile_regs_acquire();
+                uint32_t w = 0;
+                for (uint32_t kk = 0; kk < kt_d; ++kk) {
+                    if (kk % kblk_x == 0) {
+                        w = wblock_x(e * nblk_x + kk / kblk_x);
+                    }
+                    matmul_block(h_all_cb, x_cb, h0 + kk * mtg, w + (kk % kblk_x) * pcx, 0, false, pcx, 1, hk);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < pcx; ++i) {
+                    pack_tile<true>(i, xo_cb, r * pcx + i);
+                }
+                tile_regs_release();
+            }
+            cb_push_back(xo_cb, mt * pcx);
+            if (last_sub) {
+                cb_pop_front(x_cb, nblk_x * slot_x);
+                popped_x += nblk_x;
+            }
+            matmul_block_init(h_all_cb, in1_cb, false, pcd, 1, hk);
+        }
+#endif
         cb_pop_front(h_all_cb, h_all_tiles);
         cb_push_back(out_cb, mt * pcd);
 #ifndef SE_EARLY_POP

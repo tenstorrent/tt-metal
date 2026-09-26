@@ -17,6 +17,11 @@
 #ifndef SE_MAX_E
 #define SE_MAX_E 16
 #endif
+// bytes of scratch per table (counts, regions); a RISC owns 2 * SE_DYN_HALF of CB 7 (BRISC the low, NCRISC the high
+// half)
+#ifndef SE_DYN_HALF
+#define SE_DYN_HALF 1024
+#endif
 
 struct SeDyn {
     uint32_t n_act = 0;       // active experts, in local order
@@ -25,9 +30,14 @@ struct SeDyn {
     uint32_t cnt[SE_MAX_E];   // its tokens
     uint32_t off[SE_MAX_E];   // its region's first row in the dispatch buffer (TILE_HEIGHT-aligned)
     uint32_t subs[SE_MAX_E];  // its sub-blocks
+    uint32_t max_cnt = 0;     // the largest active count
+    bool small = false;       // SE_SMALL_T: every active expert has at most SE_SMALL_T tokens (small-M role split)
 };
 
-// Reads the counts / regions rows into SCRATCH (two 1 KB halves of L1 this RISC owns) and fills d.
+// Where the compute kernels find `small` in the meta page (after the largest possible subs list).
+constexpr uint32_t SE_META_SMALL = 2 + SE_MAX_E;
+
+// Reads the counts / regions rows into SCRATCH (two SE_DYN_HALF halves of L1 this RISC owns) and fills d.
 template <uint32_t num_e>
 inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows_per_sub) {
     static_assert(num_e <= SE_MAX_E);
@@ -38,10 +48,10 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
     const InterleavedAddrGen<true> cg = {.bank_base_address = counts_addr, .page_size = row_bytes};
     const InterleavedAddrGen<true> rg = {.bank_base_address = regions_addr, .page_size = row_bytes};
     noc_async_read(get_noc_addr(0, cg), scratch, rd);
-    noc_async_read(get_noc_addr(0, rg), scratch + 1024, rd);
+    noc_async_read(get_noc_addr(0, rg), scratch + SE_DYN_HALF, rd);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-    volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + 1024);
+    volatile tt_l1_ptr uint32_t* regions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + SE_DYN_HALF);
     d.n_act = 0;
     d.num_v = 0;
     for (uint32_t e = 0; e < num_e; ++e) {
@@ -56,7 +66,11 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
         d.off[a] = regions[g];
         d.subs[a] = (c + rows_per_sub - 1) / rows_per_sub;
         d.num_v += d.subs[a];
+        d.max_cnt = c > d.max_cnt ? c : d.max_cnt;
     }
+#ifdef SE_SMALL_T
+    d.small = d.max_cnt <= SE_SMALL_T;
+#endif
 }
 
 // Hands the active experts' sub-block counts to this core's compute kernel: one page of CB META_CB holding
@@ -69,5 +83,6 @@ inline void se_dyn_publish(const SeDyn& d, uint32_t meta_cb) {
     for (uint32_t a = 0; a < d.n_act; ++a) {
         p[2 + a] = d.subs[a];
     }
+    p[SE_META_SMALL] = d.small;
     cb_push_back(meta_cb, 1);
 }
