@@ -256,7 +256,10 @@ void FabricBuilder::compile_kernels_for_missing_directions() {
     const auto& missing_directions = tensix_config.get_missing_directions(device_->id());
 
     for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
-        log_warning(
+        // Routine step of UDM's core-budget fallback (see fabric_tensix_builder.cpp), not an
+        // error -- every device in UDM mode with fewer mux cores than directions logs this once
+        // per missing direction, so it belongs at debug rather than warning.
+        log_debug(
             tt::LogMetal,
             "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
             local_node_,
