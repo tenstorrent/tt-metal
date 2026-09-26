@@ -631,3 +631,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0030, ratio [0.9963, 1.0013]),
   because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py`
+
+## S.global.03 test (run1, attempt 1)
+- Replaced the one-line template body with test_swap_global_02_attention.py (HEAD_ROWS = 128 checks on attn_out, block out rel L2 <= 0.02) plus the norm isolation check
+  from test_swap_sliding_03_post_attn_norm.py (each swapped norm vs the CPU norm on the exact device input: rel L2 <= 0.03, per-token ratio in [0.97, 1.03]).
+  SWAPPED = attn_norm, attention, post_attn_norm. The gated metric stays `pcc_swap_out` >= 0.98. No new CPU bug measurements; the post_attn_norm bug numbers are from test_c_global_post_attn_norm.py.
+- Verified: BRINGUP_IMPL=reference PASS (block 0.999996, rel 0.0029 / 0.0026; post_attn_norm rel 0.0028). Stub FAIL (every check). The device gate PASSES:
+  pcc_swap_out 0.999991, block rel 0.0042 / 0.0033, attn_out rel 0.0079 / 0.0070, post_attn_norm rel 0.0084 vs golden, iso 0.0019, ratio [0.9974, 1.0010].
+  The device post_attn_norm is the same module as the sliding one, already registered. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py`
+  (BRINGUP_IMPL=reference / stub for the freeze checks).
