@@ -113,40 +113,74 @@ class TtGemma4Block:
         scalar = float(loader.get(p + "layer_scalar").float().reshape(-1)[0].item())
         self.out_add = TtResidualAdd(mesh, scale=scalar)
 
-    def __call__(self, x: ttnn.Tensor, start: int, cache, kv_sink=None) -> ttnn.Tensor:
+        self._build_steps()
+
+    def _build_steps(self):
+        """Device fn(ctx, *inputs) per block-graph step (reference/gemma4_ref.py BLOCK_GRAPH), and after each step the
+        boundaries it was the last reader of (freed there). ctx.state is the layer's attention cache; ctx.extra may
+        carry kv_sink. The router boundary is (idx, wts): the experts take them directly (no dense -> topk)."""
+        from models.demos.gemma4_a4b_d_p.reference.gemma4_ref import BLOCK_GRAPH
+
         n = self.norms
-        an = n["attn_norm"](x)
-        ao = self.attn(an, start, cache, kv_sink=kv_sink)
-        ttnn.deallocate(an)
-        apn = n["post_attn_norm"](ao)
-        ttnn.deallocate(ao)
-        h_mid = self.add(x, apn)
-        ttnn.deallocate(apn)
 
-        fn = n["ffn_norm"](h_mid)
-        mo = self.mlp(fn)
-        ttnn.deallocate(fn)
-        mpn = n["post_mlp_norm"](mo)
-        ttnn.deallocate(mo)
+        def norm(k):
+            return lambda ctx, x: n[k](x)
 
-        dense, idx, wts = self.router(h_mid)
-        ttnn.deallocate(dense)
-        mn = n["moe_norm"](h_mid)
-        eo = self.experts(mn, idx=idx, wts=wts)
-        for t in (mn, idx, wts):
-            ttnn.deallocate(t)
-        epn = n["post_moe_norm"](eo)
-        ttnn.deallocate(eo)
+        def router(ctx, x):
+            dense, idx, wts = self.router(x)
+            ttnn.deallocate(dense)
+            return (idx, wts)
 
-        fs = self.add(mpn, epn)
-        ttnn.deallocate(mpn)
-        ttnn.deallocate(epn)
-        fo = n["post_ffn_norm"](fs)
-        ttnn.deallocate(fs)
-        out = self.out_add(h_mid, fo)
-        ttnn.deallocate(h_mid)
-        ttnn.deallocate(fo)
-        return out
+        self.steps = {k: norm(k) for k in n}
+        self.steps.update(
+            attention=lambda ctx, x: self.attn(x, ctx.start, ctx.state, kv_sink=ctx.extra.get("kv_sink")),
+            attn_residual=lambda ctx, a, b: self.add(a, b),
+            mlp=lambda ctx, x: self.mlp(x),
+            router=router,
+            experts=lambda ctx, x, r: self.experts(x, idx=r[0], wts=r[1]),
+            ffn_combine=lambda ctx, a, b: self.add(a, b),
+            ffn_residual=lambda ctx, a, b: self.out_add(a, b),
+        )
+        self.graph = list(BLOCK_GRAPH)
+        last_use = {}
+        for k, st in enumerate(self.graph):
+            for name in st.inputs:
+                last_use[name] = k
+        assert set(self.steps) == {st.name for st in self.graph}
+        self.overrides = {}
+        for k, st in enumerate(self.graph):
+            dead = tuple(dict.fromkeys(nm for nm in st.inputs if nm != "in" and last_use[nm] == k))
+            self.overrides[st.name] = self._freeing(self.steps[st.name], st.inputs, dead)
+
+    @staticmethod
+    def _freeing(fn, inputs, dead):
+        if not dead:
+            return fn
+        pos = [inputs.index(nm) for nm in dead]
+
+        def wrapped(ctx, *args):
+            y = fn(ctx, *args)
+            for p in pos:
+                for t in args[p] if isinstance(args[p], tuple) else (args[p],):
+                    ttnn.deallocate(t)
+            return y
+
+        return wrapped
+
+    def ctx(self, start: int, seq: int, cache, kv_sink=None):
+        from models.demos.common.bringup.reference.interface import Ctx
+
+        return Ctx(self.i, start, seq, cache, {"kv_sink": kv_sink} if kv_sink is not None else {})
+
+    def __call__(self, x: ttnn.Tensor, start: int, cache, kv_sink=None) -> ttnn.Tensor:
+        """x: replicated [1, 1, S, H] block input (not freed). Runs the block graph through run_block (one profiler
+        section per step); every intermediate is freed after its last reader."""
+        from models.demos.common.bringup.reference.interface import run_block
+
+        def missing(name):
+            raise KeyError(f"no device step {name}")
+
+        return run_block(self.graph, missing, self.ctx(start, x.shape[-2], cache, kv_sink), x, overrides=self.overrides)
 
 
 class TtGemma4Model:
@@ -173,6 +207,7 @@ class TtGemma4Model:
             cos, sin = rope_tables(inv_freq, 0, self.max_seq)
             self.rope[sliding] = tuple(self._replicate(t[None, None]) for t in (cos, sin))
         self.blocks = [TtGemma4Block(mesh, cfg, loader, i, max_chunk, self.rope) for i in self.layer_ids]
+        self.final_norm = TtRMSNorm(mesh, loader.get(PREFIX + "norm.weight"), eps=cfg.rms_norm_eps)
 
     def _replicate(self, t):
         return ttnn.from_torch(

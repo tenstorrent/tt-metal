@@ -3265,6 +3265,202 @@
   "started": "2026-09-26T04:04:40",
   "status": "PASS"
  },
+ "P.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "a67598acf0d2236c1848ff20284dd5955c476df0",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "628409b1-09e8-431b-b9dc-271eedb3b459"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/P.1.assemble.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "a67598acf0d2236c1848ff20284dd5955c476df0",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/P.1.assemble.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [
+     "python on device code without a safe runner: \"python - <<'EOF'\\np='models/demos/gemma4_a4b_d_p/bringup/hooks.py'\\ns=open(p).read()\\nold='''def device_model(mesh, spec, l\""
+    ],
+    "rc": 0,
+    "role": "assemble",
+    "seconds": 582.6,
+    "session_id": "628409b1-09e8-431b-b9dc-271eedb3b459",
+    "t": "2026-09-26T05:38:46"
+   }
+  ],
+  "attempts": 1,
+  "duration_s": 200.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T05:29:03"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T05:42:09"
+   }
+  ],
+  "last_run": "2026-09-26T05:42:09",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/P.1.log",
+  "metrics": {
+   "chunk_seconds_c00": 0.493,
+   "chunk_seconds_c01": 0.535,
+   "chunk_wall_ms": 743.1,
+   "covered_layers": 30,
+   "device_ms_attention": 381.2,
+   "device_ms_attn_norm": 5.73,
+   "device_ms_attn_residual": 6.68,
+   "device_ms_chip0": 740.12,
+   "device_ms_chip1": 740.42,
+   "device_ms_chip2": 741.03,
+   "device_ms_chip3": 740.92,
+   "device_ms_experts": 212.26,
+   "device_ms_ffn_combine": 6.76,
+   "device_ms_ffn_norm": 5.73,
+   "device_ms_ffn_residual": 11.81,
+   "device_ms_mlp": 40.15,
+   "device_ms_moe_norm": 5.73,
+   "device_ms_post_attn_norm": 5.74,
+   "device_ms_post_ffn_norm": 5.74,
+   "device_ms_post_mlp_norm": 5.74,
+   "device_ms_post_moe_norm": 5.73,
+   "device_ms_router": 43.15,
+   "device_ms_total": 742.15,
+   "host_overhead_ms": 0.9,
+   "host_transfers_per_layer": 0,
+   "model_load_s": 49.0,
+   "pcc_chunk_out": 0.9989112612993154,
+   "pcc_final_hidden": 0.9985229167466899,
+   "pcc_layer_L00": 0.9999475578530741,
+   "pcc_layer_L01": 0.9999224289309997,
+   "pcc_layer_L02": 0.9999431317088601,
+   "pcc_layer_L03": 0.9999294215788109,
+   "pcc_layer_L04": 0.9999097137700835,
+   "pcc_layer_L05": 0.9998789383144558,
+   "pcc_layer_L06": 0.9997884766614886,
+   "pcc_layer_L07": 0.9997004710087739,
+   "pcc_layer_L08": 0.9993499070176133,
+   "pcc_layer_L09": 0.9988563278367129,
+   "pcc_layer_L10": 0.9983279090199153,
+   "pcc_layer_L11": 0.9981192820829234,
+   "pcc_layer_L12": 0.9977863214385452,
+   "pcc_layer_L13": 0.9969054694159114,
+   "pcc_layer_L14": 0.9954756231314936,
+   "pcc_layer_L15": 0.9945169692577979,
+   "pcc_layer_L16": 0.9955367389604477,
+   "pcc_layer_L17": 0.9942133152946478,
+   "pcc_layer_L18": 0.9928227047383604,
+   "pcc_layer_L19": 0.9938456313194738,
+   "pcc_layer_L20": 0.9941029085496127,
+   "pcc_layer_L21": 0.993776290101996,
+   "pcc_layer_L22": 0.9949828006184893,
+   "pcc_layer_L23": 0.9943494459109954,
+   "pcc_layer_L24": 0.9952134232785406,
+   "pcc_layer_L25": 0.9960036179837272,
+   "pcc_layer_L26": 0.9966240274725383,
+   "pcc_layer_L27": 0.997279875549928,
+   "pcc_layer_L28": 0.9971765909325058,
+   "pcc_layer_L29": 0.9993742854911716,
+   "pcc_logits_tail": 0.9979004724491021,
+   "pcc_state_key_L00": 0.9999898060107345,
+   "pcc_state_key_L01": 0.9999660523089026,
+   "pcc_state_key_L02": 0.9999550143402743,
+   "pcc_state_key_L03": 0.9999291216367935,
+   "pcc_state_key_L04": 0.9999476434110343,
+   "pcc_state_key_L05": 0.999729718090035,
+   "pcc_state_key_L06": 0.9998690703450326,
+   "pcc_state_key_L07": 0.9997660404399015,
+   "pcc_state_key_L08": 0.9996759449879226,
+   "pcc_state_key_L09": 0.9991099157530292,
+   "pcc_state_key_L10": 0.9989046479995686,
+   "pcc_state_key_L11": 0.9965842345562825,
+   "pcc_state_key_L12": 0.9983775538627705,
+   "pcc_state_key_L13": 0.9979589293642647,
+   "pcc_state_key_L14": 0.9975721850712521,
+   "pcc_state_key_L15": 0.9972855553285193,
+   "pcc_state_key_L16": 0.9972729730999814,
+   "pcc_state_key_L17": 0.9945283298085943,
+   "pcc_state_key_L18": 0.9972332693409341,
+   "pcc_state_key_L19": 0.9972412150492553,
+   "pcc_state_key_L20": 0.9970441255853524,
+   "pcc_state_key_L21": 0.9972340762161633,
+   "pcc_state_key_L22": 0.9976557065740788,
+   "pcc_state_key_L23": 0.9958678296564664,
+   "pcc_state_key_L24": 0.9972742766412387,
+   "pcc_state_key_L25": 0.9972274550512971,
+   "pcc_state_key_L26": 0.997289506034835,
+   "pcc_state_key_L27": 0.9973633672962462,
+   "pcc_state_key_L28": 0.9978699954378515,
+   "pcc_state_key_L29": 0.9973352831143936,
+   "pcc_state_min": 0.9943342593361727,
+   "pcc_state_value_L00": 0.9999920661691771,
+   "pcc_state_value_L01": 0.9999057874050201,
+   "pcc_state_value_L02": 0.99983859254101,
+   "pcc_state_value_L03": 0.9997629088110968,
+   "pcc_state_value_L04": 0.9997510848100515,
+   "pcc_state_value_L05": 0.9997311854748405,
+   "pcc_state_value_L06": 0.9995764588437616,
+   "pcc_state_value_L07": 0.9994035234461651,
+   "pcc_state_value_L08": 0.999205051746729,
+   "pcc_state_value_L09": 0.9976409855697487,
+   "pcc_state_value_L10": 0.9962642577113087,
+   "pcc_state_value_L11": 0.9965853093626809,
+   "pcc_state_value_L12": 0.9962931013978679,
+   "pcc_state_value_L13": 0.995201560101497,
+   "pcc_state_value_L14": 0.9945048110533375,
+   "pcc_state_value_L15": 0.9943342593361727,
+   "pcc_state_value_L16": 0.9945653966907165,
+   "pcc_state_value_L17": 0.9945293669057405,
+   "pcc_state_value_L18": 0.9961813206060292,
+   "pcc_state_value_L19": 0.9957350134490427,
+   "pcc_state_value_L20": 0.9957206781297674,
+   "pcc_state_value_L21": 0.9959127108564104,
+   "pcc_state_value_L22": 0.9966091860278993,
+   "pcc_state_value_L23": 0.9958661040436342,
+   "pcc_state_value_L24": 0.9961979583147921,
+   "pcc_state_value_L25": 0.996426511002484,
+   "pcc_state_value_L26": 0.9962224216786496,
+   "pcc_state_value_L27": 0.9961458051211691,
+   "pcc_state_value_L28": 0.9961607010234939,
+   "pcc_state_value_L29": 0.9973357501970768,
+   "prefill_seconds": 1.028,
+   "profiled_programs": 8980,
+   "subset": 0,
+   "top1_match": 0.9620253443717957,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T05:38:49",
+  "status": "PASS"
+ },
  "PL.0": {
   "attempts": 0,
   "duration_s": 3.3,
@@ -6717,6 +6913,35 @@
   "reason": [],
   "started": "2026-09-26T01:45:10",
   "status": "PASS"
+ },
+ "X.1": {
+  "attempts": 1,
+  "duration_s": 170.6,
+  "history": [
+   {
+    "status": "RESUMED",
+    "t": "2026-09-26T05:15:47"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T05:18:38"
+   }
+  ],
+  "last_run": "2026-09-26T05:18:38",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/X.1.log",
+  "metrics": {
+   "host_transfers_per_layer": 32,
+   "pcc_chunk_out": 0.9988730002950481
+  },
+  "rc": 1,
+  "reason": [
+   "  cmd rc=1 (171s), log: /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/X.1.log",
+   "  MISSING  device_ms_total (need > 0)",
+   "  MISSING  profiled_programs (need >= 1)",
+   "  ok       pcc_chunk_out = 0.9988730002950481 (need >= 0.97)"
+  ],
+  "started": "2026-09-26T05:15:47",
+  "status": "FAIL"
  },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
