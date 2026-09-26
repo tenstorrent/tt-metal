@@ -97,6 +97,38 @@ def test_full_float(device, input_shape, fill_value, dtype, layout):
 @pytest.mark.parametrize(
     "input_shape",
     [
+        [1, 3],
+        [32, 32],
+    ],
+)
+@pytest.mark.parametrize(
+    "fill_value, dtype",
+    [
+        (3, torch.bfloat16),  # int fill_value on a float dtype
+        (-1, torch.float32),
+        (3.14, torch.int32),  # float fill_value on an int dtype, truncates toward zero
+        (-3.9, torch.int32),
+    ],
+)
+def test_full_mismatched_fill_value_type(device, input_shape, fill_value, dtype):
+    expected_value = int(fill_value) if dtype == torch.int32 else float(fill_value)
+    torch_output = torch.full(input_shape, expected_value, dtype=dtype)
+
+    tt_output = ttnn.moreh_full(input_shape, fill_value, device, dtype=torch_dtype_to_ttnn_dtype[dtype])
+    tt_output_cpu = ttnn.to_torch(tt_output)
+
+    assert torch.equal(torch_output, tt_output_cpu)
+
+
+@pytest.mark.parametrize("fill_value", [1e20, -1e20, float("nan")])
+def test_full_int32_fill_value_out_of_range(device, expect_error, fill_value):
+    with expect_error(RuntimeError, "out of range for INT32"):
+        ttnn.moreh_full([32, 32], fill_value, device, dtype=ttnn.int32)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
         [32, 32],  # single tile
     ],
 )
