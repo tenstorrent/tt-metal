@@ -192,6 +192,10 @@ footer{color:var(--muted);font-size:12px}
     <section aria-labelledby="s-time">
       <div class="sec-head"><h2 id="s-time">Chunk timing</h2><p>Warm prefill time by token range (k = 1024 tokens): nothing read back. Accuracy runs (the ladder) are not timed here</p></div>
       <div class="tbl-wrap"><table id="timing"></table></div>
+      <h3 id="pos-head" style="margin:22px 0 4px">Chunk time by position</h3>
+      <p id="pos-sub" class="muted" style="margin:0 0 8px"></p>
+      <div id="pos-wrap"><svg id="pos" viewBox="0 0 900 260" role="img" style="width:100%;height:auto"></svg></div>
+      <div class="tbl-wrap"><table id="pos-table"></table></div>
     </section>
   </div>
 
@@ -473,6 +477,29 @@ function timing(){
       return `<tr${old}><td><b>${esc(t.headline)}</b></td><td class="num"><b>${t.seconds.toFixed(t.seconds < 10 ? 2 : 1)} s</b>${per}</td><td class="num">${tps}</td><td class="num">${n}</td><td>${esc(t.how)}</td><td>${esc(t.model)}</td><td>${esc(t.task)}</td></tr>`; }).join("") + "</tbody>";
 }
 
+function positionsChart(){
+  const P = D.positions, kt = n => n < 1024 ? String(n) : `${(n / 1024).toFixed(Math.abs(n / 1024 - Math.round(n / 1024)) < 0.05 ? 0 : 1)}k`;
+  if (!P){ $("#pos-wrap").innerHTML = `<div class="empty">No position sweep yet (the final perf task measures it)</div>`; $("#pos-table").outerHTML = ""; $("#pos-sub").textContent = ""; return; }
+  const pts = P.points, c = P.chunk || 0, W = 900, H = 260, m = {l:64, r:24, t:16, b:42};
+  $("#pos-sub").textContent = `One warm ${kt(c)}-token chunk starting at each position (${P.model}, nothing read back; ${P.task}). The rise is attention over the longer prefix.`;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y1 = Math.max(...ys) * 1.12;
+  const x = v => m.l + (W - m.l - m.r) * (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5), y = v => m.t + (H - m.t - m.b) * (1 - v / y1);
+  const muted = css("--muted"), line = css("--line"), acc = css("--accent"), ink = css("--ink");
+  let s = "";
+  const step = y1 > 2000 ? 500 : y1 > 800 ? 200 : 100;
+  for (let v = 0; v <= y1; v += step){ s += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="${line}"/>`;
+    s += `<text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="12" fill="${muted}">${v} ms</text>`; }
+  s += `<polyline points="${pts.map(p => `${x(p[0])},${y(p[1])}`).join(" ")}" fill="none" stroke="${acc}" stroke-width="2.5"/>`;
+  pts.forEach(p => { s += `<circle cx="${x(p[0])}" cy="${y(p[1])}" r="5" fill="${acc}"/>`;
+    s += `<text x="${x(p[0])}" y="${y(p[1]) - 10}" text-anchor="middle" font-size="12" fill="${ink}">${p[1].toFixed(0)} ms</text>`;
+    s += `<text x="${x(p[0])}" y="${H - m.b + 20}" text-anchor="middle" font-size="12" fill="${muted}">${kt(p[0])}→${kt(p[0] + c)}</text>`; });
+  $("#pos").innerHTML = s;
+  $("#pos").setAttribute("aria-label", `Chunk time by start position: ${pts.map(p => `${kt(p[0])} ${p[1].toFixed(0)} ms`).join(", ")}`);
+  const base = pts[0][1];
+  $("#pos-table").innerHTML = `<thead><tr><th>Chunk</th><th>Time</th><th>Tokens/s</th><th>vs first</th></tr></thead><tbody>` +
+    pts.map(p => `<tr><td><b>${kt(p[0])} → ${kt(p[0] + c)}</b></td><td class="num">${p[1].toFixed(0)} ms</td><td class="num">${c ? (c / p[1] * 1e3).toFixed(0) : ""}</td><td class="num">${(p[1] / base).toFixed(2)}×</td></tr>`).join("") + "</tbody>";
+}
+
 function profile(){
   const P = D.profile, secEl = $("#prof-sec");
   if (!P){ secEl.hidden = true; return; }
@@ -545,7 +572,7 @@ function profile(){
   secEl.onkeydown = e => { if (e.key === "ArrowRight"){ select(cur + 1); e.preventDefault(); } if (e.key === "ArrowLeft"){ select(cur - 1); e.preventDefault(); } };
   select(cur);
 }
-function render(){ header(); profile(); ladder(); dag(); ops(); findings(); timing(); sharding(); pccChart();
+function render(){ header(); profile(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml, findings.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
