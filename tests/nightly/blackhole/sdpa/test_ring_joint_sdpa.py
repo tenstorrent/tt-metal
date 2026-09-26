@@ -1709,6 +1709,7 @@ def run_ring_joint_sdpa_chunked(
     use_ring_mla: bool = False,
     do_check: bool = True,
     reuse_kv_buffer: bool = False,
+    use_compact_single_chunk_q: bool = False,
     fp32_dest_acc_en: bool = False,
     sliding_window_size: int = None,
     use_attention_sink: bool = False,
@@ -1731,6 +1732,10 @@ def run_ring_joint_sdpa_chunked(
     use_ring_mla=True drives ttnn.transformer.ring_mla instead of the classic
     separate-K/V op: K and V live in a single latent K/V tensor (width d_k) and V
     is its first d_v columns. This is the MLA latent-V deployment shape.
+
+    use_compact_single_chunk_q=True stores only the selected Q chunk. K/V remain
+    full-sequence, deterministic nonzero inputs and follow the normal production
+    cache-packing path. This mode is only supported without a correctness check.
     """
     torch.manual_seed(CHUNKED_PREFILL_SEED)
 
@@ -1785,6 +1790,11 @@ def run_ring_joint_sdpa_chunked(
     # identical whether run in isolation or as part of the full sequence.
     only_chunk = get_chunked_only_chunk_id(n_chunks)
 
+    if use_compact_single_chunk_q:
+        assert only_chunk is not None, "Compact Q requires one profiler-selected chunk"
+        assert num_iterations == 1, "Compact Q supports one iteration"
+        assert not do_check, "Compact Q is not supported by the full-sequence correctness reference"
+
     if qk_configs is None:
         if q_chunk_size is None:
             q_chunk_size = model.q_chunk_sizes[0]
@@ -1826,30 +1836,22 @@ def run_ring_joint_sdpa_chunked(
 
     try:
         torch.manual_seed(CHUNKED_PREFILL_SEED)
-        # A profiler-selected chunk needs only one Q chunk. In the perf-only reuse-K/V path, the
-        # device consumes an already packed fixed-capacity cache plus logical prefix metadata, so
-        # canonical full-sequence K/V tensors are unnecessary as well.
-        is_gemma4_chunked_perf = model.name in ("gemma4_global", "gemma4_swa")
-        use_compact_single_chunk_q = (
-            is_gemma4_chunked_perf and only_chunk is not None and num_iterations == 1 and not do_check
-        )
-        use_direct_reuse_perf_inputs = use_compact_single_chunk_q and reuse_kv_buffer and not use_ring_mla
         q_storage_seq = chunk_size if use_compact_single_chunk_q else total_seq
-        random_input = torch.randn if use_compact_single_chunk_q else fa_rand
-        if num_iterations > 1:
-            Q_full = deterministic_input_tensor(b, nhq, total_seq, d_q, offset=0.125)
+        use_deterministic_inputs = num_iterations > 1 or use_compact_single_chunk_q
+        if use_deterministic_inputs:
+            Q_full = deterministic_input_tensor(b, nhq, q_storage_seq, d_q, offset=0.125)
             K_full = deterministic_input_tensor(b, nhk, total_seq, d_k, offset=0.25)
         else:
-            Q_full = random_input(b, nhq, q_storage_seq, d_q)
-            K_full = None if use_direct_reuse_perf_inputs else random_input(b, nhk, total_seq, d_k)
+            Q_full = fa_rand(b, nhq, q_storage_seq, d_q)
+            K_full = fa_rand(b, nhk, total_seq, d_k)
 
         if use_ring_mla:
             # MLA latent: a single shared K/V tensor; V is its first d_v columns.
             V_full = K_full[:, :, :, :d_v]
-        elif num_iterations > 1:
+        elif use_deterministic_inputs:
             V_full = deterministic_input_tensor(b, nhv, total_seq, d_v, offset=0.375)
         else:
-            V_full = None if use_direct_reuse_perf_inputs else random_input(b, nhv, total_seq, d_v)
+            V_full = fa_rand(b, nhv, total_seq, d_v)
 
         operator_sink = None
         if use_attention_sink:
@@ -2051,25 +2053,11 @@ def run_ring_joint_sdpa_chunked(
             s, e = i * chunk_size, (i + 1) * chunk_size
 
             if reuse_kv_buffer:
-                if use_direct_reuse_perf_inputs:
-                    # Performance profiling does not inspect tensor values. Build the fixed physical
-                    # cache directly instead of materializing and pad-rotating the 256K-token logical
-                    # cache. The device-visible shapes and logical_n/kv_actual_isl metadata are the
-                    # same as the normal reuse-K/V path.
-                    return (
-                        s,
-                        e,
-                        b,
-                        None,
-                        upload_q(Q_full),
-                        upload_k(torch.zeros(b, nhk, reuse_kv_stable_seq, d_k, dtype=torch.bfloat16)),
-                        upload_v(torch.zeros(b, nhv, reuse_kv_stable_seq, d_v, dtype=torch.bfloat16)),
-                    )
-
                 # Pad-rotation layout for the [0, s) prefix + new [s, e) chunk, then grow each device's
                 # slab to reuse_kv_stable_seq with a garbage tail. The tail is never read iff the gather
                 # honours logical_n=e / kv_actual_isl=s (set in run_chunk_call).
-                Q_chunk, K_chunk = Q_full[:, :, s:e, :].contiguous(), K_full[:, :, s:e, :].contiguous()
+                Q_chunk = Q_full if use_compact_single_chunk_q else Q_full[:, :, s:e, :].contiguous()
+                K_chunk = K_full[:, :, s:e, :].contiguous()
                 stable_per_dev = reuse_kv_stable_seq // sp_size
 
                 def oversize(host, nh, head_dim):
@@ -2105,7 +2093,7 @@ def run_ring_joint_sdpa_chunked(
                     upload_v(oversize(v_host, nhv, d_v)),
                 )
 
-            Q_chunk = Q_full[:, :, s:e, :].contiguous()
+            Q_chunk = Q_full if use_compact_single_chunk_q else Q_full[:, :, s:e, :].contiguous()
             if circular_kv_cache:
                 assert i >= 1, "circular_kv_cache runs need a predecessor chunk (select chunk >= 1)"
                 cache_layout = lambda full: to_circular_cache_layout(
@@ -5570,7 +5558,7 @@ if MESH_CONFIG.is_galaxy:
             q_chunk_sizes=[32, 64, 128],
             # k512 overflows BH L1 for q64/q128; keep the sweep rectangular and entirely runnable.
             k_chunk_sizes=[64, 128, 256],
-            seq_len=GEMMA4_CHUNKED_PER_DEVICE_CHUNK,
+            seq_len=GEMMA4_CHUNKED_PER_DEVICE_CHUNK,  # Per-device portion of the global chunk.
             scale=1.0,
             topology=Topology.Linear,
             total_seq=GEMMA4_CHUNKED_TOTAL_SEQ,
@@ -5588,7 +5576,7 @@ if MESH_CONFIG.is_galaxy:
             kv_dtype=ttnn.bfloat8_b,
             q_chunk_sizes=[64, 128],
             k_chunk_sizes=[128],
-            seq_len=GEMMA4_CHUNKED_PER_DEVICE_CHUNK,
+            seq_len=GEMMA4_CHUNKED_PER_DEVICE_CHUNK,  # Per-device portion of the global chunk.
             sliding_window_size=1024,
             scale=1.0,
             topology=Topology.Linear,
@@ -6855,8 +6843,8 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
 # dedicated >=130 W perf host has enough samples to establish tighter production baselines.
 GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = [
     # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
-    ("gemma4_global", 64, 256, 8, 38.25, 0.25),
-    ("gemma4_swa", 64, 128, 8, 5.19, 0.25),
+    ("gemma4_global", 96, 256, 8, 55.4, 0.25),
+    ("gemma4_swa", 128, 128, 8, 6.3, 0.25),
 ]
 
 
@@ -6902,6 +6890,7 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
                     persistent_buffer_mode="reuse_max",
                     do_check=False,
                     reuse_kv_buffer=True,
+                    use_compact_single_chunk_q=True,
                     sliding_window_size=model.sliding_window_size,
                     runtime=runtime,
                 ),
