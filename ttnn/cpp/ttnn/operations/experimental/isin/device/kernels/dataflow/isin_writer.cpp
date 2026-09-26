@@ -12,11 +12,11 @@ void kernel_main() {
     const uint32_t output_buffer_address = get_arg_val<uint32_t>(0);
     const uint32_t subchunks_per_core = get_arg_val<uint32_t>(1);
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(2);
+    // DRAM offset and length are in uint32 mask elements, not input elements.
+    constexpr uint32_t output_element_size = sizeof(uint32_t);
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
     const auto output_addr_gtor = TensorAccessor(ctas.output_accessor_args, output_buffer_address, ctas.elements_size);
-
-    constexpr uint32_t output_element_size = ctas.elements_tensor_datum_size;
 
     /*
         this loop goes over the same range as the reader with its elements subchunk loop

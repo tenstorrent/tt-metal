@@ -57,8 +57,8 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
     test_elements_torch = torch.tensor(test_elements, dtype=torch_dtype)
 
     # Convert to ttnn tensors
-    elements_ttnn = ttnn.from_torch(elements_torch, device=device, layout=layout)
-    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, layout=layout)
+    elements_ttnn = ttnn.from_torch(elements_torch, device=device, layout=layout, dtype=dtype)
+    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, layout=layout, dtype=dtype)
 
     # Act - Compute results
     torch_isin_result = torch.isin(elements_torch, test_elements_torch, invert=invert)
