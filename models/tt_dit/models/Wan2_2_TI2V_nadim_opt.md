@@ -1,7 +1,7 @@
 # Wan2.2 TI2V-5B — I2V enablement and optimization (nkira)
 
-Everything done on `nkira/wan2.2-5B-i2v` (sprint-4 tip on `nkira/wan2.2-5B-i2v-step3`) since
-branching from Teja's bring-up at `8d596eb242d`. Companion to `Wan2_2_TI2V_5B.md`, which stays the bring-up doc.
+Everything done on `nkira/wan2.2-5B-i2v` (sprint-5 tip on `nkira/wan2.2-5B-i2v-step5`, sprint 4
+on `-step3`) since branching from Teja's bring-up at `8d596eb242d`. Companion to `Wan2_2_TI2V_5B.md`, which stays the bring-up doc.
 
 Hardware throughout: one Blackhole Galaxy, 4x8, SP=8 axis1 / TP=4 axis0, Ring, FSDP off.
 All timings are 40 steps, warm-traced, and every figure below is a **mean of 3 invocations** —
@@ -11,9 +11,25 @@ the per-run `Std` the perf test prints is a single sample, not a spread.
 
 ## 1. Results
 
-**Current tip (sprint 4, 2026-09-25, host u13-43, mean of 3, 81 f / 40 steps, warm-traced).** The
-default pipeline now runs the trace on two command queues non-blocking (section 7.5); the
-`all_bf8_lofi` row is opt-in (`WAN5B_QUANT_CONFIG=all_bf8_lofi`, section 7.7) and is the fastest
+**Current tip (sprint 5, 2026-09-26, host u13-43, mean of 3, 81 f / 40 steps, warm-traced,
+bf16 / HiFi2, 2cq).** Sprint 5 hoisted the per-block AdaLN modulation out of the two CFG passes
+(section 7.2, bit-exact); it is the only model change since sprint 4, so the delta column is
+that change alone. The `all_bf8_lofi` preset (section 7.7) has not been re-measured on top of it.
+
+| Mode | Resolution | Text enc | Image enc | Denoise | VAE dec | Total | vs sprint 4 (11.50 / 13.49 / 6.03) |
+|------|------------|----------|-----------|---------|---------|-------|---|
+| T2V  | 1280x704   | 0.089s | — | **10.198s** | 0.922s | **11.23s** | -2.4% (denoise -2.3%) |
+| I2V  | 1280x704   | 0.089s | 1.293s | **10.580s** | 0.923s | **12.90s** | -4.4% (denoise -4.5%) |
+| T2V  | 832x480    | 0.088s | — | **4.842s** | 0.556s | **5.49s** | -8.9% (denoise -9.5%) |
+
+Spreads across the three runs: denoise 0.6 % (720p T2V), 0.4 % (I2V), 0.07 % (480p); totals
+0.7 / 0.7 / 0.4 %. The gain grows as the step gets shorter (720p T2V 261 -> 255 ms/step, 480p
+134 -> 121 ms/step) because what was removed is a fixed ~330 program launches per step, not
+math. Against the sprint start (16.78 / 18.86 / 8.87 s) the totals are now **-33.1 % / -31.6 % /
+-38.1 %**.
+
+**Sprint-4 tip (2026-09-25, same host and method), kept for the record.** The
+`all_bf8_lofi` row is opt-in (`WAN5B_QUANT_CONFIG=all_bf8_lofi`, section 7.7) and was the fastest
 configuration that passes every gate.
 
 | Mode | Resolution | Config | Text enc | Image enc | Denoise | VAE dec | Total | vs sprint 3 (11.77 / 13.96 / 6.34) |
@@ -242,6 +258,14 @@ counts, which is good evidence that axis is exhausted. `WanDupUp3D` is now ~0.07
 A full read of the denoise path found **no ROW_MAJOR<->TILE padding pathology anywhere in it**,
 so there is no second `WanDupUp3D` to find. Remaining wins are incremental.
 
+**Program count matters more than this table suggests (sprint 5).** Removing ~330 tiny
+modulation programs per step (section 7.2) saved 6.9 ms of a 261 ms step, i.e. ~21 us per
+program of pure launch cost inside the trace. At 480p (121 ms/step) the same removal was worth
+9.5 % of the denoise. So the ranking above, which is by kernel time, undercounts the ~1300
+programs a step still launches (~25 % of the step if all cost ~20 us): op fusion and op-count
+reduction are a lever of the same order as the matmul blockings were. The Tracy capture (7.8)
+would put a number on it directly via `ops per step per device` in `tracy_summarize_ops.py`.
+
 ---
 
 ## 7. Next, in order
@@ -305,11 +329,47 @@ All verified by reading the code; none implemented.
    downstream writes into either tensor (the fused addcmul kernels return fresh outputs).
    Gate `test_cfg_hoist_ti2v_5b.py`: `max_abs_diff == 0.0` for the cond pass, the uncond pass
    and the combined output at 720p geometry; the transformer PCC suite is unchanged to four
-   decimals (100.0000 / 99.9893 / 99.9894 %). The per-block AdaLN modulation (the
-   `scale_shift_table + temb` add and six-way chunk in every block, twice per step) is still
-   duplicated: hoisting it means threading 30 x 6 modulation tensors through the block API,
-   and the traced steady state pays only its device time, which is small. Perf effect of the
-   half that landed: see section 1 (expected <= 1 %).
+   decimals (100.0000 / 99.9893 / 99.9894 %). Perf effect of this first half: see section 1
+   (expected <= 1 %).
+
+   *Done, second half (2026-09-26, sprint 5):* the per-block AdaLN modulation is hoisted too.
+   `WanTransformerBlock.prepare_modulation(temb)` returns the six tensors the block consumes
+   (`shift`, `1 + scale`, bf16 `gate`, and the FFN triple) with exactly the ops `forward` ran
+   inline before, in the same order; `forward(modulation=)` takes them, and `combined_step`
+   computes the 30 tuples plus the `norm_out` pair (`prepare_norm_out_modulation`) once per step
+   under CFG and hands them to both `inner_step` passes. Every other caller (untraced `forward`,
+   `inner_step` without CFG, the 14B) computes them inline as before. Gate
+   `test_cfg_hoist_ti2v_5b.py` now passes the hoisted modulations explicitly and still asserts
+   `max_abs_diff == 0.0` for the cond pass, the uncond pass and `combined_step`; the PCC suite is
+   unchanged (100.0000 / 99.9893 / 99.9894 %) and `test_trace_modes_ti2v_5b` stays bit-identical.
+
+   Measured, 720p T2V, 81 f / 40 steps, 2cq, host u13-43, same hour:
+
+   | | denoise | total |
+   |---|---|---|
+   | sprint-4 file, control run (1 run) | 10.473 s | 11.535 s |
+   | sprint-4 recorded mean of 3 (2026-09-24/25) | 10.434 s | 11.50 s |
+   | **hoisted, mean of 3** (10.178 / 10.236 / 10.179; spread 0.6 %) | **10.198 s** | **11.228 s** |
+
+   **-2.6 % denoise / -2.7 % total against the control, 6.9 ms per step** -- far above the
+   "<= 1 %" this item was booked at. The reason is instructive: the hoist removes ~330 tiny
+   device programs per step (30 blocks x (1 add + 6-way chunk + 2 typecasts + 2 scalar adds), one
+   CFG pass' worth), so each removed program was worth ~21 us of device time inside the trace,
+   which is launch/dispatch cost, not math. The remaining once-per-step copy of the same ~330
+   programs is therefore worth another ~6-7 ms/step (2.5 %) if it can be removed -- see item 9.
+
+   The other two geometries, mean of 3 against the sprint-4 means (section 1): 720p I2V denoise
+   11.073 -> **10.580 s** (-4.5 %), total 13.49 -> **12.90 s**; 480p T2V denoise 5.350 ->
+   **4.842 s** (-9.5 %, 12.7 ms/step), total 6.03 -> **5.49 s**. I2V gains twice as much per step
+   as T2V because its modulation is per-token (7 MB fp32 tensors per slice instead of 3 KB), and
+   480p gains most in relative terms because its step is half as long. Teja's 121 f generate
+   passes with CLIP mean 40.69 (min 39.84 / max 41.21; bf16 before the hoist 40.38 -- the output
+   is bit-identical, the CLIP spread is the gate's own); mid-frame preview
+   `/home/ttuser/wan5b_s5_hoist_t2v_720p_121f_mid.png` is sharp and coherent. The generate
+   test's mp4 export fails with `No module named 'imageio'` in this venv (also in the sprint-4
+   bf8 generate log), so only the PNGs land; the demo CLI writes mp4s through a different path.
+   The `+1` fold (item 3) is now only 60 ops/step (~1.2 ms) and costs bit-exactness, so it
+   stays undone.
 3. **Fold `+1.0` into `scale_shift_table`.** `1 + (table+temb) == (table+1) + temb` exactly;
    removes 4,800 ops per generation at zero numerical cost.
 4. **Change the AdaLN split layout.** Measured bit-exact on the production shape: current
@@ -414,10 +474,54 @@ All verified by reading the code; none implemented.
    `OSError: [Errno 28] No space left on device`. A Tracy run JIT-recompiles every kernel with
    profiler markers (thousands of `riscv-tt-elf-g++` invocations into `~/.cache/tt-metal-cache`)
    and streams the device log into `generated/profiler/.logs/`, and the root disk had 11-12 GB
-   free. `tracy_summarize_ops.py` is written and untested on a real capture. Options: symlink
-   `generated/profiler` (and/or the kernel cache) onto `/mnt/tt-data`, or free ~40 GB on root.
-   Not a code blocker; the per-step device time is already known from the blocking
+   free. Not a code blocker; the per-step device time is already known from the blocking
    `execute_trace` measurement (258.5 ms of 266.4 ms, item 5).
+
+   *Sprint 5 (2026-09-25/26): disk solved, host RAM is the real wall.* Three more attempts on
+   `test_step_gap_ti2v_5b` (`WAN5B_GAP_PASSES=A`), with `-o /mnt/tt-data/nkira/profiler/<tag>`
+   (sets `TT_METAL_PROFILER_DIR`) and `build/profiler/build_wasm/traces` symlinked onto NFS:
+
+   | attempt | setup | outcome |
+   |---|---|---|
+   | 1 | 20 steps, `ReadDeviceProfiler` drain every 4 steps, count 30000 | `No available port found`: `tools/tracy/__init__.py:get_available_port` binds to `gethostbyname(hostname)`, which resolves to an IP this host does not own (10.81.14.43 vs 10.82.97.43). Fixed with `-t 8086`. |
+   | 2 | same | drains took **321 s and 230 s** each (32 chips, most behind ethernet); the host pushes one Tracy zone per device marker, 1.2 G zones, pytest RSS 504 GB -> **OOM-killed** (host has 566 GB). |
+   | 3 | 8 steps, no drains, `TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1` | 0 marker drops, all 8 traced steps ran (264.3 ms wall, 259.5 ms `execute_trace`: production numbers, so the traced path is not distorted under Tracy); then **32 min in the end-of-run device read + C++ post-process** (`TT_METAL_PROFILER_CPP_POST_PROCESS`, on by default in `-r`) until the job was stopped for host memory pressure before any CSV was written. |
+
+   Budget **programs, not steps**: a 720p step is ~1650 programs, and the eager compile run
+   plus the trace capture (2 steps each) already cost ~6600, so attempt 3 held ~20k programs
+   x 120 cores x 5 RISCs x 32 chips of markers on the host. The tooling is ready for a
+   capture under ~10k programs: `WAN5B_GAP_BLOCKS=n` truncates the transformer to n blocks
+   (every block is the same op stream at the same shapes, so per-op numbers scale to 30
+   exactly), `WAN5B_GAP_PROFILER_DRAIN` is there but is not a fix (see the drain times), and
+   `tracy_summarize_ops.py --traced-only` ranks by `OP CODE` and by input shapes/dtypes, which
+   is what separates the three AGMM call sites without a Python stack. Suggested command:
+
+   ```bash
+   free -g   # need a few hundred GB free
+   WAN5B_GAP_BLOCKS=6 WAN5B_GAP_STEPS=4 WAN5B_GAP_PASSES=A TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1 \
+     python -m tracy -p -r -v -t 8086 -o /mnt/tt-data/nkira/profiler/blocks6 --op-support-count 30000 \
+     -m pytest "models/tt_dit/tests/models/wan2_2/test_step_gap_ti2v_5b.py::test_step_gap_ti2v_5b[blackhole-bh_4x8]" -sv --timeout=0
+   python models/tt_dit/tests/models/wan2_2/tracy_summarize_ops.py <reports>/ops_perf_results_<ts>.csv --steps 4 --traced-only
+   ```
+
+9. **Remove the once-per-step modulation programs (sprint-5 lead, not built).** After item 2
+   the traced step still launches ~330 tiny programs for the 30 blocks' modulation (per block:
+   `table + temb`, six `slice`s from `ttnn.chunk`, two `typecast`s, two `1 + x`), and item 2
+   measured ~21 us of device time per such program, i.e. ~6-7 ms/step (~2.5 %) still on the
+   table. The modulation depends only on the timestep, and the whole schedule is known before
+   the loop, so it could be computed once per generation. The obstacle is feeding 180 small
+   tensors per step into the captured trace: ttnn has no zero-copy view into a bigger buffer, so
+   a stacked `[30, 6, D/tp]` modulation still needs a `slice` per block per tensor, and per-step
+   uploads of 180 tensors are 180 host writes (fine on the 2cq input queue but not free). Cheaper
+   partial steps: chunk `temb` once per step and pre-split the 30 tables at load time (11 -> 8
+   ops per block, ~2 ms/step, not bit-exact if the `+1` is folded into the table rows). A kernel
+   that takes a row offset into a stacked modulation tensor would remove all of it.
+
+10. **Same-hour controls are cheap and worth it.** The hoist's 3-run mean beat the recorded
+    sprint-4 mean by 2.3 %, and a single control run of the sprint-4 file in the same hour
+    (10.473 / 11.535 s) sat 0.4 % above that recorded mean, so the improvement is 2.6 % against
+    the control. `run_control.sh`-style swaps of one file in the checkout take four minutes and
+    settle the drift question before it is asked.
 
 ---
 
@@ -467,7 +571,18 @@ All verified by reading the code; none implemented.
   alive. Kill the fuser pid, then confirm `fuser` is empty.
 - **The root disk is ~12 GB from full and both Tracy and the matmul sweep fill it** (section
   7.1, 7.8). `generated/profiler/.logs/` alone reaches several GB per capture; delete
-  `profile_log_device.csv` and `tracy_profile_log_host.tracy` there after each attempt.
+  `profile_log_device.csv` and `tracy_profile_log_host.tracy` there after each attempt. Since
+  sprint 5 run Tracy with `-o /mnt/tt-data/nkira/profiler/<tag>` and the wasm `traces` dir is a
+  symlink onto NFS (`build/profiler/build_wasm/traces`), so disk is no longer the limit.
+- **`python -m tracy` says `No available port found`** on this host because its port probe binds
+  to `gethostbyname(hostname)` = 10.81.14.43, an address the box does not own. Pass `-t 8086`.
+- **A 32-chip Tracy op capture is bounded by host RAM, not by marker drops** (section 7.8).
+  Every device marker of every profiled program is held on the host at the end-of-run read
+  (~1650 programs per 720p step x 120 cores x 5 RISCs x 32 chips); ~20k programs exceeded the
+  566 GB host and was OOM-killed, twice. Keep a capture under ~10k programs (`WAN5B_GAP_BLOCKS`),
+  set `TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1` (the GUI push is a second copy, one zone per
+  marker), and check `free -g` first. `ttnn.ReadDeviceProfiler(mesh)` mid-run takes 4-5 minutes
+  per call on this Galaxy, so draining is not a way around it.
 - **VAE decode spreads 1-8 % run to run** at ~0.95 s; do not read a VAE delta under 10 % as
   real from a single run.
 
@@ -475,16 +590,21 @@ All verified by reading the code; none implemented.
 
 ## 9. Validation
 
-Everything below was re-run green at the current tip (`3d34a070c13`, 2026-09-25 unless noted).
+Everything below was re-run green at the sprint-4 tip (`3d34a070c13`, 2026-09-25 unless noted);
+the rows dated 2026-09-26 were run at the sprint-5 tip (`58bd9badfce` and after).
 
 | gate | result |
 |---|---|
 | `test_dup_up3d_ti2v_5b` | 12/12, `max_abs_diff == 0.0` at production shapes (2026-09-22) |
 | `test_vae_chunk_pcc_ti2v_5b` | PCC **1.0**, max_abs_diff 0.0 (2026-09-22) |
 | `test_transformer_wan_ti2v_5b` | PCC **100.0000 / 99.9893 / 99.9894%** (2 pre-existing skips) after the CFG hoist; scalar re-run at the tip 2026-09-25: 99.9893% |
-| `test_cfg_hoist_ti2v_5b` | `max_abs_diff == 0.0` for cond, uncond and combined at 720p geometry |
-| `test_trace_modes_ti2v_5b` | nonblocking and 2cq **bit-identical** to blocking, compute grid 12x10 with two queues |
+| `test_cfg_hoist_ti2v_5b` | `max_abs_diff == 0.0` for cond, uncond and combined at 720p geometry; re-run 2026-09-26 with the per-block modulation hoist passed explicitly: still 0.0 / 0.0 / 0.0 |
+| `test_trace_modes_ti2v_5b` | nonblocking and 2cq **bit-identical** to blocking, compute grid 12x10 with two queues (re-run green 2026-09-26 at `58bd9badfce`) |
+| `test_transformer_wan_ti2v_5b` after the modulation hoist (2026-09-26) | 100.0000 / 99.9893 / 99.9894 %, unchanged |
 | `test_pipeline_performance_ti2v_5b` 720p / 480p, `_i2v` 720p | 3/3 pass each under the 2cq default (section 1 has the means) |
+| same three, sprint-5 tip with the modulation hoist (2026-09-26) | 3/3 pass each under the 2026-09-22 gates; means in section 1 (720p T2V 10.198 / 11.23 s, I2V 10.580 / 12.90 s, 480p 4.842 / 5.49 s); plus one 720p T2V control run of the sprint-4 file the same hour (10.473 / 11.535 s) |
+| gates recalibrated to the sprint-5 means + 30 % (`ti2v_5b_metrics`, `ti2v_5b_i2v_metrics`, 2026-09-26) | 720p 0.2 / 13.3 / 1.2 / 14.6 s; 480p 0.2 / 6.3 / 0.75 / 7.2 s; I2V 0.2 / 1.7 / 13.8 / 1.2 / 16.8 s; one run per geometry re-run under them, all pass: 720p T2V 10.174 / 11.195 s, 480p 4.844 / 5.523 s, I2V 10.569 / 12.845 s (denoise / total) |
+| Teja's 121 f `test_pipeline_ti2v_5b_generate`, sprint-5 tip (2026-09-26) | passes; CLIP mean 40.69 (min 39.84 / max 41.21) vs 36.00; previews `/home/ttuser/wan5b_s5_hoist_t2v_720p_121f_{first,mid,last}.png` (mp4 export needs `imageio`, absent from the venv) |
 | same, `WAN5B_QUANT_CONFIG=all_bf8_lofi`, 720p T2V | 3/3 pass, PCC 99.9651 / 99.9651%, CLIP 41.34 |
 | same, `WAN5B_QUANT_CONFIG=all_weights_bf8`, 720p T2V | 2/2 pass, PCC 99.9885 / 99.9885%, CLIP 40.20 |
 | `test_step_gap_ti2v_5b` | passes; 1.37 ms/step host-only gap on the blocking path (section 7.5) |
