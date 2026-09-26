@@ -1027,6 +1027,7 @@ class TtCSA(TtHCA):
         ent_pieces = list(a2[4:])
         rate = self.compressor.compress_rate
         full = int(real_len) == int(sliding_kv_g.shape[2])
+        entries_total = int(sliding_kv_g.shape[2]) // rate  # entries the padded chunk wrote (1280 for a 5120 chunk)
         if export is not None:
             unified, index_k, batch_idx = export[:3]
             pending = export[3] if len(export) > 3 else None
@@ -1047,6 +1048,23 @@ class TtCSA(TtHCA):
                 self._write_rm_pieces(unified, [ring_rm_real], batch_idx, 0)
                 for t in (ring, ring_rm_real):
                     if t is not None:
+                        ttnn.deallocate(t)
+                # ZERO the padded chunk's entries / keys past the real ones (DS4F-0271 root cause candidate, launch 16): the
+                # pieces above wrote all 1280 of them, the driver's single row range (128 + S/4 rows for EVERY config) hands
+                # the decode ring the first 128 index-key rows past the real entries, and the ring's indexer reads row S/4
+                # for the first three decode positions BEFORE its own compressor writes it. The eager path never wrote
+                # those rows (zeros); make the traced path match. Transient zeros, tile-aligned start (all e2e lengths are).
+                n_real = -(-(int(real_len) // rate) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+                n_pad = int(entries_total) - n_real
+                if n_pad > 0:
+                    row0 = int(state.entry_count) + n_real
+                    zk = self._from_torch(torch.zeros(1, 1, n_pad, int(index_k.shape[-1])), dtype=index_k.dtype)
+                    ttnn.kv_cache.fill_cache_for_user_(index_k, zk, int(batch_idx), update_idx=row0)
+                    ttnn.deallocate(zk)
+                    zu = self._from_torch(torch.zeros(1, 1, n_pad, int(unified.shape[-1])), dtype=ttnn.bfloat16)
+                    zu_rm = self._rm_pieces(zu, ttnn.TILE_SIZE, self._contract_dtype("csa_unified"))
+                    self._write_rm_pieces(unified, zu_rm, batch_idx, self.sliding_window + row0)
+                    for t in [zu] + list(zu_rm):
                         ttnn.deallocate(t)
             if pending is not None and full and real_len % rate == 0:
                 # a ragged chunk's pending block would be the padded chunk's; the decode ring does not consume csa_pending
