@@ -749,3 +749,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - BRINGUP_IMPL=reference passes; BRINGUP_IMPL=stub fails (PCC 0). Default gate: PCC 0.999996, rel 0.0030,
   ratio [0.9975, 1.0010].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py`
+
+## S.global.09.test.1 (swap test review, global moe_norm)
+- Replaced the rendered one-liner with global swap 8's checks (s4096 chunk 1, HEAD_ROWS = 128, attention head-row checks, block out rel L2 <= 0.02,
+  norm/residual/mlp isolation vs the CPU step on the same device inputs, router selection/weight checks) and added moe_norm to SWAPPED, as sliding swap 9 does.
+  moe_norm is a `norm` step, so the existing checks cover it: vs golden (PCC >= 0.99, rel L2 <= 0.03) and iso (rel L2 <= 0.03, row-norm ratio [0.97, 1.03]).
+  Why: PCC misses sum-instead-of-mean, 2x and zeroed rows (test_c_global_moe_norm.py), and post_moe_norm hides per-row scale errors from block out.
+- BRINGUP_IMPL=reference: pass (pcc_swap_out 0.999996, block out rel 0.0029, moe_norm rel 0.0026). BRINGUP_IMPL=stub: fails every check.
+- Device gate: pass, pcc_swap_out 0.999989, block out rel 0.0048 / 0.0038; moe_norm pcc 0.99998, rel 0.0061 vs golden, iso 0.0019,
+  ratio [0.9984, 1.0006]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py`
