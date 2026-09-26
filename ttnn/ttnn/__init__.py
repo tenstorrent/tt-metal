@@ -227,7 +227,6 @@ from ttnn.types import (
     TILE_SIZE,
     DataType,
     DumpTensorMode,
-    MalformedTensorError,
     uint8,
     int8,
     uint16,

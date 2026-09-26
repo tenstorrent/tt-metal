@@ -13,7 +13,7 @@ import ttnn
 
 
 @pytest.mark.parametrize("malformation", ["header-size", "shard-buffer"])
-def test_load_malformed_tensor_raises_typed_error(tmp_path, expect_error, malformation):
+def test_load_malformed_tensor_raises(tmp_path, expect_error, malformation):
     file_name = tmp_path / "malformed.tensorbin"
     expected = torch.full((32, 32), 11, dtype=torch.bfloat16)
     tensor = ttnn.from_torch(expected, layout=ttnn.TILE_LAYOUT)
@@ -39,7 +39,7 @@ def test_load_malformed_tensor_raises_typed_error(tmp_path, expect_error, malfor
     file_name.write_bytes(data)
 
     diagnostic = "truncated or corrupt" if malformation == "header-size" else "Only InlineFileStorage"
-    with expect_error(ttnn.MalformedTensorError, diagnostic):
+    with expect_error(RuntimeError, diagnostic):
         ttnn.load_tensor(file_name)
 
     file_name.write_bytes(original)
