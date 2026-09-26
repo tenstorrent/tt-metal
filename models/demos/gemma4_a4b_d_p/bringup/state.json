@@ -785,6 +785,107 @@
   "started": "2026-09-26T00:09:50",
   "status": "PASS"
  },
+ "C.sliding.router": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "da789b4d-ff77-4da1-a6c2-4f31ae248b33"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/C.sliding.router.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/C.sliding.router.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 192.3,
+    "session_id": "40c9cd88-d31c-4ab6-8b10-6601e34e7f40",
+    "t": "2026-09-26T00:15:38"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/C.sliding.router.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/C.sliding.router.implement.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 99.7,
+    "session_id": "da789b4d-ff77-4da1-a6c2-4f31ae248b33",
+    "t": "2026-09-26T00:17:55"
+   }
+  ],
+  "attempts": 1,
+  "duration_s": 11.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T00:16:15"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T00:18:09"
+   }
+  ],
+  "last_run": "2026-09-26T00:18:09",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/C.sliding.router.log",
+  "metrics": {
+   "matched_rel_l2_router_L00": 0.002674258779734373,
+   "pcc_router_L00": 0.9998147143471106,
+   "row_sum_ratio_max_router_L00": 1.0028014183044434,
+   "row_sum_ratio_min_router_L00": 0.9956315755844116,
+   "selection_overlap_router_L00": 0.9984130859375
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T00:17:58",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 368.6,

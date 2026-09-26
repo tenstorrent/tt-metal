@@ -313,3 +313,33 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, block rel 0.0027); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999967, block out rel
   0.0081 / 0.0067 (0.0080 at swap 6), post_mlp_norm 0.0041 vs golden (iso 0.0019, ratio [0.9971, 1.0014]).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py`
+
+## C.sliding.router test (run1, attempt 1)
+- The golden `router` is the dense [S, 128] bf16 routing matrix, with exactly 8 nonzeros per row and row sums in [0.987, 1.011] (per_expert_scale is in [0.980, 1.023]).
+  PCC stays the gated metric. The test also asserts: a finite output with the right element count, exactly 8 nonzeros per row, non-negative weights, mean top-8 selection
+  overlap >= 0.995, weight rel L2 <= 0.005 on rows whose selected set matches the golden, and a per-row sum ratio in [0.99, 1.01]. The informational metrics are
+  `selection_overlap_router_L00`, `matched_rel_l2_router_L00`, `row_sum_ratio_{min,max}_router_L00`.
+- Scored mutations once in a temporary test under BRINGUP_IMPL=reference, then removed that code (numbers are in the test docstring). Even the CPU reference
+  does not match the golden exactly: 6 of 2048 rows pick a different expert (near ties from the bf16 golden input), so overlap is 0.99963. bf16 h plus bf16 proj weight
+  gives overlap 0.99921 and matched rel 0.0021. PCC alone misses: no per_expert_scale, per_expert_scale by rank, top-7/9, zeroed rows, and 1-3% logit noise.
+- Known gap: renormalizing after per_expert_scale instead of before scores matched rel 0.0048 (passes). Only the row-sum check catches it ([0.9887, 1.0129]).
+- For implement: keep h and the proj in fp32 (plan.yaml) to keep near-tie flips down. The overlap threshold allows about 80 flipped selections in 16384.
+  The output must have exact zeros off the top-8 (scatter into zeros), not small values from a mask multiply.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999965); BRINGUP_IMPL=stub FAIL (pcc 0.0). The device gate fails as expected until the implement step:
+  `NotImplementedError: implement step: no device module for router yet`.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py`
+
+## C.sliding.router implement (run1, attempt 1)
+- Added `tt/router.py:TtRouter`, replicated, all fp32 up to the scatter. Steps: fp32 `rms_norm` (no weight), `linear` with W' = (proj * router.scale * 2816^-0.5)^T
+  (scale folded into the weight on the host, same math), `softmax(numeric_stable)`, fp32 `topk(8)`, then `gather`. The weights are
+  gather(probs * per_expert_scale, idx) / sum(gather(probs, idx)), which equals renorm-then-per_expert_scale[id] without a per-row index lookup.
+  The bf16 `scatter` goes into zeros, so off-top-8 entries are exactly 0 (ttnn.scatter has no fp32 TILE path). HiFi4 + fp32 acc throughout.
+  `__call__` returns `(dense [1,1,S,128] bf16, idx, weights fp32)`, and the experts step should consume idx/weights.
+- hooks.py: added `_router_module`, which loads only `router.{proj.weight, scale, per_expert_scale}`, and `_router_host_fn`, which uploads h_mid as **fp32**
+  (not `to_device_replicated`, which rounds to bf16) and returns the dense matrix. `router` is in `DEVICE_STEPS["sliding"]`, `device_component` handles it,
+  and `HybridDeviceModel` swaps it in.
+- Gate PASS: pcc_router_L00 0.999815; nnz 8/row; selection overlap 0.99841 (CPU ref 0.99963, limit 0.995); matched rows 2022/2048; matched rel L2 0.00267;
+  row-sum ratio [0.9956, 1.0028].
+- The selection overlap is below the CPU reference (about 26 rows differ vs 6). The likely cause is fp32 matmul/softmax on device (the TILE fp32 matmul is not
+  bit-exact fp32). There is a lot of margin, and I did not tune it further.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py`
