@@ -48,7 +48,7 @@ def hf_model(spec, num_layers):
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention", "attn_residual"},
+    "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
 }
 
 # Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out.
@@ -106,6 +106,18 @@ def _residual_host_fn(mesh):
         return y.to(a.dtype)
 
     return fn
+
+
+def _mlp_module(mesh, spec, layer, loader=None):
+    """TtDenseMLP (TP=4 SwiGLU) for the dense layer; fp8 + 128x128 block scale dequantized to bf16 at load."""
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader, fp8_weight
+    from models.demos.mimo_v2_6_d_p.tt.mlp import TtDenseMLP
+
+    loader = loader or WeightLoader(hf_path(spec))
+    p = f"model.layers.{layer}.mlp."
+    wg, wu, wd = (fp8_weight(loader, p + f"{n}.weight", torch.float32) for n in ("gate_proj", "up_proj", "down_proj"))
+    return TtDenseMLP(mesh, wg, wu, wd)
 
 
 def _rope_max_seq(spec):
@@ -186,6 +198,8 @@ def device_component(mesh, spec, layer, step):
         return _attention_host_fn(mesh, module, cache_of)
     if step in _RESIDUAL_STEPS:
         return _residual_host_fn(mesh)
+    if step == "mlp":
+        return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -229,6 +243,8 @@ class HybridDeviceModel:
             steps = DEVICE_STEPS.get(spec.block_type_of(i), ())
             ov = {s: _host_fn(mesh, _norm_module(mesh, spec, i, s, loader)) for s in steps if s in _NORM_WEIGHTS}
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
+            if "mlp" in steps:
+                ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, lambda ctx: ctx.extra["dev_cache"])
