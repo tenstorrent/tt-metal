@@ -221,6 +221,7 @@ class MiniMaxH3Attention(Module):
             math_fidelity=sdpa_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
+            dst_full_sync_en=self.use_ring and os.environ.get("MINIMAX_H3_SDPA_DST_FULL_SYNC") == "1",
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
