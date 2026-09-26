@@ -328,3 +328,13 @@ def test_a_box_that_fails_at_device_open_stops_the_run_without_burning_attempts(
     st = o.led.state()["C.1"]
     assert st["status"] == "STOPPED" and "reset the board" in st["reason"][0]
     assert orch.calls() == []  # no agent was started
+
+
+def test_a_test_killed_by_its_timeout_stops_for_a_person(orch):
+    """F25: a pytest-timeout kill is not a failed check; no fix agent starts."""
+    cmd = f"{PY} -c \"print('E   Failed: Timeout (>300.0s) from pytest-timeout.'); raise SystemExit(1)\""
+    o = orch([impl_task(tests=[], gate={"cmd": cmd, "metrics": {}})], {})
+    assert o.run() == STOPPED
+    st = o.led.state()["C.1"]
+    assert st["status"] == "STOPPED" and "test_timeout_s" in st["reason"][0]
+    assert orch.calls() == []

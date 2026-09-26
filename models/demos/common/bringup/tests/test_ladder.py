@@ -7,11 +7,12 @@ import os
 
 import pytest
 
-from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
+from models.demos.common.bringup.testing.harness import device_timeout, mesh_parametrize, spec
 from models.demos.common.bringup.testing.ladder import run_ladder
 
 S = spec()
 RUNGS = [r["name"] for r in S.data["ladder"] if os.environ.get("BRINGUP_RUNG") in (None, r["name"])]
+pytestmark = device_timeout(S)
 
 
 @mesh_parametrize
