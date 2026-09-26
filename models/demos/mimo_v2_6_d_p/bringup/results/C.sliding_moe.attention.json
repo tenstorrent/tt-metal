@@ -1,0 +1,33 @@
+{
+ "metrics": {
+  "pcc_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 0.9999719422105515
+  },
+  "rel_l2_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 0.00861072912812233
+  },
+  "rel_l2_head_rows_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 0.008151084184646606
+  },
+  "rel_l2_vs_cpu_window_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 0.0070753805339336395
+  },
+  "row_norm_ratio_max_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 1.0209007263183594
+  },
+  "row_norm_ratio_min_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 0.9747362732887268
+  },
+  "worst_row_rel_l2_attention_L01": {
+   "t": "2026-09-26T21:02:17",
+   "value": 0.025467069819569588
+  }
+ },
+ "task": "C.sliding_moe.attention"
+}

@@ -608,6 +608,112 @@
   "status": "PASS",
   "waiting": null
  },
+ "C.sliding_moe.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "c5a8e03a-c922-4393-b6d2-c22d775cfc12"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/C.sliding_moe.attention.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/C.sliding_moe.attention.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 353.0,
+    "session_id": "400b80a5-5da4-41b0-b9ec-b67bda354f6c",
+    "t": "2026-09-26T20:52:26"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/C.sliding_moe.attention.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/C.sliding_moe.attention.implement.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 498.9,
+    "session_id": "c5a8e03a-c922-4393-b6d2-c22d775cfc12",
+    "t": "2026-09-26T21:02:00"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 25.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T20:53:40"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T21:02:28"
+   }
+  ],
+  "last_run": "2026-09-26T21:02:28",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/C.sliding_moe.attention.log",
+  "metrics": {
+   "pcc_attention_L01": 0.9999719422105515,
+   "rel_l2_attention_L01": 0.00861072912812233,
+   "rel_l2_head_rows_attention_L01": 0.008151084184646606,
+   "rel_l2_vs_cpu_window_attention_L01": 0.0070753805339336395,
+   "row_norm_ratio_max_attention_L01": 1.0209007263183594,
+   "row_norm_ratio_min_attention_L01": 0.9747362732887268,
+   "worst_row_rel_l2_attention_L01": 0.025467069819569588
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-26T21:02:02",
+  "status": "PASS",
+  "waiting": null
+ },
  "C.sliding_moe.attn_norm": {
   "agent": {
    "defs": {

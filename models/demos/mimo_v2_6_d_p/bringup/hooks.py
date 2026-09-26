@@ -49,6 +49,7 @@ def hf_model(spec, num_layers):
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp", "mlp_residual"},
+    "sliding_moe": {"attn_norm", "attention"},
 }
 
 # Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out; out = h_mid + mlp_out.
@@ -128,34 +129,41 @@ def _rope_max_seq(spec):
 
 
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
-    """TtFullAttention for one full-attention layer, loading only its attention weights (fused qkv dequantized per TP
-    rank, bf16 o_proj)."""
+    """TtFullAttention (full layers) or TtSlidingAttention (sliding layers: window, per-head sink) for one layer, loading
+    only its attention weights (fused qkv dequantized per TP rank, bf16 o_proj, bf16 sink bias)."""
     import os
 
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig, rope_inv_freq
     from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader, qkv_weight
-    from models.demos.mimo_v2_6_d_p.tt.attention import TtFullAttention
+    from models.demos.mimo_v2_6_d_p.tt.attention import TtFullAttention, TtSlidingAttention
 
     loader = loader or WeightLoader(hf_path(spec))
     cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
-    if cfg.is_sliding(layer):
-        raise NotImplementedError(f"implement step: no device sliding attention yet (layer {layer})")
-    assert not cfg.has_sink(layer)
     hq, hkv, d, dv = cfg.attn_dims(layer)
     p = f"model.layers.{layer}.self_attn."
     wqkv = qkv_weight(loader, p, (hq * d, hkv * d, hkv * dv), torch.float32)
     wo = loader.get(p + "o_proj.weight").float()
-    inv_freq = rope_inv_freq(cfg.rope_theta, cfg.rope_dim(layer))
-    module = TtFullAttention(mesh, wqkv, wo, (hq, hkv, d, dv), inv_freq, _rope_max_seq(spec), cfg.attention_value_scale)
+    sliding = cfg.is_sliding(layer)
+    inv_freq = rope_inv_freq(cfg.swa_rope_theta if sliding else cfg.rope_theta, cfg.rope_dim(layer))
+    dims, max_seq, vs = (hq, hkv, d, dv), _rope_max_seq(spec), cfg.attention_value_scale
+    if sliding:
+        sink = loader.get(p + "attention_sink_bias").float() if cfg.has_sink(layer) else None
+        module = TtSlidingAttention(mesh, wqkv, wo, dims, inv_freq, max_seq, vs, cfg.sliding_window, sink)
+    else:
+        assert not cfg.has_sink(layer)
+        module = TtFullAttention(mesh, wqkv, wo, dims, inv_freq, max_seq, vs)
     return module, cfg
 
 
 def _new_kv_cache(mesh, cfg, layer, max_seq):
-    """Empty device KV cache for one full-attention layer (4 KV heads, head r on chip r, V padded to 192)."""
-    from models.demos.mimo_v2_6_d_p.tt.attention import TtKVCacheFull
+    """Empty device KV cache for one layer, V padded to 192: full layers 4 KV heads (head r on chip r, paged-shaped),
+    sliding layers 8 KV heads (heads 2r, 2r+1 on chip r, contiguous)."""
+    from models.demos.mimo_v2_6_d_p.tt.attention import TtKVCacheFull, TtKVCacheSliding
 
     _, hkv, d, dv = cfg.attn_dims(layer)
+    if cfg.is_sliding(layer):
+        return TtKVCacheSliding(mesh, hkv, d, dv, max_seq)
     return TtKVCacheFull(mesh, hkv, d, dv, max_seq)
 
 
