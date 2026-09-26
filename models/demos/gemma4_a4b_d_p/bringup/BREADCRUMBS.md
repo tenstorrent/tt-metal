@@ -784,3 +784,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   ratio [1.0007, 1.0214], worst row 0.0292. The ratio is above 1 on every row: this is the fused kernel's known overshoot (HiFi2 + fp32 dest, about 1.01-1.02).
   Headroom is tight (iso rel 0.0224 vs 0.03, ratio max 1.021 vs 1.03). The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py`
+
+## C.global.post_moe_norm test (run1, attempt 1)
+- Replaced the one-line template body with test_c_sliding_post_moe_norm.py (LAYER = 5). The gated metric stays `pcc_post_moe_norm_L05` >= 0.99. The test also asserts
+  rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03], and a finite output (informational metrics `rel_l2_*`, `row_norm_ratio_{min,max}_*`). No new limits.
+- Measured on the CPU (layer 5 golden, experts_out -> moe_post_norm; weight recovered from the golden, in [-4.3, 102.5]). PCC / rel / ratio: recovered-weight norm 0.999997 / 0.0023 / [0.9977, 1.0023];
+  bf16 0.0028; 1% noise 0.010; `1 + w` 0.9968 (passes PCC) / 0.101; no weight PCC 0.55; sum instead of mean ~1.0 / 0.98; 2x ~1.0 / 1.0; row 0 / last row zeroed pass PCC, ratio min 0;
+  last 32 rows zeroed 0.9924 (passes PCC) / 0.124. Script /tmp/g5pmoe/v.py (CPU only, not kept). Compute PCC in float64: a float32 dot over 5.8M elements gave PCC > 1.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0023). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0030, ratio [0.9959, 1.0021]),
+  because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py`
