@@ -122,3 +122,24 @@ Result
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_norm.py
+
+## S.full_dense.01 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_dense_01_attn_norm.py` with the
+  gemma4_a4b_d_p swap_sliding_01 pattern: gated pcc_swap_out (spec block 0.98) plus asserted extras: the swapped
+  step's own output (finite, PCC >= 0.99, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]) and block out
+  (finite, rel L2 <= 0.01). Records `rel_l2_swap_out`, `rel_l2_swap_attn_norm`, `row_norm_ratio_{min,max}_swap_attn_norm`.
+
+Why
+- The gated metric alone passes the zero stub: pcc_swap_out 0.9884 (rel 0.155). Also passing the gate: sum instead of
+  mean 0.9890, eps 1e-2 0.9916. Mutations measured on the CPU (script in /tmp, not kept) are in the test docstring;
+  a zeroed last row is caught only by the norm ratio.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out 0.999999 / rel 0.0017). BRINGUP_IMPL=stub: FAIL (extra checks; gated PCC 0.988).
+- Gate (device TtRMSNorm): PASS, pcc_swap_out 0.999999, rel_l2_swap_out 0.001693, step rel 0.002118, ratio
+  [0.9956, 1.0012].
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_01_attn_norm.py
