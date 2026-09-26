@@ -384,7 +384,8 @@ class ModelOptimizations:
     def _default_settings(self):
         """Default is BFP8/HIFI2 everywhere, activation follows input type (usually BF16)
         Only exceptions:
-        - SDPA runs in HIFI4 during prefill (still HIFI2 during decode)
+        - SDPA runs in HIFI4 during prefill (still HIFI2 during decode); on Blackhole without fp32
+          accumulation, which keeps the prefill SDPA on its streaming kernel
         """
         return {
             "TensorPrecision": {
@@ -407,7 +408,7 @@ class ModelOptimizations:
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP16 if is_blackhole() else MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
@@ -1702,8 +1703,14 @@ class ModelArgs:
                 )
             )
         )
+        # Prefill Q, K and V are interleaved in DRAM, so the op is free to use the whole Blackhole grid.
+        grid_size = (
+            self.mesh_device.compute_with_storage_grid_size()
+            if is_blackhole() and self.mesh_device is not None
+            else (8, 8)
+        )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=grid_size,
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
