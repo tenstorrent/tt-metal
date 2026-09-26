@@ -70,3 +70,55 @@ static const FrobeniusCase kCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(All, FrobeniusNormalizeTest, ::testing::ValuesIn(kCases), CaseName);
+
+class FrobeniusNormalizeCacheTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().get_device().enable_program_cache();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_F(FrobeniusNormalizeCacheTest, RepeatedMulticoreCacheHitsCompleteAndUseOneGlobalNorm) {
+    using namespace ttml;
+
+    constexpr std::array<uint32_t, 4> kShape = {1, 1, 64, 64};
+    constexpr uint32_t kIterations = 64;
+    constexpr std::array<float, 2> kEpsilons = {4.0F, 32.0F};
+    constexpr std::array<std::array<float, 4>, 2> kTileValues = {
+        std::array<float, 4>{1.0F, 2.0F, -3.0F, 4.0F}, std::array<float, 4>{8.0F, -1.0F, 0.5F, -4.0F}};
+
+    auto& device = autograd::ctx().get_device();
+    for (uint32_t iteration = 0; iteration < kIterations; ++iteration) {
+        const uint32_t variant = iteration % static_cast<uint32_t>(kTileValues.size());
+        xt::xarray<float> data = xt::zeros<float>(kShape);
+        for (uint32_t row = 0; row < kShape[2]; ++row) {
+            for (uint32_t col = 0; col < kShape[3]; ++col) {
+                const uint32_t tile_index = (row / 32U) * 2U + col / 32U;
+                data(0, 0, row, col) = kTileValues[variant][tile_index];
+            }
+        }
+
+        const auto input = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, &device);
+        const auto expected = frobenius_normalize_ref(data, kEpsilons[variant]);
+
+        const auto entries_before = device.num_program_cache_entries();
+        const auto output = metal::frobenius_normalize(input, kEpsilons[variant]);
+        const auto entries_after = device.num_program_cache_entries();
+
+        if (iteration == 0U) {
+            EXPECT_GT(entries_after, entries_before) << "first call did not populate the program cache";
+        } else {
+            EXPECT_EQ(entries_after, entries_before)
+                << "frobenius_normalize compiled a new program on iteration " << iteration;
+        }
+
+        const auto result = core::to_xtensor(output);
+        EXPECT_TRUE(xt::all(xt::isfinite(result))) << "non-finite output on iteration " << iteration;
+        EXPECT_TRUE(xt::allclose(result, expected, /*rtol=*/2e-2F, /*atol=*/2e-4F))
+            << "global norm mismatch on iteration " << iteration;
+    }
+}
