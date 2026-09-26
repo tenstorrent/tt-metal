@@ -2339,7 +2339,8 @@ class SpeculativeDecoder:
         um = ttnn.permute(stacked, (0, 1, 3, 2))  # [1,1,B,P]
         stacked.deallocate(True)
         verify_x = ttnn.reshape(um, (1, B * P))
-        um.deallocate(True)
+        # ROW_MAJOR reshape returns a view. Keep the owner alive so trace replay
+        # can read verify_x after subsequent verify allocations.
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
             position_idx=tr["v_pos"],
