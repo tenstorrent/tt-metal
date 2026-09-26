@@ -865,22 +865,18 @@ def _ci_unsupported_param_combos_ds_moe(**params):
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
     ),
     [
         # fmt: off
-        # is_balanced=True (zigzag placement) spreads real tokens evenly across SP devices so
-        # padding-aware dispatch shrinks every device's token loop. Only enabled for the
-        # perf-device-256 (DEVICE_FP32, non-PCC) row — the only one that builds a padding_config;
-        # the rest keep sequential placement (their reference / PCC path isn't zigzag).
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
         # PCC gate on the production 256-expert / 32-per-chip path. The unified
         # routed-expert MoE op switches into the unfused extract -> FFN -> insert
         # chain whenever num_routed_experts > 64; without this variant that
         # branch ships PCC-untested on Blackhole.
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=160).
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
         # fmt: on
     ],
 )
@@ -935,7 +931,6 @@ def test_ds_moe(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     run_pcc_check,
-    is_balanced,
     num_links,
     gate_fallback_mode,
     request,
@@ -958,7 +953,6 @@ def test_ds_moe(
         topology,
         gate_fallback_mode,
         request,
-        is_balanced=is_balanced,
         padded_percent=padded_percent,
     )
 
@@ -973,12 +967,12 @@ def test_ds_moe(
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
-        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
     ),
     [
         # fmt: off
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
         # fmt: on
     ],
 )
@@ -1034,7 +1028,6 @@ def test_glm_moe(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     run_pcc_check,
-    is_balanced,
     num_links,
     gate_fallback_mode,
     request,
@@ -1057,7 +1050,6 @@ def test_glm_moe(
         topology,
         gate_fallback_mode,
         request,
-        is_balanced=is_balanced,
         padded_percent=padded_percent,
     )
 
@@ -1198,8 +1190,15 @@ def test_kimi_moe(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
-        # Loudbox proxy for local bring-up; no pipeline selects it. TP stays 4 as on the 8x4 anchor:
-        # at TP=1 the shared expert is unsharded and its gate matmul's CBs exceed L1.
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        # Loudbox proxy for local bring-up; no pipeline selects it. No TP=1 (SP=8) row: at TP=1 the
+        # shared expert is unsharded and its gate matmul's CBs exceed L1.
         pytest.param(
             (2, 4),
             fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
