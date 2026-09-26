@@ -641,3 +641,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   The device post_attn_norm is the same module as the sliding one, already registered. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py`
   (BRINGUP_IMPL=reference / stub for the freeze checks).
+
+## C.global.attn_residual test (run1, attempt 1)
+- Replaced the one-line template body with test_c_sliding_attn_residual.py (LAYER = 5). The gated metric stays `pcc_attn_residual_L05` >= 0.99. The test also asserts
+  rel L2 <= 0.03, a per-token norm ratio in [0.97, 1.03], and a finite output (informational metrics `rel_l2_*`, `row_norm_ratio_{min,max}_*`).
+- Measured on the CPU (layer 5 golden, s4096 chunk 1; ||in|| 4.1e3, ||attn_post_norm|| 1.2e3, so the residual dominates here, unlike layer 0). PCC / rel / ratio:
+  reference 0.999997 / 0.0022 / [0.998, 1.002]; bf16 0.0027; 2x passes PCC but rel 1.0; row 0 zeroed 0.99974 / 0.023; last row zeroed 0.99990 / 0.014;
+  last 32 rows zeroed 0.993 / 0.117; attention dropped 0.966; residual dropped 0.477. Zeroed rows fail through the ratio check (min 0). Script /tmp/g5res/v.py (CPU only, not kept).
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0022). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0028, ratio [0.9970, 1.0032]).
+  The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py`
