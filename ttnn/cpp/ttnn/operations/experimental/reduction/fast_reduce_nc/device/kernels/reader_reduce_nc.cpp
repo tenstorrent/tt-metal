@@ -4,9 +4,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
@@ -14,32 +15,28 @@ inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_s
 
 void kernel_main() {
     // compile-time args
-    constexpr uint32_t input_granularity = get_compile_time_arg_val(0);
-    constexpr uint32_t shard_factor = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
+    constexpr auto input_granularity = get_arg(args::input_granularity);
+    constexpr auto shard_factor = get_arg(args::shard_factor);
+    constexpr auto num_cores_to_be_used = get_arg(args::num_cores_to_be_used);
     constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
-    constexpr auto tensor_args = TensorAccessorArgs<3>();
 
     // runtime args
-    const auto input_addr = get_arg_val<uint32_t>(0);
-    const auto num_input_tiles = get_arg_val<uint32_t>(1);
-    const auto id_range_length = get_arg_val<uint32_t>(2);
-    const auto start_id = get_arg_val<uint32_t>(3);
-    const auto dim = get_arg_val<uint32_t>(4);
-    const auto reduce_tile_size = get_arg_val<uint32_t>(5);
-    const auto inner_tile_size = get_arg_val<uint32_t>(6);
+    const auto num_input_tiles = get_arg(args::num_input_tiles);
+    const auto id_range_length = get_arg(args::id_range_length);
+    const auto start_id = get_arg(args::start_id);
+    const auto dim = get_arg(args::dim);
+    const auto reduce_tile_size = get_arg(args::reduce_tile_size);
+    const auto inner_tile_size = get_arg(args::inner_tile_size);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_id_in0);
-    dataflow_kernel_lib::prepare_zero_tile<cb_id_in1>();
+    DataflowBuffer cb_in0_obj(dfb::in0);
+    dataflow_kernel_lib::prepare_zero_tile<dfb::in1>();
 
-    constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t input_tile_bytes = cb_in0_obj.get_entry_size();
 
-    auto tensor_accessor = TensorAccessor(tensor_args, input_addr);
+    auto tensor_accessor = TensorAccessor(tensor::src);
     uint32_t input_granularity_index = 0;
     uint32_t write_offset = 0;
 
