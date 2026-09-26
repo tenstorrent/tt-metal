@@ -4,8 +4,7 @@
 
 #include "mla_q_rope_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "mla_q_rope_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -15,39 +14,15 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "MlaQRope requires {} on device. Got {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "MlaQRope: {} buffer must be allocated.", name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "MlaQRope requires {} TILE layout. Got {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "MlaQRope requires {} BFLOAT16. Got {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "MlaQRope requires {} INTERLEAVED. Got {}",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& q_in = tensor_args.q_in;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
     const auto& trans = tensor_args.trans_mat;
 
-    check_tensor(q_in, "q_in");
-    check_tensor(cos, "cos_cache");
-    check_tensor(sin, "sin_cache");
-    check_tensor(trans, "trans_mat");
+    check_device_tensor(q_in, "MlaQRope", "q_in");
+    check_device_tensor(cos, "MlaQRope", "cos_cache");
+    check_device_tensor(sin, "MlaQRope", "sin_cache");
+    check_device_tensor(trans, "MlaQRope", "trans_mat");
 
     TT_FATAL(
         q_in.device() == cos.device() && cos.device() == sin.device() && sin.device() == trans.device(),
