@@ -41,7 +41,7 @@ The test prints a table with one row per layer and an overall row, pooling all c
 | Relative RMSE | RMS error divided by the GPU reference's RMS magnitude; lower is better. |
 | RMSE | Root mean squared error in the tensor's units; lower is better. |
 
-The test also identifies the worst head by PCC, with its zero-based layer and head indices and cache type.
+The test also identifies the worst head by PCC, with its zero-based layer and head indices and cache type. A final criteria table shows the required values, achieved values, and PASS/FAIL results before any accuracy failure is raised.
 
 The JSON report includes the worst head, per-head PCC, minimum PCC by cache type, and validation timings. Pass/fail criteria are defined in the [test](../tests/test_prefill_migration.py).
 
