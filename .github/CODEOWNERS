@@ -585,7 +585,12 @@ models/demos/gemma4_31b_qb2 @yieldthought @handrewsTT @mtairum @uaydonat @dwadhw
 models/demos/gemma4_d_p @svuckovicTT @amilovanovicTT @sdjordjevicTT
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/demos/llama_3p1_8b_d_p @mgiermakowskiTT @djordje-tt
+models/demos/mixtral8x7b @mtairum
 models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @mtairum @arginugaTT
+models/demos/multimodal/llama3_vision @cglagovichTT
+models/demos/multimodal/llama_image_attention.py @cglagovichTT
+models/demos/multimodal/llama_layernorm.py @cglagovichTT
+models/demos/multimodal/test_llama_image_attention.py @cglagovichTT
 models/demos/qwen25_vl @ssanjayTT @yieldthought @uaydonat
 models/demos/qwen3_vl @ssanjayTT @mtairum
 models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
@@ -620,6 +625,7 @@ models/experimental/bevformer/ @mbezuljTT @njovanovicTT
 models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/exaone45_vl @changh95 @uaydonat @mtairum
+models/experimental/mistral_24b @mtairum @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce
 models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn
@@ -639,7 +645,7 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/perf/ @yieldthought @esmalTT @mtairum @uaydonat
 models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat
 models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
-models/tt_transformers @mtairum @yieldthought @uaydonat @cglagovichTT
+models/ttt_compat @mtairum @yieldthought @uaydonat @cglagovichTT
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra
 models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce

@@ -7,7 +7,7 @@ import json
 import nltk
 import pytest
 
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.ttt_compat.tt.model_config import parse_optimizations
 
 
 @pytest.fixture(autouse=True)

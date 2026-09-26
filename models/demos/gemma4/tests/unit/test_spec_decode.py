@@ -172,7 +172,7 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -363,7 +363,7 @@ def test_assistant_step_pcc_vs_hf(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.ccl import ccl_allgather
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -638,7 +638,7 @@ def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -829,7 +829,7 @@ def test_export_tt_spec_features(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -937,7 +937,7 @@ def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1115,7 +1115,7 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1323,7 +1323,7 @@ def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1473,7 +1473,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1569,7 +1569,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1680,7 +1680,7 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1782,7 +1782,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -1916,7 +1916,7 @@ def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2006,7 +2006,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2120,7 +2120,7 @@ def test_verify_trace_batched_capture(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2250,7 +2250,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2376,7 +2376,7 @@ def test_fused_iter_eager(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2468,7 +2468,7 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2574,7 +2574,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2673,7 +2673,7 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2757,7 +2757,7 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -2869,7 +2869,7 @@ def test_draft_step_breakdown(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:
@@ -3115,7 +3115,7 @@ def test_spec_decode_batched(mesh_device, reset_seeds):
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:

@@ -9,7 +9,7 @@ from diffusers import MochiTransformer3DModel
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import get_rot_transformation_mat
+from models.ttt_compat.tt.common import get_rot_transformation_mat
 
 from ....models.transformers.attention_mochi import MochiAttention
 from ....parallel.config import DiTParallelConfig, ParallelFactor

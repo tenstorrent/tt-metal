@@ -228,7 +228,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds, state_dict
         input_prompts = ["What are the prime factors of 1?"]
 
         # Use the same preprocessing as the demo
-        from models.tt_transformers.tt.common import preprocess_inputs_prefill
+        from models.ttt_compat.tt.common import preprocess_inputs_prefill
 
         max_generated_tokens = 30  # Generate 30 tokens for testing
 
@@ -332,7 +332,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds, state_dict
         input_prompts = ["What are the prime factors of 1?"]
 
         # Use the same preprocessing as the demo
-        from models.tt_transformers.tt.common import preprocess_inputs_prefill
+        from models.ttt_compat.tt.common import preprocess_inputs_prefill
 
         max_generated_tokens = 30  # Generate 30 tokens for testing
 
@@ -357,7 +357,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds, state_dict
         input_ids = torch.stack(input_tokens_prefill_pt).view(1, -1)
 
     # Create generator like the demo
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     generator = Generator(model, model_args, setup["mesh_device"], processor=processor, tokenizer=tokenizer)
 

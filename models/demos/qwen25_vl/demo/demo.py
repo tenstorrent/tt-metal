@@ -28,7 +28,7 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
 def _qwen25_vl_model_key() -> str:
@@ -115,7 +115,7 @@ def create_tt_model(
 
 # List of supported Parameters for demo.py
 #
-# input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
+# input_prompts (string): input json file with prompts to process. See models/ttt_compat/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
 # max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)

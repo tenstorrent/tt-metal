@@ -7,7 +7,7 @@ from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,

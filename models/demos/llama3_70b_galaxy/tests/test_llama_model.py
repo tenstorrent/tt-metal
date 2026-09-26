@@ -12,8 +12,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.tt_transformers.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tests.decode_test_helpers import decode_step_state, teacher_forced_decode_token
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
 from models.common.sampling.tt_sampling import TTSampling
 from models.common.utility_functions import (
     comp_pcc,

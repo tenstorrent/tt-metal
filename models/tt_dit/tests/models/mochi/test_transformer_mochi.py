@@ -10,7 +10,7 @@ from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import get_rot_transformation_mat
+from models.ttt_compat.tt.common import get_rot_transformation_mat
 
 from ....models.transformers.transformer_mochi import MochiTransformer3DModel, MochiTransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor

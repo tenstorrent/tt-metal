@@ -31,14 +31,14 @@ The following models have been traced and their configurations are available in 
 
 | Model | Purpose | Pytest command used for tracing |
 |-------|---------|---------------------------------|
-| meta-llama/Llama-3.2-11B-Vision-Instruct | Vision-language model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| meta-llama/Llama-3.2-11B-Vision | Vision model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| meta-llama/Llama-3.2-1B-Instruct | Small instruction-tuned model | `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| Qwen/Qwen2.5-Coder-7B-Instruct | Code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| deepseek-ai/deepseek-llm-7b-chat | Chat model | `HF_MODEL=deepseek-ai/deepseek-llm-7b-chat python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| ilsp/Llama-Krikri-8B-Instruct | Instruction-tuned model | `HF_MODEL=ilsp/Llama-Krikri-8B-Instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| microsoft/Phi-3-mini-128k-instruct | Small instruction model | `HF_MODEL=microsoft/Phi-3-mini-128k-instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| mistralai/Mistral-7B-Instruct-v0.3 | Instruction-tuned model | `HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| meta-llama/Llama-3.2-11B-Vision-Instruct | Vision-language model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision-Instruct python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| meta-llama/Llama-3.2-11B-Vision | Vision model | `HF_MODEL=meta-llama/Llama-3.2-11B-Vision python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| meta-llama/Llama-3.2-1B-Instruct | Small instruction-tuned model | `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-7B-Instruct | Code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-7B-Instruct python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| deepseek-ai/deepseek-llm-7b-chat | Chat model | `HF_MODEL=deepseek-ai/deepseek-llm-7b-chat python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| ilsp/Llama-Krikri-8B-Instruct | Instruction-tuned model | `HF_MODEL=ilsp/Llama-Krikri-8B-Instruct python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| microsoft/Phi-3-mini-128k-instruct | Small instruction model | `HF_MODEL=microsoft/Phi-3-mini-128k-instruct python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| mistralai/Mistral-7B-Instruct-v0.3 | Instruction-tuned model | `HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
 | vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py` |
 | ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
@@ -53,9 +53,9 @@ The following models have been traced and their configurations are available in 
 
 | Model | Purpose | Pytest command used for tracing |
 |-------|---------|---------------------------------|
-| deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
-| Qwen/Qwen3-32B | Large language model | `HF_MODEL=Qwen/Qwen3-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen3-32B | Large language model | `HF_MODEL=Qwen/Qwen3-32B python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text` |
 
 **BH (p150b) Machine:**
 

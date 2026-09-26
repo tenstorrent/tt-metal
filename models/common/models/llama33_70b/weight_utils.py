@@ -6,7 +6,7 @@ Host-side HF weight layout helpers for Llama-3.3-70B-Instruct (TTTv2 port).
 
 Q/K linear weights use HuggingFace head layout; TTNN RoPE expects Meta layout.
 This duplicates the small permute helpers from ``load_checkpoints.reverse_permute``
-without importing ``models/tt_transformers``.
+without importing ``models/ttt_compat``.
 
 Llama 3.3 70B has no QKV bias and no Q/K norm.
 """

@@ -14,7 +14,7 @@ from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 def _pad_tokens(tokens: torch.Tensor, pad_value: int = 0, block_size: int = USERS_PER_ROW) -> torch.Tensor:

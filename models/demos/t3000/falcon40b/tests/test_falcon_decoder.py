@@ -15,7 +15,7 @@ from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.demos.t3000.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor, ShardTensorToMesh
 

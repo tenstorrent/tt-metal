@@ -69,7 +69,7 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
 
     # args.CKPT_DIR is the resolved local snapshot dir (Qwen36ModelArgs downloads the hub id).
     sd = load_attn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
@@ -133,7 +133,7 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     logger.info(f"devices={nd} full-attn layer={li} S={S}")
 
     sd = load_attn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
@@ -188,7 +188,7 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     logger.info(f"devices={nd} layer={li} NKV_local={NKV} HD={HD} S={S} num_blocks={num_blocks}")
 
     sd = load_attn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)
@@ -284,7 +284,7 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
 
     sd = load_attn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_attention_weights_tp(mesh_device, sd, args)

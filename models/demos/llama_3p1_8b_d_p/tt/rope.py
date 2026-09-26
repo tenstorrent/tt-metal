@@ -121,7 +121,7 @@ def _indexed_rope_geometry(mesh_device, *, max_seq_len: int, chunk_size: int, sp
 def build_transformation_mat(mesh_device, *, dtype=None):
     """Build a replicated, single-tile RoPE transformation matrix in DRAM."""
     import ttnn
-    from models.tt_transformers.tt.common import get_rot_transformation_mat
+    from models.ttt_compat.tt.common import get_rot_transformation_mat
 
     if dtype is None:
         dtype = ttnn.bfloat16

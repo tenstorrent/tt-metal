@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTTv2 Llama 3.2-1B-Instruct — native stack (no ``models/tt_transformers`` imports).
+TTTv2 Llama 3.2-1B-Instruct — native stack (no ``models/ttt_compat`` imports).
 
 Architecture: standard Llama 1D transformer, same topology family as Llama 3.2-3B / 3.1-8B.
   hidden=2048, layers=16, n_heads=32, n_kv_heads=8, head_dim=64,
@@ -14,7 +14,7 @@ Mesh compatibility: N150 (1×1), N300 (1×2), T3K (1×8) — 32 heads / 8 KV hea
 divide all three.
 
 TTTv1 source for precision recipes:
-  ``models/tt_transformers/tt/model_config.py :: DecodersPrecision``
+  ``models/ttt_compat/tt/model_config.py :: DecodersPrecision``
   (Llama-3 group: ``accuracy()`` lines 130-159, ``performance()`` lines 208-218)
 """
 
@@ -669,7 +669,7 @@ class Llama32_1BTransformer1D(LightweightModule):
                 # all non-Galaxy meshes (only Llama-3.1-8B on TG flips it True). The 1B perf recipe
                 # (temp=0, top_p=0.08, top_k=32) routes through the cheap top-k op path — per-device
                 # ttnn.topk -> all-gather of the [*,32] tuples -> ttnn.sampling — never the full-vocab
-                # argmax all-gather. See models/tt_transformers/tt/model_config.py:1007.
+                # argmax all-gather. See models/ttt_compat/tt/model_config.py:1007.
                 allow_force_argmax=False,
                 pad_to_power_of_2=True,
             )

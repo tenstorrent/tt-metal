@@ -20,10 +20,10 @@ import transformers
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.generator_vllm import initialize_vllm_text_transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.generator_vllm import initialize_vllm_text_transformer
+from models.ttt_compat.tt.model_config import DecodersPrecision
 
 
 class Qwen3ForEmbedding:
@@ -307,7 +307,7 @@ class Qwen3ForEmbedding:
 
         # Create page_table for paged attention
         # With paged attention, we always need a page_table
-        from models.tt_transformers.tt.common import num_blocks_in_seq
+        from models.ttt_compat.tt.common import num_blocks_in_seq
 
         actual_seq_len = input_ids.shape[1]  # This should be max_seq_len after padding
         block_size = self.paged_attention_config.block_size

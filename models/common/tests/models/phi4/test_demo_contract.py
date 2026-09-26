@@ -293,7 +293,7 @@ def test_t3k_policy_is_two_dp4_runnable_and_eighteen_intentional_skips(expect_er
 
 def test_demo_uses_phi_provider_prompt_encoding_only():
     source = Path(_DEMO_PATH).read_text(encoding="utf-8")
-    assert "models.tt_transformers.tt.common" not in source
+    assert "models.ttt_compat.tt.common" not in source
     assert "encode_prompt_hf" not in source
     assert "encode_prompt(tokenizer, p)" in source
 

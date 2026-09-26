@@ -49,7 +49,7 @@ def test_rmsnorm_forward_is_zero_when_gamma_is_zero(completer_and_norm):
     forward output is elementwise zero (within bf16 noise)."""
     import ttnn
 
-    from models.tt_transformers.tt.common import Mode
+    from models.ttt_compat.tt.common import Mode
 
     completer, distributed_norm, rms = completer_and_norm
     model = completer.models[0]

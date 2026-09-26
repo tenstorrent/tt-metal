@@ -25,7 +25,7 @@ from models.demos.wormhole.mamba.tt.preprocessing import (
     split_sequence_length,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.model_config import determine_device_name
 
 
 class TokenDisplay:

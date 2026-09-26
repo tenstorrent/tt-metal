@@ -33,7 +33,7 @@ from models.experimental.llama32_1b_quasar.modules.lazy_weight import LazyWeight
 from models.experimental.llama32_1b_quasar.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _matmul_config
 from models.experimental.llama32_1b_quasar.tensor_utils import TILE_SIZE
 from models.experimental.llama32_1b_quasar.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 
 def get_mlp_weights_from_ref_model(reference_mlp) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -701,7 +701,7 @@ def test_mlp_1d_config_prefill_override(ttnn_mesh_device: ttnn.MeshDevice):
 # ============================================================================
 
 
-# [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
+# [INFO] this test will retire once models/ttt_compat/tt/model_config.py retires
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [
@@ -719,9 +719,9 @@ def test_mlp_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
     Test that MLP1D class matches the HuggingFace/Meta reference model.
     """
     from models.experimental.llama32_1b_quasar.modules.mlp.mlp_1d import MLP1D
-    from models.tt_transformers.tests.test_utils import get_ref_model_dype
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tests.test_utils import get_ref_model_dype
+    from models.ttt_compat.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     dtype = ttnn.bfloat8_b
     batch_size = 1

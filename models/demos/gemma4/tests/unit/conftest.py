@@ -95,12 +95,12 @@ def _stub_runtime(patch):
                 "warmup_gemma4_model_prefill",
             )
         },
-        "models.tt_transformers.tt.common": {"get_padded_prefill_len": _padded_length},
-        "models.tt_transformers.tt.generator": {
+        "models.ttt_compat.tt.common": {"get_padded_prefill_len": _padded_length},
+        "models.ttt_compat.tt.generator": {
             "SUPPORTED_PREFILL_BATCH_SIZES": (1, 2, 4, 8, 16, 32),
             "create_submeshes": _unused,
         },
-        "models.tt_transformers.tt.generator_vllm": {
+        "models.ttt_compat.tt.generator_vllm": {
             "HybridAttentionForCausalLM": type(
                 "HybridAttentionForCausalLM",
                 (),

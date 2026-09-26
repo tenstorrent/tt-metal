@@ -40,7 +40,7 @@ def _build_random_hidden_state(completer):
     """
     import ttnn
 
-    from models.tt_transformers.tt.common import Mode
+    from models.ttt_compat.tt.common import Mode
 
     model = completer.models[0]
     dim = model.args.dim

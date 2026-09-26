@@ -11,10 +11,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.lfm25_vl.tt.model_config import ModelArgs
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.mlp import MLP
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.mlp import MLP
 
 
 @torch.no_grad()

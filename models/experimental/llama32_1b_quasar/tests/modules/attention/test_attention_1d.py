@@ -126,7 +126,7 @@ def get_rot_mats_from_hf(
     """
     Create TTNN rotation matrices from HuggingFace rotary_emb.
 
-    Replaces `get_rot_mats` from models.tt_transformers.tt.rope.
+    Replaces `get_rot_mats` from models.ttt_compat.tt.rope.
     """
     cos_meta, sin_meta = get_cos_sin_from_hf(rotary_emb, seq_len * 2, head_dim)
 
@@ -2003,11 +2003,11 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
     This test validates backward compatibility with the ModelArgs factory method
     and performs numerical PCC comparison against the reference attention.
     """
-    from models.tt_transformers.tests.test_utils import get_ref_model_dype
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.common import precompute_freqs
-    from models.tt_transformers.tt.model_config import Mode, ModelArgs
-    from models.tt_transformers.tt.rope import RotarySetup, get_rot_mats
+    from models.ttt_compat.tests.test_utils import get_ref_model_dype
+    from models.ttt_compat.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.common import precompute_freqs
+    from models.ttt_compat.tt.model_config import Mode, ModelArgs
+    from models.ttt_compat.tt.rope import RotarySetup, get_rot_mats
 
     # Use HF_MODEL env var if set, otherwise use appropriate default based on device count
     # Multi-device requires larger models (dim >= 4096) for proper sharding

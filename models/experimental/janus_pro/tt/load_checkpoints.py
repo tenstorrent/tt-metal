@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.tt_transformers.tt.load_checkpoints import (
+from models.ttt_compat.tt.load_checkpoints import (
     convert_hf_qkv_to_meta_format,
     map_hf_to_meta_keys,
     map_hf_to_meta_keys_vision_only,

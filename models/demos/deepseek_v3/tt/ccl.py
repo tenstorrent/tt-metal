@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.tt_transformers.tt.ccl import get_num_links
+from models.ttt_compat.tt.ccl import get_num_links
 
 
 class CCL:

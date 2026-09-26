@@ -6,7 +6,7 @@ Host-side HF weight layout helpers for Qwen2.x (TTTv2 port).
 
 Q/K linear weights use HuggingFace head layout; TTNN RoPE expects Meta layout.
 This duplicates the small permute helpers from ``load_checkpoints.reverse_permute``
-without importing ``models/tt_transformers``.
+without importing ``models/ttt_compat``.
 """
 
 from __future__ import annotations

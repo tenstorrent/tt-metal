@@ -50,13 +50,13 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 # Import helper functions for proper cos/sin generation and transformation matrix.
 # Cos/sin caches in this test are generated using the production code path via
 # `compute_gather_cos_sin`, ensuring alignment with model runtime behavior.
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     get_rot_transformation_mat,
     RopeScalingLlama3,
     RopeScalingLinear,
     RopeScalingYarn,
 )
-from models.tt_transformers.tt.rope import compute_gather_cos_sin
+from models.ttt_compat.tt.rope import compute_gather_cos_sin
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader

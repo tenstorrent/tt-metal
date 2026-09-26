@@ -34,7 +34,7 @@ from models.experimental.llama32_1b_quasar.modules.tt_ccl import (
 )
 from models.experimental.llama32_1b_quasar.tensor_utils import TILE_SIZE, get_padded_hidden_dim, pad_dim_to_size
 from models.experimental.llama32_1b_quasar.utility_functions import is_blackhole
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 # =============================================================================
 # Top-level config dataclass
@@ -499,7 +499,7 @@ class MLP1D(LightweightModule):
 
         import torch
 
-        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+        from models.ttt_compat.tt.model_config import OpGroup, TensorGroup
 
         # Get model_config for overrides - use passed model_config if provided
         if model_config is None:
@@ -690,7 +690,7 @@ def _find_prefill_grid(row_tiles: int, col_tiles: int, max_rows: int = 8, max_co
 
 def _get_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
     """Get output subblock width that divides per_core_n and satisfies constraints."""
-    # [ALIGNED] Exactly matching models/tt_transformers/tt/common.py:get_out_subblock_w
+    # [ALIGNED] Exactly matching models/ttt_compat/tt/common.py:get_out_subblock_w
     out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
     while out_subblock_w > 1:
         if out_subblock_w * out_subblock_h <= 4 and per_core_n % out_subblock_w == 0:

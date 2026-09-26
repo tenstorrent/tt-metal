@@ -64,7 +64,7 @@ class TTMistral3PatchMerger(LightweightModule):
         # Normalising here makes the contract explicit instead of rank-dependent, and lets
         # split's own validation catch a genuine token-count mismatch loudly.
         # NOTE this file is a near-duplicate of
-        # models/tt_transformers/tt/multimodal/mistral_24b/vision_mmp.py, which carries the
+        # models/ttt_compat/tt/multimodal/mistral_24b/vision_mmp.py, which carries the
         # same fix; the experimental copy is the one the e2e pipeline_tests exercise.
         if len(image_features.shape) != 2 or image_features.shape[0] != sum(tokens_per_image):
             image_features = ttnn.reshape(image_features, (-1, d))

@@ -34,7 +34,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.demos.deepseek_v3.utils.signpost_names import FIRST_DENSE_LAYER_SIGNPOST, FIRST_MOE_LAYER_SIGNPOST
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 class RowBatchedModel(SharedStateAddOn, AbstractModule):

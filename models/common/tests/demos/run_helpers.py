@@ -677,7 +677,7 @@ def assert_no_special_tokens(
 
 def load_eval_repeat_prompts_batch32() -> list[str]:
     """The 32 numeric sequence-continuation prompts TTTv1's ci-eval-32 uses (parity)."""
-    path = Path("models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json")
+    path = Path("models/ttt_compat/demo/sample_prompts/eval_repeat_prompts_batch32.json")
     with open(path) as f:
         data = json.load(f)
     return [entry["prompt"] for entry in data]

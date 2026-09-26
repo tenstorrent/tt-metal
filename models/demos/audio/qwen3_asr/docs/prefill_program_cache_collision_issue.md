@@ -1,6 +1,6 @@
 # tt-metal issue draft: prefill program-cache collision across the MLP reshape batch dim
 
-**Component:** `models/tt_transformers` (prefill path) + ttnn matmul program cache
+**Component:** `models/ttt_compat` (prefill path) + ttnn matmul program cache
 **Arch:** Blackhole (P150). Observed with a Qwen3-1.7B decoder built on `tt_transformers.tt.model.Transformer`.
 **tt-metal:** branch `yito/qwen3_asr` @ `b8319d60dd4` (merged `main` @ `98169aec057`).
 
@@ -18,7 +18,7 @@ transcription accuracy (full-clip CER 0.045 → 0.065) and blocks long single-sh
 
 ## Root cause
 
-`models/tt_transformers/tt/mlp.py:135-137` reshapes the prefill activation when `seq_len >= prefill_len_cutoff`
+`models/ttt_compat/tt/mlp.py:135-137` reshapes the prefill activation when `seq_len >= prefill_len_cutoff`
 (`= 512` on Blackhole, `model_config.py:555`):
 
 ```python
@@ -57,7 +57,7 @@ a_shape[-1] == b_shape[-2]
 The width of the first tensor must be equal to the height of the second tensor.
 Mismatch: width=3072 height=2048
 ```
-(backtrace: attention `forward_prefill` → `wo` `ttnn.linear`, `models/tt_transformers/tt/attention.py:1156`.)
+(backtrace: attention `forward_prefill` → `wo` `ttnn.linear`, `models/ttt_compat/tt/attention.py:1156`.)
 
 3. A **1024** prefill run first, in isolation (no prior 512), **works** — as do 512-only and repeated
    same-length prefills. The crash requires a *prior different-bucket* prefill in the same process.
@@ -66,8 +66,8 @@ Mismatch: width=3072 height=2048
 
 ```python
 import ttnn, torch
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model import Transformer
 
 dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=200_000_000)
 args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048)
@@ -109,9 +109,9 @@ long-lived process (servers, batched eval) is exposed to the same collision.
 
 ## References
 
-- `models/tt_transformers/tt/mlp.py:135-137` (prefill reshape), `:275-281` (ff2 `minimal_matmul`)
-- `models/tt_transformers/tt/model_config.py:555` (`prefill_len_cutoff`), `:756-765` (fixed grids),
+- `models/ttt_compat/tt/mlp.py:135-137` (prefill reshape), `:275-281` (ff2 `minimal_matmul`)
+- `models/ttt_compat/tt/model_config.py:555` (`prefill_len_cutoff`), `:756-765` (fixed grids),
   `:1988` (`get_attn_wo_program_config`)
-- `models/tt_transformers/tt/attention.py:1156` (`wo` linear, crash site)
+- `models/ttt_compat/tt/attention.py:1156` (`wo` linear, crash site)
 - `models/demos/audio/qwen3_asr/tt/qwen3_asr_decoder.py:prefill_logits` (the 512-pad workaround)
 - `models/demos/audio/qwen3_asr/README.md` → "Known limitations"

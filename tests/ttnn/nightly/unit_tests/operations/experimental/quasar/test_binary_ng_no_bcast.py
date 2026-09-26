@@ -194,7 +194,7 @@ def test_no_bcast_lhs_activation(device, op_name, layout):
 @pytest.mark.parametrize("layout", ["interleaved", "height"])
 def test_no_bcast_lhs_silu_swiglu(device, layout):
     # Llama 3.2 1B SwiGLU: a multiply with a fused lhs SiLU -- silu(a) * b -- the exact binary-op
-    # activation the model emits (models/tt_transformers/tt/mlp.py: ttnn.mul(w1_out, w3_out,
+    # activation the model emits (models/ttt_compat/tt/mlp.py: ttnn.mul(w1_out, w3_out,
     # input_tensor_a_activations=[ttnn.UnaryOpType.SILU])). Same lhs-activation self-loop as
     # test_no_bcast_lhs_activation, but with SiLU (an SFPU activation, no packer fast-path) on the SFPU
     # multiply kernel and no post activation (SwiGLU is just silu(a)*b). bf16; interleaved and height-sharded.

@@ -9,7 +9,7 @@ import pytest
 import ttnn
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 
 
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])

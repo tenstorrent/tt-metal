@@ -138,11 +138,11 @@ Run `generic_ops_tracer.py` against any model demo or test. It runs the model wi
 python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py
 
 # Pytest test
-python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text
+python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text
 
 # With HF model selection
 HF_MODEL=meta-llama/Llama-3.2-1B-Instruct \
-    python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text
+    python model_tracer/generic_ops_tracer.py models/ttt_compat/demo/simple_text_demo.py::test_demo_text
 
 # Keep raw trace files for later import (e.g., traced on a remote machine)
 python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py --store

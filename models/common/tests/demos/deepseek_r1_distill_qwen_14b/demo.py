@@ -39,7 +39,7 @@ LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` 
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
 Reference artifact (``.refpt``): generate with ``generate_book_refpt.py`` before running token-accuracy
-tests. The file lives at ``models/tt_transformers/tests/reference_outputs/DeepSeek-R1-Distill-Qwen-14B.refpt``.
+tests. The file lives at ``models/ttt_compat/tests/reference_outputs/DeepSeek-R1-Distill-Qwen-14B.refpt``.
 """
 
 import json
@@ -78,7 +78,7 @@ from models.common.tests.demos.run_helpers import (
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf
+from models.ttt_compat.tt.common import encode_prompt_hf
 
 # =============================================================================
 # Expected metrics — perf gates set from a same-box TTTv1-vs-TTTv2 sweep (on-device sampling),
@@ -389,7 +389,7 @@ def _load_tokenizer(hf_model_id: str):
 def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``."""
     name = ref_basename_for_hf(hf_model_id)
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(
             f"Reference file not found: {ref_path}. "
@@ -407,7 +407,7 @@ def load_reference_data(hf_model_id: str):
 
 def load_input_prompts(batch_size: int) -> list[str]:
     """Load prompts for performance testing from shared sample file."""
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
     with open(prompts_path) as f:

@@ -16,7 +16,7 @@ import ttnn  # noqa: E402
 
 
 def _base_generator():
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     generator = Generator.__new__(Generator)
     released = []

@@ -42,7 +42,7 @@ from qwen_vl_utils import process_vision_info
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.generator import Generator
 
 # Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device the mesh is
 # (1,1) and the model runs its validated single-device path; on a multi-device mesh it needs
@@ -482,7 +482,7 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
     multimodal addition is computing the (hidden-fractured) image embeddings up front and passing
     them to ``prefill_traced_chunked``, which gathers/re-shards them into the splice buffers.
     """
-    from models.tt_transformers.tt.common import copy_host_to_device
+    from models.ttt_compat.tt.common import copy_host_to_device
 
     vocab = model.args.vocab_size
     mesh = model.mesh_device

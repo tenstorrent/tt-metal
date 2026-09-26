@@ -18,7 +18,7 @@ from ttnn.operations.transformer_golden import (
     scaled_dot_product_attention_reference_prefill,
 )
 
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     PagedAttentionConfig,
 )
 

@@ -37,7 +37,7 @@ from models.demos.audio.qwen3_asr.reference.qwen_asr_processor import load_proce
 from models.demos.audio.qwen3_asr.tests._artifacts import missing_artifact
 from models.demos.audio.qwen3_asr.tt import audio_encoder as tt_enc
 from models.demos.audio.qwen3_asr.tt.qwen3_asr_decoder import Qwen3ASRDecoder
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 AUDIO_TOKEN_ID = 151676
 SR = 16000

@@ -304,7 +304,7 @@ def test_model_helpers_write_explicit_recipes_on_common_configs(arch, num_device
 
 
 def test_checked_in_qwen_config_retains_intermediate_size_25600():
-    config_path = Path(__file__).parents[4] / "tt_transformers/model_params/Qwen3-32B/config.json"
+    config_path = Path(__file__).parents[4] / "ttt_compat/model_params/Qwen3-32B/config.json"
     checked_in = json.loads(config_path.read_text())
 
     assert QWEN3_32B_INTERMEDIATE_SIZE == 25600

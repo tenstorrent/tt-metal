@@ -20,10 +20,10 @@ import torch
 import ttnn
 from huggingface_hub import snapshot_download
 from models.common.sampling import SamplingParams
-from models.tt_transformers.tt.common import PagedAttentionConfig
-from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import ModelArgs
 
 OptimizationsFn = Callable[[int, str], Any]
 

@@ -26,8 +26,8 @@ prefill (embeds) -> greedy decode loop (token ids) -> text.
 import torch
 
 import ttnn
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
 
 
 class Qwen3ASRDecoder(Transformer):

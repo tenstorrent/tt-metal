@@ -85,7 +85,7 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.dflash_drafter import DFlashDrafter, DFlashFusedDecoder
     from models.demos.gemma4.tt.generator import Gemma4Generator
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     model_path = os.getenv("HF_MODEL")
     if not model_path:

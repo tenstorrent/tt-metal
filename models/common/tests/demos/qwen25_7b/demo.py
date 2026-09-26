@@ -44,13 +44,13 @@ Usage:
     SAMPLING_MODE=on_device_topk MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen2.5-7B-Instruct \
       pytest models/common/tests/demos/qwen25_7b/demo.py -k "batch-32-ci" -v
 
-LazyWeight tensor cache (same rules as ``models/tt_transformers`` ``ModelArgs``):
+LazyWeight tensor cache (same rules as ``models/ttt_compat`` ``ModelArgs``):
 ``TT_CACHE_PATH/<device_name>`` when ``TT_CACHE_PATH`` is set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory
 (``device_name`` is ``N150`` / ``N300`` / ``N150x4`` / ``{n}dev`` from mesh size).
 
 Reference artifact (``.refpt``): the token-accuracy test gates on the committed book
-reference ``models/tt_transformers/tests/reference_outputs/Qwen2.5-7B-Instruct.refpt``
+reference ``models/ttt_compat/tests/reference_outputs/Qwen2.5-7B-Instruct.refpt``
 (real-corpus teacher-forced targets), shared with the TTTv1 demo. The loader supports both
 the metadata-rich format (``prompt_len``) and the book half-split format.
 """
@@ -85,7 +85,7 @@ from models.common.tests.demos.run_helpers import (
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf, get_padded_prefill_len
+from models.ttt_compat.tt.common import encode_prompt_hf, get_padded_prefill_len
 
 # =============================================================================
 # Expected metrics — perf gates set from a same-box TTTv1-vs-TTTv2 sweep, NOT PERF.md / not a cross-box
@@ -322,7 +322,7 @@ def get_device_name(mesh_device):
 def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> Path:
     """Disk root for ``Qwen25_7B`` ``LazyWeight`` caches in this e2e demo.
 
-    Matches ``models/tt_transformers/tt/model_config.py`` (HF checkpoint branch):
+    Matches ``models/ttt_compat/tt/model_config.py`` (HF checkpoint branch):
     if ``TT_CACHE_PATH`` is set, use ``<TT_CACHE_PATH>/<device_name>``; otherwise
     ``model_cache/<HF_MODEL>/<device_name>``. Directories are created as needed.
     """
@@ -346,7 +346,7 @@ def ref_basename_for_hf(hf_model_id: str) -> str:
 def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``."""
     name = ref_basename_for_hf(hf_model_id)
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
@@ -360,7 +360,7 @@ def load_reference_data(hf_model_id: str):
 
 def load_input_prompts(batch_size: int) -> list[str]:
     """Load input prompts for performance testing."""
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
 

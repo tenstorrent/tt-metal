@@ -8,8 +8,8 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.model_config import OpGroup, TensorGroup
 
 
 class VisionAttention(LightweightModule):

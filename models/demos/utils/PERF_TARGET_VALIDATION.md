@@ -13,7 +13,7 @@ You can run that **same** enforcement locally as an opt-in pytest gate.
 Run your model demo/test with `VALIDATE_PERF_TARGETS=1`:
 
 ```bash
-VALIDATE_PERF_TARGETS=1 pytest models/tt_transformers/demo/simple_text_demo.py -k "..."
+VALIDATE_PERF_TARGETS=1 pytest models/ttt_compat/demo/simple_text_demo.py -k "..."
 ```
 
 A `pytest_sessionfinish` hook (in `models/conftest.py`) runs **after** the

@@ -28,7 +28,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 from .vision_distributed_layernorm import DistributedLayerNorm
 

@@ -5,8 +5,8 @@
 from ``tt_transformers``) or a ``ShortConv``-based layer (custom to this model), selected
 per-layer via ``args.layer_types[layer_num]``.
 
-``LfmDecoderLayer`` matches ``models.tt_transformers.tt.decoder.TransformerBlock``'s
-constructor and ``forward`` signature exactly, so ``models.tt_transformers.tt.model.Transformer``
+``LfmDecoderLayer`` matches ``models.ttt_compat.tt.decoder.TransformerBlock``'s
+constructor and ``forward`` signature exactly, so ``models.ttt_compat.tt.model.Transformer``
 can build/drive a full hybrid stack unmodified -- see
 ``models.demos.multimodal.lfm25_vl.tt.e2e_model`` for how ``TransformerBlock`` is
 monkeypatched to this class for the duration of ``Transformer.__init__``.
@@ -18,12 +18,12 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.multimodal.lfm25_vl.tt.short_conv import TtLfm2ShortConv
 
 # Import the *original* TransformerBlock directly from its defining module so this class
-# still works correctly even while `models.tt_transformers.tt.model.TransformerBlock` is
+# still works correctly even while `models.ttt_compat.tt.model.TransformerBlock` is
 # monkeypatched to `LfmDecoderLayer` (see e2e_model.py).
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.decoder import TransformerBlock as OriginalTransformerBlock
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mlp import MLP
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.decoder import TransformerBlock as OriginalTransformerBlock
+from models.ttt_compat.tt.distributed_norm import DistributedNorm
+from models.ttt_compat.tt.mlp import MLP
 
 
 def _is_prefill(mode) -> bool:

@@ -12,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.ttt_compat.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.reference.qwen import Transformer

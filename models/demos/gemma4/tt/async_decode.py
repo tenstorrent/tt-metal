@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gemma4-local async decode helpers (do not edit models/tt_transformers).
+"""Gemma4-local async decode helpers (do not edit models/ttt_compat).
 
 vLLM async scheduling can hand a one-step-stale host token while the device
 trace buffer holds the authoritative sampled token. Nearest-bucket batch

@@ -23,8 +23,8 @@ from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.model_config import determine_device_name
 
 END_OF_TEXT = 11
 SPACE = 204

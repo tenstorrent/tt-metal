@@ -63,7 +63,7 @@ def _skip_unless_t3k(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> None:
 
 @pytest.fixture
 def device_params(request, galaxy_type):
-    """Match ``models/tt_transformers/conftest.py`` so ``fabric_config: True`` maps to a real fabric."""
+    """Match ``models/ttt_compat/conftest.py`` so ``fabric_config: True`` maps to a real fabric."""
     params = getattr(request, "param", {}).copy()
 
     mesh_device = {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(

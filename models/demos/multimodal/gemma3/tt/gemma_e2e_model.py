@@ -10,9 +10,9 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
-from models.tt_transformers.tt.common import sample_top_p
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.common import sample_top_p
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
 
 
 class TtGemmaModel(Transformer):

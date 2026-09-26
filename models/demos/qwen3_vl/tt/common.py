@@ -10,7 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
+from models.ttt_compat.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 
 def get_hf_visual(model):

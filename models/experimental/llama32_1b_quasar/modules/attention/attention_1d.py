@@ -21,10 +21,10 @@ Key design decisions:
 Weight format requirements:
   Q and K weights MUST be in Meta format, not HuggingFace format. HuggingFace stores
   Q/K weights with a different head layout that is incompatible with TTNN's RoPE
-  implementation. Use `reverse_permute` from `models.tt_transformers.tt.load_checkpoints`
+  implementation. Use `reverse_permute` from `models.ttt_compat.tt.load_checkpoints`
   to convert HF weights to Meta format before passing to Attention1D:
 
-    from models.tt_transformers.tt.load_checkpoints import reverse_permute
+    from models.ttt_compat.tt.load_checkpoints import reverse_permute
     wq_meta = reverse_permute(wq_hf, n_heads, n_heads * head_dim, dim)
     wk_meta = reverse_permute(wk_hf, n_kv_heads, n_kv_heads * head_dim, dim)
 
@@ -1270,7 +1270,7 @@ class Attention1D(LightweightModule):
         """Factory method for backward compatibility with ModelArgs."""
         import torch
 
-        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+        from models.ttt_compat.tt.model_config import OpGroup, TensorGroup
 
         if args.is_galaxy:
             raise ValueError("Attention1D cannot be used for Galaxy devices. Use Attention2D instead.")

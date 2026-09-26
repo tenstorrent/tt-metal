@@ -3,7 +3,7 @@
 
 """
 Host-only tests for the resumed-prefill offset alignment in
-``models.tt_transformers.tt.generator.Generator``.
+``models.ttt_compat.tt.generator.Generator``.
 
 A resumed prefill (prefix caching, or a prompt split across engine steps) hands
 the traced chunked SDPA a ``chunk_start_idx``. That op reads the wrong prefix
@@ -20,8 +20,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.tt_transformers.tt.common import get_padded_prefill_len
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.common import get_padded_prefill_len
+from models.ttt_compat.tt.generator import Generator
 
 # The buckets Llama-3.1-8B traces on T3K, and the ceiling warmup applies to them.
 TRACED_BUCKETS = (128, 1024, 2048, 4096, 8192)

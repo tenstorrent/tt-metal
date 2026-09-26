@@ -692,8 +692,8 @@ def test_rmsnorm_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevi
     """
     Test RMSNorm1D.from_model_args() factory method.
     """
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     seed = 1234
     torch.manual_seed(seed)

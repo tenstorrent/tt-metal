@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Batched prefill gates on identical *padded* buckets (hetero actual OK)."""
 
-from models.tt_transformers.tt.common import get_padded_prefill_len
+from models.ttt_compat.tt.common import get_padded_prefill_len
 
 
 def can_batch_prefill(prompt_lens, num_cached=None, page_table_ok=True, disable=False):

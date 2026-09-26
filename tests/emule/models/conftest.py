@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# EMULE VENDORED COPY of models/tt_transformers/demo/conftest.py (options only).
+# EMULE VENDORED COPY of models/ttt_compat/demo/conftest.py (options only).
 # Registers the --input_prompts/--enable_trace/... CLI options that the vendored
 # test_tt_transformers_text_demo.py reads via request.config.getoption(). All
 # fixtures come from the root tt-metal conftest.py (in the ancestry). Re-sync
 # alongside the vendored demo on a tt-metal pin bump.
 
 import json
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.ttt_compat.tt.model_config import parse_optimizations
 
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.

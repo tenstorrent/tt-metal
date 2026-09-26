@@ -8,9 +8,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
-from models.tt_transformers.tt.rope import RotarySetup
+from models.ttt_compat.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.rope import RotarySetup
 
 from ...tt.layer import DecoderLayer
 from ...utils.general_utils import throughput_experts_supported_on_arch
@@ -766,7 +766,7 @@ def test_decoder(
     paged_attention_config = None
     page_table_tt = None
     if paged:
-        from models.tt_transformers.tt.common import PagedAttentionConfig
+        from models.ttt_compat.tt.common import PagedAttentionConfig
 
         paged_block_size = 64
         effective_seq_len = max(seq_len, 128)

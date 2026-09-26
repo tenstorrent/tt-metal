@@ -81,7 +81,7 @@ _MIXED_SHAPE = (16 * 32, 16 * 32)
 
 # Fused activations exercised by the op, each with its torch golden. A lhs (pre) activation applies to
 # operand A before the binary op; a post activation applies to the result. RELU is ResNet50's fused
-# residual activation; SILU is Llama's SwiGLU gate (models/tt_transformers/tt/mlp.py emits
+# residual activation; SILU is Llama's SwiGLU gate (models/ttt_compat/tt/mlp.py emits
 # ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])). GELU/TANH/SQUARE/SIGMOID
 # are further activations the WH-baseline matrix (QUASAR_LLK_GAPS.md Table 2) marks SUPPORTED on Quasar
 # (each has a Quasar ckernel + SfpuType + an #else ARCH_QUASAR compute-API branch); they are exercised by

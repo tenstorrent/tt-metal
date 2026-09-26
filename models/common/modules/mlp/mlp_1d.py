@@ -33,7 +33,7 @@ from models.common.modules.tt_ccl import (
     get_tt_ccl,
 )
 from models.common.tensor_utils import TILE_SIZE, get_out_subblock_w, get_padded_hidden_dim, pad_dim_to_size
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 # =============================================================================
 # Top-level config dataclass
@@ -511,7 +511,7 @@ class MLP1D(LightweightModule):
 
         import torch
 
-        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+        from models.ttt_compat.tt.model_config import OpGroup, TensorGroup
 
         # Get model_config for overrides - use passed model_config if provided
         if model_config is None:
