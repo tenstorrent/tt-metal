@@ -12,14 +12,25 @@
 
 namespace tt::tt_metal {
 
+class Device;
 class IDevice;
+class MetalContext;
 class Program;
+enum class DispatchCoreAxis;
 
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
 
 namespace experimental {
+
+// Options for a manual fast-dispatch session.
+struct FastDispatchSetupOptions {
+    // Warn and proceed when an L1 allocation is resident on a core that fast
+    // dispatch will claim. The default refuses before any firmware is written.
+    // The conflicting allocation may be corrupted.
+    bool allow_destructive = false;
+};
 
 // This class provides APIs to dynamically enable and teardown Fast Dispatch during runtime.
 // Functionality is currently limited to Galaxy clusters.
@@ -33,7 +44,9 @@ namespace experimental {
 class DispatchContext {
 public:
     static DispatchContext& get();
+    ::tt::tt_metal::DispatchCoreAxis get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const;
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
+    void initialize_fast_dispatch(distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
     void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
 
@@ -53,6 +66,10 @@ private:
         void operator()(DispatchContext* p) const { delete p; }
     };
     friend struct Deleter;
+
+    // Drops the host-side fast-dispatch state created before the L1 preflight refused, so the
+    // mesh is back in Slow Dispatch. Touches Device internals, hence a member.
+    void unwind_failed_fd_setup(MetalContext& context, const std::vector<::tt::tt_metal::Device*>& devices);
 
     bool fast_dispatch_enabled_ = false;
     uint32_t num_fd_inits_ = 0;
