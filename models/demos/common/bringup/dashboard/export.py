@@ -160,7 +160,20 @@ def build(spec) -> dict:
             )
         ch = sorted((int(k.rsplit("_c", 1)[1]), v["value"]) for k, v in m.items() if k.startswith("chunk_seconds_c"))
         if ch:
-            timing.append({"task": t["id"], "label": t["id"], "chunks": ch})
+            timing.append({"task": t["id"], "label": f"{t['id']} ladder (reads back every layer)", "chunks": ch})
+        full = sorted(
+            (int(k.rsplit("_c", 1)[1]), v["value"] / 1e3) for k, v in m.items() if k.startswith("prefill_chunk_ms_c")
+        )
+        if full:
+            timing.append({"task": t["id"], "label": f"{t['id']} full prefill, warm, no readback", "chunks": full})
+        if "chunk_wall_ms" in m:
+            timing.append(
+                {
+                    "task": t["id"],
+                    "label": f"{t['id']} last chunk on golden prefix, warm",
+                    "chunks": [[0, m["chunk_wall_ms"]["value"] / 1e3]],
+                }
+            )
 
     plan_mem = res / "plan_memory.json"
     return {
