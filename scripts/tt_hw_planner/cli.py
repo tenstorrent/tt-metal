@@ -11704,6 +11704,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--hf-arch", dest="hf_arch", help="HF architecture (e.g. LlamaForCausalLM) if config.json is not in the demo"
     )
     pph.add_argument("--lock", help="path to a requirements.lock to pin the container build deps")
+    pph.add_argument(
+        "--no-bench",
+        dest="no_bench",
+        action="store_true",
+        help="skip the post-publish auto-benchmark (serve + latency sweep into the card)",
+    )
     pph.add_argument("--out", help="tt-model build staging dir (default ~/tt-model-builds)")
     pph.add_argument("--tt-model-bin", dest="tt_model_bin", help="path to the tt-model executable")
     pph.add_argument("--public", action="store_true", help="push the bundle public (shared by link)")

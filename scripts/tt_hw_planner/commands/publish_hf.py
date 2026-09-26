@@ -397,6 +397,140 @@ def _scaffold_vllm_bundle(
     return True, is_stub, str(bundle)
 
 
+def _enrich_card_with_benchmarks(args, slug: str, staged: Path, ttm: str) -> None:
+    """After the bundle is built+pushed, SERVE it and measure a real latency sweep, then write the
+    numbers into the card — the same class of table the reference TT cards carry. Fully automatic and
+    universal: any model that actually serves gets measured; one that can't serve yet (e.g. a novel
+    arch whose adapter is still a stub) is skipped, and the publish stands. Never raises."""
+    import concurrent.futures
+    import json as _json
+    import statistics
+    import subprocess
+    import time
+    import urllib.request
+
+    try:
+        manifest = str(Path(staged) / "tt_kernel_manifest.json")
+        port = 21777
+        base = f"http://127.0.0.1:{port}/v1"
+        print("  [publish-hf] bench: serving the bundle to measure latency…")
+        try:
+            subprocess.run(
+                [ttm, "serve", manifest, "--detach", "--port", str(port)], timeout=180, capture_output=True, text=True
+            )
+        except Exception as e:
+            print(f"  [publish-hf] bench: could not launch serve ({e}); published without measured numbers.")
+            return
+        ready = False
+        deadline = time.time() + 1800  # kernels compile on first serve (can take many minutes)
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(base + "/models", timeout=5)
+                ready = True
+                break
+            except Exception:
+                time.sleep(20)
+        if not ready:
+            print(
+                "  [publish-hf] bench: server never became ready (model not servable yet) — "
+                "published without measured numbers."
+            )
+            subprocess.run([ttm, "stop", manifest], timeout=90, capture_output=True)
+            return
+        model_id = getattr(args, "weights", None) or slug
+        try:
+            d = _json.loads(urllib.request.urlopen(base + "/models", timeout=10).read())
+            model_id = d["data"][0]["id"]
+        except Exception:
+            pass
+
+        def _one():
+            body = _json.dumps(
+                {
+                    "model": model_id,
+                    "messages": [{"role": "user", "content": "Write a paragraph about GPUs."}],
+                    "max_tokens": 128,
+                    "stream": True,
+                    "ignore_eos": True,
+                }
+            ).encode()
+            req = urllib.request.Request(
+                base + "/chat/completions", data=body, headers={"Content-Type": "application/json"}
+            )
+            t0 = time.time()
+            ttft = None
+            last = t0
+            itl = []
+            n = 0
+            for line in urllib.request.urlopen(req, timeout=600):
+                if b"data:" in line and b"[DONE]" not in line and b'"content"' in line:
+                    now = time.time()
+                    if ttft is None:
+                        ttft = now - t0
+                    else:
+                        itl.append(now - last)
+                    last = now
+                    n += 1
+            return (ttft * 1000 if ttft else None, statistics.mean(itl) * 1000 if itl else None)
+
+        rows = []
+        for users in (1, 8, 32):
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=users) as ex:
+                    res = [f.result() for f in [ex.submit(_one) for _ in range(users)]]
+            except Exception:
+                res = []
+            ttfts = [r[0] for r in res if r and r[0]]
+            tpots = [r[1] for r in res if r and r[1]]
+            ttft = statistics.mean(ttfts) if ttfts else None
+            tpot = statistics.mean(tpots) if tpots else None
+            dec = (1000.0 / tpot) if tpot else None
+            rows.append((users, ttft, tpot, dec, (dec * users) if dec else None))
+        subprocess.run([ttm, "stop", manifest], timeout=90, capture_output=True)
+
+        if not any(r[1] for r in rows):
+            print("  [publish-hf] bench: no measurements returned; published without a sweep.")
+            return
+        tbl = [
+            "| Users | TTFT (ms) | TPOT (ms) | Decode (tok/s/u) | Throughput (tok/s) |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for u, ttft, tpot, dec, tot in rows:
+            tbl.append(
+                f"| {u} | {ttft:.0f} | {tpot:.1f} | {dec:.1f} | {tot:.0f} |" if ttft else f"| {u} | — | — | — | — |"
+            )
+        section = (
+            "\n\n## Measured performance (auto-benchmarked on publish)\n\n"
+            "Latency measured by serving this exact bundle and streaming 128-token completions "
+            "at each concurrency (mean over the batch).\n\n" + "\n".join(tbl) + "\n"
+        )
+
+        from huggingface_hub import HfApi, hf_hub_download
+
+        tok = getattr(args, "token", None) or os.environ.get("HF_TOKEN")
+        if not tok:
+            for p in ("~/.cache/huggingface/token", "~/.huggingface/token"):
+                fp = Path(p).expanduser()
+                if fp.is_file() and fp.read_text().strip():
+                    tok = fp.read_text().strip()
+                    break
+        api = HfApi(token=tok)
+        lp = hf_hub_download(repo_id=args.repo, filename="README.md", repo_type="model", token=tok)
+        s = open(lp).read()
+        s = re.sub(r"\n## Measured performance \(auto-benchmarked on publish\).*?(?=\n## |\Z)", "\n", s, flags=re.S)
+        open(lp, "w").write(s.rstrip() + section)
+        api.upload_file(
+            path_or_fileobj=lp,
+            path_in_repo="README.md",
+            repo_id=args.repo,
+            repo_type="model",
+            commit_message="Add measured latency sweep (auto-benchmarked)",
+        )
+        print("  [publish-hf] bench: measured latency sweep added to the card.")
+    except Exception as e:
+        print(f"  [publish-hf] bench: skipped ({e}); publish stands.")
+
+
 def _checkout_of(demo_dir: Path) -> Path:
     """The tt-metal checkout root a demo dir belongs to (the path before '/models/')."""
     parts = Path(demo_dir).resolve().parts
@@ -579,6 +713,10 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             print(f"  [publish-hf] upload failed: {e}")
         return 4
     print(f"  [publish-hf] published container bundle: https://huggingface.co/{args.repo}")
+    # Auto-benchmark: serve the bundle and write a measured latency sweep into the card. Universal +
+    # best-effort — measures any model that serves, skips (publish stands) for one that can't yet.
+    if not getattr(args, "no_bench", False):
+        _enrich_card_with_benchmarks(args, slug, staged, ttm)
     return 0
 
 
