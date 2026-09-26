@@ -1,0 +1,626 @@
+<title>__TITLE__</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+:root{
+  --room:#0c0b0a; --ink:#d9d3c6; --muted:#9b9486; --focus:#ffff2a;
+  --t0:#000000; --t1:#ff2020; --t2:#20ff40; --t3:#ffff28; --t4:#2638ff; --t5:#ff28ff; --t6:#28ffff; --t7:#ffffff;
+}
+*{box-sizing:border-box}
+html{background:#0c0b0a}
+body{margin:0;min-height:100vh;padding:20px 16px 32px;background:#0c0b0a radial-gradient(ellipse 90% 60% at 50% 0%,#2b2621 0%,#0c0b0a 75%) no-repeat;
+  color:#d9d3c6;font-family:"VT323",ui-monospace,"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;overflow-x:hidden}
+.wrap{max-width:940px;margin:0 auto}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.tv{position:relative;border-radius:clamp(14px,4vw,36px);padding:clamp(10px,3.2vw,32px) clamp(10px,3.2vw,32px) clamp(30px,6.5vw,58px);
+  background:linear-gradient(165deg,#4d4943 0%,#2a2723 45%,#191715 100%);
+  box-shadow:0 28px 60px rgba(0,0,0,.65),inset 0 2px 0 rgba(255,255,255,.09),inset 0 -4px 0 rgba(0,0,0,.55)}
+.glass{position:relative;overflow:hidden;background:#000;border-radius:6%/8%;padding:3.4% 4.2%;outline:none;
+  box-shadow:0 0 0 2px #0a0908,0 0 0 6px #2f2c27,0 0 0 7px #0a0908}
+.glass:focus-visible{box-shadow:0 0 0 2px #0a0908,0 0 0 6px var(--focus),0 0 0 7px #0a0908}
+.grid{position:relative;aspect-ratio:4/3;display:grid;grid-template-rows:repeat(24,minmax(0,1fr));font-size:var(--fs,12px);line-height:1;
+  filter:saturate(1.08) drop-shadow(0 0 .09em rgba(255,255,255,.22));animation:flick .11s infinite alternate}
+.row{display:grid;grid-template-columns:repeat(40,minmax(0,1fr));min-height:0}
+.row.dh{transform:scaleY(2);transform-origin:50% 0;position:relative;z-index:1}
+.row.hid{visibility:hidden}
+.row>span{display:flex;align-items:center;justify-content:center;min-width:0;overflow:hidden;white-space:pre;text-shadow:0 0 .2em currentColor}
+.row>span[data-k]{cursor:pointer}
+.m{background-repeat:no-repeat}
+.f0{color:var(--t0)}.f1{color:var(--t1)}.f2{color:var(--t2)}.f3{color:var(--t3)}.f4{color:var(--t4)}.f5{color:var(--t5)}.f6{color:var(--t6)}.f7{color:var(--t7)}
+.b0{background-color:var(--t0)}.b1{background-color:var(--t1)}.b2{background-color:var(--t2)}.b3{background-color:var(--t3)}
+.b4{background-color:var(--t4)}.b5{background-color:var(--t5)}.b6{background-color:var(--t6)}.b7{background-color:var(--t7)}
+.fl{animation:flash 1.1s steps(1,end) infinite}
+@keyframes flash{50%{color:transparent;text-shadow:none}}
+@keyframes flick{from{opacity:.975}to{opacity:1}}
+@keyframes roll{from{transform:translateY(-30%)}to{transform:translateY(330%)}}
+.fx{position:absolute;inset:0;pointer-events:none;border-radius:inherit}
+.scan{background:repeating-linear-gradient(to bottom,rgba(255,255,255,.035) 0,rgba(255,255,255,.035) 1px,rgba(0,0,0,.34) 1.6px,rgba(0,0,0,.34) 2.4px,rgba(255,255,255,0) 3px);mix-blend-mode:multiply;z-index:3}
+.vig{z-index:4;background:
+  radial-gradient(ellipse 70% 55% at 30% 18%,rgba(255,255,255,.07),rgba(255,255,255,0) 60%),
+  radial-gradient(ellipse at 50% 50%,rgba(0,0,0,0) 58%,rgba(0,0,0,.42) 86%,rgba(0,0,0,.85) 100%);
+  box-shadow:inset 0 0 2.8vw rgba(0,0,0,.9),inset 0 0 .6vw rgba(0,0,0,.9)}
+.band{z-index:3;height:22%;background:linear-gradient(to bottom,rgba(255,255,255,0),rgba(255,255,255,.035) 50%,rgba(255,255,255,0));animation:roll 9s linear infinite;bottom:auto}
+.brand{position:absolute;left:clamp(14px,4vw,40px);bottom:clamp(8px,2.2vw,20px);font-size:clamp(13px,2.4vw,20px);letter-spacing:.2em;color:#8f887b;text-shadow:0 1px 0 #000}
+.led{position:absolute;right:clamp(16px,4.4vw,44px);bottom:clamp(12px,2.9vw,26px);width:9px;height:9px;border-radius:50%;background:#ff3a2a;box-shadow:0 0 8px #ff3a2a,0 0 2px #fff}
+.remote{margin:16px auto 0;max-width:720px;display:flex;flex-wrap:wrap;gap:10px 14px;justify-content:center;align-items:center;
+  padding:12px;border-radius:18px;background:linear-gradient(#262421,#171614);box-shadow:0 10px 24px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.06)}
+.pad{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.remote button{font:inherit;font-size:20px;line-height:1;min-width:40px;min-height:40px;padding:6px 10px;border-radius:9px;border:0;cursor:pointer;
+  color:#e8e2d4;background:linear-gradient(#45423d,#2c2a26);box-shadow:0 2px 0 #0b0a09,inset 0 1px 0 rgba(255,255,255,.12)}
+.remote button:active{transform:translateY(1px);box-shadow:0 1px 0 #0b0a09}
+.remote button:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.remote button.c1{background:#d42a22;color:#fff}.remote button.c2{background:#1fae3c;color:#04130a}
+.remote button.c3{background:#e8d21f;color:#1a1600}.remote button.c4{background:#2346d8;color:#fff}
+.remote button.fxb{min-width:74px}
+.remote button[aria-pressed="true"]{background:#e8d21f;color:#1a1600}
+.hint{margin:12px auto 0;max-width:720px;text-align:center;font-size:18px;color:#9b9486}
+.hint kbd{font:inherit;color:#e8e2d4;background:#262421;border-radius:4px;padding:0 5px}
+@media (prefers-reduced-motion: reduce){
+  .grid,.fl,.band{animation:none!important}
+  .band{display:none}
+}
+@media (max-width:520px){ .remote button{font-size:18px;min-width:36px;min-height:38px;padding:5px 8px} .remote button.fxb{min-width:64px} .hint{font-size:16px} }
+</style>
+
+<div class="wrap">
+  <h1 class="sr">Bring-up teletext</h1>
+  <div class="tv">
+    <div class="glass" id="glass" tabindex="0" role="region" aria-roledescription="teletext screen" aria-label="Teletext screen. Type a page number, or use the arrow keys.">
+      <div class="grid" id="grid"></div>
+      <div class="fx scan"></div><div class="fx band"></div><div class="fx vig"></div>
+    </div>
+    <div class="brand" aria-hidden="true">TT-VISION</div><div class="led" aria-hidden="true"></div>
+  </div>
+  <div class="remote" role="group" aria-label="Remote control">
+    <div class="pad" role="group" aria-label="Fastext">
+      <button type="button" class="fxb c1" id="fx0">Red</button><button type="button" class="fxb c2" id="fx1">Green</button>
+      <button type="button" class="fxb c3" id="fx2">Yellow</button><button type="button" class="fxb c4" id="fx3">Blue</button>
+    </div>
+    <div class="pad" role="group" aria-label="Page number" id="digits"></div>
+    <div class="pad" role="group" aria-label="Browse">
+      <button type="button" id="bprev" aria-label="Previous page">&#9664;</button>
+      <button type="button" id="bsubm" aria-label="Previous subpage">&#9650;</button>
+      <button type="button" id="bsubp" aria-label="Next subpage">&#9660;</button>
+      <button type="button" id="bnext" aria-label="Next page">&#9654;</button>
+      <button type="button" id="bhold" aria-pressed="false">HOLD</button>
+      <button type="button" id="bidx">100</button>
+    </div>
+  </div>
+  <p class="hint">Type a page number <kbd>100</kbd>-<kbd>106</kbd> &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> pages &middot; <kbd>&uarr;</kbd><kbd>&darr;</kbd> subpages &middot; <kbd>H</kbd> hold &middot; <kbd>R</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>B</kbd> fastext</p>
+  <div class="sr" aria-live="polite" id="live"></div>
+</div>
+
+<script>
+"use strict";
+const D = /*__DATA__*/null;
+const W = 40, H = 24;
+const BLK = 0, RED = 1, GRN = 2, YEL = 3, BLU = 4, MAG = 5, CYN = 6, WHT = 7;
+const STAT = {PASS:[GRN,"PASS",0], FAIL:[RED,"FAIL",1], HANG:[RED,"HANG",1], RUNNING:[YEL,"RUN",1],
+  TODO:[CYN,"TODO",0], BLOCKED:[MAG,"BLKD",1], STOPPED:[MAG,"STOP",1]};
+const st = s => STAT[s] || [WHT, String(s || "?").slice(0, 4), 0];
+const STEP_NAMES = {intake:"Intake", reference:"Reference + HF parity", goldens:"Goldens", box:"Box", ledger:"Ledger",
+  plan:"Plan", implement:"Implement", integrate:"Integrate ladder", contract:"Serving contract", perf:"Performance", framework:"Framework"};
+const TYPE_COL = [CYN, MAG, YEL, GRN, WHT, RED];
+const typeCol = bt => TYPE_COL[Math.max(0, (D.block_types || []).indexOf(bt)) % TYPE_COL.length];
+
+/* ---------- text helpers ---------- */
+const TR = {"·":"-", "×":"x", "–":"-", "—":"-", "→":">", "≥":">=", "≤":"<=", "…":"...",
+  "‘":"'", "’":"'", "“":'"', "”":'"', "−":"-", " ":" ", "\n":" ", "\t":" "};
+function A(s){ s = String(s == null ? "" : s); let o = "";
+  for (const ch of s){ const c = ch.codePointAt(0);
+    if (c >= 32 && c < 127) o += ch; else if (TR[ch] != null) o += TR[ch];
+    else { const n = ch.normalize("NFKD").replace(/[^\x20-\x7e]/g, ""); o += n || "?"; } }
+  return o; }
+function trunc(s, n){ s = A(s); return s.length <= n ? s : (n <= 1 ? s.slice(0, n) : s.slice(0, n - 1) + "~"); }
+function wrap(s, n){ const words = A(s).split(/\s+/).filter(Boolean), out = []; let cur = "";
+  for (let w of words){ while (w.length > n){ if (cur){ out.push(cur); cur = ""; } out.push(w.slice(0, n)); w = w.slice(n); }
+    if (!cur) cur = w; else if (cur.length + 1 + w.length <= n) cur += " " + w; else { out.push(cur); cur = w; } }
+  if (cur) out.push(cur); return out.length ? out : [""]; }
+function fmt(v){ if (typeof v !== "number") return A(v); if (Number.isInteger(v)) return String(v);
+  if (v > 0.9 && v <= 1) return v.toFixed(v > 0.99999 ? 7 : 5);
+  const a = Math.abs(v); if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(2).toUpperCase();
+  return String(+v.toPrecision(4)); }
+const expo = v => v.toExponential(1).toUpperCase().replace("E-", "E-");
+function abbrId(id, n){ id = A(id); if (id.length <= n) return id;
+  const p = id.split("."); if (p.length > 2){ for (let i = 1; i < p.length - 1 && p.join(".").length > n; i++) p[i] = p[i].slice(0, 4); id = p.join("."); }
+  return trunc(id, n); }
+
+/* ---------- metric logic (same rule as the dashboard template) ---------- */
+function worstMetric(t){
+  const ops = {">=":(a,b)=>a>=b, "<=":(a,b)=>a<=b, ">":(a,b)=>a>b, "<":(a,b)=>a<b, "==":(a,b)=>a==b};
+  const glob = g => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  let worst = null;
+  for (const [g, cond] of Object.entries(t.thresholds || {})){
+    const [op, vs] = String(cond).split(" "); const want = +vs; const re = glob(g);
+    const hits = Object.entries(t.metrics || {}).filter(([k]) => re.test(k));
+    if (!hits.length){ if (t.status !== "TODO") worst = worst || {k:g, v:"missing", ok:false, cond}; continue; }
+    for (const [k, v] of hits){
+      const f = ops[op] || (() => true); const ok = f(+v, want);
+      const margin = op && op.startsWith(">") ? +v - want : want - +v;
+      if (!worst || (!ok && worst.ok) || (ok === worst.ok && margin < worst.margin)) worst = {k, v, ok, cond, margin};
+    }
+  }
+  return worst;
+}
+
+/* ---------- screen buffer ---------- */
+class Buf {
+  constructor(){ this.c = []; this.dh = new Set();
+    for (let r = 0; r < H; r++){ const row = []; for (let k = 0; k < W; k++) row.push({ch:" ", fg:WHT, bg:BLK, m:-1, fl:0, lk:null}); this.c.push(row); } }
+  ok(r, c){ return r >= 0 && r < H && c >= 0 && c < W; }
+  t(r, c, s, fg = WHT, bg = null, fl = 0){ s = A(s);
+    for (let i = 0; i < s.length; i++){ const k = c + i; if (!this.ok(r, k)) continue; const x = this.c[r][k];
+      x.ch = s[i]; x.m = -1; x.fg = fg; if (bg != null) x.bg = bg; x.fl = fl; }
+    return c + s.length; }
+  tr(r, cEnd, s, fg, bg, fl){ s = A(s); return this.t(r, cEnd - s.length + 1, s, fg, bg, fl); }
+  fill(r, c0, c1, bg){ for (let k = Math.max(0, c0); k <= Math.min(W - 1, c1); k++) if (this.ok(r, k)) this.c[r][k].bg = bg; }
+  m(r, c, bits, fg, bg = null, fl = 0){ if (!this.ok(r, c)) return; const x = this.c[r][c];
+    x.m = bits; x.ch = " "; x.fg = fg; if (bg != null) x.bg = bg; x.fl = fl; }
+  clone(){ const b = new Buf(); b.dh = new Set(this.dh); b.c = this.c.map(row => row.map(x => ({...x}))); return b; }
+}
+/* px: array of rows (multiple of 3) of arrays (multiple of 2) holding a colour or null; drawn as sextant mosaics */
+function plot(b, r0, c0, px, bg = null){
+  const rows = Math.ceil(px.length / 3), cols = Math.ceil((px[0] || []).length / 2);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++){
+    let bits = 0; const cnt = {};
+    for (let y = 0; y < 3; y++) for (let x = 0; x < 2; x++){ const v = (px[r * 3 + y] || [])[c * 2 + x];
+      if (v != null){ bits |= 1 << (y * 2 + x); cnt[v] = (cnt[v] || 0) + 1; } }
+    if (!bits) continue;
+    const col = +Object.entries(cnt).sort((a, b2) => b2[1] - a[1])[0][0];
+    b.m(r0 + r, c0 + c, bits, col, bg);
+  }
+}
+const canvas = (w, h) => Array.from({length:h}, () => new Array(w).fill(null));
+/* 3x5 pixel font for mosaic headlines */
+const FONT = {A:"010101111101101",B:"110101110101110",C:"011100100100011",D:"110101101101110",E:"111100110100111",F:"111100110100100",
+  G:"011100101101011",H:"101101111101101",I:"111010010010111",J:"001001001101010",K:"101101110101101",L:"100100100100111",
+  M:"101111111101101",N:"111101101101101",O:"010101101101010",P:"110101110100100",Q:"010101101110011",R:"110101110101101",
+  S:"011100010001110",T:"111010010010010",U:"101101101101111",V:"101101101101010",W:"101101111111101",X:"101101010101101",
+  Y:"101101010010010",Z:"111001010100111","0":"111101101101111","1":"010110010010111","2":"110001010100111","3":"110001010001110",
+  "4":"101101111001001","5":"111100110001110","6":"011100111101111","7":"111001010010010","8":"111101111101111","9":"111101111001110",
+  "-":"000000111000000",".":"000000000000010"," ":"000000000000000"};
+function bigText(b, r, c, s, fg, bg){
+  s = A(s).toUpperCase(); const px = canvas(Math.ceil((s.length * 4 - 1) / 2) * 2, 6);
+  [...s].forEach((ch, i) => { const g = FONT[ch] || FONT[" "];
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (g[y * 3 + x] === "1") px[y + 1][i * 4 + x] = fg; });
+  plot(b, r, c, px, bg); return px[0].length / 2; }
+
+/* page banner: double-height title on rows 1-2 */
+function banner(b, title, bg, fg, sub, n, deco = YEL){
+  b.dh.add(1); b.fill(1, 0, W - 1, bg); b.fill(2, 0, W - 1, bg);
+  b.m(1, 0, 63, deco, bg); b.m(1, 1, 21, deco, bg);
+  b.t(1, 3, A(title).toUpperCase(), fg, bg);
+  if (n > 1) b.tr(1, W - 2, `${sub + 1}/${n}`, WHT, bg);
+}
+function noData(b, r, msg){ b.dh.add(r); b.fill(r, 0, W - 1, BLK); b.fill(r, 13, 25, RED); b.t(r, 15, "NO DATA", YEL, RED);
+  if (msg) wrap(msg, 38).slice(0, 2).forEach((l, i) => b.t(r + 2 + i, 1, l, WHT)); }
+
+/* flow layout: lines -> paginated subpages. line = {h, hdr, draw(b, r)} */
+function flow(lines, mk, r0 = 4, r1 = 22){
+  const pages = []; let b = null, r = 0, curHdr = null;
+  const open = () => { b = mk(); pages.push(b); r = r0; };
+  open();
+  for (const L of lines){
+    const h = L.h || 1;
+    if (L.hdr) curHdr = L;
+    if (r + h - 1 > r1 || (L.hdr && r + h + (L.keep || 1) - 1 > r1)){
+      open();
+      if (!L.hdr && curHdr){ curHdr.draw(b, r, true); r += curHdr.h || 1; }
+    }
+    if (L.gap && r === r0) continue;
+    if (h === 2) b.dh.add(r);
+    L.draw(b, r, false); r += h;
+  }
+  return pages;
+}
+const gapLine = {gap:true, draw(){}};
+function hdrLine(text, right, bg = BLU, fg = YEL){ return {hdr:true, keep:1, draw(b, r, cont){ b.fill(r, 0, W - 1, bg);
+  b.t(r, 1, A(text).toUpperCase() + (cont ? " (cont)" : ""), fg, bg); if (right) b.tr(r, W - 2, right, WHT, bg); }}; }
+
+/* ---------- pages ---------- */
+function statusCounts(){ const c = {}; D.tasks.forEach(t => c[t.status] = (c[t.status] || 0) + 1); return c; }
+function readyTasks(){ const s = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));
+  return D.tasks.filter(t => t.status !== "PASS" && t.status !== "STOPPED" && (t.deps || []).every(d => s[d] === "PASS")); }
+function alertTasks(){ return D.tasks.filter(t => (t.waiting && t.status !== "PASS") || ["STOPPED","BLOCKED","FAIL","HANG"].includes(t.status)); }
+
+function pIndex(){
+  const b = new Buf();
+  b.fill(1, 0, W - 1, BLU); b.fill(2, 0, W - 1, BLU); b.fill(3, 0, W - 1, BLU);
+  let name = A(String(D.title || D.model || "BRING-UP").split(" ")[0]).toUpperCase();
+  while (name.length > 19 && name.includes("-")) name = name.slice(0, name.lastIndexOf("-"));
+  name = name.slice(0, 19);
+  const cw = Math.ceil((name.length * 4 - 1) / 2);
+  bigText(b, 1, Math.max(0, Math.floor((W - cw) / 2)), name, YEL, BLU);
+  const rest = A(String(D.title || "").split(" ").slice(1).join(" ") + " bring-up").toUpperCase().trim();
+  b.t(3, 1, trunc(rest, 26), WHT, BLU); b.tr(3, W - 2, A(D.head || ""), CYN, BLU);
+  let y = 4;
+  const fact = (lab, val, rows) => { if (!val) return; wrap(val, 32).slice(0, rows).forEach((l, i) => { if (!i) b.t(y, 0, lab, YEL); b.t(y, 7, l, WHT); y++; }); };
+  fact("MODEL", D.model, 1); fact("TARGET", D.target, 2); fact("BOX", D.box, 2);
+  if (D.generated){ b.t(y, 0, "SNAP", YEL); b.t(y, 7, trunc(`${D.generated}  ${D.branch || ""}`, 33), CYN); y++; }
+  y = Math.max(y, 10);
+  // progress
+  const n = D.tasks.length, cnt = statusCounts(), pass = cnt.PASS || 0;
+  b.dh.add(y); b.t(y, 0, "GATES", WHT); b.t(y, 6, `${pass}/${n}`, GRN); b.t(y, 14, "PASSED", WHT);
+  b.tr(y, W - 1, `${n ? Math.round(100 * pass / n) : 0}%`, YEL); y += 2;
+  const order = ["PASS","RUNNING","FAIL","HANG","BLOCKED","STOPPED","TODO"].concat(Object.keys(cnt).filter(k => !STAT[k]));
+  const slots = [], S = 2 * W;
+  let acc = 0; order.forEach(k => { if (!cnt[k]) return; const a0 = Math.round(acc / n * S); acc += cnt[k]; const a1 = Math.round(acc / n * S);
+    for (let i = a0; i < a1; i++) slots[i] = k; });
+  const barCol = k => k === "TODO" ? BLU : st(k)[0];
+  for (let c = 0; c < W; c++){ const L = slots[2 * c], R = slots[2 * c + 1];
+    if (!L && !R) continue;
+    if (L === R) b.m(y, c, 63, barCol(L)); else if (L && R) b.m(y, c, 21, barCol(L), barCol(R)); else b.m(y, c, L ? 21 : 42, barCol(L || R)); }
+  y++;
+  let x = 0; order.forEach(k => { if (!cnt[k]) return; b.m(y, x, 63, barCol(k)); x = b.t(y, x + 1, `${st(k)[1]} ${cnt[k]}`, WHT) + 2; });
+  y += 2;
+  // now / next / alerts
+  const running = D.tasks.filter(t => t.status === "RUNNING"), ready = readyTasks();
+  const now = running.length ? running : ready;
+  const ids = new Set(now.map(t => t.id));
+  const nxt = D.tasks.filter(t => t.status === "TODO" && !ids.has(t.id)).slice(0, 2);
+  const line = (t, lab, labCol, first, more) => { if (first) b.t(y, 0, lab, BLK, labCol); const id = abbrId(t.id, 16);
+    const sfx = more ? ` +${more}` : "";
+    b.t(y, 6, id, WHT); b.t(y, 7 + id.length, trunc(t.title, W - 7 - id.length - sfx.length), CYN); if (sfx) b.tr(y, W - 1, sfx, YEL); y++; };
+  if (now.length){ const sh = now.slice(0, 2); sh.forEach((t, i) => line(t, running.length ? " RUN " : " NOW ", YEL, !i, i === sh.length - 1 && now.length > 2 ? now.length - 2 : 0)); }
+  else { b.t(y, 0, " NOW ", BLK, YEL); b.t(y, 6, "nothing ready", WHT); y++; }
+  nxt.forEach((t, i) => line(t, " NEXT", CYN, !i));
+  const al = alertTasks();
+  if (!al.length){ b.t(y, 0, " OK  ", BLK, GRN); b.t(y, 6, "nothing WAITING or STOPPED", GRN); y++; }
+  else al.slice(0, 2).forEach((t, i) => { if (!i) b.t(y, 0, " ALRT", WHT, RED, 0); const [c, l, f] = st(t.status);
+    const id = abbrId(t.id, 14); b.t(y, 6, id, WHT); b.t(y, 7 + id.length, t.waiting ? "WAIT" : l, t.waiting ? MAG : c, null, 1);
+    b.t(y, 12 + id.length, trunc(t.waiting || t.reason || t.title, W - 12 - id.length), WHT); y++; });
+  // index of pages
+  y = Math.max(y, 21);
+  const idx = PAGES.filter(p => p.n !== 100);
+  idx.forEach((p, i) => { const r = y + Math.floor(i / 3), c = (i % 3) * 13 + 1; if (r > 22) return;
+    b.t(r, c, String(p.n), WHT); b.t(r, c + 4, p.short, [CYN, GRN, YEL][i % 3]); });
+  return [b];
+}
+
+function pLadder(){
+  const lines = [], steps = [];
+  D.tasks.forEach(t => { if (!steps.includes(t.step)) steps.push(t.step); });
+  for (const s of steps){
+    const ts = D.tasks.filter(t => t.step === s), pass = ts.filter(t => t.status === "PASS").length;
+    lines.push(gapLine);
+    lines.push(hdrLine(STEP_NAMES[s] || s, `${pass}/${ts.length}`));
+    for (const t of ts){
+      const [c, l, f] = st(t.status), w = worstMetric(t), id = abbrId(t.id, 22);
+      lines.push({draw(b, r){ b.t(r, 0, id, WHT); b.t(r, 23, l, c, null, f);
+        if (t.commit) b.t(r, 28, A(t.commit).slice(0, 11), YEL);
+        else { const th = Object.entries(t.thresholds || {})[0]; if (th) b.t(r, 28, trunc(A(th[1]).replace(/\s+/g, ""), 12), WHT); } }});
+      if (w && (t.status !== "TODO" || Object.keys(t.metrics || {}).length)){
+        lines.push({draw(b, r){ const v = w.v === "missing" ? "missing" : fmt(+w.v), cond = A(w.cond);
+          const room = W - 2 - 1 - v.length - 1 - cond.length; b.t(r, 2, trunc(w.k, Math.max(4, room)), CYN);
+          b.tr(r, W - 2 - cond.length, v, w.ok ? GRN : RED, null, w.ok ? 0 : 1); b.tr(r, W - 1, cond, WHT); }});
+      }
+      if (t.waiting && t.status !== "PASS") wrap("WAIT " + t.waiting, 36).slice(0, 2).forEach(s2 => lines.push({draw(b, r){ b.t(r, 2, s2, MAG); }}));
+      if (t.reason && t.status !== "PASS") wrap(t.reason, 36).slice(0, 2).forEach(s2 => lines.push({draw(b, r){ b.t(r, 2, s2, RED); }}));
+    }
+  }
+  const cnt = statusCounts();
+  return flow(lines, () => { const b = new Buf(); b.t(3, 0, "GATE", CYN); b.t(3, 23, "STAT", CYN); b.t(3, 28, "COMMIT/GATE", CYN);
+    b.tr(22, W - 1, `${cnt.PASS || 0} of ${D.tasks.length} passed`, GRN); return b; }, 4, 21)
+    .map((b, i, a) => { banner(b, "Gate ladder", RED, WHT, i, a.length, YEL); return b; });
+}
+
+function pGraph(){
+  const bts = D.block_types || Object.keys(D.graphs || {}), subs = [];
+  const PER = 14;
+  const groups = [];
+  bts.forEach(bt => { const g = (D.graphs || {})[bt] || []; for (let i = 0; i < Math.max(1, g.length); i += PER) groups.push({bt, g, i}); });
+  for (let k = 0; k < Math.max(1, groups.length); k += 2){
+    const b = new Buf();
+    wrap(A(D.arch || ""), 40).slice(0, 2).forEach((l, i) => b.t(3 + i, 0, l, CYN));
+    groups.slice(k, k + 2).forEach((G, j) => {
+      const x0 = j * 20, col = typeCol(G.bt), nL = (D.layer_types || []).filter(t => t === G.bt).length;
+      const dev = G.g.filter(s => s.state === "device").length;
+      const e = b.t(5, x0, A(G.bt).toUpperCase().slice(0, 9), col); b.t(5, e + 1, `x${nL}`, WHT);
+      b.tr(5, x0 + 18, `${dev}/${G.g.length}`, dev === G.g.length ? GRN : YEL);
+      if (!G.g.length) b.t(6, x0, "no graph yet", WHT);
+      G.g.slice(G.i, G.i + PER).forEach((s, i) => { const r = 6 + i, on = s.state === "device";
+        b.m(r, x0, 63, on ? GRN : RED); b.t(r, x0 + 2, trunc(s.name, s.stateful ? 11 : 12) + (s.stateful ? "*" : ""), WHT);
+        b.t(r, x0 + 15, on ? "DEV" : "CPU", on ? GRN : RED); });
+    });
+    // layer strip
+    const LT = D.layer_types || [], N = LT.length, sel = new Set(D.selected_layers || LT.map((_, i) => i));
+    b.t(20, 0, "LAYERS", YEL);
+    const two = N > 33, c0 = 7;
+    const colAt = i => sel.has(i) ? typeCol(LT[i]) : WHT;
+    if (!two) LT.forEach((t, i) => b.m(20, c0 + i, sel.has(i) ? 63 : 20, colAt(i)));
+    else for (let i = 0; i < N; i += 2){ const L = colAt(i), R = i + 1 < N ? colAt(i + 1) : null;
+      if (R == null) b.m(20, c0 + i / 2, 21, L); else if (L === R) b.m(20, c0 + i / 2, 63, L); else b.m(20, c0 + i / 2, 21, L, R); }
+    const step = two ? 10 : 5;
+    for (let i = 0; i < N; i += step){ const c = c0 + (two ? i / 2 : i), s = String(i); if (c + s.length <= W) b.t(21, c, s, WHT); }
+    let x = 0; bts.forEach(bt => { b.m(22, x, 63, typeCol(bt)); x = b.t(22, x + 1, A(bt), WHT) + 1; });
+    b.m(22, x, 63, GRN); x = b.t(22, x + 1, "dev", WHT) + 1; b.m(22, x, 63, RED); x = b.t(22, x + 1, "cpu", WHT) + 1;
+    if (x < W - 6) b.t(22, x, "*state", WHT);
+    subs.push(b);
+  }
+  return subs.map((b, i, a) => { banner(b, "Model graph", GRN, BLK, i, a.length, BLU); return b; });
+}
+
+function pShard(){
+  const b = new Buf(), P = D.plan;
+  banner(b, "Sharding + memory", MAG, WHT, 0, 1, CYN);
+  if (!P){ noData(b, 6, "The plan gate has not written plan_memory.json yet."); return [b]; }
+  const mesh = P.mesh || D.mesh || [1, 1], nch = mesh[0] * mesh[1], cap = +P.capacity_gb, bud = +P.budget_gb, tot = +P.total_gb;
+  b.t(3, 0, `MESH ${mesh.join("x")}`, YEL); b.t(3, 9, trunc(`${nch}x ${D.chip_name || "chip"}`, 20), WHT);
+  if (P.tensors != null) b.tr(3, W - 1, `${P.tensors} tensors`, CYN);
+  let e = b.t(4, 0, `${tot.toFixed(2)}/${cap} GB/chip`, WHT); e = b.t(4, e + 1, `budget ${bud.toFixed(1)}`, RED);
+  b.tr(4, W - 1, P.fits ? "FITS" : "NO FIT", P.fits ? GRN : RED, null, P.fits ? 0 : 1);
+  const LAB = 14, BC = 15, BW = 19, HU = BW * 2, VC = 35;
+  const u = gb => gb / cap * HU;
+  b.t(5, 0, "GROUP", CYN);
+  for (let g = 0; g <= cap + 1e-9; g += cap / 4){ const c = BC + Math.min(BW - 1, Math.floor(u(g) / 2)); const s = String(Math.round(g));
+    b.t(5, Math.min(c, BC + BW - s.length), s, CYN); }
+  b.t(5, VC + 1, "GB", CYN);
+  const hb = Math.min(HU - 1, Math.floor(u(bud))), bCell = BC + (hb >> 1), bBits = hb & 1 ? 34 : 17;
+  const abbr = s => { s = A(s).replace(/^state:\s*/, "").replace(/^extra:\s*/, "+").replace(/\s*\(planner estimate\)/, "").replace(/\s+layers\b.*$/, "");
+    if (s.length > LAB){ s = s.replace(/attention/g, "attn").replace(/embedding/g, "embed").replace(/activations/g, "acts")
+      .replace(/vocab-sharded/g, "vocab").replace(/contract/g, "contr").replace(/tables/g, "tbl").replace(/ and /g, "+").replace(/[()]/g, ""); }
+    return trunc(s, LAB); };
+  let rows = (P.rows || []).slice();
+  const MAXR = 13;
+  if (rows.length > MAXR){ const rest = rows.slice(MAXR - 1); rows = rows.slice(0, MAXR - 1);
+    rows.push({group:`+${rest.length} others`, gb: rest.reduce((a, r) => a + r.gb, 0)}); }
+  const SER = [CYN, GRN, YEL, MAG, WHT];
+  const bar = (r, s, e2, col, tick) => { for (let c = 0; c < BW; c++){ const hl = 2 * c, hr = 2 * c + 1;
+      let bits = (hl >= s && hl < e2 ? 21 : 0) | (hr >= s && hr < e2 ? 42 : 0);
+      if (bits) b.m(r, BC + c, bits, col); }
+    if (tick != null){ const c = Math.min(BW - 1, tick >> 1); b.m(r, BC + c, tick & 1 ? 32 : 16, col); } };
+  let cum = 0;
+  rows.forEach((g, i) => { const r = 6 + i, col = SER[i % SER.length];
+    const s = Math.round(u(cum)), e2 = Math.round(u(cum + g.gb)); cum += g.gb;
+    b.t(r, 0, abbr(g.group), col);
+    const cell = b.c[r][bCell]; bar(r, s, e2, col, e2 <= s && g.gb > 0 ? Math.min(HU - 1, s) : null);
+    if (cell.m < 0) b.m(r, bCell, bBits, RED);
+    b.tr(r, W - 1, g.gb >= 10 ? g.gb.toFixed(1) : g.gb.toFixed(2), WHT); });
+  const rt = 6 + rows.length;
+  if (rt <= 19){ b.t(rt, 0, "TOTAL", WHT); bar(rt, 0, Math.round(u(tot)), tot <= bud ? GRN : RED, null);
+    if (b.c[rt][bCell].m < 0) b.m(rt, bCell, bBits, RED); b.tr(rt, W - 1, tot.toFixed(1), tot <= bud ? GRN : RED); }
+  (P.errors || []).slice(0, Math.max(0, 19 - rt)).forEach((er, i) => b.t(rt + 1 + i, 0, trunc("! " + er, 40), RED, null, 1));
+  // mesh diagram
+  const C = mesh[1], R = mesh[0];
+  if (R === 1 && C <= 8){
+    const gap = C > 5 ? 1 : 2, bw = Math.floor((W - (C - 1) * gap) / C), x0 = Math.floor((W - (C * bw + (C - 1) * gap)) / 2);
+    const ctr = [];
+    for (let k = 0; k < C; k++){ const x = x0 + k * (bw + gap); ctr.push(x + (bw >> 1));
+      b.fill(20, x, x + bw - 1, BLU); b.fill(21, x, x + bw - 1, BLU);
+      const lab = bw >= 6 ? `CHIP ${k}` : `C${k}`, gbs = `${tot.toFixed(1)}G`;
+      b.t(20, x + Math.max(0, (bw - lab.length) >> 1), lab.slice(0, bw), WHT, BLU);
+      b.t(21, x + Math.max(0, (bw - gbs.length) >> 1), gbs.slice(0, bw), YEL, BLU);
+      if (k < C - 1) for (let g = 0; g < gap; g++) b.m(20, x + bw + g, 12, CYN); }
+    const fab = (A(D.box).match(/FABRIC_\w+/) || [""])[0], ring = /RING/i.test(fab);
+    if (ring && C > 1){ b.m(22, ctr[0], 13, CYN); b.m(22, ctr[C - 1], 14, CYN); for (let c = ctr[0] + 1; c < ctr[C - 1]; c++) b.m(22, c, 12, CYN); }
+    const lab = ` ${fab || "mesh " + mesh.join("x")} `; b.t(22, Math.max(0, (W - lab.length) >> 1), lab, CYN);
+  } else b.t(21, 0, trunc(`mesh ${mesh.join("x")}: ${nch} chips, ${tot.toFixed(1)} GB each`, 40), CYN);
+  return [b];
+}
+
+function pPcc(){
+  const b = new Buf(), T = D.trails || [], N = (D.layer_types || []).length || Math.max(1, ...T.flatMap(t => t.points.map(p => p[0] + 1)));
+  banner(b, "PCC trail", CYN, BLK, 0, 1, BLU);
+  b.t(3, 0, "1-PCC by layer, log scale, lower=better", CYN);
+  if (!T.length){ noData(b, 6, "No per-layer PCC recorded yet."); return [b]; }
+  const thr = [...new Set([D.thresholds && D.thresholds.layer, D.thresholds && D.thresholds.final_hidden].filter(v => v != null))];
+  const lv = v => Math.log10(Math.max(1 - v, 1e-16));
+  const all = T.flatMap(t => t.points.map(p => lv(p[1]))).concat(thr.map(lv));
+  let lo = Math.floor(Math.min(...all)), hi = Math.ceil(Math.max(...all)); if (hi - lo < 2) lo = hi - 2; hi = Math.min(0, Math.max(hi, lo + 2));
+  const RR = 16, PH = RR * 3, r0 = 4, c0 = 6, ppl = N <= 33 ? 2 : 1, PW = Math.ceil(N * ppl / 2) * 2;
+  const yOf = e => Math.max(0, Math.min(PH - 1, Math.round((hi - e) / (hi - lo) * (PH - 1))));
+  const px = canvas(PW, PH);
+  thr.forEach(p => { const y = yOf(lv(p)); for (let x = 0; x < PW; x += 2) px[y][x] = RED; });
+  const COLS = [YEL, GRN, MAG, WHT, CYN, RED];
+  T.forEach((t, k) => { const col = COLS[k % COLS.length], pts = t.points.slice().sort((a, b2) => a[0] - b2[0]);
+    const ys = new Map(pts.map(p => [p[0], yOf(lv(p[1]))]));
+    pts.forEach(([i]) => { const y = ys.get(i), yp = ys.has(i - 1) ? ys.get(i - 1) : y, yn = ys.has(i + 1) ? ys.get(i + 1) : y;
+      if (ppl === 2){ const xl = i * 2, xr = xl + 1;
+        const ml = Math.round((yp + y) / 2), mr = Math.round((y + yn) / 2);
+        for (let q = Math.min(ml, y); q <= Math.max(ml, y); q++) px[q][xl] = col;
+        for (let q = Math.min(mr, y); q <= Math.max(mr, y); q++) px[q][xr] = col; }
+      else { for (let q = Math.min(yp, y); q <= Math.max(yp, y); q++) px[q][i] = col; } }); });
+  plot(b, r0, c0, px);
+  for (let r = r0; r < r0 + RR; r++) b.m(r, c0 - 1, 42, WHT);
+  for (let e = hi; e >= lo; e--){ const y = yOf(e), r = r0 + Math.floor(y / 3); if ((hi - e) % 2) continue;
+    b.tr(r, c0 - 2, e === 0 ? "1" : `1E${e}`, WHT); }
+  thr.forEach(p => { const r = r0 + Math.floor(yOf(lv(p)) / 3), c = Math.min(c0 + PW / 2 + 1, W - 4); b.t(r, c, String(p).slice(0, 4), RED); });
+  const step = ppl === 2 ? 5 : 10;
+  for (let i = 0; i < N; i += step){ const c = c0 + Math.floor(i * ppl / 2), s = "L" + i; if (c + s.length <= W) b.t(r0 + RR, c, s, WHT); }
+  T.slice(0, 2).forEach((t, k) => { const r = 21 + k, col = COLS[k % COLS.length], worst = Math.max(...t.points.map(p => 1 - p[1]));
+    b.m(r, 0, 63, col); const tag = ` max ${worst > 0 ? expo(worst) : "0"}${t.device ? " DEV" : " CPU"}`;
+    b.t(r, 2, trunc(t.label, W - 3 - tag.length), WHT); b.tr(r, W - 1, tag, col); });
+  if (T.length > 2) b.tr(22, W - 1, `+${T.length - 2} trails`, YEL);
+  return [b];
+}
+
+function pTiming(){
+  const T = D.timing || [], P = D.profile;
+  const perf = D.tasks.filter(t => t.step === "perf"), lad = D.tasks.filter(t => t.step === "integrate");
+  const gates = ts => ts.map(t => `${t.id} ${st(t.status)[1]}`).join(", ");
+  const lines = [];
+  lines.push(hdrLine("Chunk timing", T.length ? `${T.length} runs` : "", BLU, YEL));
+  if (!T.length){ lines.push(gapLine); lines.push({h:2, draw(b, r){ b.fill(r, 13, 25, RED); b.t(r, 15, "NO DATA", YEL, RED); }});
+    lines.push(gapLine);
+    wrap("No device runs yet." + (lad.length ? " Ladder gates: " + gates(lad) : ""), 38).forEach(l => lines.push({draw(b, r){ b.t(r, 1, l, WHT); }})); }
+  else { lines.push({draw(b, r){ b.t(r, 0, "RUN", CYN); b.tr(r, 16, "N", CYN); b.tr(r, 24, "FIRST", CYN); b.tr(r, 32, "STEADY", CYN); b.tr(r, 39, "TOTAL", CYN); }});
+    T.forEach(t => { const v = t.chunks.map(c => c[1]), rest = v.slice(1).sort((a, b2) => a - b2), med = rest.length ? rest[Math.floor(rest.length / 2)] : v[0];
+      lines.push({draw(b, r){ b.t(r, 0, trunc(t.label, 13), WHT); b.tr(r, 16, String(v.length), WHT); b.tr(r, 24, v[0].toFixed(2) + "s", YEL);
+        b.tr(r, 32, med.toFixed(2) + "s", GRN); b.tr(r, 39, v.reduce((a, x) => a + x, 0).toFixed(1) + "s", WHT); }}); }); }
+  lines.push(gapLine);
+  lines.push(hdrLine("Device profile", P ? `${(P.wall_ms / 1e3).toFixed(2)}s wall` : "", BLU, YEL));
+  if (!P){ lines.push(gapLine); lines.push({h:2, draw(b, r){ b.fill(r, 13, 25, RED); b.t(r, 15, "NO DATA", YEL, RED); }});
+    lines.push(gapLine);
+    wrap("No profile yet." + (perf.length ? " Perf gates: " + gates(perf) : ""), 38).forEach(l => lines.push({draw(b, r){ b.t(r, 1, l, WHT); }})); }
+  else {
+    const S = P.steps || [], total = S.reduce((a, s) => a + s.ms, 0), mx = Math.max(1e-9, ...S.map(s => s.ms));
+    const BC = {compute:YEL, memory:CYN, comm:MAG, other:WHT};
+    wrap(P.heading || "", 40).slice(0, 2).forEach(l => lines.push({draw(b, r){ b.t(r, 0, l, WHT); }}));
+    lines.push({draw(b, r){ b.t(r, 0, `device ${(total / 1e3).toFixed(2)}s`, GRN); let x = 18; ["compute","memory","comm","other"].forEach(k => { b.m(r, x, 63, BC[k]); x = b.t(r, x + 1, k.slice(0, 4), WHT) + 1; }); }});
+    let last = null;
+    S.forEach(s => { if (s.part !== last){ last = s.part; const pm = S.filter(q => q.part === s.part).reduce((a, q) => a + q.ms, 0);
+        lines.push({draw(b, r){ b.t(r, 0, A(s.part).toUpperCase(), CYN); b.tr(r, W - 1, `${pm.toFixed(0)}ms ${(100 * pm / total).toFixed(0)}%`, CYN); }}); }
+      lines.push({draw(b, r){ const col = BC[s.bound] || WHT; b.t(r, 0, trunc(s.name, 16), WHT);
+        const hu = Math.max(1, Math.round(s.ms / mx * 30)); for (let c = 0; c < 15; c++){ const bits = (2 * c < hu ? 21 : 0) | (2 * c + 1 < hu ? 42 : 0); if (bits) b.m(r, 17 + c, bits, col); }
+        b.tr(r, W - 1, s.ms >= 100 ? s.ms.toFixed(0) : s.ms.toFixed(1), col); }}); });
+  }
+  return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Timing + profile", YEL, BLU, i, a.length, RED); return b; });
+}
+
+function pFindings(){
+  const F = D.findings || [], lines = [];
+  const KC = {API:MAG, ACCURACY:GRN, PERF:YEL, INFRA:RED, CONTRACT:CYN};
+  lines.push(hdrLine("Findings", String(F.length), BLU, YEL));
+  if (!F.length) lines.push({draw(b, r){ b.t(r, 1, "None filed yet (findings.yaml empty)", WHT); }});
+  F.forEach(f => { const kind = A(f.kind || "NOTE").toUpperCase().slice(0, 8), tl = wrap(f.title, W - 3 - kind.length);
+    lines.push({draw(b, r){ b.t(r, 0, ` ${kind} `, BLK, KC[kind] != null ? KC[kind] : WHT); b.t(r, kind.length + 3, tl[0], WHT); }});
+    tl.slice(1).forEach(l => lines.push({draw(b, r){ b.t(r, kind.length + 3, l, WHT); }}));
+    wrap(f.detail || "", 37).slice(0, 4).forEach(l => lines.push({draw(b, r){ b.t(r, 2, l, CYN); }}));
+    if (f.task) lines.push({draw(b, r){ b.tr(r, W - 1, A(f.task), YEL); }}); });
+  lines.push(gapLine);
+  // known gaps: block steps still on CPU
+  const bts = D.block_types || Object.keys(D.graphs || {});
+  lines.push(hdrLine("Known gaps", "", RED, WHT));
+  bts.forEach(bt => { const g = (D.graphs || {})[bt] || [], cpu = g.filter(s => s.state !== "device").length;
+    lines.push({draw(b, r){ b.t(r, 0, A(bt).toUpperCase().slice(0, 9), typeCol(bt)); b.t(r, 10, `${cpu}/${g.length} on CPU`, cpu ? RED : GRN);
+      g.slice(0, 16).forEach((s, i) => b.m(r, 24 + i, 63, s.state === "device" ? GRN : RED)); }}); });
+  const comps = D.components || [], cpuC = comps.filter(c => c.state !== "device");
+  lines.push({draw(b, r){ b.t(r, 0, `Ops not on device ${cpuC.length}/${comps.length}`, WHT); b.t(r, 25, "N", GRN); b.t(r, 26, "ative", WHT); b.t(r, 32, "C", MAG); b.t(r, 33, "omposed", WHT); }});
+  const short = k => { const p = A(k).split("/"); return p.length > 1 && bts.includes(p[0]) ? `${p[0].slice(0, 4)}/${p.slice(1).join("/")}` : p.join("/"); };
+  for (let i = 0; i < cpuC.length; i += 2){ const pair = cpuC.slice(i, i + 2);
+    lines.push({draw(b, r){ pair.forEach((c, j) => { const x = j * 20, comp = /COMPOSED/i.test(c.tag || "");
+      b.t(r, x, comp ? "C" : "N", comp ? MAG : GRN); b.t(r, x + 2, trunc(short(c.key), 17), WHT); }); }}); }
+  const al = alertTasks();
+  if (al.length){ lines.push(gapLine); lines.push(hdrLine("Waiting / stopped", String(al.length), MAG, WHT));
+    al.forEach(t => { const txt = t.waiting || t.reason || t.title; lines.push({draw(b, r){ const [c, l, f] = st(t.status); b.t(r, 0, abbrId(t.id, 20), WHT); b.t(r, 22, t.waiting ? "WAIT" : l, t.waiting ? MAG : c, null, 1); }});
+      wrap(txt, 37).slice(0, 2).forEach(l => lines.push({draw(b, r){ b.t(r, 2, l, CYN); }})); }); }
+  const pe = (D.plan && D.plan.errors) || [];
+  if (pe.length){ lines.push(gapLine); lines.push(hdrLine("Plan errors", String(pe.length), RED, WHT)); pe.forEach(e => wrap(e, 38).forEach(l => lines.push({draw(b, r){ b.t(r, 1, l, RED); }}))); }
+  return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Findings + gaps", BLU, YEL, i, a.length, RED); return b; });
+}
+
+const PAGES = [
+  {n:100, name:"Index", short:"Index", build:pIndex},
+  {n:101, name:"Gate ladder", short:"Gates", build:pLadder},
+  {n:102, name:"Model graph", short:"Graph", build:pGraph},
+  {n:103, name:"Sharding", short:"Memory", build:pShard},
+  {n:104, name:"PCC trail", short:"PCC", build:pPcc},
+  {n:105, name:"Timing and profile", short:"Timing", build:pTiming},
+  {n:106, name:"Findings and gaps", short:"Finds", build:pFindings},
+];
+function buildAll(){ const out = {};
+  for (const p of PAGES){ try { out[p.n] = p.build(); }
+    catch (err){ const b = new Buf(); banner(b, p.name, RED, WHT, 0, 1); b.t(4, 0, "PAGE ERROR", RED, null, 1); wrap(String(err && err.message || err), 40).slice(0, 6).forEach((l, i) => b.t(6 + i, 0, l, WHT)); out[p.n] = [b]; } }
+  return out; }
+function notFound(n){ const b = new Buf(); banner(b, `Page ${n}`, RED, WHT, 0, 1); b.t(5, 1, `PAGE ${n} IS NOT IN TRANSMISSION`, YEL);
+  b.t(7, 1, "This service carries pages", WHT); b.t(8, 1, `${PAGES[0].n} to ${PAGES[PAGES.length - 1].n}.`, WHT); b.t(10, 1, "Press the blue key for the index.", CYN); return b; }
+
+/* fastext links for a page */
+function links(n){ const i = PAGES.findIndex(p => p.n === n), L = PAGES.length;
+  if (i < 0) return [PAGES[0], PAGES[1], PAGES[2], PAGES[0]];
+  if (n === PAGES[0].n) return [1, 2, 3, 4].map(k => PAGES[k % L]);
+  const rest = PAGES.filter(p => p.n !== n && p.n !== PAGES[0].n), j = rest.findIndex(p => p.n > n);
+  const nx = k => rest[((j < 0 ? 0 : j) + k) % rest.length];
+  return [PAGES[(i - 1 + L) % L], PAGES[(i + 1) % L], (i + 1) % L === 0 ? nx(0) : nx(1), PAGES[0]]; }
+
+/* compose the header and fastext rows onto a page */
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], MONS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function compose(page, S, now){
+  const b = page.clone(); for (let k = 0; k < W; k++) b.c[0][k] = {ch:" ", fg:WHT, bg:BLK, m:-1, fl:0, lk:null};
+  const p2 = n => String(n).padStart(2, "0");
+  const lead = S.entry ? ("P" + S.entry.padEnd(3, "-")) : S.hold ? "HOLD" : ("P" + (S.target || S.page));
+  b.t(0, 0, lead, S.hold && !S.entry ? RED : WHT, null, S.hold && !S.entry ? 1 : 0);
+  b.t(0, 5, "TT-FAX", WHT); b.t(0, 13, String(S.roll || S.page), S.roll ? YEL : WHT);
+  b.t(0, 17, `${DAYS[now.getDay()]} ${p2(now.getDate())} ${MONS[now.getMonth()]}`, WHT);
+  b.t(0, 32, `${p2(now.getHours())}:${p2(now.getMinutes())}/${p2(now.getSeconds())}`, YEL);
+  const L = links(S.page), FC = [RED, GRN, YEL, CYN];
+  for (let k = 0; k < W; k++) b.c[23][k] = {ch:" ", fg:WHT, bg:BLK, m:-1, fl:0, lk:null};
+  L.forEach((p, i) => { b.t(23, i * 10, p.short.slice(0, 9), FC[i]); for (let k = i * 10; k < i * 10 + 10; k++) b.c[23][k].lk = i; });
+  return b;
+}
+
+/* ---------- DOM ---------- */
+const ESC = {"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;"};
+function rowHtml(b, r){ let h = ""; for (const x of b.c[r]){
+    let cls = `f${x.fg} b${x.bg}`; if (x.m >= 0) cls += ` m s${x.m}`; if (x.fl) cls += " fl";
+    h += `<span class="${cls}"${x.lk != null ? ` data-k="${x.lk}"` : ""}>${x.m >= 0 ? "" : (ESC[x.ch] || x.ch)}</span>`; }
+  return h; }
+function mosaicCss(){ let css = "";
+  for (let n = 1; n < 64; n++){ const img = [], pos = [];
+    for (let k = 0; k < 6; k++) if (n & (1 << k)){ img.push("linear-gradient(currentColor,currentColor)"); pos.push(`${k & 1 ? "100%" : "0"} ${["0", "50%", "100%"][k >> 1]}`); }
+    css += `.s${n}{background-image:${img.join(",")};background-position:${pos.join(",")};background-size:${img.map(() => "50.5% 34%").join(",")}}\n`; }
+  return css; }
+
+function toText(b){ // debugging aid: the screen as plain text (mosaics shown as #)
+  return b.c.map((row, r) => row.map(x => x.m >= 0 ? (x.m === 0 ? " " : "#") : x.ch).join("") + (b.dh.has(r) ? "  <dh" : "")).join("\n"); }
+if (typeof window !== "undefined") window.__TT = {buildAll, compose, toText, PAGES};
+
+if (typeof document !== "undefined" && document.getElementById("grid")){
+  const grid = document.getElementById("grid"), glass = document.getElementById("glass"), live = document.getElementById("live");
+  const style = document.createElement("style"); style.textContent = mosaicCss(); document.head ? document.head.appendChild(style) : document.body.appendChild(style);
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const BUILT = buildAll();
+  const S = {page:100, sub:0, hold:!!reduce, entry:"", target:null, roll:null, tick:0, timer:null, shown:null};
+  let rows = [];
+  grid.innerHTML = Array.from({length:H}, (_, r) => `<div class="row" data-r="${r}"></div>`).join("");
+  rows = [...grid.children];
+  const subsOf = n => BUILT[n] || null;
+  function current(){ const s = subsOf(S.page); return s ? s[Math.min(S.sub, s.length - 1)] : notFound(S.page); }
+  function paint(full = true){
+    const b = compose(current(), S, new Date());
+    for (let r = 0; r < H; r++){ if (!full && r !== 0 && r !== 23) continue;
+      const cls = "row" + (b.dh.has(r) ? " dh" : b.dh.has(r - 1) ? " hid" : "");
+      if (rows[r].className !== cls) rows[r].className = cls;
+      rows[r].innerHTML = rowHtml(b, r); }
+    const L = links(S.page);
+    L.forEach((p, i) => { const el = document.getElementById("fx" + i); el.textContent = p.short; el.setAttribute("aria-label", `${["Red","Green","Yellow","Blue"][i]}: page ${p.n}, ${p.name}`); });
+    document.getElementById("bhold").setAttribute("aria-pressed", S.hold ? "true" : "false");
+  }
+  function announce(){ const s = subsOf(S.page), p = PAGES.find(q => q.n === S.page);
+    live.textContent = p ? `Page ${S.page}, ${p.name}` + (s && s.length > 1 ? `, subpage ${S.sub + 1} of ${s.length}` : "") : `Page ${S.page} not in transmission`;
+    glass.setAttribute("aria-label", `Teletext screen, ${live.textContent}. Type a page number, or use the arrow keys.`); }
+  function show(n, sub = 0){ S.page = n; S.sub = sub; S.tick = 0; S.target = null; S.roll = null; paint(); announce(); }
+  function goTo(n){
+    clearInterval(S.timer); S.timer = null;
+    if (reduce){ show(n); return; }
+    S.target = n; const seq = PAGES.map(p => p.n); let i = Math.max(0, seq.indexOf(S.page)), steps = 0;
+    const exists = !!subsOf(n), maxSteps = exists ? 6 + Math.floor(Math.random() * 4) : 26;
+    S.timer = setInterval(() => { i = (i + 1) % seq.length; S.roll = seq[i]; steps++; paint(false);
+      if (steps >= maxSteps){ clearInterval(S.timer); S.timer = null; show(n); } }, 70);
+    paint(false);
+  }
+  function pageStep(d){ const seq = PAGES.map(p => p.n); let i = seq.indexOf(S.target != null ? S.target : S.page); if (i < 0) i = 0; goTo(seq[(i + d + seq.length) % seq.length]); }
+  function subStep(d){ const s = subsOf(S.page); if (!s || s.length < 2) return; S.sub = (S.sub + d + s.length) % s.length; S.tick = 0; paint(); announce(); }
+  function fast(i){ goTo(links(S.page)[i].n); }
+  function toggleHold(){ S.hold = !S.hold; S.tick = 0; paint(false); document.getElementById("bhold").setAttribute("aria-pressed", S.hold ? "true" : "false"); live.textContent = S.hold ? "Hold on" : "Hold off"; }
+  function digit(d){ if (!S.entry && d === "0") return; if (!S.entry && d === "9") return; S.entry += d; paint(false);
+    if (S.entry.length === 3){ const n = +S.entry; S.entry = ""; goTo(n); } }
+  setInterval(() => { if (!S.timer){ const s = subsOf(S.page);
+      if (s && s.length > 1 && !S.hold && ++S.tick >= 8){ S.sub = (S.sub + 1) % s.length; S.tick = 0; paint(); announce(); } else paint(false); } }, 1000);
+  document.addEventListener("keydown", e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const onBtn = e.target && e.target.tagName === "BUTTON";
+    if (/^[0-9]$/.test(e.key)){ digit(e.key); e.preventDefault(); return; }
+    if (onBtn && (e.key === " " || e.key === "Enter")) return;
+    const k = e.key.toLowerCase(); let used = true;
+    if (e.key === "ArrowRight") pageStep(1); else if (e.key === "ArrowLeft") pageStep(-1);
+    else if (e.key === "ArrowDown" || e.key === "PageDown") subStep(1); else if (e.key === "ArrowUp" || e.key === "PageUp") subStep(-1);
+    else if (k === "r") fast(0); else if (k === "g") fast(1); else if (k === "y") fast(2); else if (k === "b") fast(3);
+    else if (k === "h" || e.key === " ") toggleHold(); else if (k === "i" || e.key === "Home") goTo(100);
+    else if (e.key === "Escape" && S.entry){ S.entry = ""; paint(false); } else used = false;
+    if (used) e.preventDefault(); });
+  grid.addEventListener("click", e => { const el = e.target.closest("[data-k]"); if (el) fast(+el.dataset.k); });
+  [0, 1, 2, 3].forEach(i => document.getElementById("fx" + i).addEventListener("click", () => fast(i)));
+  const dg = document.getElementById("digits");
+  dg.innerHTML = "1234567890".split("").map(d => `<button type="button" data-d="${d}" aria-label="Digit ${d}">${d}</button>`).join("");
+  dg.addEventListener("click", e => { const el = e.target.closest("[data-d]"); if (el) digit(el.dataset.d); });
+  document.getElementById("bprev").onclick = () => pageStep(-1); document.getElementById("bnext").onclick = () => pageStep(1);
+  document.getElementById("bsubm").onclick = () => subStep(-1); document.getElementById("bsubp").onclick = () => subStep(1);
+  document.getElementById("bhold").onclick = toggleHold; document.getElementById("bidx").onclick = () => goTo(100);
+  const fit = () => { const h = grid.getBoundingClientRect().height; if (h > 0) grid.style.setProperty("--fs", (h / 24 * 1.12).toFixed(2) + "px"); };
+  if (window.ResizeObserver) new window.ResizeObserver(fit).observe(grid); else window.addEventListener("resize", fit);
+  fit(); show(100);
+}
+</script>

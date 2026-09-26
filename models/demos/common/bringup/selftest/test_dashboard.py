@@ -152,3 +152,16 @@ def test_page_renders_an_empty_bring_up(fx, tmp_path):
 )
 def test_bound_guess(sec, b):
     assert bound_of(sec) == b
+
+
+def test_styles(records, tmp_path):
+    from models.demos.common.bringup.dashboard.export import styles_of
+
+    assert styles_of(records, None) == ["standard"]
+    assert styles_of(records, "both") == ["standard", "teletext"]
+    outs = main(["--spec", str(records.path), "--style", "both", "--out", str(tmp_path)])
+    assert sorted(p.name for p in outs) == ["index.html", "teletext.html"]
+    ttx = (tmp_path / "teletext.html").read_text()
+    assert ttx.startswith("<title>fixture Ceefax</title>") and "/*__DATA__*/null" not in ttx
+    with pytest.raises(SystemExit):
+        styles_of(records, "neon")
