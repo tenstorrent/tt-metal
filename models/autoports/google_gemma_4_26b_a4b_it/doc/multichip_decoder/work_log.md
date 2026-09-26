@@ -98,3 +98,19 @@ Final staged pre-commit run passed after the whitespace hooks normalized two
 generated text reports. Preserved precommit_staged.log.gz records the successful
 rerun. The local checkpoint is an incomplete/blocked attempt, not a stage-pass
 commit. No push is authorized or performed.
+
+## Local checkpoint
+
+Repository tt-metal, branch gemma-4-26b-a4b-it:
+`41a8c80072c3ce2f0480cd4bbfbefeccfedc8ddc` — incomplete/blocked attempt
+checkpoint, not stage completion. Commit hooks passed. Identity was supplied
+per command as Codex <codex@openai.com>, matching prior stage commits; no
+global/repository identity configuration changed. Nothing pushed.
+
+Independent fresh xhigh stage-review returned **more-work-needed**
+(stage_review.md): fabric Watcher gate, final capability/context/batch/stack
+validation, topology/geometry/default selection, and target native profiling.
+The review verified numerical summaries, diagnostic windows, memory arithmetic
+and provenance. No additional arithmetic defect was demonstrated. These gates
+remain work after the separately scoped fabric repair; AutoFix's failed scoped
+workaround is the stopping condition for this attempt, not the review verdict.
