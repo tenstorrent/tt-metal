@@ -454,3 +454,13 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Gate PASS: pcc_post_moe_norm_L00 0.999996, rel L2 0.0030, row norm ratio [0.9970, 1.0015]. The `FAIL ... pcc=0.000000` line in the log comes from the precompile
   collect pass (the comp_pcc stub), not from the real pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py`
+
+## S.sliding.11 test (run1, attempt 1): swap attn_norm .. post_moe_norm into the sliding block
+- Replaced the one-line template body with swap 10's checks, and added `post_moe_norm` to SWAPPED. post_moe_norm is a `norm` step, so it gets the existing norm checks:
+  vs golden PCC >= 0.99 and rel L2 <= 0.03, and vs the CPU norm on the same device experts_out rel L2 <= 0.03 and a per-token norm ratio in [0.97, 1.03]. No new limits.
+  The gated metric stays `pcc_swap_out` >= 0.98.
+- Why no looser golden limit here: post_moe_norm vs golden scores 0.0195 on device. That is mostly the experts error carried through (experts 0.0266 vs golden), and it leaves margin under 0.03.
+  The iso check (device 0.0019) is the one that catches `1 + w`, sum instead of mean and zeroed rows. ffn_combine + post_ffn_norm partly hide those at block out.
+- Verified: BRINGUP_IMPL=reference PASS (pcc 0.999996, post_moe_norm rel 0.0043 / iso 0.0); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999953,
+  block out rel 0.0096 / 0.0087 (limit 0.02), post_moe_norm pcc 0.99981, rel 0.0195, iso 0.0019, ratio [0.9975, 1.0009]; experts iso 0.0183, ratio [0.9905, 1.0203].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py`
