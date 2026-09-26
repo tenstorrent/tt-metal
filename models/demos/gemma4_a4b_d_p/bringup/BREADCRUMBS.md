@@ -811,3 +811,9 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS; stub FAIL. The device gate already PASSES (pcc 0.999997, rel 0.0027, ratio [0.9960, 1.0046]) because ffn_combine goes through
   the same `TtResidualAdd` module as sliding. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_combine.py`
+
+## S.global.12.test.1 (swap test, global steps 1-12, last ffn_combine)
+- Test = global swap 11 (`test_swap_global_11_post_moe_norm.py`) with `ffn_combine` added to SWAPPED, the same way as sliding swap 12. ffn_combine is a `residual` step, so the generic residual checks apply: vs golden PCC >= 0.99 and rel L2 <= 0.03, and vs the CPU add on the same device mlp_post_norm / moe_post_norm rel L2 <= 0.03 with per-token norm ratio in [0.97, 1.03] (post_ffn_norm on the CPU hides per-row scale errors at block out). No thresholds changed.
+- BRINGUP_IMPL=reference: passes (pcc_swap_out 0.999996, ffn_combine rel 0.0035 golden / 0.0 iso). BRINGUP_IMPL=stub: fails every check.
+- Device (the gate): passes. pcc_swap_out 0.999972, block out rel 0.0075 / 0.0070 (first 128 rows). ffn_combine pcc 0.99995, rel 0.0096 vs golden, iso 0.0017, ratio [0.9986, 1.0028].
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_12_ffn_combine.py`
