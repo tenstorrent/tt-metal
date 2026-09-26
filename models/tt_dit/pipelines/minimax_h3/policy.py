@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator, Sequence
 
+import numpy as np
 from PIL import Image
 
 from .packing import (
@@ -21,7 +22,13 @@ from .packing import (
     MINIMAX_H3_MIN_ASPECT_RATIO,
     resolve_canvas_size,
 )
-from .packing_ref2va import MiniMaxH3Reference, resolve_reference_image_size
+from .packing_ref2va import (
+    MINIMAX_H3_MAX_REFERENCE_IMAGES,
+    MINIMAX_H3_MAX_REFERENCE_VIDEOS,
+    MiniMaxH3Reference,
+    resolve_reference_image_size,
+    sample_reference_video_frames,
+)
 
 MINIMAX_H3_ASPECT_RATIOS = ((21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16))
 MINIMAX_H3_DEFAULT_ASPECT_RATIO = (16, 9)
@@ -65,6 +72,16 @@ MINIMAX_H3_MAX_TEXT_TOKENS = int(os.environ.get("MINIMAX_H3_MAX_TEXT_TOKENS", 30
 
 # Served ref2va image resize mode; other modes are rejected on the request path.
 MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE = "match"
+
+# Vision-tower patches at the reference caps: every image and every video block at the canvas area
+# cap (4 patches per 32x32 merged token, 4,032 per block, which `match` never exceeds) and every
+# video at the longest duration (16 blocks): 229,824.
+MINIMAX_H3_MAX_REFERENCE_BLOCK_PATCHES = 4 * MINIMAX_H3_MAX_PIXELS // MINIMAX_H3_CANVAS_MULTIPLE**2
+MINIMAX_H3_MAX_REFERENCE_PATCHES = MINIMAX_H3_MAX_REFERENCE_BLOCK_PATCHES * (
+    MINIMAX_H3_MAX_REFERENCE_IMAGES
+    + MINIMAX_H3_MAX_REFERENCE_VIDEOS
+    * len(sample_reference_video_frames(np.zeros((MINIMAX_H3_MAX_NUM_FRAMES, 1, 1, 3), np.uint8))[1])
+)
 
 # MiniMax API limits on an fl2va keyframe.
 MINIMAX_H3_KEYFRAME_MIN_SIDE = 256
@@ -246,27 +263,6 @@ def served_reference_canvases() -> tuple[tuple[int, int], ...]:
     for canvas in served_canvases():
         by_area.setdefault(canvas[0] * canvas[1], canvas)
     return tuple(by_area[area] for area in sorted(by_area))
-
-
-def served_reference_video_canvases() -> tuple[tuple[int, int], ...]:
-    """Video-reference canvases whose run token count no image reference reaches."""
-    multiple = MINIMAX_H3_CANVAS_MULTIPLE
-    image_tokens = {
-        (height // multiple) * (width // multiple)
-        for canvas in served_reference_canvases()
-        for height, width in served_reference_image_sizes(*canvas)
-    }
-    by_tokens: dict[int, tuple[int, int]] = {}
-    large = 4096
-    for height in range(multiple, large + 1, multiple):
-        for width in range(multiple, large + 1, multiple):
-            if width > 4 * height or height > 4 * width:
-                continue
-            canvas = resolve_canvas_size(width, height)
-            tokens = (canvas[0] // multiple) * (canvas[1] // multiple)
-            if tokens not in image_tokens:
-                by_tokens.setdefault(tokens, canvas)
-    return tuple(by_tokens[tokens] for tokens in sorted(by_tokens))
 
 
 def served_envelope(task: str) -> Iterator:

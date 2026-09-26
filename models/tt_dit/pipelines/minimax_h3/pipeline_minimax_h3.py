@@ -119,9 +119,8 @@ from .packing_ref2va import (
     sample_reference_video_frames,
 )
 from .policy import (
-    MINIMAX_H3_DEFAULT_ASPECT_RATIO,
-    MINIMAX_H3_DURATIONS_S,
     MINIMAX_H3_MAX_KEYFRAME_TOKENS,
+    MINIMAX_H3_MAX_REFERENCE_PATCHES,
     MINIMAX_H3_MAX_TEXT_TOKENS,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     align_num_frames,
@@ -129,7 +128,6 @@ from .policy import (
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
-    served_reference_video_canvases,
     validate_request,
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
@@ -193,11 +191,21 @@ MODEL_NAME = "minimax-h3"
 # for SP alignment. The top rung is the admission cap: a longer request raises.
 MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
 
-# ref2va ladder; the top rung must admit everything the ref2va arena caps do (322336 rows, aligned).
-MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 322560)
+# ref2va ladder; the top rung must admit everything the ref2va arena caps do (326432 rows, aligned).
+MINIMAX_H3_REF2VA_BUCKET_LADDER = (32768, 61440, 86016, 118784, 176128, 245760, 326656)
 
 # ref2va text-encoder pad targets below the prompt arena cap; the cap itself is always the top rung.
 MINIMAX_H3_REF2VA_PRESENTATION_RUNGS = (1024, 4096, 8192, 16384, 32768)
+
+# ref2va vision-tower pad targets, in patches; each rung is one set of tower programs. Every 1024 up
+# to 14336, then ~7% steps. The bottom rung is the first above the smallest reference block (2112
+# patches); the top must cover the reference caps or 4x the prompt arena, whichever is smaller.
+MINIMAX_H3_VISION_PATCH_LADDER = (
+    3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336,
+    16384, 18432, 20480, 22528, 24576, 26624, 28672, 31744, 34816, 37888, 40960, 44032,
+    48128, 52224, 56320, 61440, 66560, 71680, 77824, 83968, 90112, 97280, 104448, 112640,
+    121856, 131072, 141312, 152576, 163840, 176128, 189440, 203776, 219136, 230400,
+)  # fmt: skip
 
 
 def default_bucket_ladder(task: str) -> tuple[int, ...]:
@@ -245,7 +253,8 @@ class MiniMaxH3ArenaCaps:
     def for_task(cls, task: str) -> "MiniMaxH3ArenaCaps":
         """Defaults sized to the task's envelope; ref2va needs much larger prompt and conditioning caps."""
         if task == "ref2va":
-            return cls(prompt=57344, condition_video_rows=149632, condition_audio_rows=2432)
+            # prompt: the largest presentation the reference caps admit (60971 tokens), aligned.
+            return cls(prompt=61440, condition_video_rows=149632, condition_audio_rows=2432)
         return cls()
 
     def validate(self) -> None:
@@ -484,6 +493,7 @@ class MiniMaxH3Pipeline:
         self._buckets: dict[int, _BucketState] = {}
         self._force_bucket: int | None = None
         self._force_prompt_pad: int | None = None
+        self._force_vision_pad: int | None = None
         self._tt_video = StateTensor()
         self._tt_audio = StateTensor()
         self._tt_cond_video = StateTensor()
@@ -528,6 +538,16 @@ class MiniMaxH3Pipeline:
         self.presentation_ladder = tuple(
             rung for rung in MINIMAX_H3_REF2VA_PRESENTATION_RUNGS if rung < self.arena_caps.prompt
         ) + (self.arena_caps.prompt,)
+        self.vision_patch_ladder = None
+        if task == "ref2va":
+            self.vision_patch_ladder = MINIMAX_H3_VISION_PATCH_LADDER
+            validate_bucket_ladder(self.vision_patch_ladder, self.sp_factor * ttnn.TILE_SIZE)
+            max_patches = min(4 * self.arena_caps.prompt, MINIMAX_H3_MAX_REFERENCE_PATCHES)
+            if self.vision_patch_ladder[-1] < max_patches:
+                raise ValueError(
+                    f"the top vision patch rung {self.vision_patch_ladder[-1]} is below the {max_patches} "
+                    f"patches a ref2va request can reach"
+                )
         if self.bucket_denoise:
             caps = self.arena_caps
             admissible = caps.prompt + caps.condition_video_rows + caps.audio_rows + caps.video_rows
@@ -1018,6 +1038,19 @@ class MiniMaxH3Pipeline:
             detail = f" ({int((type_ids > 0).sum())} of them vision, references {kinds})"
         elif keyframes:
             detail = f" ({int(type_ids.sum())} of them vision, {len(keyframes)} keyframe(s))"
+        vision_pad = None
+        if has_vision and self.vision_patch_ladder is not None:
+            num_patches = pixel_values.shape[0]
+            vision_pad = self._force_vision_pad
+            if vision_pad is None:
+                vision_pad = select_bucket(num_patches, self.vision_patch_ladder)
+            elif vision_pad not in self.vision_patch_ladder:
+                raise ValueError(
+                    f"forced vision pad {vision_pad} is not in the vision patch ladder {self.vision_patch_ladder}"
+                )
+            elif num_patches > vision_pad:
+                raise ValueError(f"forced vision pad {vision_pad} is smaller than the {num_patches} vision patches")
+            detail += f", {num_patches} vision patches padded to {vision_pad}"
         self._log(f"encoding {seq_len} presentation tokens on device" + detail)
 
         true_seq_len = seq_len
@@ -1055,9 +1088,9 @@ class MiniMaxH3Pipeline:
                 (vis_cos, vis_sin),
                 vision_cu_seqlens(grid_thw),
                 sp_factor=self.sp_factor,
+                pad_to=vision_pad,
             )
-            path = "ring" if p_cu is None or len(p_cu) <= 2 else "windowed"
-            # self._host_log(f"vision tower {path} attention, {p_patches.shape[0]} padded patches")
+
             sp_kw = {"mesh_axis": self.sp_axis, "shard_dim": 0} if self.sp_factor > 1 else {}
             merged, deepstack = tower.forward(
                 bf16_tensor(p_patches, device=self.mesh_device, **sp_kw),
@@ -2218,54 +2251,20 @@ class MiniMaxH3Pipeline:
         prompt = self._filler_prompt(1)
         before = self.mesh_device.num_program_cache_entries()
 
-        def gray(size: tuple[int, int]) -> Image.Image:
-            height, width = size
-            return Image.new("RGB", (width, height), (127, 127, 127))
-
-        def image_ref(size: tuple[int, int]) -> MiniMaxH3PreparedReference:
-            return MiniMaxH3PreparedReference(kind="image", image=gray(size))
-
-        def video_ref(num_frames: int, size: tuple[int, int]) -> MiniMaxH3PreparedReference:
-            height, width = size
-            return MiniMaxH3PreparedReference(
-                kind="video", frames=np.full((num_frames, height, width, 3), 127, dtype=np.uint8)
-            )
-
-        units: list[tuple[str, list[MiniMaxH3PreparedReference], int | None]] = []
-
-        def add(label: str, references: list[MiniMaxH3PreparedReference], *, pad_to: int | None = None) -> None:
-            units.append((label, references, pad_to))
-
         pad_canvas = min(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
-        pad_size = min(served_reference_image_sizes(*pad_canvas), key=lambda size: size[0] * size[1])
-        for rung in self.presentation_ladder:
-            add(f"presentation rung {rung}", [image_ref(pad_size)], pad_to=rung)
+        height, width = min(served_reference_image_sizes(*pad_canvas), key=lambda size: size[0] * size[1])
+        image = Image.new("RGB", (width, height), (127, 127, 127))
+        references = [MiniMaxH3PreparedReference(kind="image", image=image)]
 
-        for canvas, size in served_envelope(self.task):
-            add(f"1 image at {size[1]}x{size[0]} (canvas {canvas[1]}x{canvas[0]})", [image_ref(size)])
-
-        max_canvas = max(served_canvases(), key=lambda canvas: canvas[0] * canvas[1])
-        add("2 images at max canvas", [image_ref(max_canvas) for _ in range(2)])
-        add(
-            "9 images at max canvas",
-            [image_ref(max_canvas) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)],
-        )
-
-        short_clip = align_num_frames(1)
-        for size in served_reference_video_canvases():
-            add(f"1 video at {size[1]}x{size[0]}", [video_ref(short_clip, size)])
-
-        video_canvas = resolve_canvas_size(*MINIMAX_H3_DEFAULT_ASPECT_RATIO)
-        for duration_s in (MINIMAX_H3_DURATIONS_S[0], MINIMAX_H3_DURATIONS_S[-1]):
-            frames = get_num_frames(duration_s)
-            add(f"1 video {duration_s}s at {video_canvas[1]}x{video_canvas[0]}", [video_ref(frames, video_canvas)])
-        clip = get_num_frames(5)
-        add("3 videos totaling 15s", [video_ref(clip, video_canvas) for _ in range(3)])
+        # One unit per vision rung, the first few also carrying a presentation rung: the two pads are
+        # independent, so this compiles both ladders in max(len) encoder calls.
+        extra = len(self.vision_patch_ladder) - len(self.presentation_ladder)
+        units = list(zip(self.vision_patch_ladder, self.presentation_ladder + (None,) * extra))
 
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
-        for label, references, pad_to in tqdm.tqdm(
+        for vision_pad, pad_to in tqdm.tqdm(
             units,
             desc="Warming ref2va prompt encoder",
             disable=not host,
@@ -2274,17 +2273,19 @@ class MiniMaxH3Pipeline:
         ):
             unit_before = self.mesh_device.num_program_cache_entries()
             self._force_prompt_pad = pad_to
+            self._force_vision_pad = vision_pad
             try:
                 embeds, _ = self.encode_prompt(prompt, references=references)
             finally:
                 self._force_prompt_pad = None
+                self._force_vision_pad = None
             if pad_to is not None:
                 assert (
                     embeds.shape[1] == pad_to
                 ), f"forced pad landed on {embeds.shape[1]}, expected presentation rung {pad_to}"
             ttnn.deallocate(embeds)
             # self._host_log(
-            #     f"warmed prompt encoder for {label}: "
+            #     f"warmed prompt encoder for vision rung {vision_pad}: "
             #     f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
             # )
 

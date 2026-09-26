@@ -14,7 +14,12 @@ import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import (
+    Qwen3VlVisionModel,
+    fixed_length_cu_window,
+    pad_patches_for_sp,
+    vision_cu_seqlens,
+)
 from ....utils import tensor
 from ....utils.check import assert_quality
 from .common import (
@@ -241,3 +246,57 @@ def test_tower_sp_padding(reference, mesh_device, submesh_shape, tp_axis, sp_axi
         feature = tensor.to_torch(feature_tt, mesh_axes=[None, None])
         assert feature.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
         assert_quality(golden_feature, feature, pcc=0.99)
+
+
+def _host_patch_batch(total: int, windows: tuple[int, ...]):
+    patches, pos = torch.randn(total, 4), torch.randn(total, 3)
+    rope = (torch.randn(total, 2), torch.randn(total, 2))
+    return patches, pos, rope, (0, *windows)
+
+
+@pytest.mark.parametrize(
+    "total, pad_to, phantom",
+    [
+        (2112, 3072, (3072,)),
+        (3072, 3072, (3072,)),
+        (4032, 3072, (4096,)),
+        (3775, 5120, (4799, 5120)),
+        (2112, 5120, (3136, 4160, 5120)),
+    ],
+)
+def test_pad_patches_for_sp_pad_to_carves_the_pad_into_phantom_windows(total, pad_to, phantom):
+    patches, pos, rope, cu = _host_patch_batch(total, (total,))
+    p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+        patches, pos, rope, cu, sp_factor=32, pad_to=pad_to
+    )
+    padded = phantom[-1]
+    assert logical == total
+    assert p_patches.shape[0] == p_pos.shape[0] == p_cos.shape[0] == padded
+    assert p_cu == (*cu, *phantom)
+    assert torch.equal(p_patches[:total], patches)
+    assert torch.all(p_cos[total:] == 1) and torch.all(p_sin[total:] == 0)
+
+
+def test_pad_patches_for_sp_without_pad_to_keeps_an_aligned_batch_on_the_ring_path():
+    patches, pos, rope, cu = _host_patch_batch(3072, (3072,))
+    out = pad_patches_for_sp(patches, pos, rope, cu, sp_factor=32)
+    assert out[0] is patches and out[3] == cu and out[4] == 3072
+
+
+def test_pad_patches_for_sp_rejects_a_misaligned_pad_to(expect_error):
+    patches, pos, rope, cu = _host_patch_batch(2112, (2112,))
+    with expect_error(ValueError, "multiple of 1024"):
+        pad_patches_for_sp(patches, pos, rope, cu, sp_factor=32, pad_to=3000)
+
+
+def test_fixed_length_cu_window_repeats_the_last_boundary():
+    cu = (0, 2112, 3136, 4096)
+    out = fixed_length_cu_window(cu)
+    assert len(out) == 1024
+    assert out[: len(cu)] == cu
+    assert set(out[len(cu) :]) == {4096}
+
+
+def test_fixed_length_cu_window_rejects_more_than_one_tile(expect_error):
+    with expect_error(ValueError, "at most 1024"):
+        fixed_length_cu_window(tuple(range(1025)))
