@@ -48,11 +48,11 @@ def hf_model(spec, num_layers):
 
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
+    "full_dense": {"attn_norm", "attention", "attn_residual", "mlp", "mlp_residual"},
 }
 
-# Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out.
-_RESIDUAL_STEPS = {"attn_residual"}
+# Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out; out = h_mid + mlp_out.
+_RESIDUAL_STEPS = {"attn_residual", "mlp_residual"}
 
 # Norm steps -> checkpoint weight name (under model.layers.<i>.).
 _NORM_WEIGHTS = {
