@@ -174,16 +174,19 @@ class MigrationDriver:
         return triples
 
     def _issue(self, triples: list) -> int:
-        layer_ranges = [(int(l), int(l) + 1) for l in self.layers] if self.layers else [(0, self.num_layers)]
+        from models.demos.common.prefill.runners import prefill_producer as producer
+
+        layers = [int(l) for l in self.layers] if self.layers else range(self.num_layers)
         if self.layers:
-            logger.info(f"[migration_driver] migrating layer subset {self.layers} (one migrate per layer)")
+            logger.info(f"[migration_driver] migrating layer subset {self.layers}")
         migrated = 0
         next_uuid = 1
         for src_slot, dst_slot, real_len in triples:
-            for layer_start, layer_end in layer_ranges:
+            runs = _layer_runs(layers, real_len, producer.ADAPTER.layer_position_range)
+            for layer_start, layer_end, pos_start, pos_end in runs:
                 logger.info(
                     f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} ep={self.dest_endpoint_id} "
-                    f"layers=[{layer_start},{layer_end}) pos=[0,{real_len})"
+                    f"layers=[{layer_start},{layer_end}) pos=[{pos_start},{pos_end})"
                 )
                 uuid = next_uuid
                 next_uuid += 1
@@ -194,13 +197,12 @@ class MigrationDriver:
                     dst_slot=dst_slot,
                     layer_start=layer_start,
                     layer_end_exclusive=layer_end,
-                    pos_start=0,
-                    pos_end_exclusive=real_len,
+                    pos_start=pos_start,
+                    pos_end_exclusive=pos_end,
                 )
                 self.client.wait_complete(token, self.timeout_ms)
             logger.success(
-                f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete "
-                f"({len(layer_ranges)} layer range(s))"
+                f"[migration_driver] MIGRATE slot {src_slot} -> {dst_slot} complete ({len(runs)} layer run(s))"
             )
             migrated += 1
         logger.info(f"[migration_driver] migrations complete: {migrated} pair(s)")
@@ -269,6 +271,23 @@ class MigrationDriver:
         return pairs
 
 
+def _layer_runs(layers, real_len: int, position_range) -> list:
+    """Consecutive layers sharing a position range, as ``(layer_start, layer_end, pos_start, pos_end)``.
+
+    One /migrate applies one position range to every config of its layers, so layers whose caches sit
+    on different axes (Kimi-K3: MLA on tokens, KDA on the contract's version windows) need separate
+    calls; consecutive layers of one kind share a call.
+    """
+    runs = []
+    for layer in sorted(int(l) for l in layers):
+        pos_start, pos_end = (int(p) for p in position_range(layer, real_len))
+        if runs and runs[-1][1] == layer and runs[-1][2:] == (pos_start, pos_end):
+            runs[-1] = (runs[-1][0], layer + 1, pos_start, pos_end)
+        else:
+            runs.append((layer, layer + 1, pos_start, pos_end))
+    return runs
+
+
 def _cache_plan(table, migrated_layers) -> list:
     from models.demos.common.prefill.runners import prefill_producer as producer
 
@@ -289,7 +308,8 @@ def _cache_plan(table, migrated_layers) -> list:
     plan = []
     for cfg_id in range(table.num_configs()):
         cfg = table.config() if cfg_id == 0 else table.config(cfg_id)
-        is_index = cfg_id == 1 and n_model_configs > 1
+        kind = adapter.cache_kind(cfg_id) if cfg_id < n_model_configs else "other"
+        is_index = kind == "index"
         n_rows = int(cfg.num_layers)
         rows, why = None, ""
         if rows_hook is not None:
@@ -323,7 +343,7 @@ def _cache_plan(table, migrated_layers) -> list:
                 "config_id": cfg_id,
                 "rows": rows,
                 "head_dim": None if head_dim is None else int(head_dim),
-                "kind": "index" if is_index else ("kvpe" if cfg_id == 0 else "other"),
+                "kind": kind,
                 "unaddressed": unaddressed,
                 "why": why,
             }
@@ -373,6 +393,12 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
     for entry in plan:
         cfg_id, rows = entry["config_id"], entry["rows"]
         if rows is None:
+            continue
+        if entry["kind"] not in ("kvpe", "index"):
+            # Not a token-addressed cache (Kimi-K3's KDA state configs); nothing to decode into KV rows.
+            logger.info(
+                f"[migration_driver] src-KV dump: cache config {cfg_id} ({entry['kind']}) is not a KV cache; not dumped."
+            )
             continue
         if entry["head_dim"] is None:
             logger.warning(
@@ -460,16 +486,25 @@ def _verify_dst_vs_src_bytes(
         for cfg_id, picked in checkable:
             tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
             stride = int(tcfg.chunk_n_tokens)
-            n_full = (real_len // stride) * stride
-            tail_tokens += real_len - n_full
+            # Compare the positions _issue requested for each layer: [0, real_len) on a token cache, one
+            # version window of the synthetic axis on Kimi-K3's KDA configs (the other windows alias the
+            # same source bytes and, on a real destination, hold versions this migration did not touch).
+            spans = {}
+            for layer, _ in picked:
+                pos_start, pos_end = producer.ADAPTER.layer_position_range(layer, real_len)
+                pos_end = min(int(pos_end), int(tcfg.max_sequence_length))
+                n_full = pos_start + ((pos_end - pos_start) // stride) * stride
+                tail_tokens += pos_end - n_full
+                spans[layer] = (int(pos_start), n_full)
+            reads = sum((end - start) // stride for start, end in spans.values())
             logger.info(
                 f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id}: "
-                f"{len(picked)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
-                f"= {2 * len(picked) * (n_full // stride)} UMD read(s)"
+                f"{len(picked)} layer(s), {reads} chunk(s) of {stride} position(s) = {2 * reads} UMD read(s)"
             )
             for layer, row in picked:
+                pos_start, n_full = spans[layer]
                 mismatches_in_layer = 0
-                for pos in range(0, n_full, stride):
+                for pos in range(pos_start, n_full, stride):
                     src_loc = table.lookup(row, pos, src, cfg_id)
                     dst_loc = table.lookup(row, pos, dst, cfg_id)
                     try:

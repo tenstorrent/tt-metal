@@ -2570,6 +2570,47 @@ def test_to_memory_config_rm_preallocated_output(device, tensor_shape, shard_sha
     assert_equal(torch_input, output_torch)
 
 
+def test_to_memory_config_rm_dram_nd_intra_row_parallel(device):
+    """Round trip a short, wide tensor whose aligned ND pages can be distributed within each logical row."""
+    torch.manual_seed(0)
+    tensor_shape = [1, 3, 3 * 48 * 128]
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    interleaved_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=interleaved_memory_config,
+    )
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 3, 64],
+        grid=make_full_dram_core_range_set(device),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec)
+    sharded_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_memory_config)
+    check_mem_config(sharded_tensor, sharded_memory_config, is_nd_sharded=True)
+
+    round_trip_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(tensor_shape),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        interleaved_memory_config,
+    )
+    ttnn.to_memory_config(
+        sharded_tensor,
+        memory_config=interleaved_memory_config,
+        output_tensor=round_trip_tensor,
+    )
+
+    assert_equal(torch_input, ttnn.to_torch(round_trip_tensor))
+
+
 # ---------------------------------------------------------------------------
 # Program cache callback (override_runtime_arguments) tests
 # ---------------------------------------------------------------------------

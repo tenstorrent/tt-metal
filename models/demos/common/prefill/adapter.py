@@ -140,6 +140,24 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
 
+    def cache_kind(self, config_id: int) -> str:
+        """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
+        ``"index"`` (a DSA indexer key cache) and treat any other value as an opaque cache they neither
+        decode nor infer a width for; a model may return its own kinds (Kimi-K3: ``"kda_recurrent"``,
+        ``"kda_convolution"``). The default keeps the historical convention (config 1 of a multi-config
+        table is the index cache); a model whose second config is something else overrides this so the
+        producer and the migration driver stop inferring the kind from the config count."""
+        if config_id == 0:
+            return "kvpe"
+        return "index" if config_id == 1 else "other"
+
+    def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
+        """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
+        A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
+        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
+        return 0, real_len
+
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
 
