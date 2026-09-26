@@ -1061,3 +1061,16 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   rel 0.0515, iso rel 0.0044, ratio [0.9967, 1.0058], worst row 0.0070. Router, as in swap 05: overlap 0.98846 vs golden
   (limit 0.985). This is still the tightest margin.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_06_experts.py`
+
+## C.full_moe.ffn_residual.test.1, 2026-09-26
+- Replaced the rendered one-liner in `tests/bringup/test_c_full_moe_ffn_residual.py` with the body of
+  `test_c_sliding_moe_ffn_residual.py` at LAYER = 5. The limits are unchanged: PCC >= 0.99 (gated), size, finite, rel L2 <= 0.01,
+  per-token ratio [0.99, 1.01], experts coef [0.97, 1.03], experts-term rel <= 0.1.
+- Layer-5 golden: ||h_mid|| 126.25, ||experts_out|| 8.47 (6.7% of out; layer 1 was 15%). Host mutations (PCC / rel):
+  bf16 add 0.999997 / 0.0023 (experts rel 0.019); dropped 0.9978 / 0.066; half 0.99946 / 0.033; 2x 0.999998 / 1.0;
+  one-row shift 0.9957 / 0.092; last row zeroed 0.99985 / 0.017 (ratio min 0); last 32 cols zeroed 0.99836 / 0.057;
+  bfp8-like 2^-7 noise experts rel 0.119. PCC alone catches none of these, and the limits catch every one.
+- Results: BRINGUP_IMPL=reference PASS (rel 0.0019, coef 1.0, experts rel 0). BRINGUP_IMPL=stub FAIL (PCC 0).
+  Device gate already PASSES (generic `TtResidualAdd`, ffn_residual already routed by hooks): pcc 0.999997, rel 0.0023,
+  ratio [0.9988, 1.0014], coef 1.0016, experts rel 0.0194. The first `FAIL ... pcc=0.000000` line is the precompile pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_ffn_residual.py`
