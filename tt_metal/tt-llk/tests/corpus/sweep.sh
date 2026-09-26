@@ -78,6 +78,52 @@ esac
 DRY_RUN=0
 for _a in "$@"; do [ "$_a" = "--dry-run" ] && DRY_RUN=1; done
 
+# ------------------------------------------------------ setup preflight --
+# Refuse to sweep unless craq-sfpi/scripts/setup.sh has stood up all four
+# repos on the same branch.  A sweep run against a stale checkout, or against
+# a tt-metal on a different branch, measures the wrong thing -- and its
+# evidence looks exactly as legitimate as a good run, which is how a bad
+# number outlives the mistake that made it.
+#
+# CRAQ_SETUP_STATE points at the SETUP-STATE.env setup.sh writes (default
+# /data/$USER/craq-ablation/SETUP-STATE.env).  CRAQ_SKIP_SETUP_CHECK=1 is the
+# documented escape for a hand-assembled tree; it is logged, never silent.
+SETUP_STATE=${CRAQ_SETUP_STATE:-/data/$USER/craq-ablation/SETUP-STATE.env}
+if [ "${CRAQ_SKIP_SETUP_CHECK:-0}" = 1 ]; then
+  echo "sweep: *** CRAQ_SKIP_SETUP_CHECK=1 — four-repo setup verification SKIPPED ***"
+elif [ ! -f "$SETUP_STATE" ]; then
+  {
+    echo "FATAL: no setup state at $SETUP_STATE"
+    echo "  The sweep needs sfpi, sfpi-gcc, tt-metal and tt-blaze all checked out"
+    echo "  on the same branch, and a built craq compiler.  Stand them up with:"
+    echo "      bash craq-sfpi/scripts/setup.sh              # or --check to look first"
+    echo "  then re-run.  Point CRAQ_SETUP_STATE elsewhere if your KEEP differs,"
+    echo "  or set CRAQ_SKIP_SETUP_CHECK=1 for a hand-assembled tree."
+  } >&2
+  exit 2
+else
+  # shellcheck source=/dev/null
+  . "$SETUP_STATE"
+  _setup_bad=0
+  for _v in SFPI GCC METAL BLAZE; do
+    eval "_sha=\${CRAQ_${_v}_SHA:-}"; eval "_br=\${CRAQ_${_v}_BRANCH:-}"
+    eval "_dir=\${CRAQ_${_v}_DIR:-}"
+    if [ -z "$_sha" ] || [ "$_sha" = "-" ] || [ ! -d "$_dir" ]; then
+      echo "FATAL: setup state has no usable checkout for $_v (dir='$_dir')" >&2
+      _setup_bad=1
+    elif [ -n "${CRAQ_SETUP_BRANCH:-}" ] && [ "$_br" != "$CRAQ_SETUP_BRANCH" ]; then
+      echo "FATAL: $_v is on '$_br', not '$CRAQ_SETUP_BRANCH' — refusing to sweep" >&2
+      _setup_bad=1
+    fi
+  done
+  [ -x "${CRAQ_COMPILER:-}" ] || {
+    echo "FATAL: no built craq compiler at '${CRAQ_COMPILER:-}' (run setup.sh --stage sfpi)" >&2
+    _setup_bad=1
+  }
+  [ "$_setup_bad" = 0 ] || { echo "  re-run: bash craq-sfpi/scripts/setup.sh" >&2; exit 2; }
+  echo "sweep: setup verified — sfpi ${CRAQ_SFPI_SHA:0:9} gcc ${CRAQ_GCC_SHA:0:9} metal ${CRAQ_METAL_SHA:0:9} blaze ${CRAQ_BLAZE_SHA:0:9} on ${CRAQ_SETUP_BRANCH}"
+fi
+
 # ------------------------------------------------------- conf bootstrap --
 # conf-lint FIRST (enforcement layer, ledger item 10): the pin audit trail
 # (conf values <-> prose <-> PIN HISTORY <-> baseline header) must agree

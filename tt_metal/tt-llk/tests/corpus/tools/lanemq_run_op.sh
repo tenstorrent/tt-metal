@@ -24,10 +24,15 @@ RT="/tmp/lanemq-rt-$(hostname -s)"
 ulimit -u "$(ulimit -Hu)" 2>/dev/null || true
 
 idmap_args=()
+
+# ULP/golden leg rides this pass (see lanemk_run_op.sh); GOLDEN=0 opts out.
+golden_args=()
+[ "${GOLDEN:-1}" = 1 ] && golden_args=(--golden "$op")
 [ -n "${IDMAP:-}" ] && [ -s "${IDMAP:-}" ] && idmap_args=(--idmap "$IDMAP")
 
 LANEMK_WAIT_TIMEOUT="${LANEMK_WAIT_TIMEOUT:-600}" \
 "$VENV" "$(dirname "$0")/binary_stream_sweep.py" \
   --op "$op" --sem-node "$sem" --hand-node "$hand" \
   --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" --runner-temp "$RT" \
-  --band-bits "${BAND_BITS:-26}" --chip "${CHIP:-0}" --out "$OUT/$op" "${idmap_args[@]}"
+  --band-bits "${BAND_BITS:-26}" --chip "${CHIP:-0}" --out "$OUT/$op" "${idmap_args[@]}" \
+  ${golden_args[@]+"${golden_args[@]}"}

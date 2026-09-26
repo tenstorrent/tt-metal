@@ -21,9 +21,15 @@ re-implementation.
   object-identity map (op → sem/hand variant + `.text` sha; asserts sem≠hand).
 - `fp32_stream_sweep.py` — single-op orchestrator (resume-safe bands, per-band SHA compare,
   coverage assert, witness-band flag). Good for one op on one chip (quietbox).
-- `lanemk_worker.sh` / `lanemk_fleet.sh` — the galaxy fan-out: idle-glx-only salloc, one
-  work-stealing worker per host, NFS-atomic claims, node-local RUNNER_TEMP, resume-safe,
-  `trap reap EXIT` auto-releasing its own allocations.
+- `lanemk_run_op.sh` / `lanemk_array.sh` — the fan-out as it actually ships: one Slurm
+  job per op (`lanemk_array.sh` is the job-array shim; Slurm is the queue), node-local
+  RUNNER_TEMP, resume-safe from cached band SHAs, and a dead job only affects its own op.
+  This fan-out is across OPS, not chips: `lanemk_run_op.sh` passes `--chip 0`, so one
+  galaxy node runs one op on one chip.  For a true 32-chip shard of a single op see
+  `lanemq_galaxy_shard.sh` (binary ops today; `fp32_stream_sweep.py` accepts the same
+  `--start-bit`/`--total`, so the unary equivalent is a small generalization away).
+  The work-stealing fleet this section used to describe (`lanemk_worker.sh`,
+  `lanemk_fleet.sh`, `lanemk_submit.sh`) was retired 2026-09-04 and deleted.
 - The device leg is the env-gated hook in `python_tests/test_sfpu_unary.py`
   (`LANEMK_STREAM` runs the in-session chunk loop; `LANEMK_TILE_DIM` sizes the dispatch;
   `LANEMK_WAIT_TIMEOUT` the per-dispatch Math wait) — additive and inert when unset.

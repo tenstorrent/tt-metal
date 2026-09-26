@@ -4,7 +4,12 @@
 # band SHAs) -> write VERDICT -> exit. No claims, no work-stealing, no supervisor: a dead
 # job only ever affects its own op and is simply resubmitted.
 #
-# Config via env (set by lanemk_submit.sh): OPS_TSV IDMAP BUILD VENV LLK_HOME PYDIR OUT.
+# Config via env: OPS_TSV IDMAP BUILD VENV LLK_HOME PYDIR OUT.
+# GOLDEN=0 turns OFF the ULP/golden leg (default on).  The leg RIDES this pass
+# -- fp32_stream_sweep.py exports LANEMR_GOLDEN, the device test folds every
+# streamed chunk through threeway_golden.py and writes a .corr sidecar, and the
+# sweep turns those into <op>-CORRECTNESS-LEDGER.tsv.  No extra device time, no
+# extra retention, and it never affects the SHA verdict.
 set -uo pipefail
 op="${1:?usage: lanemk_run_op.sh <op>}"
 : "${OPS_TSV:?} ${IDMAP:?} ${BUILD:?} ${VENV:?} ${LLK_HOME:?} ${PYDIR:?} ${OUT:?}"
@@ -20,8 +25,12 @@ RT="/tmp/lanemk-rt-$(hostname -s)"
 [ -d "$RT/tt-llk-build/sources" ] || { mkdir -p "$RT"; cp -a "$BUILD/tt-llk-build" "$RT/"; }
 ulimit -u "$(ulimit -Hu)" 2>/dev/null || true
 
+golden_args=()
+[ "${GOLDEN:-1}" = 1 ] && golden_args=(--golden "$op")
+
 LANEMK_WAIT_TIMEOUT="${LANEMK_WAIT_TIMEOUT:-600}" \
 "$VENV" "$(dirname "$0")/fp32_stream_sweep.py" \
   --op "$op" --sem-node "$sem" --hand-node "$hand" \
   --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" --runner-temp "$RT" \
-  --idmap "$IDMAP" --tile-dim 256,256 --band-bits 28 --chip 0 --out "$OUT/$op"
+  --idmap "$IDMAP" --tile-dim 256,256 --band-bits 28 --chip 0 --out "$OUT/$op" \
+  ${golden_args[@]+"${golden_args[@]}"}
