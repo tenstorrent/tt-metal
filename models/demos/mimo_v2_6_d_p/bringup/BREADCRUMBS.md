@@ -284,3 +284,22 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_03_attn_residual.py
+
+## C.full_dense.ffn_norm test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_full_dense_ffn_norm.py` with the same body
+  as `test_c_full_dense_attn_norm.py` (STEP = ffn_norm): gated PCC (spec 0.99) plus finite output, rel L2 <= 0.03 and
+  per-token norm ratio in [0.97, 1.03]. Records `rel_l2_ffn_norm_L00`, `row_norm_ratio_{min,max}_ffn_norm_L00`.
+
+Why
+- Measured on the golden (CPU, h_mid [2048, 4096] -> ffn_norm bf16, post_attention_layernorm w mean 0.020):
+  reference fp32 PCC 0.999997 / rel 0.0023 / ratio [0.9953, 1.0045]; bf16 math rel 0.0033 / ratio [0.9919, 1.0054]
+  (not bit-equal to the golden here, unlike attn_norm); sum-instead-of-mean PCC 0.999997 but rel 0.98; eps 1e-2 PCC
+  0.9925 but rel 0.84; `1 + w` rel 7.4; the attn_norm weight PCC 0.17. So a PCC-only gate would let sum and eps bugs through.
+
+Results
+- BRINGUP_IMPL=reference: pass (rel 0.0023). BRINGUP_IMPL=stub: fail (PCC 0). Default (device): pass, PCC 0.999996,
+  rel 0.0029, ratio [0.9933, 1.0053].
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_ffn_norm.py`
