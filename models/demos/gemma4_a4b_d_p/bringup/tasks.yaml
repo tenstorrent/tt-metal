@@ -1994,3 +1994,52 @@ tasks:
       opportunities_listed: '>= 1'
   paths:
   - models/demos/gemma4_a4b_d_p/bringup/opportunities.md
+- id: P.2
+  title: SDPA config A (HiFi2, fp32 dest acc off -> streaming kernel, approx exp)
+    for sliding and global attention
+  step: perf
+  role: perf
+  deps:
+  - X.2
+  device: true
+  paths: *id003
+  brief:
+    details: 'Baseline (X.1): 742.8 ms for the last 5120-token chunk on the 51200-token
+      golden prefix; attention 381 ms (51%). Apply the SDPA settings that took ERNIE''s
+      50k->55k SDPA from 1328 to 203 ms (commit e35159e2651, models/demos/ernie45_d_p/tt/attention.py:
+      sdpa_settings): compute kernel config math_fidelity=HiFi2, fp32_dest_acc_en=False
+      (fp32 dest acc disables SDPA''s streaming kernel on Blackhole, sdpa_program_factory.cpp:75),
+      packer_l1_acc=False, math_approx_mode=False; SDPAProgramConfig exp_approx_mode=True,
+      q_chunk_size=256, k_chunk_size=512, full compute grid. Apply it to both the
+      sliding (head_dim 256) and the global (head_dim 512) SDPA; if a chunk size does
+      not fit L1 for head_dim 512, use the largest that does and say so. Keep the
+      bring-up config selectable (env GEMMA4_SDPA_CFG=base) and record the active
+      preset in the model''s perf_settings(). Leave the other matmuls as they are.'
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_chunk_out: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_attention: < 250
+      chunk_wall_ms: < 620
+      device_ms_total: '> 0'
+- id: X.3
+  title: 'Final: full 56k accuracy and warm full-prefill time (no readback) on the
+    tuned model'
+  step: perf
+  deps:
+  - P.2
+  device: true
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_FULL_PREFILL=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile
+      --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      prefill_ms_full: '> 0'
+      pcc_chunk_out: '>= 0.97'
