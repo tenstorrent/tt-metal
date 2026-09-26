@@ -26,7 +26,7 @@ re-implementation.
   RUNNER_TEMP, resume-safe from cached band SHAs, and a dead job only affects its own op.
   This fan-out is across OPS, not chips: `lanemk_run_op.sh` passes `--chip 0`, so one
   galaxy node runs one op on one chip.  For a true 32-chip shard of a single op see
-  `lanemq_galaxy_shard.sh` (binary ops today; `fp32_stream_sweep.py` accepts the same
+  `galaxy_shard.sh` (binary ops today; `fp32_stream_sweep.py` accepts the same
   `--start-bit`/`--total`, so the unary equivalent is a small generalization away).
   The work-stealing fleet this section used to describe (`lanemk_worker.sh`,
   `lanemk_fleet.sh`, `lanemk_submit.sh`) was retired 2026-09-04 and deleted.
