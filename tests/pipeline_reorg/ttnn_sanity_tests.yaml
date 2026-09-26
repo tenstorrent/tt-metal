@@ -8,6 +8,10 @@
 # sim_wh_n150 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
 # on ubuntu-latest; ttnn-sanity-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
+#
+# sim_quasar_xl is tt-sim for QSR on an xl runner. An entry listing it
+# as its only SKU therefore runs on tt-sim and nowhere else -- see "ttnn quasar
+# group" at the bottom of this file.
 
 - name: "ttnn data movement group"
   cmd: >-
@@ -337,3 +341,35 @@
   team: ttnn
   budget_type: sanity
   owner_id: U091SNDA4TS # Tomasz Cheda
+
+# Quasar tt-sim coverage: the one SKU below is the QSR simulator
+# (sim_quasar_xl -> libttsim_qsr.so, .github/sku_config.yaml), so this group never
+# schedules on hardware. Same shape as the LLK tt-sim leg in llk_ttsim_weekly.yaml
+# ("LLK ttsim regression [sim_quasar_xl]"), including the xl runner: ubuntu-latest is
+# too small for a model e2e under the simulator.
+#
+# Starting set is deliberately two tests, cheapest first: to_device is a graph-op
+# smoke test, so when it fails there is no point spending the resnet50 e2e run.
+#
+# `-n 0` runs both serially from the start. The ttsim leg in ttnn-sanity-tests-impl.yaml
+# exports `-n 4` through PYTEST_ADDOPTS; command-line args beat PYTEST_ADDOPTS, so -n 0
+# here wins. Under xdist the resnet50 leg reported only "worker 'gw1' crashed" and the
+# real simulator error (UnimplementedFunctionality: rv64_custom_2) showed up solely in
+# the impl's serial retry -- going serial up front makes the first failure the useful one
+# and halves the work.
+#
+# setup-ttsim already exports TT_METAL_SLOW_DISPATCH_MODE=1 for every sim_* SKU; it is
+# kept inline so the cmd is the same one that is run by hand. ttsim-skip-list.yaml holds
+# no quasar entries, so nothing is deselected here.
+- name: "ttnn quasar group"
+  cmd: >-
+    TT_METAL_SLOW_DISPATCH_MODE=1 MESH_DEVICE=N150
+    pytest -q -n 0 models/experimental/llama32_1b_quasar/tests/graph_ops/test_to_device.py
+    && TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" TT_METAL_SLOW_DISPATCH_MODE=1 RESNET_PCC_LOG=1
+    pytest -q -n 0 models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py::test_resnet50_e2e[pretrained-device_params0]
+  skus:
+    sim_quasar_xl:
+      timeout: 60
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
