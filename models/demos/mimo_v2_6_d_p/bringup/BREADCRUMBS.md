@@ -998,3 +998,20 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   registered) passes: PCC 0.998111, overlap 0.99536, matched rel 0.00107, row sums [0.9976, 1.0023].
 - The "FAIL pcc_router_L05: pcc=0.000000" line printed first comes from run_safe_pytest's precompile pass. The real result is the second line.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_router.py`
+
+## S.full_moe.05 test (attempt 1), 2026-09-26
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_05_router.py` with swap 04's body
+  (`test_swap_full_moe_04_ffn_norm.py`: every check on attn_norm, attention, attn_residual, ffn_norm, block out).
+  Added the router branch `_check_router` and the limits from `test_swap_sliding_moe_05_router.py`: PCC >= 0.99,
+  exactly 8 nonzeros per row, no negative weights, row sums 1 +- 0.01. Against the golden: overlap >= 0.985 and
+  matched rel <= 0.01. Against the CPU router on the same device ffn_norm (iso): overlap >= 0.99 and matched rel
+  <= 0.005. Whole-matrix router rel L2 is recorded but not gated (near-tie flips). pcc_swap_out is gated at 0.98.
+- BRINGUP_IMPL=reference: PASS (out rel 0.0025; router overlap 0.99664 against the golden, 1.0 iso).
+  BRINGUP_IMPL=stub: FAIL on every check. The precompile pass fails (router overlap against the golden 0.137).
+- Device gate: PASS. pcc_swap_out 0.999986, out rel 0.0053; router pcc 0.99552, overlap 0.98846 against the golden /
+  0.99890 iso, matched rel 0.00265 / 0.00147, row sums [0.9977, 1.0026]. Trail: experts_out 0.99869.
+- Tightest margin: router selection overlap against the golden, 0.98846 against a 0.985 limit. It comes from the
+  upstream device error: layer 5 has many near-ties (679/2048 rows with an 8th/9th gap < 1e-3), and swap 04's CPU router
+  on the device ffn_norm already gave router pcc 0.9955. Iso overlap 0.9989 shows that the device router itself is
+  accurate. If upstream noise grows, this is the check that trips first.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_05_router.py`
