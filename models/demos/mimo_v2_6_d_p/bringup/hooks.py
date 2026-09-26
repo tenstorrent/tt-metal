@@ -49,7 +49,7 @@ def hf_model(spec, num_layers):
 # Device steps swapped in so far, per block type. Every other step runs on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp", "mlp_residual"},
-    "sliding_moe": {"attn_norm", "attention"},
+    "sliding_moe": {"attn_norm", "attention", "router"},
 }
 
 # Residual steps (replicated bf16 add, no collective): h_mid = in + attn_out; out = h_mid + mlp_out.
@@ -156,6 +156,49 @@ def _attention_module(mesh, spec, layer, loader=None, cfg=None):
     return module, cfg
 
 
+def _max_chunk(spec):
+    """Largest chunk any rung or the target runs: the router's bias / zero tables are built once for it at load."""
+    chunks = [int(r.get("chunk", 0)) for r in spec.data.get("ladder", [])]
+    chunks.append(int((spec.data.get("target") or {}).get("chunk", 0)))
+    return max(chunks)
+
+
+def _router_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtRouter (replicated, fp32 logits, fp32 sigmoid + bias choice, ttnn.topk) for one MoE layer."""
+    import os
+
+    from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.mimo_v2_6_d_p.reference.mimo_ref import MiMoConfig
+    from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+    from models.demos.mimo_v2_6_d_p.tt.router import TtRouter
+
+    loader = loader or WeightLoader(hf_path(spec))
+    cfg = cfg or MiMoConfig.from_json(os.path.join(loader.model_path, "config.json"))
+    assert cfg.n_group == 1 and cfg.scoring_func == "sigmoid" and cfg.norm_topk_prob
+    p = f"model.layers.{layer}.mlp.gate."
+    w = loader.get(p + "weight").float()
+    b = loader.get(p + "e_score_correction_bias").float()
+    rs = cfg.routed_scaling_factor if cfg.routed_scaling_factor is not None else 1.0
+    mode = os.environ.get("MIMO_ROUTER_MODE", "fp32")  # "fused": moe_grouped_topk (TF32 keys), for comparison
+    return TtRouter(mesh, w, b, _max_chunk(spec), top_k=cfg.num_experts_per_tok, route_scale=rs, mode=mode)
+
+
+def _router_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> dense routing host [S, E] (chip 0's copy of the replicated result)."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x):
+        xd = to_device_replicated(mesh, x)
+        dense, idx, wts = module(xd)
+        y = replicated_to_host(dense)
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def _new_kv_cache(mesh, cfg, layer, max_seq):
     """Empty device KV cache for one layer, V padded to 192: full layers 4 KV heads (head r on chip r, paged-shaped),
     sliding layers 8 KV heads (heads 2r, 2r+1 on chip r, contiguous)."""
@@ -208,6 +251,8 @@ def device_component(mesh, spec, layer, step):
         return _residual_host_fn(mesh)
     if step == "mlp":
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
+    if step == "router":
+        return _router_host_fn(mesh, _router_module(mesh, spec, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -253,6 +298,8 @@ class HybridDeviceModel:
             ov.update({s: _residual_host_fn(mesh) for s in steps if s in _RESIDUAL_STEPS})
             if "mlp" in steps:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
+            if "router" in steps:
+                ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader, self.cfg))
             if "attention" in steps:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, lambda ctx: ctx.extra["dev_cache"])
