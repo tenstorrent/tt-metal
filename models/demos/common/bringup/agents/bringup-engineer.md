@@ -66,5 +66,7 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 - **contract**: write the prefill adapter and runtime the engine loads (see
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`). The runtime must accept the engine's uint32 device
   input with a padded tail, and must call the layer-completion sink only after that layer's state is on the device.
+- **perf**: one picked performance change (the brief's details say which). Faster, same accuracy; keep the old
+  behaviour selectable for comparison.
 - **fix**: a scripted gate (ladder rung, contract, profile) failed. The brief carries the log. Find the component whose
   layer first broke the trail, fix it in its module, and re-run the gate.
