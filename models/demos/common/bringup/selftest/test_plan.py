@@ -234,3 +234,14 @@ def test_ledger_gates_the_intake_sanity(fx):
     r1 = generate(s, Reference())["tasks"][0]
     assert "check_hf_sanity" in r1["gate"]["cmd"]
     assert r1["gate"]["metrics"]["text_top1_acc"] == ">= 0.5" and r1["gate"]["metrics"]["smoke_ok"] == "== 1"
+
+
+def test_custom_loader_moves_the_sanity_into_r2(fx):
+    """F39: a checkpoint the stock HF loader cannot run here gets its sanity checks after the reference agent's loader."""
+    s = Spec.load(fx(intake={"smoke": {"prompt": "capital?", "expect": "Paris"}}, hf={"custom_loader": True}))
+    r1, r2 = generate(s, Reference())["tasks"][:2]
+    assert "check_hf_sanity" not in r1["gate"]["cmd"] and "smoke_ok" not in r1["gate"]["metrics"]
+    assert "revision_ok" not in r1["gate"]["metrics"] and r1["gate"]["metrics"]["prompt_hash_ok"] == "== 1"
+    assert r2["gate"]["cmd"].index("check_hf_sanity") < r2["gate"]["cmd"].index("check_hf ")
+    m = r2["gate"]["metrics"]
+    assert m["smoke_ok"] == "== 1" and m["revision_ok"] == "== 1" and "pcc_logits" in m and "text_top1_acc" in m
