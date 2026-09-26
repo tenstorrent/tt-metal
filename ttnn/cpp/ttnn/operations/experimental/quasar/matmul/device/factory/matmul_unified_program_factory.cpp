@@ -1,0 +1,787 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Unified (placement-first) matmul factory (GH#41910): one Metal 2.0 program for every placement.
+// Kernels address tiles by tile index through the tensor accessor, so operand layout doesn't matter here.
+
+#include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_unified_program_factory.hpp"
+
+#include <algorithm>
+#include <filesystem>
+#include <map>
+#include <string>
+#include <tuple>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+
+#include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal::experimental;
+
+namespace ttnn::prim::qsr {
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Names the kernels see: dfb::A_slice / B_slice / C_slice / C_partials and tensor::A / B / C.
+const DFBSpecName A_SLICE_DFB{"A_slice"};
+const DFBSpecName B_SLICE_DFB{"B_slice"};
+const DFBSpecName C_SLICE_DFB{"C_slice"};
+const DFBSpecName C_PARTIALS_DFB{"C_partials"};
+
+const TensorParamName A_TENSOR{"A"};
+const TensorParamName B_TENSOR{"B"};
+const TensorParamName C_TENSOR{"C"};
+
+const KernelSpecName READER_KERNEL{"reader"};
+const KernelSpecName COMPUTE_KERNEL{"compute"};
+const KernelSpecName WRITER_KERNEL{"writer"};
+
+constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/";
+
+// A TRISC-visible DFB's extent is a uint16_t of 16-byte units (validate_ring_extent); enforced on
+// every arch so a Wormhole-legal config never FATALs on Quasar.
+constexpr uint64_t MAX_DFB_EXTENT_BYTES = 65535ull * 16ull;
+// Auto K chunk search (#57884): walk down from this cap through divisors of K_tiles to the first that fits
+// L1, except a C slice of at most SMALL_C_SLICE_TILES tiles is not capped (its A and B slices are cheap,
+// so a long K chunk saves partial-sum round trips). Tuning points, not hardware limits.
+constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
+constexpr uint32_t SMALL_C_SLICE_TILES = 4;
+
+// True when every sized DFB fits the extent cap and their total fits the L1 budget.
+bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
+    const uint64_t dfb_bytes[] = {
+        (uint64_t)plan.A_slice_entries * plan.A_entry_bytes,
+        (uint64_t)plan.B_slice_entries * plan.B_entry_bytes,
+        (uint64_t)plan.C_slice_entries * plan.C_entry_bytes,
+        (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes};
+    for (uint64_t bytes : dfb_bytes) {
+        if (bytes > MAX_DFB_EXTENT_BYTES) {
+            return false;
+        }
+    }
+    return plan.l1_bytes <= l1_budget;
+}
+
+// Max-volume DST-filling subblock among the shapes the caller's fits predicate accepts (L1 fit and
+// borrow preservation stay external): the C slice is rounded up to subblock multiples and the
+// overshoot is clipped on write. Ties prefer the least padding waste; 1x1 (no padding) if nothing
+// is accepted, and the caller's DFB sizing FATALs with the full breakdown.
+template <typename FitsSubblock>
+std::pair<uint32_t, uint32_t> maximize_subblock_size(
+    uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, uint32_t dst_capacity_tiles, const FitsSubblock& fits) {
+    std::pair<uint32_t, uint32_t> best{1, 1};
+    uint64_t best_volume = 0;
+    uint64_t best_padded_area = UINT64_MAX;
+    for (uint32_t h = 1; h <= dst_capacity_tiles; ++h) {
+        for (uint32_t w = 1; h * w <= dst_capacity_tiles; ++w) {
+            const uint64_t volume = h * w;
+            const uint64_t padded_area = (uint64_t)tt::round_up(C_slice_M_tiles, h) * tt::round_up(C_slice_N_tiles, w);
+            const bool better = volume > best_volume || (volume == best_volume && padded_area < best_padded_area);
+            if (better && fits(h, w)) {
+                best = {h, w};
+                best_volume = volume;
+                best_padded_area = padded_area;
+            }
+        }
+    }
+    return best;
+}
+
+// Completes a candidate plan for one K chunk: chunking, formats, DFB entry counts and byte totals.
+// Takes the plan by value so the K chunk search can size several candidates.
+UnifiedMatmulPlan size_dfbs(
+    UnifiedMatmulPlan plan,
+    uint32_t K_chunk_tiles,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc,
+    bool A_borrowable,
+    bool B_borrowable,
+    bool C_borrowable) {
+    plan.K_chunk_tiles = K_chunk_tiles;
+    plan.num_K_chunks = plan.K_tiles / K_chunk_tiles;
+
+    // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
+    // to pay off (the last K chunk spills and reloads either way, so more than two).
+    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_chunks > 2;
+    plan.C_partials_format = plan.packer_l1_acc_en
+                                 ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
+                                 : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
+    plan.C_entry_bytes = tt::tile_size(plan.C_format);
+    plan.C_partials_entry_bytes = tt::tile_size(plan.C_partials_format);
+
+    const uint32_t C_slice_tiles = plan.C_slice_M_padded_tiles * plan.C_slice_N_padded_tiles;
+    plan.C_slice_entries = C_slice_tiles;
+    plan.C_partials_entries = C_slice_tiles;
+
+    // Copied operands double-buffer when more than one slice passes through; a borrowed DFB is the
+    // resident shard itself. A is borrowable only when one K chunk covers K.
+    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * plan.num_K_chunks > 1;
+    const uint32_t slice_buffering_factor = more_than_one_slice ? 2 : 1;
+    plan.borrow_A = A_borrowable && plan.num_K_chunks == 1;
+    plan.borrow_B = B_borrowable;
+    plan.borrow_C = C_borrowable;
+    plan.A_entry_bytes = tt::tile_size(plan.A_format);
+    plan.B_entry_bytes = tt::tile_size(plan.B_format);
+    plan.A_slice_entries = plan.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles
+                                         : plan.C_slice_M_padded_tiles * K_chunk_tiles * slice_buffering_factor;
+    plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * plan.C_slice_N_tiles
+                                         : K_chunk_tiles * plan.C_slice_N_padded_tiles * slice_buffering_factor;
+
+    // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
+    // (else compute packs slice i+1's partials over slice i before the writer drains it).
+    const bool partials_ever_written = plan.num_K_chunks > 1;
+    const bool one_C_slice_per_core = plan.batch_size == 1 && plan.max_C_slices_per_core == 1;
+    plan.alias_C_partials_onto_C_slice =
+        (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_C_slice_per_core);
+
+    // Borrowed DFBs are the tensors' own memory and cost nothing here.
+    plan.l1_bytes =
+        (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
+        (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
+        (plan.borrow_C ? 0 : (uint64_t)plan.C_slice_entries * plan.C_entry_bytes) +
+        (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes);
+    return plan;
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+UnifiedMatmulPlan plan_unified_matmul(
+    tt::tt_metal::IDevice& device,
+    const ttnn::Tensor& A,
+    const ttnn::Tensor& B,
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config,
+    const MatmulParams& attributes,
+    const std::optional<ttnn::Tensor>& output) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    UnifiedMatmulPlan base{};
+
+    TT_FATAL(
+        !attributes.transpose_a && !attributes.transpose_b,
+        "MatmulUnifiedProgramConfig: transposes are applied to the operands before the op, not in the kernels");
+    TT_FATAL(!attributes.untilize_out, "MatmulUnifiedProgramConfig does not support untilize_out");
+    TT_FATAL(attributes.bcast_batch.has_value(), "bcast_batch should have been populated");
+    TT_FATAL(attributes.compute_kernel_config.has_value(), "compute_kernel_config should have been populated");
+    TT_FATAL(attributes.output_dtype.has_value(), "output_dtype should have been populated");
+
+    const tt::tt_metal::Shape& A_shape = A.padded_shape();
+    const tt::tt_metal::Shape& B_shape = B.padded_shape();
+    const tt::tt_metal::Tile A_tile = A.tensor_spec().tile();
+    const tt::tt_metal::Tile B_tile = B.tensor_spec().tile();
+    TT_FATAL(
+        A_tile.get_height() == TILE_HEIGHT && A_tile.get_width() == TILE_WIDTH && B_tile.get_height() == TILE_HEIGHT &&
+            B_tile.get_width() == TILE_WIDTH,
+        "MatmulUnifiedProgramConfig supports 32x32 tiles only (A {}x{}, B {}x{})",
+        A_tile.get_height(),
+        A_tile.get_width(),
+        B_tile.get_height(),
+        B_tile.get_width());
+    if (attributes.output_tile.has_value()) {
+        TT_FATAL(
+            attributes.output_tile->get_tile_shape()[0] == TILE_HEIGHT &&
+                attributes.output_tile->get_tile_shape()[1] == TILE_WIDTH,
+            "MatmulUnifiedProgramConfig supports a 32x32 output tile only");
+    }
+
+    // ---- GEMM size ----
+    base.batch_size = get_batch_size(A_shape);
+    base.M_tiles = A_shape[-2] / TILE_HEIGHT;
+    base.K_tiles = A_shape[-1] / TILE_WIDTH;
+    base.N_tiles = B_shape[-1] / TILE_WIDTH;
+    const bool B_has_one_batch = attributes.bcast_batch.value();  // the op sets bcast_batch iff batch_size(B) == 1
+    base.B_batch_stride_tiles = B_has_one_batch ? 0 : base.K_tiles * base.N_tiles;
+    TT_FATAL(
+        B_has_one_batch || get_batch_size(B_shape) == base.batch_size,
+        "Batched B must match A's batch ({} vs {})",
+        get_batch_size(B_shape),
+        base.batch_size);
+    base.A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
+
+    // ---- Cores ----
+    TT_FATAL(config.cores.num_cores() > 0, "MatmulUnifiedProgramConfig.cores is empty");
+    const CoreCoord grid = device.compute_with_storage_grid_size();
+    const CoreRange bounding_box = config.cores.bounding_box();
+    TT_FATAL(
+        bounding_box.end_coord.x < grid.x && bounding_box.end_coord.y < grid.y,
+        "MatmulUnifiedProgramConfig.cores {} exceed the device compute grid {}x{}",
+        config.cores.str(),
+        grid.x,
+        grid.y);
+    base.orientation = config.orientation;
+    const std::vector<CoreCoord> all_cores =
+        corerange_to_cores(config.cores, std::nullopt, config.orientation == ShardOrientation::ROW_MAJOR);
+
+    // ---- Accumulation mode, formats, L1 budget ----
+    const bool fp32_dest_acc_en = get_fp32_dest_acc_en(attributes.compute_kernel_config);
+    base.fp32_dest_acc_en = fp32_dest_acc_en;
+    const bool packer_l1_acc =
+        std::get<3>(get_compute_kernel_config_args(device.arch(), attributes.compute_kernel_config.value()));
+    const uint32_t dst_capacity_tiles = fp32_dest_acc_en ? 4 : 8;
+    base.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
+    base.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
+    base.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
+    const uint32_t l1_base = device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
+    TT_FATAL(l1_ceiling > l1_base, "L1 ceiling ({}) must exceed base ({})", l1_ceiling, l1_base);
+    const uint64_t l1_budget = l1_ceiling - l1_base;
+
+    TT_FATAL(
+        (config.subblock_M_tiles == 0) == (config.subblock_N_tiles == 0),
+        "subblock_M_tiles and subblock_N_tiles must both be set or both be 0 (auto), got {}x{}",
+        config.subblock_M_tiles,
+        config.subblock_N_tiles);
+    TT_FATAL(
+        config.K_chunk_tiles == 0 || base.K_tiles % config.K_chunk_tiles == 0,
+        "K_chunk_tiles ({}) must divide K_tiles ({})",
+        config.K_chunk_tiles,
+        base.K_tiles);
+
+    // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
+    // cores in assignment order (so shard i lives on the core that produces C slice i).
+    const auto shard_matches = [&](const ttnn::Tensor& tensor,
+                                   uint32_t shard_M_tiles,
+                                   uint32_t shard_N_tiles,
+                                   const std::vector<CoreCoord>& cores) {
+        if (!tensor.is_sharded() || tensor.memory_config().buffer_type() != tt::tt_metal::BufferType::L1) {
+            return false;
+        }
+        const tt::tt_metal::ShardSpec& shard = tensor.shard_spec().value();
+        if (shard.shape[0] != shard_M_tiles * TILE_HEIGHT || shard.shape[1] != shard_N_tiles * TILE_WIDTH) {
+            return false;
+        }
+        const std::vector<CoreCoord> shard_cores =
+            corerange_to_cores(shard.grid, std::nullopt, shard.orientation == ShardOrientation::ROW_MAJOR);
+        return shard_cores == cores;
+    };
+
+    // Everything downstream of the C slice: core assignment, borrowability, subblock, K chunk and DFB
+    // sizing. Returns nullopt when no K chunk fits L1 unless must_fit, which FATALs with the breakdown.
+    const auto complete_plan =
+        [&](uint32_t C_slice_M_tiles, uint32_t C_slice_N_tiles, bool must_fit) -> std::optional<UnifiedMatmulPlan> {
+        UnifiedMatmulPlan plan = base;
+        plan.C_slice_M_tiles = C_slice_M_tiles;
+        plan.C_slice_N_tiles = C_slice_N_tiles;
+        // The C slices of one batch, walked across N then down M; every core produces its C slices for all batches.
+        const uint32_t C_slices_across_N = tt::div_up(plan.N_tiles, C_slice_N_tiles);
+        const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, C_slice_M_tiles);
+        plan.C_slices_across_N = C_slices_across_N;
+        plan.C_slices_per_batch = C_slices_down_M * C_slices_across_N;
+        plan.sharded_output_layout = C_slices_across_N == 1 ? tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED
+                                     : C_slices_down_M == 1 ? tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED
+                                                            : tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
+        const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
+        plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
+        plan.max_C_slices_per_core = tt::div_up(plan.C_slices_per_batch, num_active);
+
+        // ---- Borrowing prerequisites that do not depend on the subblock ----
+        const bool one_C_slice_per_core_no_batch = plan.batch_size == 1 && plan.C_slices_per_batch == plan.cores.size();
+        // A: the C slice's rows for all of K; C slices must span N so no two cores need the same rows. The copy
+        // path zeroes A's K padding in the DFB; a borrowed shard is never written, so K must be a tile multiple.
+        const bool A_shard_borrowable =
+            one_C_slice_per_core_no_batch && C_slices_across_N == 1 && plan.A_last_K_tile_valid_columns == 0 &&
+            shard_matches(A, C_slice_M_tiles, plan.K_tiles, plan.cores) &&
+            (uint64_t)C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
+        // B: the C slice's columns for all of K; C slices must span M.
+        const bool B_shard_borrowable =
+            one_C_slice_per_core_no_batch && C_slices_down_M == 1 &&
+            shard_matches(B, plan.K_tiles, C_slice_N_tiles, plan.cores) &&
+            (uint64_t)plan.K_tiles * C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
+        // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
+        const bool C_shard_matches = output.has_value()
+                                         ? shard_matches(output.value(), C_slice_M_tiles, C_slice_N_tiles, plan.cores)
+                                         : (attributes.output_mem_config.is_sharded() &&
+                                            attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1);
+        const bool C_shard_borrowable = C_shard_matches && one_C_slice_per_core_no_batch;
+
+        // ---- Subblock: the C slice's tiles accumulated in DST at once ----
+        // A candidate is viable when it voids no achievable borrow and its DFBs fit L1, sized at the K
+        // chunk the search below bottoms out at, so an accepted candidate is guaranteed to fit.
+        const uint32_t K_chunk_floor = config.K_chunk_tiles == 0 ? 1 : config.K_chunk_tiles;
+        const auto subblock_viable = [&](uint32_t subblock_M_tiles, uint32_t subblock_N_tiles) {
+            UnifiedMatmulPlan candidate = plan;
+            candidate.C_slice_M_padded_tiles = tt::round_up(C_slice_M_tiles, subblock_M_tiles);
+            candidate.C_slice_N_padded_tiles = tt::round_up(C_slice_N_tiles, subblock_N_tiles);
+            const bool M_padded = candidate.C_slice_M_padded_tiles != C_slice_M_tiles;
+            const bool N_padded = candidate.C_slice_N_padded_tiles != C_slice_N_tiles;
+            // A borrowed shard holds only the true slice dims, so a candidate that voids an achievable
+            // borrow is rejected outright: never trade a borrow for subblock volume. C's borrow needs
+            // subblocks spanning the C slice width, achievable only when that width fits DST.
+            const bool C_borrow_achievable = C_shard_borrowable && C_slice_N_tiles <= dst_capacity_tiles;
+            const bool C_borrow_kept = subblock_N_tiles == C_slice_N_tiles && !M_padded;
+            const bool voids_A_borrow = A_shard_borrowable && M_padded;
+            const bool voids_B_borrow = B_shard_borrowable && N_padded;
+            const bool voids_C_borrow = C_borrow_achievable && !C_borrow_kept;
+            if (voids_A_borrow || voids_B_borrow || voids_C_borrow) {
+                return false;
+            }
+            return dfbs_fit(
+                size_dfbs(
+                    std::move(candidate),
+                    K_chunk_floor,
+                    fp32_dest_acc_en,
+                    packer_l1_acc,
+                    /*A_borrowable=*/A_shard_borrowable,
+                    /*B_borrowable=*/B_shard_borrowable,
+                    /*C_borrowable=*/C_shard_borrowable && C_borrow_kept),
+                l1_budget);
+        };
+        if (config.subblock_M_tiles != 0) {
+            plan.subblock_M_tiles = config.subblock_M_tiles;
+            plan.subblock_N_tiles = config.subblock_N_tiles;
+        } else {
+            std::tie(plan.subblock_M_tiles, plan.subblock_N_tiles) =
+                maximize_subblock_size(C_slice_M_tiles, C_slice_N_tiles, dst_capacity_tiles, subblock_viable);
+        }
+        plan.C_slice_M_padded_tiles = tt::round_up(C_slice_M_tiles, plan.subblock_M_tiles);
+        plan.C_slice_N_padded_tiles = tt::round_up(C_slice_N_tiles, plan.subblock_N_tiles);
+        TT_FATAL(
+            plan.subblock_M_tiles * plan.subblock_N_tiles <= dst_capacity_tiles,
+            "subblock {}x{} holds {} tiles; DST fits {} (fp32 accumulation: {})",
+            plan.subblock_M_tiles,
+            plan.subblock_N_tiles,
+            plan.subblock_M_tiles * plan.subblock_N_tiles,
+            dst_capacity_tiles,
+            fp32_dest_acc_en);
+        // The padded-dim conditions are redundant for auto subblocks (the viability filter enforced them)
+        // but load-bearing for explicit ones, which may pad a borrowable operand and must take the copy path.
+        const bool A_borrowable = A_shard_borrowable && plan.C_slice_M_padded_tiles == C_slice_M_tiles;
+        const bool B_borrowable = B_shard_borrowable && plan.C_slice_N_padded_tiles == C_slice_N_tiles;
+        const bool C_borrowable = C_shard_borrowable && plan.subblock_N_tiles == C_slice_N_tiles &&
+                                  plan.C_slice_M_padded_tiles == C_slice_M_tiles;
+
+        // ---- K chunk and DFB sizing ----
+        if (config.K_chunk_tiles != 0) {
+            UnifiedMatmulPlan candidate = size_dfbs(
+                plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, A_borrowable, B_borrowable, C_borrowable);
+            const bool fits = dfbs_fit(candidate, l1_budget);
+            TT_FATAL(
+                fits || !must_fit,
+                "MatmulUnifiedProgramConfig: DFBs for a {}x{}-tile C slice with K_chunk_tiles={} do not fit "
+                "(needs {} B, budget {} B, max DFB extent {} B: A slice {} B, B slice {} B, C slice {} B, C partials "
+                "{} B)",
+                C_slice_M_tiles,
+                C_slice_N_tiles,
+                candidate.K_chunk_tiles,
+                candidate.l1_bytes,
+                l1_budget,
+                MAX_DFB_EXTENT_BYTES,
+                (uint64_t)candidate.A_slice_entries * candidate.A_entry_bytes,
+                (uint64_t)candidate.B_slice_entries * candidate.B_entry_bytes,
+                (uint64_t)candidate.C_slice_entries * candidate.C_entry_bytes,
+                (uint64_t)candidate.C_partials_entries * candidate.C_partials_entry_bytes);
+            return fits ? std::optional<UnifiedMatmulPlan>(std::move(candidate)) : std::nullopt;
+        }
+        // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
+        // in0_block_w == K for height-sharded in0 for the same reason).
+        if (A_borrowable) {
+            UnifiedMatmulPlan candidate = size_dfbs(
+                plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, A_borrowable, B_borrowable, C_borrowable);
+            if (candidate.borrow_A && dfbs_fit(candidate, l1_budget)) {
+                return candidate;
+            }
+        }
+        // Otherwise the largest divisor of K_tiles whose DFBs fit, walking down from the cap (#57884: a
+        // small C slice makes the A and B slices cheap, so it is not capped and takes all of K if it fits).
+        const uint32_t K_chunk_start = C_slice_M_tiles * C_slice_N_tiles > SMALL_C_SLICE_TILES
+                                           ? std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES)
+                                           : plan.K_tiles;
+        for (uint32_t K_chunk_tiles = K_chunk_start; K_chunk_tiles >= 1; --K_chunk_tiles) {
+            if (plan.K_tiles % K_chunk_tiles != 0) {
+                continue;
+            }
+            UnifiedMatmulPlan candidate = size_dfbs(
+                plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, A_borrowable, B_borrowable, C_borrowable);
+            if (dfbs_fit(candidate, l1_budget)) {
+                return candidate;
+            }
+        }
+        TT_FATAL(
+            !must_fit,
+            "MatmulUnifiedProgramConfig: a {}x{}-tile C slice does not fit L1 even with K_chunk_tiles=1 "
+            "(budget {} B, max DFB extent {} B); shrink C_slice_M_tiles / C_slice_N_tiles",
+            C_slice_M_tiles,
+            C_slice_N_tiles,
+            l1_budget,
+            MAX_DFB_EXTENT_BYTES);
+        return std::nullopt;
+    };
+
+    // ---- C slice ----
+    // Each core's share of C: the output shard when C is sharded, else M / N split over the bounding box of
+    // the cores. An explicit or shard-derived C slice is taken as is; an auto one is the largest piece of the
+    // share that fits L1 (#57884).
+    const std::optional<tt::tt_metal::ShardSpec>& C_shard =
+        output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
+    const bool C_slice_from_shard = C_shard.has_value() && (config.C_slice_M_tiles == 0 || config.C_slice_N_tiles == 0);
+    if (C_slice_from_shard) {
+        TT_FATAL(
+            C_shard->shape[0] % TILE_HEIGHT == 0 && C_shard->shape[1] % TILE_WIDTH == 0,
+            "A sharded C needs a tile-multiple shard shape to derive the C slice from, got {}x{}",
+            C_shard->shape[0],
+            C_shard->shape[1]);
+    }
+    const uint32_t share_M_tiles = config.C_slice_M_tiles != 0 ? config.C_slice_M_tiles
+                                   : C_slice_from_shard        ? C_shard->shape[0] / TILE_HEIGHT
+                                                               : tt::div_up(base.M_tiles, bounding_box.grid_size().y);
+    const uint32_t share_N_tiles = config.C_slice_N_tiles != 0 ? config.C_slice_N_tiles
+                                   : C_slice_from_shard        ? C_shard->shape[1] / TILE_WIDTH
+                                                               : tt::div_up(base.N_tiles, bounding_box.grid_size().x);
+    const bool M_fixed = config.C_slice_M_tiles != 0 || C_slice_from_shard;
+    const bool N_fixed = config.C_slice_N_tiles != 0 || C_slice_from_shard;
+
+    UnifiedMatmulPlan plan;
+    if (M_fixed && N_fixed) {
+        plan = *complete_plan(share_M_tiles, share_N_tiles, /*must_fit=*/true);
+    } else {
+        // Candidates are divisor pieces of the share, largest area first (ties: wider). The first that fits
+        // wins, except one that fits only with K_chunk_tiles == 1 yields to a smaller piece with a longer K
+        // chunk and more work per L1 fill (C slice tiles x K chunk); the whole share is never shrunk if it fits.
+        const auto divisors_descending = [](uint32_t n, bool fixed) {
+            std::vector<uint32_t> out;
+            for (uint32_t d = n; d >= 1; --d) {
+                if (fixed ? d == n : n % d == 0) {
+                    out.push_back(d);
+                }
+            }
+            return out;
+        };
+        std::vector<std::pair<uint32_t, uint32_t>> candidates;
+        for (uint32_t h : divisors_descending(share_M_tiles, M_fixed)) {
+            for (uint32_t w : divisors_descending(share_N_tiles, N_fixed)) {
+                candidates.emplace_back(h, w);
+            }
+        }
+        std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+            const uint64_t area_a = (uint64_t)a.first * a.second;
+            const uint64_t area_b = (uint64_t)b.first * b.second;
+            return area_a != area_b ? area_a > area_b : a.second > b.second;
+        });
+        std::optional<UnifiedMatmulPlan> best;
+        uint64_t best_work = 0;
+        for (const auto& [h, w] : candidates) {
+            std::optional<UnifiedMatmulPlan> candidate = complete_plan(h, w, /*must_fit=*/false);
+            if (!candidate.has_value()) {
+                continue;
+            }
+            const uint64_t work = (uint64_t)h * w * candidate->K_chunk_tiles;
+            if (!best.has_value() || work > best_work) {
+                best = std::move(candidate);
+                best_work = work;
+            }
+            const bool whole_share = h == share_M_tiles && w == share_N_tiles;
+            if (best->K_chunk_tiles > 1 || whole_share) {
+                break;
+            }
+        }
+        TT_FATAL(
+            best.has_value(),
+            "MatmulUnifiedProgramConfig: no piece of the {}x{}-tile per-core share of C fits L1 (budget {} B, max DFB "
+            "extent {} B)",
+            share_M_tiles,
+            share_N_tiles,
+            l1_budget,
+            MAX_DFB_EXTENT_BYTES);
+        plan = std::move(*best);
+    }
+
+    // ---- Sharded output: one C slice per core, batch 1, and a grid the accessor maps the same way ----
+    if (attributes.output_mem_config.is_sharded()) {
+        TT_FATAL(plan.batch_size == 1, "Sharded output needs batch 1 (a core's C slices would not form one shard)");
+        TT_FATAL(
+            plan.C_slices_per_batch == plan.cores.size(),
+            "Sharded output needs exactly one C slice per core ({} C slices, {} active cores)",
+            plan.C_slices_per_batch,
+            plan.cores.size());
+        if (plan.sharded_output_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+            const uint32_t C_slices_down_M = tt::div_up(plan.M_tiles, plan.C_slice_M_tiles);
+            const std::vector<CoreRange>& ranges = config.cores.ranges();
+            const bool one_rectangle = ranges.size() == 1;
+            const uint32_t rectangle_columns = one_rectangle ? ranges[0].grid_size().x : 0;
+            const uint32_t rectangle_rows = one_rectangle ? ranges[0].grid_size().y : 0;
+            TT_FATAL(
+                one_rectangle && rectangle_columns == plan.C_slices_across_N && rectangle_rows == C_slices_down_M,
+                "Block-sharded output needs cores to be one {}x{} rectangle (one core per C slice, laid out as "
+                "the C slices tile C), got {}",
+                plan.C_slices_across_N,
+                C_slices_down_M,
+                config.cores.str());
+        }
+    }
+    return plan;
+}
+
+ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_program_artifacts(
+    const MatmulParams& operation_attributes,
+    const MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    const operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig& config =
+        std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+            operation_attributes.program_config.value());
+
+    const ttnn::Tensor& A_tensor = tensor_args.input_tensors.at(0);
+    const ttnn::Tensor& B_tensor = tensor_args.input_tensors.at(1);
+    const tt::tt_metal::MeshTensor& A = A_tensor.mesh_tensor();
+    const tt::tt_metal::MeshTensor& B = B_tensor.mesh_tensor();
+    const tt::tt_metal::MeshTensor& C = tensor_return_value.at(0).mesh_tensor();
+    tt::tt_metal::IDevice* device = &A.mutable_device();
+
+    const UnifiedMatmulPlan plan =
+        plan_unified_matmul(*device, A_tensor, B_tensor, config, operation_attributes, tensor_return_value.at(0));
+
+    // ---- Tensor parameters: the kernels' tensor accessors are generated from these specs ----
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = A_TENSOR, .spec = A.tensor_spec()},
+        TensorParameter{.unique_id = B_TENSOR, .spec = B.tensor_spec()},
+        TensorParameter{.unique_id = C_TENSOR, .spec = C.tensor_spec()},
+    };
+
+    // ---- Dataflow buffers ----
+    const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
+    log_debug(
+        tt::LogOp,
+        "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (C slice {}x{}, subblock {}x{}, K chunk {} of {} tiles)",
+        plan.borrow_A,
+        plan.borrow_B,
+        plan.borrow_C,
+        plan.C_slice_M_tiles,
+        plan.C_slice_N_tiles,
+        plan.subblock_M_tiles,
+        plan.subblock_N_tiles,
+        plan.K_chunk_tiles,
+        plan.K_tiles);
+    if (C.is_sharded() && !plan.borrow_C) {
+        log_warning(
+            tt::LogOp,
+            "MatmulUnifiedProgramConfig: sharded C is copied by the writer instead of packed in place. Packing in "
+            "place needs an L1 shard grid equal to the active cores, batch 1, one C slice per core and "
+            "subblock_N_tiles == C_slice_N_tiles (subblock {}x{} for a {}x{} C slice).",
+            plan.subblock_M_tiles,
+            plan.subblock_N_tiles,
+            plan.C_slice_M_tiles,
+            plan.C_slice_N_tiles);
+    }
+    Group<DataflowBufferSpec> dataflow_buffers;
+    {
+        DataflowBufferSpec A_slice_dfb{
+            .unique_id = A_SLICE_DFB,
+            .entry_size = plan.A_entry_bytes,
+            .num_entries = plan.A_slice_entries,
+            .data_format_metadata = plan.A_format,
+            .tile_format_metadata = A.tensor_spec().tile(),
+        };
+        if (plan.borrow_A) {
+            A_slice_dfb.borrowed_from = A_TENSOR;  // the resident A shard is the DFB
+        }
+        DataflowBufferSpec B_slice_dfb{
+            .unique_id = B_SLICE_DFB,
+            .entry_size = plan.B_entry_bytes,
+            .num_entries = plan.B_slice_entries,
+            .data_format_metadata = plan.B_format,
+            .tile_format_metadata = B.tensor_spec().tile(),
+        };
+        if (plan.borrow_B) {
+            B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the DFB
+        }
+        DataflowBufferSpec C_slice_dfb{
+            .unique_id = C_SLICE_DFB,
+            .entry_size = plan.C_entry_bytes,
+            .num_entries = plan.C_slice_entries,
+            .data_format_metadata = plan.C_format,
+            .tile_format_metadata = C_tile,
+        };
+        if (plan.borrow_C) {
+            C_slice_dfb.borrowed_from = C_TENSOR;  // finished tiles are packed straight into the C shard
+        }
+        DataflowBufferSpec C_partials_dfb{
+            .unique_id = C_PARTIALS_DFB,
+            .entry_size = plan.C_partials_entry_bytes,
+            .num_entries = plan.C_partials_entries,
+            .data_format_metadata = plan.C_partials_format,
+            .tile_format_metadata = C_tile,
+        };
+        if (plan.alias_C_partials_onto_C_slice) {
+            C_slice_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
+            C_partials_dfb.advanced_options.alias_with = {C_SLICE_DFB};
+            if (plan.borrow_C) {
+                C_partials_dfb.borrowed_from = C_TENSOR;  // partials accumulate in the shard too
+            }
+        }
+        dataflow_buffers.push_back(std::move(A_slice_dfb));
+        dataflow_buffers.push_back(std::move(B_slice_dfb));
+        dataflow_buffers.push_back(std::move(C_slice_dfb));
+        dataflow_buffers.push_back(std::move(C_partials_dfb));
+    }
+
+    // ---- Reader ----
+    KernelSpec reader{
+        .unique_id = READER_KERNEL,
+        .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
+        .compiler_options = {},
+        .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = A_TENSOR, .accessor_name = "A"},
+                TensorBinding{.tensor_parameter_name = B_TENSOR, .accessor_name = "B"},
+            },
+        .compile_time_args =
+            {
+                {"M_tiles", plan.M_tiles},
+                {"K_tiles", plan.K_tiles},
+                {"N_tiles", plan.N_tiles},
+                {"batch_size", plan.batch_size},
+                {"B_batch_stride_tiles", plan.B_batch_stride_tiles},
+                {"C_slice_M_tiles", plan.C_slice_M_tiles},
+                {"C_slice_N_tiles", plan.C_slice_N_tiles},
+                {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
+                {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
+                {"K_chunk_tiles", plan.K_chunk_tiles},
+                {"num_K_chunks", plan.num_K_chunks},
+                {"A_last_K_tile_valid_columns", plan.A_last_K_tile_valid_columns},
+                {"A_borrowed", plan.borrow_A ? 1u : 0u},
+                {"B_borrowed", plan.borrow_B ? 1u : 0u},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    // ---- Writer ----
+    KernelSpec writer{
+        .unique_id = WRITER_KERNEL,
+        .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_writer.cpp"),
+        .compiler_options = {},
+        .dfb_bindings = {ConsumerOf(C_SLICE_DFB, "C_slice")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_TENSOR, .accessor_name = "C"}},
+        .compile_time_args =
+            {
+                {"M_tiles", plan.M_tiles},
+                {"N_tiles", plan.N_tiles},
+                {"batch_size", plan.batch_size},
+                {"C_slice_M_tiles", plan.C_slice_M_tiles},
+                {"C_slice_N_tiles", plan.C_slice_N_tiles},
+                {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
+                {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
+                {"subblock_M_tiles", plan.subblock_M_tiles},
+                {"subblock_N_tiles", plan.subblock_N_tiles},
+                {"C_borrowed", plan.borrow_C ? 1u : 0u},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+    };
+
+    // ---- Compute ----
+    std::map<std::string, std::string> compute_defines_map;  // throttle / stagger only
+    const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
+        ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), plan.cores.size(), compute_defines_map);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), plan.cores.size(), compute_defines_map, throttle_level);
+    KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
+
+    ComputeHardwareConfig compute_hw_config =
+        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
+    if (plan.fp32_dest_acc_en) {
+        // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode. The partials are
+        // reloaded with a data copy into DST, so unpack them straight to DST and keep fp32 precision;
+        // fp32 operands feed the FPU and go through SrcA/SrcB.
+        auto is_32bit = [](tt::DataFormat format) {
+            return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
+                   format == tt::DataFormat::UInt32;
+        };
+        ComputeUnpackModes& modes = unpack_modes(compute_hw_config);
+        if (is_32bit(plan.C_partials_format)) {
+            modes.emplace(C_PARTIALS_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
+        }
+        if (is_32bit(plan.A_format)) {
+            modes.emplace(A_SLICE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+        if (is_32bit(plan.B_format)) {
+            modes.emplace(B_SLICE_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
+
+    KernelSpec compute{
+        .unique_id = COMPUTE_KERNEL,
+        .source = std::filesystem::path(std::string(KERNEL_DIR) + "compute/unified_matmul_compute.cpp"),
+        .compiler_options = {.defines = compute_defines},
+        .dfb_bindings =
+            {
+                ConsumerOf(A_SLICE_DFB, "A_slice"),
+                ConsumerOf(B_SLICE_DFB, "B_slice"),
+                ProducerOf(C_SLICE_DFB, "C_slice"),
+                ProducerOf(C_PARTIALS_DFB, "C_partials"),
+                ConsumerOf(C_PARTIALS_DFB, "C_partials"),
+            },
+        .compile_time_args =
+            {
+                {"batch_size", plan.batch_size},
+                {"K_chunk_tiles", plan.K_chunk_tiles},
+                {"num_K_chunks", plan.num_K_chunks},
+                {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
+                {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
+                {"subblock_M_tiles", plan.subblock_M_tiles},
+                {"subblock_N_tiles", plan.subblock_N_tiles},
+                {"packer_l1_acc", plan.packer_l1_acc_en ? 1u : 0u},
+                {"partials_format_differs", plan.C_partials_format != plan.C_format ? 1u : 0u},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_C_slices"}},
+        .hw_config = compute_hw_config,
+    };
+
+    // ---- One work unit over the active cores ----
+    const CoreRangeSet active_cores(ttsl::Span<const CoreCoord>(plan.cores));
+    Group<WorkUnitSpec> work_units = {WorkUnitSpec{
+        .name = "unified_matmul",
+        .kernels = {READER_KERNEL, COMPUTE_KERNEL, WRITER_KERNEL},
+        .target_nodes = active_cores,
+    }};
+
+    // ---- Per-core runtime args ----
+    // Each core takes a contiguous run of the C slice walk, the first (C_slices_per_batch % cores)
+    // cores one slice longer; starts are in tile coordinates, which is what the kernels step in.
+    ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER_KERNEL};
+    ProgramRunArgs::KernelRunArgs compute_run_args{.kernel = COMPUTE_KERNEL};
+    ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER_KERNEL};
+    const uint32_t num_active_cores = plan.cores.size();
+    const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active_cores;
+    const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active_cores;
+    uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
+    for (uint32_t core = 0; core < num_active_cores; ++core) {
+        const uint32_t num_C_slices = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
+        const std::initializer_list<std::pair<std::string, uint32_t>> run_start = {
+            {"first_C_slice", next_C_slice}, {"num_C_slices", num_C_slices}};
+        next_C_slice += num_C_slices;
+        AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, plan.cores[core], run_start);
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, plan.cores[core], run_start);
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, plan.cores[core], {{"num_C_slices", num_C_slices}});
+    }
+
+    ProgramSpec spec{
+        .name = "matmul_unified",
+        .kernels = {reader, compute, writer},
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run_args), std::move(compute_run_args), std::move(writer_run_args)},
+        .tensor_args = {{A_TENSOR, A}, {B_TENSOR, B}, {C_TENSOR, C}},
+    };
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+}  // namespace ttnn::prim::qsr

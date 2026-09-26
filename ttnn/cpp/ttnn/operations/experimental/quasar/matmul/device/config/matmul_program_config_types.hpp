@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -86,13 +87,40 @@ struct MatmulMultiCoreProgramConfig {
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
+// Placement-first config for the Quasar-native matmul (GH#41910): the caller names the clusters and
+// the C slice (in 32x32 tiles) each produces in one go; the factory assigns one batch's C slices to
+// `cores` as contiguous runs. Edge C slices are clipped on read/write, so any M / N works.
+// Limits: one NEO/reader/writer per cluster, no bias/activation/untilize, 32x32 tiles only;
+// sharded output needs batch 1 and one C slice per core.
+struct MatmulUnifiedProgramConfig {
+    CoreRangeSet cores;
+    // C slice (in tiles) each core produces in one go. 0 = auto: the output shard when C is sharded, else the
+    // largest divisor piece of the core's share of C (M / N split over the bounding box of `cores`) that fits
+    // L1 (#57884).
+    std::size_t C_slice_M_tiles = 0;
+    std::size_t C_slice_N_tiles = 0;
+    // K tiles multiplied per accumulation step: one A slice and one B slice are resident in L1 at a time and
+    // the partial sums round-trip L1 between steps. Must divide K_tiles. 0 = auto: the largest divisor of
+    // K_tiles whose buffers fit L1, capped at 8 unless the C slice is 4 tiles or fewer (#57884).
+    std::size_t K_chunk_tiles = 0;
+    // Subblock: the C slice's tiles accumulated in DST at once; holds <= 8 tiles (4 with fp32
+    // accumulation). Need not divide the C slice: it is padded up to subblock multiples and the
+    // overshoot is clipped on write. 0 for both = auto (max-volume subblock).
+    std::size_t subblock_M_tiles = 0;
+    std::size_t subblock_N_tiles = 0;
+    // Order `cores` are walked when handing out C slices: ROW_MAJOR x fastest, COL_MAJOR y fastest. A
+    // sharded C gets this shard orientation.
+    tt::tt_metal::ShardOrientation orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
+};
+
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
-    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>;
+    MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulUnifiedProgramConfig>;
 
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
 // If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is
@@ -118,7 +146,7 @@ inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_m
                     c.allowed_worker_cores = make_crs(device_grid);
                 }
             }
-            // DRAM-sharded configs have no grid fields to normalize.
+            // DRAM-sharded and unified configs have no grid fields to normalize.
         },
         config);
 }
