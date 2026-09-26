@@ -103,6 +103,16 @@ Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenario
     pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16 and not tp_sharded" -s
     pytest -m perf ...::test_mla_chunked_perf -k "warm and kv_bf16 and tp_sharded" -s
 
+GLM-5.2 host comparison (untraced forward, then segmented trace replay):
+    DS_PERF_UNTRACED_HOST=1 scripts/run_safe_pytest.sh \
+        models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py \
+        -m perf -k 'glm_5_2 and warm and scaled_fp8' -q -s
+The opt-in path warms 10 forwards, measures 10 complete forward-plus-sync intervals, and records
+their minimum. A separate 10-forward pass times each ttnn.matmul/linear Python call, excluding
+device completion; its wrappers do not affect the end-to-end samples. It then captures the same
+forward as segmented traces and measures 10 warm plus 10 traced replays under the same host timer.
+Other cases are skipped.
+
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
 generated/profiler/{variant}_{mode}_mla_perf/), DS_PERF_RT_TIMEOUT (realtime-profiler record drain
@@ -125,6 +135,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -185,6 +196,7 @@ RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 # one device-collapsed row per program per forward, ordered by start tick — the input a per-call graph
 # attribution (parse_percall) needs. Off by default (the summary CSVs are the normal output).
 RT_OPS_DUMP = os.environ.get("DS_PERF_RT_OPS_DUMP", "") not in ("", "0", "false")
+UNTRACED_HOST_BENCH = os.environ.get("DS_PERF_UNTRACED_HOST", "") == "1"
 
 
 def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
@@ -722,6 +734,13 @@ PERF_CASES = [
 def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, tp_shard_kv, config_only):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
+    if UNTRACED_HOST_BENCH and (
+        variant.name != "glm_5_2"
+        or scenario != "warm"
+        or attn_mode != "sparse"
+        or kv_cache_format != MlaKvCacheFormat.SCALED_FP8
+    ):
+        pytest.skip("untraced host benchmark targets GLM-5.2 warm sparse MLA with scaled FP8 KV")
 
     # Workload is variant-specific (head counts differ); the mesh/SP is shared. Resolve per parametrized
     # variant so labels + head counts match the variant under test (module-level VARIANT may differ).
@@ -730,7 +749,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         pytest.skip(skip_reason)
     # Assert profiler activation only after skip checks pass: an unsupported system should skip with the
     # informative reason above, not hard-fail here.
-    _require_rt_profiler()
+    if not UNTRACED_HOST_BENCH:
+        _require_rt_profiler()
 
     scenario_cfg = SCENARIOS[scenario]
     is_cold = scenario_cfg["loop"]
@@ -881,6 +901,128 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
 
     def _one_forward(start):
         return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
+
+    if UNTRACED_HOST_BENCH:
+        warmups = measured_runs = 10
+        for _ in range(warmups):
+            _one_forward(cache)
+            ttnn.synchronize_device(mesh_device)
+
+        e2e_ns = []
+        for _ in range(measured_runs):
+            start_ns = time.perf_counter_ns()
+            _one_forward(cache)
+            ttnn.synchronize_device(mesh_device)
+            e2e_ns.append(time.perf_counter_ns() - start_ns)
+
+        # Measure each Python operation call in a separate pass so wrapper bookkeeping
+        # cannot affect the reported end-to-end samples. Device completion stays outside
+        # each operation's timer, matching cached host-dispatch overhead.
+        op_runs = []
+        current_ops = []
+
+        def timed_op(name, fn):
+            def call(*args, **kwargs):
+                start_ns = time.perf_counter_ns()
+                result = fn(*args, **kwargs)
+                current_ops.append((name, time.perf_counter_ns() - start_ns))
+                return result
+
+            return call
+
+        with (
+            patch.object(ttnn, "matmul", timed_op("matmul", ttnn.matmul)),
+            patch.object(ttnn, "linear", timed_op("linear", ttnn.linear)),
+        ):
+            for _ in range(measured_runs):
+                current_ops = []
+                _one_forward(cache)
+                ttnn.synchronize_device(mesh_device)
+                op_runs.append(current_ops)
+
+        signature = [name for name, _ in op_runs[0]]
+        assert all([name for name, _ in run] == signature for run in op_runs), "operation order changed"
+        kind_indices = {"matmul": 0, "linear": 0}
+        per_op = []
+        for index, name in enumerate(signature):
+            kind_indices[name] += 1
+            samples = [run[index][1] for run in op_runs]
+            per_op.append({"name": name, "instance": kind_indices[name], "samples_ns": samples, "min_ns": min(samples)})
+
+        controller = SubDeviceTraceController(mesh_device)
+        compile_out = capture_out = None
+        capture_started = capture_ended = False
+        traced_e2e_ns = []
+        trace_segments = 0
+        mla.set_trace_controller(controller)
+        try:
+            compile_out = _one_forward(cache)
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(compile_out)
+            compile_out = None
+
+            controller.begin_capture()
+            capture_started = True
+            capture_out = _one_forward(cache)
+            controller.end_capture()
+            capture_ended = True
+            ttnn.synchronize_device(mesh_device)
+
+            for _ in range(warmups):
+                controller.replay()
+                ttnn.synchronize_device(mesh_device)
+            for _ in range(measured_runs):
+                start_ns = time.perf_counter_ns()
+                controller.replay()
+                ttnn.synchronize_device(mesh_device)
+                traced_e2e_ns.append(time.perf_counter_ns() - start_ns)
+            trace_segments = controller.num_segments
+        finally:
+            if capture_started and not capture_ended:
+                try:
+                    controller.end_capture()
+                except Exception:
+                    pass
+            try:
+                controller.release()
+            finally:
+                mla.set_trace_controller(None)
+                if capture_out is not None:
+                    ttnn.deallocate(capture_out)
+                if compile_out is not None:
+                    ttnn.deallocate(compile_out)
+
+        head = _git_head()
+        report = {
+            "commit": head["commit"],
+            "branch": head["branch"],
+            "execution": "untraced_cached_forward",
+            "device": workload.system_name,
+            "mesh": list(workload.mesh_shape),
+            "variant": variant.name,
+            "cache_format": _cache_format_id(kv_cache_format),
+            "chunk_tokens": chunk,
+            "cached_tokens": cache,
+            "warmups": warmups,
+            "measured_runs": measured_runs,
+            "e2e_samples_ns": e2e_ns,
+            "e2e_min_ns": min(e2e_ns),
+            "traced_execution": "segmented_trace_replay",
+            "trace_segments": trace_segments,
+            "traced_e2e_samples_ns": traced_e2e_ns,
+            "traced_e2e_min_ns": min(traced_e2e_ns),
+            "per_op": per_op,
+        }
+        out_dir = _output_dir("glm52_untraced_matmul_host")
+        report_path = os.path.join(out_dir, f"{(head['commit'] or 'unknown')[:12]}_warm.json")
+        with open(report_path, "w") as out:
+            json.dump(report, out, indent=2)
+        logger.info(
+            f"untraced host benchmark: E2E min={min(e2e_ns) / 1e6:.3f} ms, "
+            f"traced min={min(traced_e2e_ns) / 1e6:.3f} ms, "
+            f"matmul={kind_indices['matmul']} calls, linear={kind_indices['linear']} calls; {report_path}"
+        )
+        return
 
     forwards = []  # per-forward host e2e duration plus max-per-chip device duration for each program
     for start in starts:
