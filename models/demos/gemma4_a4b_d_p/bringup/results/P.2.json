@@ -1,8 +1,20 @@
 {
  "metrics": {
+  "chunk_len": {
+   "t": "2026-09-26T06:19:28",
+   "value": 5120
+  },
+  "chunk_start": {
+   "t": "2026-09-26T06:19:28",
+   "value": 51200
+  },
   "chunk_wall_ms": {
    "t": "2026-09-26T06:12:49",
    "value": 609.6
+  },
+  "device_model_hybrid": {
+   "t": "2026-09-26T06:19:28",
+   "value": 0
   },
   "device_ms_attention": {
    "t": "2026-09-26T06:12:49",
