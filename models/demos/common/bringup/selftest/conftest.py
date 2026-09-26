@@ -41,7 +41,13 @@ class Sandbox:
             "model": "toyspec",
             "tag": "toy",
             "commit_trailer": "",
-            "paths": {"repo": str(self.repo), "art": str(root / "art"), "bringup_dir": "bringup"},
+            # the sandbox model lives in the repo root: src/ and tests/ are its own code, not shared code
+            "paths": {
+                "repo": str(self.repo),
+                "art": str(root / "art"),
+                "bringup_dir": "bringup",
+                "own": ["src", "tests"],
+            },
         }
         self.write_spec()
 

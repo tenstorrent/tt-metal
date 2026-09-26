@@ -289,3 +289,10 @@ Drive this ledger with
   (default 3600 s; in the spec template). run_safe_pytest still catches hangs.
 - A `Timeout (>Ns) from pytest-timeout` in a gate log now stops the task for a person, like a failed device open;
   no attempt is used and no agent starts.
+
+## F26 (2026-09-26): shared code needs the owner's approval
+- K.1's allowed paths include `models/demos/common/prefill/adapter.py`, shared by every prefill model. Nothing made the
+  run wait for the owner; the contract agent started and was stopped by the supervisor (no edits made).
+- `plan/approvals.shared_paths`: a task's paths outside the model dir (plus spec `paths.own`). The orchestrator waits
+  for a person before any gate or agent of such a task until `approve shared:<task id>` is recorded; the approval is
+  bound to that exact list of paths. The skill's supervision table says so.

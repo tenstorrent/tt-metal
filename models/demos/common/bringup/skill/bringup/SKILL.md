@@ -69,6 +69,7 @@ the dashboards. Classify every failure before acting, and log every intervention
 | the box (device open fails, ethernet or fabric timeouts) | the orchestrator stops by itself; ask the person to reset the board, then a quick box check, then resume |
 | the input or data (implausible accuracy, degenerate generations) | stop, show the evidence, ask the person |
 | an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve` |
+| a task that changes shared code (paths outside the model dir, e.g. K.1's adapter registry) | the run waits; ask the person, and on their yes `$B approve shared:<task id>` |
 
 Never:
 - edit anything in the tree while an agent step runs. `python -m models.demos.common.bringup.orchestrator pause --spec <spec>`
