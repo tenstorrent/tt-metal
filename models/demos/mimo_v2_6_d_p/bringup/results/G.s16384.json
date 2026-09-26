@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "cpu_seconds": {
+   "t": "2026-09-26T17:34:06",
+   "value": 1357.4
+  },
+  "golden_chunks": {
+   "t": "2026-09-26T17:34:03",
+   "value": 2
+  },
+  "golden_hash_ok": {
+   "t": "2026-09-26T17:34:06",
+   "value": 1
+  },
+  "golden_layers": {
+   "t": "2026-09-26T17:34:03",
+   "value": 6
+  },
+  "text_top5_acc_last_chunk": {
+   "t": "2026-09-26T17:34:06",
+   "value": 0.9927969574928284
+  }
+ },
+ "task": "G.s16384"
+}
