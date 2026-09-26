@@ -309,6 +309,7 @@ ADAPTER_PATHS = {
     # ERNIE-4.5-21B-A3B: GQA (20/4) + 64-expert top-6 MoE with 2 shared experts; single rank on a 1x4 BH mesh.
     "ernie45_d_p": "models.demos.ernie45_d_p.tt.runners.adapters.ernie45:Ernie45PrefillAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
+    "gemma4_a4b_d_p": "models.demos.gemma4_a4b_d_p.tt.runners.adapter:Gemma4A4BPrefillAdapter",
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
