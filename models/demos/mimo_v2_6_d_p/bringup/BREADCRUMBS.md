@@ -624,3 +624,22 @@ Results
   0.999996, rel 0.0030, ratio [0.9954, 1.0029]. The first pcc=0 line in each log is the precompile pass.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_norm.py`
+
+## S.sliding_moe.04 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_sliding_moe_04_ffn_norm.py` with the body of
+  `test_swap_sliding_moe_03_attn_residual.py`. All swap-03 checks are kept. Added ffn_norm to SWAPPED with the
+  component-test limits: rel L2 <= 0.03 and per-token norm ratio [0.97, 1.03]. Block out rel L2 stays <= 0.01.
+
+Why
+- The ffn_norm component test measured these limits: sum instead of mean, eps 1e-3 / 1e-2, 1 + w, and zeroed rows all
+  fail them. The residual dominates block out, so pcc_swap_out on its own would not catch a bad ffn_norm.
+
+Results
+- BRINGUP_IMPL=reference: PASS (out rel 0.0030, ffn_norm rel 0.0024). BRINGUP_IMPL=stub: FAIL (every check).
+- Device (gate): PASS. pcc_swap_out 0.999993, out rel 0.0037 / first 128 rows 0.0029; ffn_norm rel 0.0035, ratio
+  [0.9941, 1.0038]. The CPU MoE on the device ffn_norm adds no visible block-out error (same 0.0037 as swap 03).
+  The attention numbers match swap 03; the w127 margin is still 0.0011.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_04_ffn_norm.py`
