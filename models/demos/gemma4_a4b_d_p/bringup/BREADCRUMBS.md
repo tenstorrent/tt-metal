@@ -276,3 +276,12 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - The attention (`tt/attention.py`) still uses HiFi2 for QKV and o_proj. Its rel L2 of 0.0052 may partly come from the same bias; this is a possible cheap win if the block-out margin gets tight.
 - Gate PASS (HiFi4): pcc_mlp_L00 0.999995, rel L2 0.00327, ratio [0.9973, 1.0047].
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py`
+
+## S.sliding.06 test (run1, attempt 1): swap attn_norm .. mlp into the sliding block
+- Replaced the one-line template body with swap 5's checks. SWAPPED is extended with `mlp`, and `mlp` is added to `ISO_STEP_KINDS`, so the device mlp is checked
+  against the CPU mlp on the same device ffn_norm input (rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]). Reason: post_mlp_norm (CPU) comes next and undoes
+  any per-row scale on mlp_out, so block out can't see a scaled or zeroed-row MLP. PCC also misses silu-for-gelu_tanh (test_c_sliding_mlp.py).
+  The gated metric stays `pcc_swap_out` >= 0.98.
+- Verified: BRINGUP_IMPL=reference PASS (block rel 0.0027); stub FAIL (every check). Device gate PASS: pcc_swap_out 0.999968, block out rel 0.0080 / 0.0066
+  (0.0079 at swap 5), mlp 0.0048 vs golden (iso 0.0028, ratio [0.9975, 1.0039]).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py`
