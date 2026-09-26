@@ -26,6 +26,13 @@ timeline, so its ``wall`` should reproduce the perf test's ms/step.
 
     WAN5B_GAP_STEPS=40 pytest \
       models/tt_dit/tests/models/wan2_2/test_step_gap_ti2v_5b.py -sv --timeout=0 | grep ^GAP
+
+Under Tracy (``python -m tracy -p -r ...``) the device profiler buffer holds
+``TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT`` programs per RISC and a 720p step is ~1600 programs,
+so a 20-step pass overflows even at 30000 and markers are dropped. ``WAN5B_GAP_PROFILER_DRAIN=N``
+calls ``ttnn.ReadDeviceProfiler`` on the mesh after the compile run, after the trace capture
+and every N traced steps; each drain synchronises the device, so leave it unset when the wall
+numbers are what you are after (device kernel durations are unaffected either way).
 """
 
 import os
@@ -38,6 +45,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b import WanTI2V5BPipeline
+from models.tt_dit.pipelines.wan.quant_config import set_quant_config_from_env
 from models.tt_dit.utils.test import ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 _PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
@@ -46,10 +54,11 @@ _PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight
 class _StepTimer:
     """Wraps execute_trace, pipeline._step and solver.step; one record per denoise step."""
 
-    def __init__(self, pipeline, mesh_device, *, sync_after_solver: bool):
+    def __init__(self, pipeline, mesh_device, *, sync_after_solver: bool, profiler_drain_every: int = 0):
         self.pipeline = pipeline
         self.mesh_device = mesh_device
         self.sync_after_solver = sync_after_solver
+        self.profiler_drain_every = profiler_drain_every
         self.records = []  # dicts: wall, trace, solver_host, solver_sync
         self._cur = None
 
@@ -86,6 +95,8 @@ class _StepTimer:
             self._cur["wall"] = time.perf_counter() - t0
             self.records.append(self._cur)
             self._cur = None
+            if self.profiler_drain_every and len(self.records) % self.profiler_drain_every == 0:
+                _drain_device_profiler(self.mesh_device, f"step {len(self.records)}")
             return out
 
         ttnn.execute_trace = execute_trace
@@ -98,6 +109,13 @@ class _StepTimer:
         self.pipeline._step = self._orig_step
         self.pipeline._solver.step = self._orig_solver_step
         return False
+
+
+def _drain_device_profiler(mesh_device, tag):
+    """Read (and thereby empty) the device profiler buffers on every chip of the mesh."""
+    t0 = time.perf_counter()
+    ttnn.ReadDeviceProfiler(mesh_device)
+    logger.info(f"step gap: device profiler drained after {tag} in {(time.perf_counter() - t0) * 1e3:.0f} ms")
 
 
 def _ms(xs):
@@ -151,6 +169,7 @@ def test_step_gap_ti2v_5b(mesh_device, mesh_shape, topology):
     steps = int(os.environ.get("WAN5B_GAP_STEPS", 40))
 
     passes = os.environ.get("WAN5B_GAP_PASSES", "AB").upper()
+    drain_every = int(os.environ.get("WAN5B_GAP_PROFILER_DRAIN", 0))
 
     # Denoise only, end to end: the construction warmup is skipped and replaced by an eager
     # 2-step run with `output_type="latent"`, which compiles every denoise program without ever
@@ -160,27 +179,49 @@ def test_step_gap_ti2v_5b(mesh_device, mesh_shape, topology):
     pipeline = WanTI2V5BPipeline.create_pipeline(
         mesh_device=mesh_device, height=height, width=width, num_frames=num_frames, run_warmup=False
     )
+    # `WAN5B_QUANT_CONFIG=<preset>` profiles a quant preset; the eager run below compiles its programs.
+    quant_name = set_quant_config_from_env(pipeline, rewarm=False)
+
+    # `WAN5B_GAP_BLOCKS=n` runs only the first n transformer blocks. Every block is the same op
+    # stream at the same shapes, so an op ranking from n blocks scales to 30 exactly; the point
+    # is to shrink a Tracy capture. On a 32-chip Galaxy the host keeps every device marker of
+    # every program in RAM at the end-of-run read (~1650 programs per 720p step; ~20k programs
+    # exceeded 300 GB and was OOM-killed on 2026-09-25), so a capture must stay under ~10k
+    # programs including the eager compile run and the trace capture below.
+    blocks = int(os.environ.get("WAN5B_GAP_BLOCKS", 0))
+    if blocks:
+        for state in pipeline.transformer_states:
+            assert blocks <= len(state.model.blocks), f"model has {len(state.model.blocks)} blocks"
+            state.model.blocks = state.model.blocks[:blocks]
+        logger.warning(f"step gap: transformer truncated to {blocks} blocks (profiling aid; numbers are not e2e)")
 
     def _run(n, traced):
         with torch.no_grad():
             return pipeline(prompts=[_PROMPT], num_inference_steps=n, seed=42, output_type="latent", traced=traced)
 
     _run(2, traced=False)  # compile
+    if drain_every:
+        _drain_device_profiler(mesh_device, "the eager compile run")
     _run(2, traced=True)  # capture the trace
     ttnn.synchronize_device(mesh_device)
+    if drain_every:
+        _drain_device_profiler(mesh_device, "the trace capture")
 
-    logger.info(f"step gap: {width}x{height}, {num_frames}f, {steps} traced steps, passes {passes}")
+    logger.info(
+        f"step gap: {width}x{height}, {num_frames}f, {steps} traced steps, passes {passes}, "
+        f"quant {quant_name or 'default'}, blocks {blocks or 'all'}"
+    )
     denoise_steps_total = 4 + steps * len(passes)
     print(f"GAP denoise steps executed in this process (for Tracy attribution): {denoise_steps_total}")
 
     a = b = None
     if "A" in passes:
-        with _StepTimer(pipeline, mesh_device, sync_after_solver=False) as ta:
+        with _StepTimer(pipeline, mesh_device, sync_after_solver=False, profiler_drain_every=drain_every) as ta:
             _run(steps, traced=True)
         a = _summarise("A production", ta.records)
 
     if "B" in passes:
-        with _StepTimer(pipeline, mesh_device, sync_after_solver=True) as tb:
+        with _StepTimer(pipeline, mesh_device, sync_after_solver=True, profiler_drain_every=drain_every) as tb:
             _run(steps, traced=True)
         b = _summarise("B sync-after-solver", tb.records)
 
