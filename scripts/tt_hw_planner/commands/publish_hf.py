@@ -428,32 +428,39 @@ def _upload_card_section(args, title: str, section: str) -> None:
 
 
 def _enrich_card_with_benchmarks(args, slug: str, staged: Path, ttm: str, checkout: Path) -> None:
-    """Measure the model ON REAL HARDWARE and write the numbers into the card. Universal: it runs the
-    model's OWN on-device perf harness (test_main_perf, full depth via TT_E2E_LAYERS) across a batch
-    grid — this works for EVERY tool-brought-up model, including Mamba-hybrids the vLLM plugin can't
-    serve, because it uses the same on-device path the optimize run measured (trace_1cq). Best-effort;
-    never raises, and the publish stands regardless."""
+    """Measure the model ON REAL HARDWARE across an ISL x Users grid via its OWN perf harness
+    (test_main_perf, which takes TT_PERF_ISL_TOKENS/OSL_TOKENS/BATCH/LAYERS and prints
+    TRACE_PER_TOKEN_MS + TRACE_TOKENS_PER_SEC), and write a full sweep table into the card — the same
+    class of table the reference TT cards carry. Universal + best-effort; runs at the depth that fits
+    the device (its default), never raises, and the publish stands regardless."""
     import re as _re
     import subprocess
 
     if getattr(args, "no_bench", False):
         return
-    py = str(Path(checkout) / "python_env" / "bin" / "python")
-    perf_node = f"models/demos/{slug}/tests/e2e/test_main_perf.py::test_main_perf"
-    if not (Path(checkout) / f"models/demos/{slug}/tests/e2e/test_main_perf.py").is_file():
+    perf_rel = f"models/demos/{slug}/tests/e2e/test_main_perf.py"
+    perf_node = perf_rel + "::test_main_perf"
+    if not (Path(checkout) / perf_rel).is_file():
         print("  [publish-hf] bench: no perf harness for this model; published without a sweep.")
         return
-    layers = getattr(args, "bench_layers", None) or "52"
-    batches = [int(b) for b in (getattr(args, "bench_batches", None) or "1,8,32").split(",")]
-    print(f"  [publish-hf] bench: measuring on-device via {perf_node} (layers={layers}) at batches {batches}…")
-    rows = []
-    for b in batches:
+    py = str(Path(checkout) / "python_env" / "bin" / "python")
+    isls = [int(x) for x in (getattr(args, "bench_isl", None) or "128,1024").split(",")]
+    osl = int(getattr(args, "bench_osl", None) or "128")
+    users_grid = [int(x) for x in (getattr(args, "bench_batches", None) or "1,8,32").split(",")]
+    layers_env = {}
+    if getattr(args, "bench_layers", None):
+        layers_env["TT_PERF_LAYERS"] = str(args.bench_layers)
+    print(f"  [publish-hf] bench: on-device sweep via {perf_node} — ISL {isls} x Users {users_grid}, OSL {osl}…")
+
+    def _run(isl, users):
         env = dict(
             os.environ,
             TT_METAL_HOME=str(checkout),
-            TT_E2E_LAYERS=str(layers),
-            TT_E2E_BATCH=str(b),
             TT_HW_PLANNER_SHARD_RUN="1",
+            TT_PERF_ISL_TOKENS=str(isl),
+            TT_PERF_OSL_TOKENS=str(osl),
+            TT_PERF_BATCH=str(users),
+            **layers_env,
         )
         try:
             r = subprocess.run(
@@ -462,46 +469,107 @@ def _enrich_card_with_benchmarks(args, slug: str, staged: Path, ttm: str, checko
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=3600,
+                timeout=5400,
             )
-            out = (r.stdout or "") + (r.stderr or "")
+            return (r.stdout or "") + (r.stderr or "")
         except Exception as e:
-            print(f"  [publish-hf] bench: batch {b} failed to run ({e}).")
-            rows.append((b, None, None))
-            continue
-        m = _re.search(r"trace_tokens_per_sec[=:\s]+([0-9.]+)", out)
-        tps = float(m.group(1)) if m else None
-        # also try the trace_caps.json the perf test writes beside itself
-        if tps is None:
-            cap = Path(checkout) / f"models/demos/{slug}/tests/e2e/test_main_perf.py.trace_caps.json"
-            try:
-                import json as _j
+            print(f"  [publish-hf] bench: ISL {isl} users {users} failed ({e}).")
+            return ""
 
-                d = _j.loads(cap.read_text())
-                mm = _re.search(r"trace_tokens_per_sec=([0-9.]+)", _j.dumps(d))
-                tps = float(mm.group(1)) if mm else None
-            except Exception:
-                pass
-        per_user = (tps / b) if (tps and b) else None
-        rows.append((b, tps, per_user))
-        print(
-            f"  [publish-hf] bench: batch {b} → {tps} tok/s total"
-            + (f" ({per_user:.1f} tok/s/user)" if per_user else "")
-        )
+    def _f(pat, out):
+        m = _re.search(pat, out)
+        return float(m.group(1)) if m else None
 
-    if not any(r[1] for r in rows):
+    rows = []
+    depth = None
+    for isl in isls:
+        for users in users_grid:
+            out = _run(isl, users)
+            tpot = _f(r"TRACE_PER_TOKEN_MS=([0-9.]+)", out)  # decode ms/token
+            tot = _f(r"TRACE_TOKENS_PER_SEC=([0-9.]+)", out) or _f(
+                r"trace_tokens_per_sec=([0-9.]+)", out
+            )  # total decode tok/s
+            b = int(_f(r"PERF_BATCH_STREAMS=([0-9]+)", out) or users)
+            d = _f(r"depth=([0-9]+)", out)
+            if d:
+                depth = int(d)
+            dec_u = (1000.0 / tpot) if tpot else ((tot / b) if (tot and b) else None)
+            rows.append((isl, osl, b, tpot, dec_u, tot))
+            print(f"  [publish-hf] bench: ISL {isl} users {b} → TPOT {tpot} ms, {tot} tok/s total")
+
+    if not any(r[3] or r[5] for r in rows):
         print("  [publish-hf] bench: no on-device numbers captured; published without a sweep.")
         return
-    tbl = ["| Batch | Throughput (tok/s total) | Decode (tok/s/user) |", "| --- | --- | --- |"]
-    for b, tps, pu in rows:
-        tbl.append(f"| {b} | {tps:.1f} | {pu:.1f} |" if tps else f"| {b} | — | — |")
+    tbl = [
+        "| ISL | OSL | Users | TPOT (ms) | Decode (tok/s/user) | Out tok/s (total) |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for isl, o, b, tpot, du, tot in rows:
+        tbl.append(
+            f"| {isl} | {o} | {b} | "
+            + (f"{tpot:.1f}" if tpot else "—")
+            + " | "
+            + (f"{du:.1f}" if du else "—")
+            + " | "
+            + (f"{tot:.1f}" if tot else "—")
+            + " |"
+        )
+    depth_note = f" at depth {depth}" if depth else " at the depth that fits this device"
     section = (
         f"Measured on real Tenstorrent hardware by running this model's own on-device perf "
-        f"harness (`test_main_perf`, full depth) at each batch — the same execution path the "
-        f"optimize run measures. Layers: {layers}.\n\n" + "\n".join(tbl)
+        f"harness (`test_main_perf`){depth_note}, sweeping input length (ISL) and concurrent "
+        f"users. TPOT = decode ms/token; Decode tok/s/user = 1000/TPOT; Out tok/s = total "
+        f"decode throughput across users. OSL={osl}.\n\n" + "\n".join(tbl)
     )
     _upload_card_section(args, "Measured performance (real hardware)", section)
     print("  [publish-hf] bench: real-hardware sweep added to the card.")
+    _enrich_card_with_accuracy(args, slug, checkout, py)
+
+
+def _enrich_card_with_accuracy(args, slug: str, checkout: Path, py: str) -> None:
+    """Add a real-hardware accuracy row: run the model's own PCC gate on device and record the pass +
+    PCC. (IFEval/GPQA/MMLU require a served OpenAI endpoint; for models the vLLM plugin can serve those
+    are added separately. The PCC gate is the accuracy signal every tool-brought-up model has.)"""
+    import re as _re
+    import subprocess
+
+    gate = f"models/demos/{slug}/tests/e2e/test_e2e_pipeline.py::test_gate3_e2e_pcc"
+    if not (Path(checkout) / f"models/demos/{slug}/tests/e2e/test_e2e_pipeline.py").is_file():
+        return
+    print("  [publish-hf] accuracy: running the on-device PCC gate…")
+    try:
+        env = dict(os.environ, TT_METAL_HOME=str(checkout), TT_HW_PLANNER_SHARD_RUN="1")
+        r = subprocess.run(
+            [py, "-m", "pytest", gate, "-q", "-s"],
+            cwd=str(checkout),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5400,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        passed = (r.returncode == 0) and (" passed" in out or "PASSED" in out)
+        pccs = _re.findall(r"[Pp][Cc][Cc][^0-9]*([01]\.\d{3,})", out)
+        pcc = max((float(x) for x in pccs), default=None)
+        row = (
+            "| E2E PCC vs HF reference (on device) | "
+            + ("**pass**" if passed else "fail")
+            + (f" | PCC {pcc:.4f} |" if pcc is not None else " | — |")
+        )
+        section = (
+            "Accuracy on real hardware, from the model's own end-to-end PCC gate "
+            "(TT output vs the HF reference, teacher-forced). IFEval/GPQA/AIME/MMLU require a "
+            "served OpenAI endpoint and are added for models the vLLM plugin can serve.\n\n"
+            "| Metric | Result |\n| --- | --- |\n" + row
+        )
+        _upload_card_section(args, "Accuracy (real hardware)", section)
+        print(
+            f"  [publish-hf] accuracy: PCC gate {'passed' if passed else 'failed'}"
+            + (f", PCC={pcc}" if pcc else "")
+            + " — added to the card."
+        )
+    except Exception as e:
+        print(f"  [publish-hf] accuracy: skipped ({e}).")
 
 
 def _checkout_of(demo_dir: Path) -> Path:
