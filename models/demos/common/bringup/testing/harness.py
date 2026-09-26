@@ -43,6 +43,18 @@ def spec():
     return load_spec()
 
 
+DEVICE_TEST_TIMEOUT_S = 3600
+
+
+def device_timeout(s):
+    """pytest-timeout mark for the framework's device tests (ladder, contract, profile): the repo's pytest.ini default
+    (300 s) is shorter than a full-target rung. Spec ``box.test_timeout_s``; hangs are still caught by run_safe_pytest.
+    """
+    import pytest
+
+    return pytest.mark.timeout(int(s.get("box.test_timeout_s", DEVICE_TEST_TIMEOUT_S)))
+
+
 def threshold(s, key: str) -> float:
     return s.threshold(key, DEFAULT_THRESHOLDS[key])
 

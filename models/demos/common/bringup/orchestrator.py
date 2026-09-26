@@ -92,6 +92,8 @@ INFRA_FAILURES = re.compile(
     r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware",
     re.I,
 )
+# A test killed by pytest-timeout ran out of time, it did not fail a check: an agent cannot fix that from the log.
+TEST_TIMEOUT = re.compile(r"Timeout \(>[\d.]+s\) from pytest-timeout")
 
 
 def now() -> str:
@@ -521,11 +523,17 @@ class Orchestrator:
 
     def infra_failure(self, res) -> str | None:
         text = res.log.read_text(errors="replace") if res and res.log and res.log.exists() else ""
-        m = INFRA_FAILURES.search(text)
+        m = INFRA_FAILURES.search(text) or TEST_TIMEOUT.search(text)
         return m.group(0) if m else None
 
     def stop_for_infra(self, tid: str, sig: str) -> int:
-        why = f"the box failed at device open ({sig!r}); reset the board, then resume"
+        if TEST_TIMEOUT.search(sig):
+            why = (
+                f"the test ran past its pytest timeout ({sig!r}); check the log for a slow path or raise "
+                "box.test_timeout_s, then resume"
+            )
+        else:
+            why = f"the box failed at device open ({sig!r}); reset the board, then resume"
         self.led.update(tid, status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
         self.echo(f"  [{tid}] STOPPED (infrastructure): {why}")
         return STOPPED
