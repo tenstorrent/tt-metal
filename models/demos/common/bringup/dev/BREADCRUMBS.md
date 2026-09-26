@@ -341,3 +341,13 @@ Drive this ledger with
   profile's untimed counting run also reads back the chunk's last-layer output: `pcc_chunk_out` vs the golden, so a
   perf gate is one ~5k chunk on the golden 51k prefix (accuracy + host transfers + time) in one test. ledger_gen runs
   the profile with `--no-precompile` (kernels compile on first use into the same disk cache).
+
+## F33 (2026-09-26): profile sections; a standing assemble step
+- Gemma X.1 failed "device profiler returned no durations": nothing marked sections (only "end"). `run_block` now
+  signposts every step, so any model whose blocks go through the block graph is profiled per step.
+- The ladder, profile and contract were measuring the hybrid harness (CPU reference, host in / host out per device
+  step): about 20 s per 5k chunk of host glue. New standing step M.1 (role `assemble`, after the last swap test,
+  before the first rung): one all-device model from the validated modules, every block through `run_block`, gated on
+  host_transfers_per_layer == 0 and accuracy on a multi-chunk rung. The hybrid stays selectable for debugging.
+- Gemma: P.1 (step perf, role assemble) wraps tt/model.py's TtGemma4Model as the device_model hook; X.1 now
+  profiles it (real baseline); P.2 (SDPA config A) follows with its threshold from X.1.

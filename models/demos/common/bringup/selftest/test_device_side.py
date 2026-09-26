@@ -172,3 +172,25 @@ def test_ladder_records_warm_host_transfers(gspec, noise):
     tasks = generate(s, fixture_model.Reference())["tasks"]
     gates = {t["id"]: t["gate"]["metrics"] for t in tasks if t["id"].startswith("L.")}
     assert gates["L.s256"]["host_transfers_per_layer"] == "== 0" and "host_transfers_per_layer" not in gates["L.last"]
+
+
+def test_run_block_marks_a_profile_section_per_step(monkeypatch):
+    """F33: X.1 got no device times because nothing marked sections; run_block now signposts every step."""
+    from models.demos.common.bringup.reference.interface import Ctx, Step, run_block
+    from models.demos.common.bringup.testing import profiler
+
+    seen = []
+    monkeypatch.setattr(profiler, "signpost", seen.append)
+    steps = [Step("a", ["in"], "x"), Step("b", ["x"], "out")]
+    out = run_block(steps, lambda n: (lambda ctx, v: v + 1), Ctx(0, 0, 1, None, {}), 0)
+    assert out == 2 and seen == ["a", "b"]
+
+
+def test_the_ledger_assembles_the_all_device_model_before_the_ladder(gspec):
+    """F33: M.1 (role assemble) sits between the last swap test and the first ladder rung, gated on zero host transfers."""
+    from models.demos.common.bringup.plan.ledger_gen import generate
+
+    tasks = {t["id"]: t for t in generate(gspec(), fixture_model.Reference())["tasks"]}
+    m = tasks["M.1"]
+    assert m["step"] == "assemble" and m["gate"]["metrics"]["host_transfers_per_layer"] == "== 0"
+    assert all(d.startswith("S.") for d in m["deps"]) and "M.1" in tasks["L.s256"]["deps"]

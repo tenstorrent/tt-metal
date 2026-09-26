@@ -5,11 +5,13 @@ target:
   dtype: bf16
 tasks:
 - id: R.1
-  title: Checkpoint has every tensor the spec expects; intake approved; canonical prompt built
+  title: Checkpoint has every tensor the spec expects; intake approved; canonical
+    prompt built
   step: intake
   deps: []
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m
+      models.demos.common.bringup.reference.prompt
     metrics:
       intake_approved: == 1
       prompt_hash_ok: == 1
@@ -41,7 +43,8 @@ tasks:
   deps:
   - R.2
   gate:
-    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096
+      --chunk 2048
     metrics:
       pcc_hidden: '>= 0.99999'
       pcc_state_min: '>= 0.99999'
@@ -93,7 +96,8 @@ tasks:
       all_gather_maxabs: == 0
   device: true
 - id: PL.0
-  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs'
+  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the
+    block graphs'
   step: ledger
   deps:
   - R.3
@@ -105,7 +109,8 @@ tasks:
   paths:
   - models/demos/gemma4_a4b_d_p/bringup/tasks.yaml
 - id: PL.1
-  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger
+    valid, approved'
   step: plan
   deps:
   - PL.0
@@ -1917,7 +1922,8 @@ tasks:
   device: true
   paths: *id003
 - id: K.1
-  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  title: Serving contract through the prefill engine API (layout, table, acks, engine
+    input, read-back)
   step: contract
   deps:
   - L.s4096
@@ -1931,17 +1937,51 @@ tasks:
   paths:
   - models/demos/gemma4_a4b_d_p/tt
   - models/demos/common/prefill/adapter.py
+- id: P.1
+  title: Assemble the all-device model (hidden state on the device; no host work per
+    step)
+  step: perf
+  role: assemble
+  deps:
+  - K.1
+  device: true
+  paths: *id003
+  brief:
+    details: 'tt/model.py (TtGemma4Model, written for K.1) already keeps the hidden
+      state on the device and builds RoPE once at load. Make the ladder/profile `device_model`
+      hook in bringup/hooks.py an adapter over it (new_state, embed, from_host, to_host,
+      layer, final_norm, logits, free, sync) instead of HybridDeviceModel, so both
+      paths share one model. Each block''s forward goes through run_block(block_graph,
+      ...) with the device modules, so the profiler sees one section per step. Remove
+      the per-chunk host uploads: RoPE tables and the global layers'' page-table slices
+      come from device tensors built once at load. Keep HybridDeviceModel behind BRINGUP_HYBRID=1.
+      Only the LM head may stay on the host (ladder logits only).'
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      host_transfers_per_layer: == 0
+      pcc_chunk_out: '>= 0.97'
+      chunk_wall_ms: < 5000
+      device_ms_total: '> 0'
 - id: X.1
-  title: Warm per-section, per-chip profile of one long chunk
+  title: Warm per-section, per-chip profile of the all-device model (last chunk on
+    the golden prefix)
   step: perf
   deps:
-  - L.s56320
+  - P.1
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
-      --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
+      pcc_chunk_out: '>= 0.97'
   device: true
 - id: X.2
   title: Opportunity list ranked by measured device time
