@@ -360,3 +360,14 @@ Drive this ledger with
   changes still retry.
 - The timing section showed only ladder chunks (with readbacks). It now also shows the profile's warm last chunk
   (chunk_wall_ms) and the warm full prefill (prefill_chunk_ms_c<nn>), labelled.
+
+## F35 (2026-09-26): readable timing, honest status, lean full-model gates
+- Timing is one headline row per measurement: token range in k = 1024 (0->55k, 50k->55k), total and per-chunk time,
+  tokens/s, how it was measured (warm, no readback / ladder with readbacks), and the model (all-device / hybrid
+  harness, from `device_model_hybrid`). The ladder and profile record rung_seq/chunk/start, chunk_start/len,
+  prefill_seq/chunk for this. Hybrid rows are greyed (standard) or folded into one line (teletext).
+- While an agent works a task shows RUNNING (attempt n), not the FAIL of the check before it started.
+- Full-model gates (integrate, assemble, contract, perf) run without run_safe_pytest's precompile pass
+  (`gate.gate_command`; tasks.yaml is unchanged, so approvals hold).
+- X.2 does not stop for picks when perf tasks after it are already in the ledger.
+- The profile records sub-sections a module marks itself (`attention.sdpa` -> device_ms_attention_sdpa).
