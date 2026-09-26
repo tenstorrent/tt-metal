@@ -711,8 +711,12 @@ def test_stream_expert_flat(device, m, wdtype):
                         Ht,
                         S,
                         E,
+                        rd_slots,
+                        ring_dr,
                     ],
                     defines=([("SE_GU_FIRST", "1")] if int(os.environ.get("MIMO_FL_GU_FIRST", "0")) else [])
+                    + ([("SE9_SKIP_DW", "1")] if os.environ.get("MIMO_FL_SKIP_RDW") else [])
+                    + ([("SE9_TRID", "1")] if int(os.environ.get("MIMO_FL_SE9_TRID", "1")) else [])
                     + e2e_def
                     + dyn_def,
                     runtime_args=g_rn,

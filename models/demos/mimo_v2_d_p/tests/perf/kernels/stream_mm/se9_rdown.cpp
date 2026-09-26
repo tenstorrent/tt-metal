@@ -85,10 +85,53 @@ void kernel_main() {
     constexpr uint32_t gu_chunks = gu_chunks_ct, d_blocks = d_blocks_ct, num_v = num_v_ct;
 #endif
     uint32_t gu_read = 0, d_read = 0;
+#ifdef SE9_TRID
+    uint32_t gu_iss = 0, d_iss = 0;
+    const uint32_t gu_l1 = get_write_ptr(gu_cb), d_l1 = get_write_ptr(d_cb);  // slot 0 of each (nothing pushed yet)
+#endif
     uint32_t h_pub = 0, h_cons = 0, h_rep = 0, out_done = 0;
     bool y_pending = false;
     while (gu_read < gu_chunks || d_read < d_blocks || out_done < num_v) {
         invalidate_l1_cache();
+#ifdef SE9_TRID
+        // weights, non-blocking: up to GU_DEPTH gate/up chunks and D_DEPTH down blocks in flight, each read tagged
+        // with its own NoC transaction id and pushed once that id has no outstanding reads (in order per stream), so
+        // the gate/up stream never waits behind a down block (CT 22 GU_SLOTS, 23 D_RING: the CBs' slot counts).
+        {
+            constexpr uint32_t gu_slots = get_compile_time_arg_val(22), d_ring = get_compile_time_arg_val(23);
+            constexpr uint32_t gu_depth = gu_slots < 4 ? gu_slots : 4, d_depth = 2;
+            while (gu_iss < gu_chunks && gu_iss - gu_read < gu_depth &&
+                   cb_pages_reservable_at_back(gu_cb, (gu_iss - gu_read + 1) * gu_slot)) {
+#ifdef SE_DYN
+                const uint64_t src = gu_base + (dyn.eid[gu_iss / gu_per_e] * gu_per_e + gu_iss % gu_per_e) * gu_bytes;
+#else
+                const uint64_t src = gu_src + gu_iss * gu_bytes;
+#endif
+                noc_async_read_set_trid(1 + gu_iss % gu_depth);
+                noc_async_read(src, gu_l1 + (gu_iss % gu_slots) * gu_bytes, gu_bytes);
+                ++gu_iss;
+            }
+            while (d_iss < d_blocks && d_iss - d_read < d_depth &&
+                   cb_pages_reservable_at_back(d_cb, (d_iss - d_read + 1) * d_slot)) {
+#ifdef SE_DYN
+                const uint64_t src = d_base + (dyn.eid[d_iss / d_per_e] * d_per_e + d_iss % d_per_e) * d_bytes;
+#else
+                const uint64_t src = d_src + d_iss * d_bytes;
+#endif
+                noc_async_read_set_trid(8 + d_iss % d_depth);
+                noc_async_read(src, d_l1 + (d_iss % d_ring) * d_bytes, d_bytes);
+                ++d_iss;
+            }
+            while (gu_read < gu_iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + gu_read % gu_depth)) {
+                cb_push_back(gu_cb, gu_slot);
+                ++gu_read;
+            }
+            while (d_read < d_iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 8 + d_read % d_depth)) {
+                cb_push_back(d_cb, d_slot);
+                ++d_read;
+            }
+        }
+#else
         // weights: at most one chunk of each stream per pass, one barrier for both
         const bool rd_gu = gu_read < gu_chunks && cb_pages_reservable_at_back(gu_cb, gu_slot);
 #ifdef SE_GU_FIRST
@@ -110,7 +153,9 @@ void kernel_main() {
             gu_src += gu_bytes;
         }
         if (rd_d) {
+#ifndef SE9_SKIP_DW  // perf experiment only: down weights not read (garbage)
             noc_async_read(d_src, get_write_ptr(d_cb), d_bytes);
+#endif
             d_src += d_bytes;
         }
         if (rd_gu || rd_d) {
@@ -124,6 +169,7 @@ void kernel_main() {
                 ++d_read;
             }
         }
+#endif
         // h from the chain predecessor
         if (h_pub < num_v && *harr >= (h_pub + 1) * h_pieces && h_pub - h_cons < hbuf) {
             cb_push_back(h_all_cb, h_all_tiles);
@@ -173,6 +219,9 @@ void kernel_main() {
 #endif
         }
     }
+#ifdef SE9_TRID
+    noc_async_read_set_trid(0);
+#endif
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
