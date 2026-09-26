@@ -333,3 +333,11 @@ Drive this ledger with
   `brief.details` (the exact change), the policy escalates to the debugger like implement, and the agent keeps the old
   behaviour selectable for comparison. The skill says how to add a pick; the contract role text no longer says
   "add only the registry line" (F29).
+
+## F32 (2026-09-26): a fast perf loop
+- Owner: 15-minute iterations are unacceptable. X.1 took that long because (1) run_safe_pytest's precompile pass runs
+  the whole test once with stubbed checks before the real pass, and (2) F28's full-target prefill ran three times.
+- The full prefill is now opt-in (spec `perf.full_prefill` or BRINGUP_FULL_PREFILL=1), for a final number only. The
+  profile's untimed counting run also reads back the chunk's last-layer output: `pcc_chunk_out` vs the golden, so a
+  perf gate is one ~5k chunk on the golden 51k prefix (accuracy + host transfers + time) in one test. ledger_gen runs
+  the profile with `--no-precompile` (kernels compile on first use into the same disk cache).
