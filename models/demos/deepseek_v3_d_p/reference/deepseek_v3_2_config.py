@@ -16,12 +16,15 @@ the HF config.json: https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/blob/ma
 
 import types
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
 
 class DeepseekV32Config:
     """DeepSeek-V3.2-Exp model dimensions (from HF config.json)."""
 
     # Core dimensions
     EMB_SIZE = 7168  # hidden_size
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     INTERMEDIATE_SIZE = 18432  # dense FFN hidden dimension
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
 

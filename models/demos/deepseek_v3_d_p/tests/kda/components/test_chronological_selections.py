@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
@@ -14,7 +15,10 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import mak
 
 @pytest.mark.parametrize(
     "mesh_device,device_params",
-    [((2, 4), fabric_1d_device_params()), ((1, 8), fabric_1d_device_params())],
+    [
+        ((2, 4), fabric_1d_device_params(model_config=KimiK3Config)),
+        ((1, 8), fabric_1d_device_params(model_config=KimiK3Config)),
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("sp_axis", [0, 1])

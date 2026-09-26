@@ -89,6 +89,13 @@ That is the entire adapter contract — four methods plus the attributes. The ad
 a factory + descriptor; it performs no device work or comms itself, and it does not
 hold the cache (the engine does).
 
+For models using the shared MoE dispatch/combine path, set `FABRIC_PAYLOAD_SIZE` with
+`moe_fabric_payload_size(EMB_SIZE)` from `models.demos.common.prefill.fabric`. The
+helper reserves two bytes per embedding element because transport uses BF16,
+independently of expert weight precision, plus the 64-byte routing header required by
+`combine_fabric2d`. The common router-config helper caps this requested size at the
+architecture's fabric limit; larger ordinary dispatch/combine rows are fragmented.
+
 Test-only metadata (HF download coordinates, reference-model classes, PCC
 thresholds) is optional and only needed if you wire pytest coverage; see the
 attributes and lazy `reference_*_cls` properties on `PrefillModelAdapter`. Keep the

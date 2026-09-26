@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -42,7 +43,11 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [fabric2d_device_params()],
+    [
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        )
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq128k"])

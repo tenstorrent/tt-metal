@@ -82,21 +82,21 @@ _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, _, f
 _MESH_CONFIGS = [
     pytest.param(
         (2, 2),
-        fabric2d_device_params(),
+        fabric2d_device_params(model_config=DeepSeekV4FlashConfig),
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
         id="fabric2d-mesh-2x2",
     ),
     pytest.param(
         (4, 2),
-        fabric2d_device_params(),
+        fabric2d_device_params(model_config=DeepSeekV4FlashConfig),
         ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
     pytest.param(
         (8, 4),
-        torus_xy_device_params(),
+        torus_xy_device_params(model_config=DeepSeekV4FlashConfig),
         ttnn.Topology.Ring,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
