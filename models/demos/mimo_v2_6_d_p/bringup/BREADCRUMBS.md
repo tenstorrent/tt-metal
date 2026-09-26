@@ -222,3 +222,44 @@ Results
 
 Re-run
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_02_attention.py
+
+## C.full_dense.attn_residual test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_component_test` call in `tests/bringup/test_c_full_dense_attn_residual.py` with the
+  explicit pattern (as test_c_full_dense_attn_norm.py / gemma4 ffn_residual): gated pcc_attn_residual_L00 (0.99) plus
+  asserted extras: output size, finite, rel L2 <= 0.01, per-token norm ratio in [0.99, 1.01].
+
+Why
+- Step is `h_mid = in + attn_out` (mimo_ref.py). Mutations measured on the golden (PCC / rel): fp32 ref 0.999998 /
+  0.0021, bf16 add 0.999997 / 0.0023; 2x 0.999998 / 1.0; single zeroed row 0.9998 / 0.019; last 32 rows zeroed 0.992 /
+  0.124; last 32 columns zeroed 0.991 / 0.133 (ratio min 0.987, passes the Gemma [0.97, 1.03]). All pass PCC 0.99, so
+  the rel L2 and ratio limits were tightened from the Gemma template's 0.03 / [0.97, 1.03] to 0.01 / [0.99, 1.01].
+- Implication for implement: keep the add in bf16 (or fp32); bfp8 on the residual stream is not budgeted.
+
+Results
+- BRINGUP_IMPL=reference: PASS (rel 0.00207, ratio [0.9991, 1.0007]). BRINGUP_IMPL=stub: FAIL (PCC).
+- Default (device) gate: FAIL with NotImplementedError (no device module for attn_residual yet; implement step).
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_residual.py
+
+## C.full_dense.attn_residual implement (attempt 1), 2026-09-26
+
+What was done
+- `tt/residual.py`: `TtResidualAdd` (from gemma4_a4b_d_p/tt/residual.py, no scale): `ttnn.add(a, b)` on replicated
+  [1, 1, S, 4096] bf16 TILE, bf16 output in DRAM, no CCL.
+- `bringup/hooks.py`: `_RESIDUAL_STEPS = {"attn_residual"}`, `_residual_host_fn` (two host inputs -> device ->
+  add -> chip 0 copy to host); `device_component` returns it; `DEVICE_STEPS["full_dense"]` now includes
+  `attn_residual`; `HybridDeviceModel` adds it to the per-layer overrides.
+
+Gotchas
+- The log shows `FAIL pcc_attn_residual_L00: pcc=0.000000` first: that is the precompile collect pass (ops are not
+  run); the real pass follows with the true value.
+- `mlp_residual` / `ffn_residual` (same a + b) are not swapped yet; add them to `_RESIDUAL_STEPS` when their tasks come.
+
+Result
+- Gate: pcc_attn_residual_L00 0.999997, rel_l2 0.002393, row_norm_ratio [0.9996, 1.0012]. PASS.
+
+Re-run
+    PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_residual.py
