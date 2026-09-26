@@ -223,7 +223,7 @@ def build(spec) -> dict:
     pts = sorted((int(k.rsplit("L", 1)[1]), v["value"]) for k, v in r2.items() if re.match(r"pcc_hidden_L\d+$", k))
     if pts:
         trails.append({"task": "R.2", "label": "CPU reference vs HF", "points": pts, "device": False})
-    timing = []
+    timing, positions = [], None
     for t in tasks:
         m = M.load(t["id"], res)
         pts = sorted((int(k.rsplit("L", 1)[1]), v["value"]) for k, v in m.items() if re.match(r"pcc_layer_L\d+$", k))
@@ -231,9 +231,13 @@ def build(spec) -> dict:
             trails.append(
                 {"task": t["id"], "label": f"{t['id']} {t['title'].split(':')[0]}", "points": pts, "device": True}
             )
-        timing += [
-            r for r in timing_rows(spec, t, m) if not r["how"].startswith("ladder")
-        ]  # perf only; ladder = accuracy
+        # performance only: the ladder is an accuracy run (reads every layer back) and never appears here
+        timing += [r for r in timing_rows(spec, t, m) if not r["how"].startswith("ladder")]
+        pos = sorted((int(k[len("pos_ms_") :]), x["value"]) for k, x in m.items() if re.match(r"pos_ms_\d+$", k))
+        if pos:  # the latest task's sweep wins (tasks are in ledger order)
+            hyb = m.get("device_model_hybrid", {}).get("value")
+            model = "hybrid harness" if hyb == 1 else "all-device" if hyb == 0 else "model not recorded"
+            positions = {"task": t["id"], "chunk": m.get("pos_chunk", {}).get("value"), "points": pos, "model": model}
 
     plan_mem = res / "plan_memory.json"
     return {
@@ -260,6 +264,7 @@ def build(spec) -> dict:
         "components": comps,
         "trails": trails,
         "timing": timing,
+        "positions": positions,
         "plan": json.loads(plan_mem.read_text()) if plan_mem.exists() else None,
         "plan_chips": plan_doc.get("chips") or [],
         "plan_ccl": plan_doc.get("ccl_per_layer") or [],
