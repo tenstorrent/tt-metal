@@ -1067,6 +1067,13 @@ tasks:
     kind: attention
     layer: 5
     stateful: true
+  frozen:
+    at: '2026-09-26T02:04:24'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py: c1873eb53eb1307875097206b53f93af93b5e07fbe58e58bdb19b4009185f0cd
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: S.global.02
   title: 'global block with steps 1-2 on device (last: attention)'
   step: implement
