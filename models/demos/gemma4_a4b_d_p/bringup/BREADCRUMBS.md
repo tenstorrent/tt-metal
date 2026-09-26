@@ -827,3 +827,10 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0024). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0030, ratio [0.9959, 1.0028]),
   because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_ffn_norm.py`
+
+## S.global.13.test.1 (swap test, global steps 1-13, last post_ffn_norm)
+- Test = global swap 12 (`test_swap_global_12_ffn_combine.py`) with `post_ffn_norm` added to SWAPPED, the same way as sliding swap 13. post_ffn_norm is a `norm` step, so the generic norm checks apply: vs golden PCC >= 0.99 and rel L2 <= 0.03, and vs the CPU norm on the same device ffn_sum rel L2 <= 0.03 with per-token norm ratio in [0.97, 1.03]. Only ffn_residual (CPU) follows. No thresholds changed.
+- BRINGUP_IMPL=reference: passes (pcc_swap_out 0.999996, post_ffn_norm rel 0.0045 golden / 0.0 iso). BRINGUP_IMPL=stub: fails every check.
+- Device (the gate): passes. pcc_swap_out 0.999972, block out rel 0.0075 / 0.0071 (first 128 rows). post_ffn_norm pcc 0.99991, rel 0.0136 vs golden, iso 0.0019, ratio [0.9973, 1.0012].
+- The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py`
