@@ -1017,7 +1017,11 @@ void normalize_rows_fp32(
         CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
         CircularBuffer(normalized_out_cb).reserve_back(head_dim_t_);
         tile_regs_acquire();
-        sdpa_copy_setup(cur_sum_cb);
+        // Without a sink nothing between two rows touches the copy or the reduce setup.
+        const bool setup = use_attention_sink || s == 0;
+        if (setup) {
+            sdpa_copy_setup(cur_sum_cb);
+        }
         sdpa_copy_tiles_to_dest(cur_sum_cb, 0, 1, 0);
         if constexpr (use_attention_sink) {
             // DST[1] = exp((sink - max) * scale) in column 0, folded into the partial sums before the row reduce.
@@ -1036,7 +1040,9 @@ void normalize_rows_fp32(
             sdpa_copy_setup(cur_out_cb);
         }
         sdpa_copy_tiles_to_dest(cur_out_cb, 0, first_batch, 1);
-        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        if (setup) {
+            sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        }
         sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(0);
         sdpa_first_batch_sfpu<first_batch, reuse_recip>();
         tile_regs_commit();
