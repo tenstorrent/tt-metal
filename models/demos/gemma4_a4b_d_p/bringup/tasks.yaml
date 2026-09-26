@@ -1210,6 +1210,13 @@ tasks:
     - post_attn_norm
     - attn_residual
     layer: 5
+  frozen:
+    at: '2026-09-26T02:21:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py: 0836cd6fe7e8391d7859e8b0d44ca570c80906c6656a309b8e005a395742c089
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
 - id: C.global.ffn_norm
   title: global ffn_norm (norm) on device, layer 5
   step: implement
