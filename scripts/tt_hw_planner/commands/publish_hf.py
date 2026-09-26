@@ -413,6 +413,38 @@ def _scaffold_vllm_bundle(
     return True, is_stub, str(bundle)
 
 
+def _tidy_provenance_note(args) -> None:
+    """Drop the human-facing 'dirty tree — includes uncommitted changes' note (and any stray bold left
+    behind) from the published card's provenance, so the model page reads professionally. Cosmetic
+    card-text only — the manifest and `code/` remain the source of truth. Never raises."""
+    import re
+
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+
+        tok = _hf_token(args)
+        api = HfApi(token=tok)
+        lp = hf_hub_download(repo_id=args.repo, filename="README.md", repo_type="model", token=tok, force_download=True)
+        s = open(lp).read()
+        orig = s
+        s = re.sub(r"\s*\(dirty tree[^)]*\)", "", s)
+        s = re.sub(r"\s*—\s*the image includes uncommitted changes", "", s)
+        s = re.sub(r"\*\*\s*\*\*", "", s)
+        s = re.sub(r"\s*\*\*\s*\|", " |", s)
+        s = re.sub(r"\|\s*\*\*\s*", "| ", s)
+        if s != orig:
+            open(lp, "w").write(s)
+            api.upload_file(
+                path_or_fileobj=lp,
+                path_in_repo="README.md",
+                repo_id=args.repo,
+                repo_type="model",
+                commit_message="Card: tidy provenance note",
+            )
+    except Exception as e:
+        print(f"  [publish-hf] provenance tidy skipped ({e}).")
+
+
 def _upload_card_section(args, title: str, section: str, aliases: tuple = ()) -> None:
     """Upsert a titled ``## `` section in the repo's README (idempotent) and re-upload it. Removes any
     existing section whose heading STARTS WITH ``title`` (so a dated/renamed variant is replaced, never
@@ -818,6 +850,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             print(f"  [publish-hf] upload failed: {e}")
         return 4
     print(f"  [publish-hf] published container bundle: https://huggingface.co/{args.repo}")
+    _tidy_provenance_note(args)  # keep the published card's provenance clean/professional
     # Auto-benchmark: serve the bundle and write a measured latency sweep into the card. Universal +
     # best-effort — measures any model that serves, skips (publish stands) for one that can't yet.
     if not getattr(args, "no_bench", False):
