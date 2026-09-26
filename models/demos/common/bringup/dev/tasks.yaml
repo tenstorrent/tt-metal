@@ -186,3 +186,14 @@ tasks:
     gate:
       cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
       metrics: {selftest_passed: ">= 109", selftest_failed: "== 0"}
+  - id: F21
+    title: Intake sanity gate, pause, infrastructure stop, teletext dashboard style, /bringup skill with supervision
+    step: framework
+    deps: [F20]
+    paths: [models/demos/common/bringup/intake, models/demos/common/bringup/orchestrator.py,
+            models/demos/common/bringup/dashboard, models/demos/common/bringup/skill, models/demos/common/bringup/templates,
+            models/demos/common/bringup/plan/ledger_gen.py, models/demos/common/bringup/core/gate.py,
+            models/demos/common/bringup/selftest]
+    gate:
+      cmd: scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/selftest/
+      metrics: {selftest_passed: ">= 114", selftest_failed: "== 0"}
