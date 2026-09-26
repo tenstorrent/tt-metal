@@ -36,6 +36,17 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
         rank);
 }
 
+ttsl::hash::hash_t SoftmaxBackwardDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto mode = plan_kernel_mode(attributes, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<SoftmaxBackwardDeviceOperation>,
+        attributes,
+        tensor_args,
+        mode.tiles_per_block,
+        mode.buffering_multiplier);
+}
+
 SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.softmax_output;
