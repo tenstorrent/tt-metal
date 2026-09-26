@@ -43,7 +43,10 @@ def is_per_host_storage(path: str) -> bool:
 
 
 def migration_file_export_enabled() -> bool:
-    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
+    """Default on: the device map and KV chunk table are dropped on the filesystem for the
+    KV manager to load. Set PREFILL_MIGRATION_EXPORT_TO_FILE=0 for the legacy transport, which
+    pushes both over a co-located migration worker's shmem queues."""
+    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "1") == "1"
 
 
 def migration_device_map_file_path() -> str:
