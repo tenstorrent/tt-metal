@@ -23,10 +23,30 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& b = tensor_args.residual_input_tensor;
     const auto& gamma = tensor_args.weight;
 
+    // Populated by ttnn::prim::rms_allgather even when the caller passes stats=None (it allocates an
+    // op-managed scratch), and it backs the globally-allocated cb_stats circular buffer.
+    TT_FATAL(tensor_args.stats.has_value(), "fused_rms_minimal: the stats scratch tensor was not populated.");
+    const auto& stats = tensor_args.stats.value();
+    // The program factory binds cb_stats onto this buffer and reads its shard spec, so the layout is
+    // part of the contract rather than a preference.
     TT_FATAL(
-        tensor_args.stats.has_value(),
-        "fused_rms_minimal requires a pre-allocated stats tensor; passing stats=None is not supported. It backs "
-        "an internal globally-allocated circular buffer.");
+        stats.memory_config().buffer_type() == BufferType::L1,
+        "fused_rms_minimal requires the stats buffer in L1 but got buffer type {}.",
+        stats.memory_config().buffer_type());
+    TT_FATAL(
+        stats.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+        "fused_rms_minimal requires a width-sharded stats buffer but got memory layout {}.",
+        stats.memory_config().memory_layout());
+    // One E(x^2) partial tile is gathered per device on the cluster axis, at slot
+    // device_index % tiles_per_core, and cb_stats is bound to a single core's bank, so the bound is on
+    // the per-core shard width rather than the tensor width. A wider bank only leaves the tail unused.
+    const uint32_t stats_tiles_per_core = stats.shard_spec().value().shape[1] / TILE_WIDTH;
+    TT_FATAL(
+        stats_tiles_per_core >= args.ring_size,
+        "fused_rms_minimal requires a stats buffer of at least ring_size ({}) tiles per core but got {}; a "
+        "caller-provided buffer must be replicated across the mesh with per-core shard shape (32, ring_size * 32).",
+        args.ring_size,
+        stats_tiles_per_core);
 
     {
         const bool fp32_dest_acc_en =
@@ -358,11 +378,36 @@ ttnn::experimental::prim::RMSAllGatherDeviceOperation::tensor_return_value_t rms
         cluster_axis,
         use_noc1_only);
 
+    // Allocate the stats scratch when the caller omits it. Each device fabric-writes its E(x^2) partial
+    // into one tile of this buffer, so it must be width-sharded L1 on the first core of the input shard
+    // grid, where the program factory places cb_stats. An op-managed transient is trace-native.
+    std::optional<const ttnn::Tensor> stats_scratch = stats;
+    if (!stats_scratch.has_value()) {
+        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+            get_compute_kernel_config_args(arch, kernel_config_val);
+        // cb_stats is mapped onto this buffer and its page size follows cb_data_format, so the tile
+        // size must match.
+        const DataType stats_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
+        const uint32_t stats_width = static_cast<uint32_t>(num_devices) * TILE_WIDTH;
+        TT_FATAL(
+            input_tensor.shard_spec().has_value(),
+            "fused_rms_minimal requires a sharded input to place the internal stats scratch.");
+        const CoreCoord stats_core = input_tensor.shard_spec().value().grid.bounding_box().start_coord;
+        const ShardSpec stats_shard_spec(
+            CoreRangeSet(CoreRange(stats_core, stats_core)), {TILE_HEIGHT, stats_width}, ShardOrientation::ROW_MAJOR);
+        const MemoryConfig stats_mem_config(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec);
+        const TensorSpec stats_spec(
+            ttnn::Shape({1, 1, TILE_HEIGHT, stats_width}),
+            TensorLayout(stats_dtype, PageConfig(Layout::TILE), stats_mem_config));
+        // emplace, not assign: std::optional<const Tensor> has no copy-assignment operator.
+        stats_scratch.emplace(create_device_tensor(stats_spec, input_tensor.device()));
+    }
+
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .residual_input_tensor = residual_input_tensor,
         .weight = weight,
-        .stats = stats,
+        .stats = stats_scratch,
         .preallocated_output = persistent_output_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
