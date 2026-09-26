@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "matched_rel_l2_router_L05": {
+   "t": "2026-09-26T03:00:37",
+   "value": 0.002826265525072813
+  },
+  "pcc_router_L05": {
+   "t": "2026-09-26T03:00:37",
+   "value": 0.9998790430043527
+  },
+  "row_sum_ratio_max_router_L05": {
+   "t": "2026-09-26T03:00:37",
+   "value": 1.0034435987472534
+  },
+  "row_sum_ratio_min_router_L05": {
+   "t": "2026-09-26T03:00:37",
+   "value": 0.9960678219795227
+  },
+  "selection_overlap_router_L05": {
+   "t": "2026-09-26T03:00:37",
+   "value": 0.99853515625
+  }
+ },
+ "task": "C.global.router"
+}
