@@ -1,0 +1,101 @@
+{
+ "metrics": {
+  "chunk_wall_ms": {
+   "t": "2026-09-26T05:52:28",
+   "value": 742.8
+  },
+  "device_ms_attention": {
+   "t": "2026-09-26T05:52:28",
+   "value": 381.1
+  },
+  "device_ms_attn_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.73
+  },
+  "device_ms_attn_residual": {
+   "t": "2026-09-26T05:52:28",
+   "value": 6.67
+  },
+  "device_ms_chip0": {
+   "t": "2026-09-26T05:52:28",
+   "value": 739.83
+  },
+  "device_ms_chip1": {
+   "t": "2026-09-26T05:52:28",
+   "value": 740.14
+  },
+  "device_ms_chip2": {
+   "t": "2026-09-26T05:52:28",
+   "value": 740.93
+  },
+  "device_ms_chip3": {
+   "t": "2026-09-26T05:52:28",
+   "value": 740.66
+  },
+  "device_ms_experts": {
+   "t": "2026-09-26T05:52:28",
+   "value": 212.15
+  },
+  "device_ms_ffn_combine": {
+   "t": "2026-09-26T05:52:28",
+   "value": 6.76
+  },
+  "device_ms_ffn_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.73
+  },
+  "device_ms_ffn_residual": {
+   "t": "2026-09-26T05:52:28",
+   "value": 11.83
+  },
+  "device_ms_mlp": {
+   "t": "2026-09-26T05:52:28",
+   "value": 40.14
+  },
+  "device_ms_moe_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.73
+  },
+  "device_ms_post_attn_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.74
+  },
+  "device_ms_post_ffn_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.73
+  },
+  "device_ms_post_mlp_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.73
+  },
+  "device_ms_post_moe_norm": {
+   "t": "2026-09-26T05:52:28",
+   "value": 5.73
+  },
+  "device_ms_router": {
+   "t": "2026-09-26T05:52:28",
+   "value": 43.15
+  },
+  "device_ms_total": {
+   "t": "2026-09-26T05:52:28",
+   "value": 741.94
+  },
+  "host_overhead_ms": {
+   "t": "2026-09-26T05:52:28",
+   "value": 0.9
+  },
+  "host_transfers_per_layer": {
+   "t": "2026-09-26T05:51:48",
+   "value": 0
+  },
+  "pcc_chunk_out": {
+   "t": "2026-09-26T05:51:48",
+   "value": 0.9989112612993154
+  },
+  "profiled_programs": {
+   "t": "2026-09-26T05:52:28",
+   "value": 8980
+  }
+ },
+ "task": "X.1"
+}
