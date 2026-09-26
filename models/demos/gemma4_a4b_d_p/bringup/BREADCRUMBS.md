@@ -708,3 +708,12 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - Verified: BRINGUP_IMPL=reference PASS (pcc 0.999997, rel 0.0024). Stub FAIL (PCC 0.0). The device gate already PASSES (pcc 0.999996, rel 0.0031, ratio [0.9944, 1.0051]),
   because the device norm is the same module the sliding layers use. The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py`
+
+## S.global.07.test.1 (swap test review, global post_mlp_norm)
+- Replaced the rendered one-liner with global swap 6's checks (s4096 chunk 1, HEAD_ROWS = 128, block out rel L2 <= 0.02,
+  isolation vs the CPU step on the same device inputs) and added post_mlp_norm to SWAPPED, as sliding swap 7 does. post_mlp_norm is a norm step,
+  so the existing isolation check covers it. Why: PCC misses `1 + w` (0.9985) and zeroed rows (test_c_global_post_mlp_norm.py).
+- BRINGUP_IMPL=reference: pass (pcc_swap_out 0.999996, block out rel 0.0029, post_mlp_norm rel 0.0019). BRINGUP_IMPL=stub: fails every check.
+- Device gate: pass, pcc_swap_out 0.999988, block out rel 0.0048 / 0.0038; post_mlp_norm rel 0.0048 vs golden, iso 0.0019,
+  ratio [0.9963, 1.0021]. The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py`
