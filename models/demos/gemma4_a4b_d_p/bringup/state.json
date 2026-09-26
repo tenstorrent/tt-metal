@@ -685,6 +685,106 @@
   "started": "2026-09-25T23:38:15",
   "status": "PASS"
  },
+ "C.sliding.post_mlp_norm": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "226a6aea-1de0-4643-a8e3-16262f5adbf1"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/C.sliding.post_mlp_norm.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/C.sliding.post_mlp_norm.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 124.2,
+    "session_id": "c73f14c2-9eec-4399-abc1-9031794f8ae7",
+    "t": "2026-09-26T00:08:27"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/C.sliding.post_mlp_norm.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "fd7a7e33a858a3f97b87ac71e58dc8f4ae92864a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "b49e1877a24a60c7f76a876f75941c16c1122b0c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "13fbb6133f917b9befcfe477bd1f4e87cda8a337",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/C.sliding.post_mlp_norm.implement.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 42.8,
+    "session_id": "226a6aea-1de0-4643-a8e3-16262f5adbf1",
+    "t": "2026-09-26T00:09:47"
+   }
+  ],
+  "attempts": 1,
+  "duration_s": 11.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T00:09:04"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T00:10:01"
+   }
+  ],
+  "last_run": "2026-09-26T00:10:01",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/C.sliding.post_mlp_norm.log",
+  "metrics": {
+   "pcc_post_mlp_norm_L00": 0.9999960365514462,
+   "rel_l2_post_mlp_norm_L00": 0.0029388293623924255,
+   "row_norm_ratio_max_post_mlp_norm_L00": 1.0033372640609741,
+   "row_norm_ratio_min_post_mlp_norm_L00": 0.9950297474861145
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-26T00:09:50",
+  "status": "PASS"
+ },
  "G.s16384": {
   "attempts": 0,
   "duration_s": 368.6,
