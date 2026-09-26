@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 
@@ -22,11 +23,11 @@ bool isFabricUnitTest() { return false; }
 namespace tt::tt_fabric {
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
-    FabricContext& fabric_context, tt::tt_metal::IDevice* device) {
+    FabricContext& fabric_context, CoreType dispatch_core_type, tt::tt_metal::IDevice* device) {
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
 
     // Use FabricBuilder to coordinate the build phases
-    FabricBuilder builder(device, *fabric_program_ptr, fabric_context);
+    FabricBuilder builder(device, *fabric_program_ptr, fabric_context, dispatch_core_type);
 
     // Execute build phases
     builder.discover_channels();
@@ -46,9 +47,14 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(
 }
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
-    tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device) {
+    tt::tt_metal::MetalEnvImpl& env_impl,
+    const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+    tt::tt_metal::IDevice* device) {
     if (tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config())) {
-        return create_and_compile_tt_fabric_program(env_impl.get_control_plane().get_fabric_context(), device);
+        return create_and_compile_tt_fabric_program(
+            env_impl.get_control_plane().get_fabric_context(),
+            tt::tt_metal::get_core_type_from_config(dispatch_core_config),
+            device);
     }
     return nullptr;
 }
