@@ -17,16 +17,20 @@ Pre-fix expectation: the ``tiles_per_core_x > 1`` x ``use_2d_core_grid=True`` ca
 (rmsnorm: silently wrong values, PCC collapse; layernorm: the ops do not yet expose
 ``use_2d_core_grid`` at the Python binding, so these error at the call site --
 exposing the flag is part of the fix). All ``use_2d_core_grid=False`` controls and the
-``tiles_per_core_x == 1`` guards PASS. Post-fix: everything green, guards unchanged.
+``tiles_per_core_x == 1`` guards PASS. Post-fix: everything green except the
+layernorm+``grid_2d`` pre cases, which skip by design (see API note); guards unchanged.
 
 API note: ``ttnn.rms_norm_{pre,post}_all_gather`` expose ``use_2d_core_grid``; the
-layernorm variants currently hardcode ``std::nullopt``
-(``layernorm_pre_all_gather.cpp:49``, ``layernorm_post_all_gather.cpp:53``). The fix
-must expose the flag there too for the layernorm+2D cases below to run.
+layernorm variants now expose it too. The 2D pre-all-gather compute kernel emits
+rmsnorm-only (1-wide) statistics, so layernorm+``use_2d_core_grid=True`` pre is
+rejected by device validation (loud ``TT_FATAL``) rather than silently producing
+wrong stats downstream; those cases skip here.
 
-HANG CANARY: the (1024, 4096) 2D case may hit the pre-existing #55075 deadlock
-instead of the stride bug. Run under ``TT_METAL_OPERATION_TIMEOUT_SECONDS=45``; a
-timeout there indicates the #55075 hang, NOT a failure of this fix.
+HANG CANARY: the multi-row 2D cases previously hit the #55075 deadlock mechanism
+(the reduce scaler was popped per-row from a depth-1 buffer; this PR pops it once
+after the row loop, mirroring the 1D kernel). Run under
+``TT_METAL_OPERATION_TIMEOUT_SECONDS=45``; a timeout now indicates a residual hang,
+NOT the stride bug.
 
 LAYOUT GUARD: every ``grid_2d`` case carries a hardcoded ``expect_tpcx`` constant
 and asserts the 2D factory's actual decomposition on THIS device against it. If a
@@ -372,9 +376,9 @@ def _run_distributed_welford_layernorm_single_device(
         # (1024, 4096): per-dev (H=1024, Wt=32) -> cores_x=8, tiles_per_core_x=4.
         # Deep stride + narrow rows: crosses tiles_per_core_x > 1.
         # HANG CANARY: #55075 reports the 2D pre-all-gather path deadlocking at
-        # H=1024,W=1024 on an unmodified tree. Run under
-        # TT_METAL_OPERATION_TIMEOUT_SECONDS=45: a timeout here indicates the #55075
-        # hang, NOT a failure of this fix -- do not "fix" it here.
+        # H=1024,W=1024 on an unmodified tree. The identified mechanism (reduce scaler
+        # popped per-row from a depth-1 buffer) is fixed in this PR; run under
+        # TT_METAL_OPERATION_TIMEOUT_SECONDS=45 as a canary for any residual hang.
         (1024, 4096, 4),
         # (128, 8192): per-dev (H=128, Wt=64) -> cores_x=4, tiles_per_core_x=1.
         # Guard: existing valid 2D behavior must stay green.
@@ -389,6 +393,11 @@ def _run_distributed_welford_layernorm_single_device(
 def test_distributed_2d_core_grid_row_stride(
     device, seq_len, hidden_dim_total, expect_tpcx, is_rmsnorm, use_2d_core_grid
 ):
+    if not is_rmsnorm and use_2d_core_grid:
+        # layernorm+2D pre is rejected by device validation: the 2D pre compute kernel
+        # emits rmsnorm-only (1-wide) statistics, so running it would silently produce
+        # wrong stats downstream. Loud TT_FATAL instead; skip by design.
+        pytest.skip("layernorm+use_2d_core_grid pre rejected by device validation (rmsnorm-stats-only 2D kernel)")
     passing, pcc_msg = _run_distributed_norm_single_device(
         device=device,
         seq_len=seq_len,

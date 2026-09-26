@@ -108,7 +108,10 @@ void kernel_main() {
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         dfb_inp.pop_front(Wt);
-        dfb_reduce.pop_front(1);
+        // The reduce scaler tile is prepared once by the reader into a depth-1 buffer and only
+        // waited on (never consumed) by each row's reduction, so it is popped once after all
+        // rows, mirroring the 1D kernel. Popping per-row deadlocks NCHt > 1: row 0 consumes the
+        // single tile and row 1's wait_front never returns.
 
         // On a merge core, sum this row's column partials into the final output buffer.
         // Per-row (not once after the loop): the gather buffer holds exactly one row's worth of
@@ -166,4 +169,5 @@ void kernel_main() {
         }
 #endif
     }
+    dfb_reduce.pop_front(1);
 }
