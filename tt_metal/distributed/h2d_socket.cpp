@@ -849,6 +849,14 @@ void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // Once an external producer has stopped, the owner can resume at its drained FIFO position.
+    if (connector_state_) {
+        tt_driver_atomics::mfence();
+        page_size_ = connector_state_->page_size;
+        fifo_curr_size_ = connector_state_->fifo_curr_size;
+        write_ptr_ = connector_state_->write_ptr;
+    }
+    bytes_acked_ = bytes_acked_value;
 }
 
 void H2DSocket::write(void* data, uint32_t num_pages) {

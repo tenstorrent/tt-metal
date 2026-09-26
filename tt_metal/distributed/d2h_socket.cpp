@@ -743,6 +743,13 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // Adopt the drained connector geometry and producer count before owner reads resume.
+    if (connector_state_) {
+        tt_driver_atomics::mfence();
+        page_size_ = connector_state_->page_size;
+        fifo_curr_size_ = connector_state_->fifo_curr_size;
+    }
+    bytes_sent_ = bytes_sent_value;
 }
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
