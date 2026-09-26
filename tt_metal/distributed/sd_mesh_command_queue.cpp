@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/program_launch.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"
@@ -249,7 +250,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
     }
 
     // First device: full LaunchProgram (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::detail::LaunchProgram(local_devices[0], program, false);
+    tt_metal::internal::LaunchProgram(local_devices[0], program, false);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop

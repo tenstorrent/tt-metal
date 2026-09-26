@@ -1573,15 +1573,15 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     // Second enqueue of the same CrossNode program inside the capture: the
     // allocator must stall_first on the prior launch before rewriting credits.
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
-    mesh_device->end_mesh_trace(cq.id(), tid);
+    mesh_device->end_mesh_trace(cq, tid);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    mesh_device->replay_mesh_trace(cq, tid, true);
     expect_1to1_ring_and_credits(*mesh_device, ctx, "CaptureReplay");
     mesh_device->release_mesh_trace(tid);
 }
@@ -1596,12 +1596,12 @@ TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
 
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
-    mesh_device->end_mesh_trace(cq.id(), tid);
+    mesh_device->end_mesh_trace(cq, tid);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
-    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    mesh_device->replay_mesh_trace(cq, tid, true);
     expect_1to1_ring_and_credits(*mesh_device, ctx, "Replay");
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
@@ -1675,13 +1675,13 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
 
-    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    const auto tid = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    mesh_device->end_mesh_trace(cq.id(), tid);
+    mesh_device->end_mesh_trace(cq, tid);
 
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
     cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
-    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    mesh_device->replay_mesh_trace(cq, tid, true);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
         *mesh_device, gdfb_b, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
