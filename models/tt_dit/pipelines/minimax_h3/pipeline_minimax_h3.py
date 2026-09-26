@@ -377,8 +377,11 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full", "kernel"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        # The vocoder replays a captured device graph (0.5 -> 0.3 s); off for meshes opened without a trace region.
-        self.audio_trace = True if audio_trace is None else bool(audio_trace)
+        # The vocoder replays a captured device graph (0.5 -> 0.3 s), but the capture needs ~375 MB
+        # of trace region (test_audio_minimax_h3.py) -- more than any mesh preset reserves (the
+        # 4x32 quad holds 150 MB, 4x8 none), so it aborts wherever it engages. Off unless a caller
+        # with a large enough region opts in.
+        self.audio_trace = False if audio_trace is None else bool(audio_trace)
         # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > default 8, then the
         # 8->4->1 fallback (32 opt-in); logged before decode.
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(audio_t_factor)

@@ -50,6 +50,7 @@ from .common_av import (
     check_av_sync,
     check_written_file,
     clip_prompt_alignment,
+    is_artifact_writer,
     log_timing_table,
     run_warm_generation,
     to_uint8_frames,
@@ -202,23 +203,27 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
     expected_frames = align_num_frames(num_frames)
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=output.video_seconds)
 
+    paths = {}
     if yuv:
         assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
-        mp4 = artifacts / f"{stem}.mp4"
-        export_video_audio_yuv(
-            output.video,
-            str(mp4),
-            fps=output.fps,
-            audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
-        )
-        paths, alignment = {"mp4": mp4}, None
+        alignment = None
+        if is_artifact_writer():
+            mp4 = artifacts / f"{stem}.mp4"
+            export_video_audio_yuv(
+                output.video,
+                str(mp4),
+                fps=output.fps,
+                audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
+            )
+            paths = {"mp4": mp4}
     else:
         frames = to_uint8_frames(output)
         check_output_sanity(frames, num_frames=expected_frames, height=height, width=width)
         check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=MINIMAX_H3_FPS)
 
-        paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
-        check_written_file(paths, expected_frames, height=height, width=width)
+        if is_artifact_writer():
+            paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+            check_written_file(paths, expected_frames, height=height, width=width)
 
         alignment = clip_prompt_alignment(frames, PROMPT)
         logger.info(f"{stem} CLIP prompt alignment (RECORDED not gated): {alignment}")
@@ -253,6 +258,7 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
         "clip": alignment,
         "artifacts": {kind: str(path) for kind, path in paths.items()},
     }
-    sidecar = artifacts / f"{stem}.json"
-    sidecar.write_text(json.dumps(record, indent=2))
-    logger.info(f"wrote {sidecar}")
+    if is_artifact_writer():
+        sidecar = artifacts / f"{stem}.json"
+        sidecar.write_text(json.dumps(record, indent=2))
+        logger.info(f"wrote {sidecar}")
