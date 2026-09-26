@@ -24,17 +24,25 @@ You start with no memory of earlier steps. Everything you need is in the brief a
 4. Always use 2D fabric. Open meshes with `ttnn.FabricConfig.FABRIC_2D` (the spec's `box.device_params` does this for
    the gates), and configure CCLs, dispatch and combine for 2D fabric. Never open a device, or write a test or a
    module, with `FABRIC_1D` or `FABRIC_1D_RING`.
-5. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
+5. No host work in the forward path. A module's forward (its `__call__` and everything it calls per chunk) never calls
+   `ttnn.from_torch`, `ttnn.to_torch` or `ttnn.synchronize_device`, never computes on the host, and never rebuilds a
+   constant per call. Build everything that depends only on shapes, positions or weights (RoPE cos/sin tables, masks,
+   page tables, index and dispatch tables) once at load time for `max_seq`, keep it on the device, and slice it on the
+   device for each chunk (`ttnn.slice`, or an op that takes a start position). Per chunk, the only host transfers are
+   the token ids in and what the harness itself reads back. A step with no TTNN op is tagged CPU in
+   `components.yaml`, not hidden in a module. The ladder and the profile count host round-trips per layer on warm
+   chunks (`host_transfers_per_layer`), and the ladder gates it at 0.
+6. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
-6. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
+7. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
    If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
-7. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
+8. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
-8. Do not commit. The orchestrator commits when the gate passes.
-9. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
+9. Do not commit. The orchestrator commits when the gate passes.
+10. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
 
 ## Roles
 

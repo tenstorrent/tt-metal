@@ -296,3 +296,15 @@ Drive this ledger with
 - `plan/approvals.shared_paths`: a task's paths outside the model dir (plus spec `paths.own`). The orchestrator waits
   for a person before any gate or agent of such a task until `approve shared:<task id>` is recorded; the approval is
   bound to that exact list of paths. The skill's supervision table says so.
+
+## F27 (2026-09-26): no host work in the forward path
+- Owner: no ugly shortcuts; nothing told agents to avoid host round-trips per chunk. Gemma's attention rebuilt RoPE
+  tables on the host and uploaded them in every layer, every chunk; the global layers re-uploaded a page table.
+- Agent definition rule 5 (every agent, every model): no from_torch / to_torch / synchronize_device, host compute or
+  per-call constant rebuilds in a forward; shape/position constants are built once at load for max_seq, kept on the
+  device and sliced there per chunk. Later rules renumbered 6-10.
+- `testing/host_transfers.HostTransfers` wraps those ttnn entry points. The ladder counts inside `model.layer` on warm
+  chunks (after the first) and records `host_transfers_per_layer`; ledger_gen gates it `== 0` on multi-chunk rungs
+  (not on a golden-prefix rung, whose one chunk is cold). The profile records it from an extra warm run.
+- Gemma's ledger is already approved and its rungs passed, so for Gemma it is reported by X.1 only; the fixes go on
+  the X.2 list. Owner approved K.1 touching adapter.py (`approve shared:K.1`).
