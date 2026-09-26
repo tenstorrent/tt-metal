@@ -773,3 +773,14 @@ Append-only log, one section per task attempt: what was done, decisions and why,
   (pcc 0.999837, rel 0.0226, ratio [0.9971, 1.0225], worst row 0.030), because the global layer uses the same device experts module as sliding. rel L2 has only about 25% headroom to 0.03.
   The `FAIL ... pcc=0.000000` line comes from the precompile pass (comp_pcc stub).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py`
+
+## S.global.10.test.1 (swap test review, global experts)
+- Replaced the rendered one-liner with global swap 9's checks (s4096 chunk 1, HEAD_ROWS = 128, attention head-row checks, block out rel L2 <= 0.02,
+  norm/residual/mlp isolation, router selection/weight checks), added experts to SWAPPED, and copied sliding swap 10's `moe` branch and constants unchanged:
+  experts vs golden PCC >= 0.99 and rel L2 <= 0.05; vs the CPU experts on the same device moe_norm and router rel L2 <= 0.03, per-token norm ratio in
+  [0.97, 1.03], worst row <= 0.1. Why: post_moe_norm hides per-row scale errors from block out, and upstream router flips move whole experts rows vs golden.
+- BRINGUP_IMPL=reference: pass (block out rel 0.0029, experts rel 0.0073 vs golden, iso 0.0). BRINGUP_IMPL=stub: fails every check.
+- Device gate: pass, pcc_swap_out 0.999973, block out rel 0.0074 / 0.0070; experts pcc 0.99976, rel 0.0246 vs golden, iso rel 0.0224,
+  ratio [1.0007, 1.0214], worst row 0.0292. The ratio is above 1 on every row: this is the fused kernel's known overshoot (HiFi2 + fp32 dest, about 1.01-1.02).
+  Headroom is tight (iso rel 0.0224 vs 0.03, ratio max 1.021 vs 1.03). The pcc=0.000000 lines come from the precompile pass (comp_pcc stub).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py`
