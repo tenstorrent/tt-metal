@@ -70,6 +70,13 @@ on:
         required: false
         default: true
         type: boolean
+      pr_number:
+        description: >-
+          The PR the compared runs came from. Only used to label the Slack
+          message when there is no pull_request event to read it from,
+          as on a pilot dispatch. Nothing is posted to the PR.
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -94,7 +101,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
 
@@ -129,7 +136,7 @@ jobs:
         if: inputs.baseline_run_id != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: perf-data-*
+          pattern: perf-data-${{ inputs.arch }}-*
           merge-multiple: true
           path: baseline_perf
           run-id: ${{ inputs.baseline_run_id }}
@@ -140,11 +147,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+          ARCH: ${{ inputs.arch }}
         run: |
           COUNT=$(find baseline_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
-          echo "Baseline CSVs from run ${BASELINE_RUN_ID}: ${COUNT}"
+          echo "Baseline ${ARCH} CSVs from run ${BASELINE_RUN_ID}: ${COUNT}"
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::Run ${BASELINE_RUN_ID} published no perf CSVs."
+            echo "::error::Run ${BASELINE_RUN_ID} published no perf-data-${ARCH}-* artifacts."
             echo "false" > have_baseline.txt
             echo '{}' > baseline_metadata.json
             exit 1
@@ -198,11 +206,14 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check that perf data arrived
+        env:
+          ARCH: ${{ inputs.arch }}
         run: |
           COUNT=$(find current_perf -name '*.csv' -not -name '*.post.csv' | wc -l)
-          echo "Current-side CSVs: ${COUNT}"
+          echo "Current-side CSVs for ${ARCH}: ${COUNT}"
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::No perf CSVs for the current side. The gate measured nothing."
+            echo "::error::No ${ARCH} perf CSVs for the current side. The gate measured nothing."
+            echo "::error::Check that the run published perf-data-${ARCH}-* artifacts."
             exit 1
           fi
 
@@ -272,6 +283,98 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+      - name: Upload the gate report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-report-${{ inputs.arch }}
+          path: |
+            perf_gate_report.md
+            perf_gate_report.points.csv
+            perf_gate_report.regressions.csv
+          if-no-files-found: ignore
+
+      - name: Build the Slack payload
+        id: slack
+        if: always()
+        env:
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '?' }}
+          PR_URL: >-
+            ${{ github.event.pull_request.html_url
+                || (inputs.pr_number
+                    && format('{0}/{1}/pull/{2}', github.server_url, github.repository, inputs.pr_number))
+                || '' }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
+          COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
+          MEASURE_RESULT: ${{ inputs.measure_result }}
+          ARCH: ${{ inputs.arch }}
+          RUN_TYPES: ${{ inputs.run_types }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            echo "should_post=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          BASELINE_SHA=$(python3 - <<'PYTHON'
+          import json
+          import os
+
+          path = "baseline_metadata.json"
+          data = json.load(open(path)) if os.path.exists(path) else {}
+          print(data.get("commit_sha", ""))
+          PYTHON
+          )
+
+          python3 "${LLK_PATH}/perf/gate_slack_notify.py" \
+            --regressions perf_gate_report.regressions.csv \
+            --report perf_gate_report.md \
+            --have-baseline have_baseline.txt \
+            --exit-code "${GATE_EXIT_CODE:-0}" \
+            --comparison-finished "${COMPARISON_FINISHED:-true}" \
+            --measure-result "$MEASURE_RESULT" \
+            --channel "$SLACK_CHANNEL_ID" \
+            --pr-number "$PR_NUMBER" \
+            --pr-url "$PR_URL" \
+            --pr-title "$PR_TITLE" \
+            --author "$PR_AUTHOR" \
+            --arch "$ARCH" \
+            --run-types "$RUN_TYPES" \
+            --run-url "$RUN_URL" \
+            --baseline-sha "$BASELINE_SHA" \
+            --out slack_payload.json && exit 0
+
+          echo "::error::The gate could not build its Slack notification."
+          echo "should_post=false" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack
+        if: always() && steps.slack.outputs.should_post == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
+            exit 0
+          fi
+
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @slack_payload.json) || true
+
+          case "$RESPONSE" in
+            *'"ok":true'*)
+              echo "Posted the gate verdict to Slack."
+              ;;
+            *)
+              echo "::error::Slack rejected the gate notification: ${RESPONSE}"
+              ;;
+          esac
+
       - name: Gate verdict
         if: always()
         run: |
