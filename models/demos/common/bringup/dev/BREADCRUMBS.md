@@ -327,3 +327,9 @@ Drive this ledger with
   approves or rejects on its own. The skill's new "Decide; do not ask" section lists what still goes to the person
   (intake spec, plan, perf picks, board reset, push/PR, evidence the model or data is wrong), what counts as cheating,
   and how to reject (pause, revert the gate commit, add a finding, rerun).
+
+## F31 (2026-09-26): perf role
+- Picked performance items (the owner delegated the picks for Gemma) run as role `perf`: the brief carries
+  `brief.details` (the exact change), the policy escalates to the debugger like implement, and the agent keeps the old
+  behaviour selectable for comparison. The skill says how to add a pick; the contract role text no longer says
+  "add only the registry line" (F29).

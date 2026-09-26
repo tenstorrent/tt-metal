@@ -94,7 +94,10 @@ branch for a new layout, a fix in a shared op with its own test. To reject: paus
 Never:
 - edit anything in the tree while an agent step runs. `python -m models.demos.common.bringup.orchestrator pause --spec <spec>`
   stops it before its next task; the path check would charge your edit to the running agent;
-- approve the intake, plan or performance picks for the person, loosen a threshold, or edit a frozen test;
+- approve the intake, plan or performance picks for the person, loosen a threshold, or edit a frozen test. When the
+  person delegates the picks, add each as a perf task (step `perf`, role `perf`, `brief.details` with the exact
+  change, deps on X.2 or the previous pick, gate = an accuracy rung plus the profile with a time threshold below the
+  X.1 baseline); perf tasks do not void the plan approval;
 - change the spec without asking (a spec edit voids the intake approval; re-approve on their word);
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
