@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "36224283098",
-    "timestamp": "2026-09-26T06:41:00Z"
+    "run_id": "36242225810",
+    "timestamp": "2026-09-26T12:36:00Z"
   },
-  "run_id": "36224283098",
+  "run_id": "36242225810",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -577,7 +577,9 @@
     "55933": "confirmed bug, awaiting fix PR (community reporter has branch)",
     "56195": "RTL Sim CI test failing since 2026-09-11 (job log retrieval 404s in this sandbox via get_job_logs/actions_get - endpoints return 404 for both run_id and job_id); needs maintainer to inspect directly. Other checks (Cycode x4) green.",
     "56538": "external PR fixing #56522 (ttnn.where -0.0 predicate float32 path); no repo-assist duplicate needed",
-    "56375": "SUPERSEDED: issue #56348 was fixed and closed via a different PR #56676 (merged); this repo-assist PR is now redundant, flagged in a comment on the PR and in monthly summary for maintainer to close; checked 2026-09-16"
+    "56375": "SUPERSEDED: issue #56348 was fixed and closed via a different PR #56676 (merged); this repo-assist PR is now redundant, flagged in a comment on the PR and in monthly summary for maintainer to close; checked 2026-09-16",
+    "57449": "pushed follow-up commit addressing HuzaifaChaudary's 3-point review (binary_pow exact-boundary NaN hole, stale comment, stronger tests); CI re-running, check outcome next run",
+    "56714": "pushed the unit test mateusznowakTT requested (test_binary_ng_width_padded_stride.py); CI re-running, check outcome next run"
   },
   "sfpu_clamp_family": {
     "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
@@ -1189,7 +1191,7 @@
     }
   },
   "backlog_cursor": {
-    "task1_task2_latest": "2026-09-26 (run 36224283098): labeled 17 fresh unlabeled issues -- the AI-static-analysis defect-catalog batch from ijankowskiTT (#57501/#57502/#57503/#57504/#57506/#57509/#57357/#57358/#57359/#57360/#57361/#57363/#57364/#57366/#57367/#57477/#57475) as bug, all self-described 'statically audited bugs' with line references against a pinned commit, no existing fix PRs found for any. Also reviewed 3 older already-labeled bug issues without opening fixes: #57211 (fused-activation INT32 bypass -- needs maintainer decision on which behavior is correct), #57212 (comparison mode never grades scalar-first div -- root cause is in decorators.py/binary.py golden-comparison plumbing, not yet isolated to a safe surgical fix), #57248 (Metal 2.0 ProgramSpec aliased-tensor cache mis-bind -- root cause in shared SpecBindingSupport::resolve_bindings, too architecturally risky for a quick PR). Continue backlog scan from #56617 downward next run (paged through #57271-#56617 this run without finding further fixable candidates -- most are TT-engineer-owned model/perf tracking issues).",
+    "task1_task2_latest": "2026-09-26 (run 36242225810): labeled 3 fresh unlabeled issues from the ascending-oldest-open-unlabeled sweep -- #57413 (bug), #56781 (bug), #56783 (infra-ci). Posted a substantive Task2 comment on #57413 (BERTScore regression bisected to #57179's tanh SFPLUT reland) confirming the LUT's documented bf16-ULP-vs-max-abs-error tradeoff against current code; left the fix decision (retune/revert/gate) to a maintainer -- no hardware access to rerun the eval or refit the table. Did not continue the older backlog scan from #56617 downward this run (prioritized Task5 maintainer-feedback backlog instead, per the 'address maintainer reviews first' priority) -- resume there next run.",
     "task6_latest": "2026-09-26: nudged 3 never-previously-touched external author-blocked stale PRs, quiet since Sept 2 or earlier: #49627 (approved but blocked, 8wk quiet), #50277 (dirty, 6wk quiet), #50661 (dirty, 2.5wk quiet). 3-action cap reached.",
     "task7_latest": "2026-09-25 (this run): checked 2 candidate recent-issue authors (bvdyvncqr5-commits, kmabeeTT) via search_issues -- both have prior merged PRs (disqualified). No welcomes posted.",
     "task5_latest": "2026-09-26: checked CI (get_check_runs) + reviews (get_reviews) + mergeable_state (get) on all 33 open [repo-assist] PRs. All CI green except the 2 known unchanged infra-noise cases (#56195/#55435) and #57130's pre-existing squared_difference_ ULP flake. Found #56428 fully approved (mcw-anasuya+mateusznowakTT), ready to merge. Found #57288 had an unanswered maintainer question from bbradelTT -- replied with a detailed scope clarification."
@@ -1713,6 +1715,11 @@
   },
   "run_history": [
     {
+      "run_id": "36242225810",
+      "date": "2026-09-26T12:36:00Z",
+      "summary": "Task1: labeled 3 fresh unlabeled issues -- #57413 (bug, Llama 3.2-90B-Vision BERTScore regression bisected to #57179 tanh SFPLUT reland), #56781 (bug, DFB-on-borrowed-mem validation doesn't account for subdevice), #56783 (infra-ci, tt-train CI matrix gaps). Task2: commented on #57413 -- confirmed against current tt_metal/hw/ckernels/wormhole_b0/.../ckernel_sfpu_tanh.h that the approximate-mode 6-entry SFPLUT was refit to minimize bf16 ULP error (not max absolute error), consistent with the reporter's bisection; left the retune/revert/gate-adjust decision to a maintainer since I can't rerun the eval or refit the table without hardware. Task5: addressed unaddressed maintainer review feedback on 2 open [repo-assist] PRs (priority per Task5 spec) -- pushed the unit test mateusznowakTT requested on #56714 (new test_binary_ng_width_padded_stride.py reproducing the exact width-over-padding repro from issue #56707), and on #57449 addressed all 3 points of @HuzaifaChaudary's review: closed binary_pow's remaining s==-127.0-exact-boundary NaN hole in both WH+BH ckernel_sfpu_binary_pow.h (added the same out_exp<=0 guard unary_power.h already has, using the reviewer's own repro pair pow(0.16287973523139954, 48.50807189941406)), fixed a stale comment in unary_power.h claiming the wrapped exponent was 0 (it's -1), and reparametrized the underflow tests to pair each base with its own exponent from the original issue instead of reusing exponent=1000 for all three (only base=0.1 actually hits the pre-fix NaN at that shared exponent, per the reviewer). Verified #57130's still-failing checks remain the same pre-existing unrelated squared_difference ULP flake noted in prior runs. Task8: rewrote monthly summary #55015 (had regrown to ~180KB via duplicated Run-History/Suggested-Actions blocks, same recurring pattern) -- trimmed to a single canonical ~13KB copy, added #57413 to Suggested Actions, noted the 2 PRs updated this run, kept newest 5 run-history entries."
+    },
+    {
       "run_id": "36224283098",
       "date": "2026-09-26T06:41:00Z",
       "summary": "Task1: labeled 17 fresh unlabeled issues bug (AI-static-analysis defect-catalog batch from ijankowskiTT: #57501/#57502/#57503/#57504/#57506/#57509/#57357/#57358/#57359/#57360/#57361/#57363/#57364/#57366/#57367/#57477/#57475). Task2: reviewed #57211/#57212/#57248 (already-labeled bug issues from older backlog) in depth -- traced #57212's root cause partway into decorators.py/binary.py comparison-config plumbing but could not isolate a safe small fix; #57211 needs a maintainer decision on correct behavior before fixing; #57248 touches a shared spec adapter used by every base-concept multi-input ported op, too risky. No new fix PRs opened this run -- prioritized correctness over speed given the complexity of all three candidates. Task5: checked CI on the 6 newest open [repo-assist] PRs (57947/57891/57844/57769/57697/57645) -- all green (57645 full PR Gate green + approved by mateusznowakTT; the other 5 only have pre-checks so far, no reviews yet). Verified PR #57288 has no new maintainer activity since repo-assist's last reply. Task8: rewrote monthly summary #55015 (had regrown to ~168KB via duplicated blocks again) back to a single canonical ~11.5KB copy; refreshed Suggested Actions against current PR/issue state including the 3 newly-investigated-but-not-fixed issues; kept newest 5 run-history entries."
@@ -1736,11 +1743,6 @@
       "run_id": "36041714939",
       "date": "2026-09-24T18:36:00Z",
       "summary": "Task5: checked CI via get_check_runs on ~32 open [repo-assist] PRs -- all green except 2 previously-flagged unchanged RTL Sim CI infra-noise cases (#56195/#55435, broken details_url placeholder domain) and PR #57130's 4 pre-existing unrelated squared_difference ULP-flake checks (PR Gate Status itself green; CHANGES_REQUESTED already addressed per prior-run comment). Task1: labeled 7 fresh 2026-09-24 issues: #57731 feature, #57709/#57708/#57707/#57695/#57716 bug, #57715/#57722 performance monitoring. Task2/3: investigated #57715 (ttnn.transpose bfloat8_b identity typecast waste, iklemenskiTT) -- cloned+verified root cause line-by-line against current transpose.cpp::transpose_impl (matches reporter's exact code citation); confirmed no existing open PR; opened ready-for-review fix PR moving the identity check above the bfloat8_b typecast (mirrors reporter's own suggested fix) plus a regression test (test_transpose_identity_bfloat8_b) mirroring the existing test_transpose_wh_bfp4 pattern; posted confirming comment on the issue. Checked #57724 (nlp_concat_heads_decode vararg OOB) -- already has an open fix PR #57726 from the reporter, no duplicate opened. Task8: rewrote monthly summary #55015 (body had regrown to ~93KB via repeated duplicated Activity/Run-History blocks across at least 5 copies, a recurring failure mode) -- trimmed to a single canonical copy, refreshed Suggested Actions (added new PR, removed stale resolved items like the merged #57421 and the already-resolved #57474/#57518 coverage note and #57324/#57396 duplicate-merge note), kept a trimmed Run History."
-    },
-    {
-      "run_id": "36000165336",
-      "date": "2026-09-24T12:42:00Z",
-      "summary": "Task5: found PR #57130's CHANGES_REQUESTED review was already addressed by a prior commit (via blozano-tt/Claude Opus); posted a comment confirming this and diagnosing its 4 failing checks as a pre-existing unrelated squared_difference_ ULP flake (this PR only touches ttnn.selu golden). Task2: investigated fresh issue #57410 (host BFP4/BFP2 packer rounds directly to destination width instead of via an intermediate BFP8 stage) -- cloned main and verified the root-cause claim line-by-line against current blockfloat_common.cpp::convert_u32_to_bfp; posted a confirming comment; judged a direct fix too high-risk without device access, deferred to maintainer. Task3/4: fixed the smaller, independent build-wiring gap #57410 itself flagged -- test_bfp4_conversion.cpp was never added to sources.cmake's UNIT_TESTS_LEGACY_SRC despite its bfp8 sibling being present, so the only Bfp4 host conversion test in the tree has never compiled; opened a one-line ready-for-review PR. Task6: nudged 3 non-repo-assist author-blocked stale PRs past the 3-day cadence: #45949, #49787, #50519 (3-action cap reached). Task8: refreshed monthly summary Suggested Actions (added #57645/#57624/#57581/#57535/#57410-build-PR, removed merged #57421, added #57130/#57410 coordination items) and prepended this run-history entry."
     }
   ],
   "no_action_reviewed": [
