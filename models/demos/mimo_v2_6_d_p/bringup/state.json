@@ -25,6 +25,134 @@
   "started": "2026-09-26T15:59:25",
   "status": "PASS"
  },
+ "R.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "665c5fb5-9e95-40af-b06d-4266d58fdc05"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/R.2.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/R.2.reference.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 2369.5,
+    "session_id": "665c5fb5-9e95-40af-b06d-4266d58fdc05",
+    "t": "2026-09-26T16:39:17"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 1156.0,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-26T15:59:48"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-26T16:58:35"
+   }
+  ],
+  "last_run": "2026-09-26T16:58:35",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/R.2.log",
+  "metrics": {
+   "parity_layers": 48,
+   "pcc_hidden_L00": 0.999999999999983,
+   "pcc_hidden_L01": 1.0000000000000133,
+   "pcc_hidden_L02": 1.0000000000000113,
+   "pcc_hidden_L03": 0.9999999999999892,
+   "pcc_hidden_L04": 0.9999999999999585,
+   "pcc_hidden_L05": 0.9999999999999781,
+   "pcc_hidden_L06": 0.9999999999999604,
+   "pcc_hidden_L07": 0.9999999999999782,
+   "pcc_hidden_L08": 0.9999999999999502,
+   "pcc_hidden_L09": 0.9999999999999469,
+   "pcc_hidden_L10": 0.9999999999999831,
+   "pcc_hidden_L11": 0.9999999999999255,
+   "pcc_hidden_L12": 0.999999999999968,
+   "pcc_hidden_L13": 0.9999999999999526,
+   "pcc_hidden_L14": 0.9999999999999679,
+   "pcc_hidden_L15": 0.9999999999999195,
+   "pcc_hidden_L16": 1.0000000000000149,
+   "pcc_hidden_L17": 1.0000000000000207,
+   "pcc_hidden_L18": 1.000000000000004,
+   "pcc_hidden_L19": 1.0000000000000517,
+   "pcc_hidden_L20": 1.0000000000000064,
+   "pcc_hidden_L21": 0.9999999999999875,
+   "pcc_hidden_L22": 1.0000000000000182,
+   "pcc_hidden_L23": 1.000000000000017,
+   "pcc_hidden_L24": 1.000000000000039,
+   "pcc_hidden_L25": 0.9999999999999892,
+   "pcc_hidden_L26": 0.9999999999999895,
+   "pcc_hidden_L27": 0.9999999999999769,
+   "pcc_hidden_L28": 0.999999999999984,
+   "pcc_hidden_L29": 0.999999999999986,
+   "pcc_hidden_L30": 0.9999999999999803,
+   "pcc_hidden_L31": 0.9999999999999697,
+   "pcc_hidden_L32": 0.9999999999999745,
+   "pcc_hidden_L33": 0.9999999999999608,
+   "pcc_hidden_L34": 0.9999999999999463,
+   "pcc_hidden_L35": 0.9999999999999465,
+   "pcc_hidden_L36": 0.999999999999907,
+   "pcc_hidden_L37": 0.999999999999909,
+   "pcc_hidden_L38": 0.9999999999998865,
+   "pcc_hidden_L39": 0.9999999999998286,
+   "pcc_hidden_L40": 0.9999999999997736,
+   "pcc_hidden_L41": 0.999999999999422,
+   "pcc_hidden_L42": 0.9999999999993716,
+   "pcc_hidden_L43": 0.9999999999993215,
+   "pcc_hidden_L44": 0.9999999999993042,
+   "pcc_hidden_L45": 0.9999999999993505,
+   "pcc_hidden_L46": 0.9999999999993849,
+   "pcc_hidden_L47": 0.9999999999991188,
+   "pcc_logits": 0.9999999999996083,
+   "revision_ok": 1,
+   "revision_pinned": 1,
+   "smoke_ok": 1,
+   "text_next_token_acc": 0.9545676708221436,
+   "text_top1_acc": 0.9545676708221436,
+   "top1_match_frac": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "reference",
+  "started": "2026-09-26T16:39:19",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-26T15:40:23",
