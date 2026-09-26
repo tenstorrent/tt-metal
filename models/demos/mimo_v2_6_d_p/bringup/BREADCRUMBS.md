@@ -1074,3 +1074,18 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   Device gate already PASSES (generic `TtResidualAdd`, ffn_residual already routed by hooks): pcc 0.999997, rel 0.0023,
   ratio [0.9988, 1.0014], coef 1.0016, experts rel 0.0194. The first `FAIL ... pcc=0.000000` line is the precompile pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_ffn_residual.py`
+
+## S.full_moe.07 test (attempt 1), 2026-09-26
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_moe_07_ffn_residual.py` with swap 06's
+  body (`test_swap_full_moe_06_experts.py`, all checks unchanged) plus the `_check_ffn_residual` branch from
+  `test_swap_sliding_moe_07_ffn_residual.py`. That branch checks against the golden: PCC, rel <= 0.01 on the whole
+  chunk and on the first 128 rows, and the per-token ratio. Against the CPU add on the same inputs (iso): rel <= 0.01,
+  ratio [0.99, 1.01], worst row <= 0.02, experts coef [0.97, 1.03], experts-term rel <= 0.1.
+- One departure from layer 1: the per-token norm ratio vs golden is split by routing. Rows whose device top-8
+  selection equals the golden one must be in [0.98, 1.02]. Rows with a flip (184 of 2048 on device) must be in
+  [0.9, 1.1]. With a single [0.98, 1.02] limit the device failed at a minimum of 0.9694, and that row is a flipped
+  row. Rows with the golden routing are at [0.9970, 1.0034]. The iso ratio is [0.9995, 1.0011], so the add itself is fine.
+- BRINGUP_IMPL=reference: PASS (out rel 0.0025). BRINGUP_IMPL=stub: FAIL. Device gate: PASS, pcc_swap_out 0.999985,
+  out rel 0.0055 / first rows 0.0047, coef 1.0016, experts rel 0.0195. The router's golden overlap (0.98846 vs 0.985)
+  is still the tightest margin.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_07_ffn_residual.py`
