@@ -564,7 +564,7 @@ if (typeof document !== "undefined" && document.getElementById("grid")){
   const BUILT = buildAll();
   const S = {page:100, sub:0, hold:!!reduce, entry:"", target:null, roll:null, tick:0, timer:null, shown:null, idle:0};
   /* carousel: Index and Model graph take turns every CAROUSEL_S seconds while one of them is on screen (hold stops it) */
-  const CAROUSEL_S = 60, CAROUSEL = ["Index", "Graph"].map(s => (PAGES.find(p => p.short === s) || {}).n).filter(n => n != null);
+  const CAROUSEL_S = 20, CAROUSEL = ["Index", "Graph"].map(s => (PAGES.find(p => p.short === s) || {}).n).filter(n => n != null);
   let rows = [];
   grid.innerHTML = Array.from({length:H}, (_, r) => `<div class="row" data-r="${r}"></div>`).join("");
   rows = [...grid.children];
