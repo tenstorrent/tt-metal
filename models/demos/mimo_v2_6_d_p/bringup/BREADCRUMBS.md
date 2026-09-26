@@ -358,3 +358,25 @@ Results (gate): pcc_mlp_L00 0.999995, rel L2 0.0038, row norm ratio [1.0001, 1.0
 The pcc=0.000000 line in the log is the precompile collect pass (comp_pcc stub), not the real run.
 
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp.py`
+
+## S.full_dense.05 test (attempt 1), 2026-09-26
+
+What was done
+- Replaced the rendered `run_swap_test` call in `tests/bringup/test_swap_full_dense_05_mlp.py` with the swap-04 body
+  plus mlp: mlp vs golden rel L2 <= 0.015 and per-token norm ratio in [0.98, 1.02] (the mlp component test's limits).
+- New check: the swapped mlp against the CPU mlp run on the same device ffn_norm output (rel L2 <= 0.015, ratio
+  [0.98, 1.02], worst row rel <= 0.05), recorded as `*_vs_cpu_swap_mlp_out`. Isolates the device mlp from upstream error,
+  so mlp scale / TP-shard / row bugs (which PCC and block out miss) fail here. Generic via `CPU_SAME_INPUT` (stateless
+  steps only).
+- Block out rel L2 <= 0.01 (whole and first 128 rows) kept.
+
+Results
+- Device (default impl): pcc_swap_out 0.999995, out rel 0.0034 / first rows 0.0035; mlp vs golden rel 0.0046 ratio
+  [0.9981, 1.0081]; mlp vs CPU same inputs rel 0.0033 ratio [1.0004, 1.0044] worst row 0.0048. PASS.
+- BRINGUP_IMPL=reference: out 0.999999 / rel 0.0017, mlp rel 0.0017, vs CPU 0. PASS.
+- BRINGUP_IMPL=stub: fails every check (out PCC 0, rel 1.0).
+
+Next
+- `mlp_residual` is still CPU; it is not in the swap list yet.
+
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_05_mlp.py`
