@@ -784,9 +784,8 @@ void sub_exp_block_bcast_cols(
  * Column-only exp(prev_max - cur_max) for SALAD corrections.
  * Operates on first-column subset of tiles.
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
-void sub_exp_first_col_blocks(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh, bool repack = false) {
+template <bool profiling_enabled, uint32_t scale_fp32, bool repack = false>
+void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -812,7 +811,7 @@ void sub_exp_first_col_blocks(
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
-        if (repack) {
+        if constexpr (repack) {
             pack_reconfig_data_format(out_cb);
         }
         configure_single_tile_pack(out_cb);
@@ -833,7 +832,7 @@ void sub_exp_first_col_blocks(
  * ob_q_subblock controls read offset for out_in_cb and bcast_cb (0 when popped row-by-row).
  * sum_q_subblock controls read offset for sum_in_cb (cumulative when not popped per-row).
  */
-template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size, bool fp32_acc = false>
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
 void salad_correct_fused(
     uint32_t out_in_cb,
     uint32_t sum_in_cb,
@@ -842,8 +841,7 @@ void salad_correct_fused(
     uint32_t sum_out_cb,
     uint32_t ob_q_subblock,
     uint32_t sum_q_subblock,
-    uint32_t write_q_subblock,
-    uint32_t ones_row_cb = INVALID_CB) {
+    uint32_t write_q_subblock) {
     constexpr uint32_t tiles_per_row = sbh_t;
     constexpr uint32_t tiles_per_column = sbw_t;
     constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
@@ -856,67 +854,11 @@ void salad_correct_fused(
     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
-    if constexpr (!fp32_acc) {
-        mul_bcast_cols_init(out_in_cb, bcast_cb);
-    }
+    mul_bcast_cols_init(out_in_cb, bcast_cb);
+
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
-
-    if constexpr (fp32_acc) {
-        // An fp32 operand is truncated on its way into the FPU source registers, which turns the per chunk
-        // rounding of the accumulator into a one sided drift. So the fp32 accumulator and sum never go through
-        // the FPU: alpha is broadcast across the row by a one tile matmul of the alpha column against the scaler
-        // tile (ones in row 0), the tiles are unpacked straight into DEST and scaled on the pack thread's SFPU.
-        // The sum tile rides in the free slot of the row's last accumulator batch, so a d128 row takes two DEST
-        // acquires and a d64 row one; every acquire repeats the alpha broadcast for its half of DEST.
-        constexpr uint32_t alpha_dst = 0;
-        constexpr uint32_t tiles_per_acquire = dst_size - 1;
-        constexpr uint32_t slots_per_row = tiles_per_column + 1;
-        CircularBuffer(ones_row_cb).wait_front(1);
-        reconfig_data_format(ones_row_cb, bcast_cb);
-        for (uint32_t i = 0; i < tiles_per_row; i++) {
-            const uint32_t in_row = (ob_row_base + i) * tiles_per_column;
-            const uint32_t out_row = (write_row_base + i) * tiles_per_column;
-            for (uint32_t slot_base = 0; slot_base < slots_per_row; slot_base += tiles_per_acquire) {
-                const uint32_t slots =
-                    (slot_base + tiles_per_acquire <= slots_per_row) ? tiles_per_acquire : slots_per_row - slot_base;
-                const bool has_sum = slot_base + slots == slots_per_row;
-                const uint32_t cols = has_sum ? slots - 1 : slots;
-                tile_regs_acquire();
-                reconfig_data_format_srca(ones_row_cb);
-                matmul_block_init(bcast_cb, ones_row_cb, 0, 1, 1, 1);
-                matmul_block(bcast_cb, ones_row_cb, ob_row_base + i, 0, alpha_dst, 0, 1, 1, 1);
-                reconfig_data_format_srca(out_in_cb);
-                copy_init(out_in_cb);
-                for (uint32_t j = 0; j < cols; j++) {
-                    copy_tile(out_in_cb, in_row + slot_base + j, 1 + j);
-                }
-                if (has_sum) {
-                    copy_tile(sum_in_cb, sum_row_base + i, 1 + cols);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < slots; j++) {
-                    sdpa_mul_tiles_packthread(alpha_dst, 1 + j);
-                }
-                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-                pack_reconfig_data_format(out_out_cb);
-                PACK((llk_pack_reconfig_l1_acc(1)));
-                configure_single_tile_pack(out_out_cb);
-                for (uint32_t j = 0; j < cols; j++) {
-                    sdpa_pack_tile_ooo(1 + j, out_out_cb, out_row + slot_base + j);
-                }
-                if (has_sum) {
-                    sdpa_pack_tile_ooo(1 + cols, sum_out_cb, write_row_base + i);
-                }
-                tile_regs_release();
-            }
-        }
-        // Back to the bf16 unpack formats the rest of the step assumes.
-        reconfig_data_format(bcast_cb, bcast_cb);
-        return;
-    }
 
     constexpr uint32_t last_batch_rem = tiles_per_column % col_batch;
     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
@@ -963,6 +905,109 @@ void salad_correct_fused(
             sdpa_pack_tile_ooo(i, sum_out_cb, write_row_base + i);
         }
         tile_regs_release();
+    }
+}
+
+// salad_correct_fused with the fp32 accumulator and row sums.
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
+void salad_correct_fp32(
+    uint32_t out_in_cb,
+    uint32_t sum_in_cb,
+    uint32_t bcast_cb,
+    uint32_t out_out_cb,
+    uint32_t sum_out_cb,
+    uint32_t ob_q_subblock,
+    uint32_t sum_q_subblock,
+    uint32_t write_q_subblock,
+    uint32_t ones_row_cb) {
+    constexpr uint32_t tiles_per_row = sbh_t;
+    constexpr uint32_t tiles_per_column = sbw_t;
+    const uint32_t ob_row_base = ob_q_subblock * tiles_per_row;
+    const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
+    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
+
+    CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
+    CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
+    CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
+
+    // An fp32 operand is truncated on its way into the FPU source registers, which turns the per chunk
+    // rounding of the accumulator into a one sided drift. So the fp32 accumulator and sum never go through
+    // the FPU: alpha is broadcast across the row by a one tile matmul of the alpha column against the scaler
+    // tile (ones in row 0), the tiles are unpacked straight into DEST and scaled on the pack thread's SFPU.
+    // The sum tile rides in the free slot of the row's last accumulator batch, so a d128 row takes two DEST
+    // acquires and a d64 row one; every acquire repeats the alpha broadcast for its half of DEST.
+    constexpr uint32_t alpha_dst = 0;
+    constexpr uint32_t tiles_per_acquire = dst_size - 1;
+    constexpr uint32_t slots_per_row = tiles_per_column + 1;
+    CircularBuffer(ones_row_cb).wait_front(1);
+    reconfig_data_format(ones_row_cb, bcast_cb);
+    for (uint32_t i = 0; i < tiles_per_row; i++) {
+        const uint32_t in_row = (ob_row_base + i) * tiles_per_column;
+        const uint32_t out_row = (write_row_base + i) * tiles_per_column;
+        for (uint32_t slot_base = 0; slot_base < slots_per_row; slot_base += tiles_per_acquire) {
+            const uint32_t slots =
+                (slot_base + tiles_per_acquire <= slots_per_row) ? tiles_per_acquire : slots_per_row - slot_base;
+            const bool has_sum = slot_base + slots == slots_per_row;
+            const uint32_t cols = has_sum ? slots - 1 : slots;
+            tile_regs_acquire();
+            reconfig_data_format_srca(ones_row_cb);
+            matmul_block_init(bcast_cb, ones_row_cb, 0, 1, 1, 1);
+            matmul_block(bcast_cb, ones_row_cb, ob_row_base + i, 0, alpha_dst, 0, 1, 1, 1);
+            reconfig_data_format_srca(out_in_cb);
+            copy_init(out_in_cb);
+            for (uint32_t j = 0; j < cols; j++) {
+                copy_tile(out_in_cb, in_row + slot_base + j, 1 + j);
+            }
+            if (has_sum) {
+                copy_tile(sum_in_cb, sum_row_base + i, 1 + cols);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < slots; j++) {
+                sdpa_mul_tiles_packthread(alpha_dst, 1 + j);
+            }
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            pack_reconfig_data_format(out_out_cb);
+            PACK((llk_pack_reconfig_l1_acc(1)));
+            configure_single_tile_pack(out_out_cb);
+            for (uint32_t j = 0; j < cols; j++) {
+                sdpa_pack_tile_ooo(1 + j, out_out_cb, out_row + slot_base + j);
+            }
+            if (has_sum) {
+                sdpa_pack_tile_ooo(1 + cols, sum_out_cb, write_row_base + i);
+            }
+            tile_regs_release();
+        }
+    }
+    // Back to the bf16 unpack formats the rest of the step assumes.
+    reconfig_data_format(bcast_cb, bcast_cb);
+}
+
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size, bool fp32_acc>
+ALWI void salad_correct(
+    uint32_t out_in_cb,
+    uint32_t sum_in_cb,
+    uint32_t bcast_cb,
+    uint32_t out_out_cb,
+    uint32_t sum_out_cb,
+    uint32_t ob_q_subblock,
+    uint32_t sum_q_subblock,
+    uint32_t write_q_subblock,
+    uint32_t ones_row_cb) {
+    if constexpr (fp32_acc) {
+        salad_correct_fp32<sbh_t, sbw_t, dst_size>(
+            out_in_cb,
+            sum_in_cb,
+            bcast_cb,
+            out_out_cb,
+            sum_out_cb,
+            ob_q_subblock,
+            sum_q_subblock,
+            write_q_subblock,
+            ones_row_cb);
+    } else {
+        salad_correct_fused<sbh_t, sbw_t, dst_size>(
+            out_in_cb, sum_in_cb, bcast_cb, out_out_cb, sum_out_cb, ob_q_subblock, sum_q_subblock, write_q_subblock);
     }
 }
 
@@ -2126,7 +2171,7 @@ static void sdpa_inner_loop_step(
                 // sum_q_subblock=salad_row: prev.sum uses cumulative indexing (not popped per-row).
                 if constexpr (has_qktv_remainder) {
                     if (sbh == qktv_remainder_h) {
-                        salad_correct_fused<qktv_remainder_h, vDHt, dst_size, fp32_acc>(
+                        salad_correct<qktv_remainder_h, vDHt, dst_size, fp32_acc>(
                             prev.out,
                             prev.sum,
                             cb_exp_max_diff,
@@ -2137,7 +2182,7 @@ static void sdpa_inner_loop_step(
                             w_salad,
                             cb_identity_scale_in);
                     } else {
-                        salad_correct_fused<qktv_h, vDHt, dst_size, fp32_acc>(
+                        salad_correct<qktv_h, vDHt, dst_size, fp32_acc>(
                             prev.out,
                             prev.sum,
                             cb_exp_max_diff,
@@ -2149,7 +2194,7 @@ static void sdpa_inner_loop_step(
                             cb_identity_scale_in);
                     }
                 } else {
-                    salad_correct_fused<qktv_h, vDHt, dst_size, fp32_acc>(
+                    salad_correct<qktv_h, vDHt, dst_size, fp32_acc>(
                         prev.out,
                         prev.sum,
                         cb_exp_max_diff,
@@ -2186,8 +2231,8 @@ static void sdpa_inner_loop_step(
             // SALAD for previous group (always a full group, h=qktv_h)
             if (!is_first_iter) {
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h, fp32_acc);
+                sub_exp_first_col_blocks<profiling_enabled, scale_fp32, fp32_acc>(
+                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
 
@@ -2244,8 +2289,8 @@ static void sdpa_inner_loop_step(
                         has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
 
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h, fp32_acc);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32, fp32_acc>(
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
 
                     salad_correct_row(salad_row, w_salad, qktv_h);
@@ -2298,8 +2343,8 @@ static void sdpa_inner_loop_step(
                 if (!is_first_iter) {
                     constexpr uint32_t drain_salad_row = 0;
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h, fp32_acc);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32, fp32_acc>(
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
                 }
