@@ -2230,8 +2230,8 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
         # operand; needs a per-cell read-back to say which is wrong before either is touched.
         MathOperation.SfpuIsclose,
-        # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
-        # ignores it, so a cat-B probe in B asserts nothing.
+        # Effectively unary: the kernel is reached through a binary adapter that ignores operand
+        # B, as does the golden, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
     }
 )
