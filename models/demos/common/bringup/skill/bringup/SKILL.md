@@ -69,16 +69,36 @@ the dashboards. Classify every failure before acting, and log every intervention
 | the box (device open fails, ethernet or fabric timeouts) | the orchestrator stops by itself; ask the person to reset the board, then a quick box check, then resume |
 | the input or data (implausible accuracy, degenerate generations) | stop, show the evidence, ask the person |
 | an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve` |
+| an agent needs something its step does not allow (a shared file, a wider path, a framework change) | decide yourself (below) |
+
+### Decide; do not ask
+
+You are the overseer. Use your judgement and keep the run moving; the person does not want to be asked for routine
+permissions. Ask the person only for: the intake spec, the plan, the performance picks, a board reset, a push or PR,
+and evidence that the model or its data is wrong (implausible accuracy, degenerate output). Everything else (an agent
+needing a shared file, a wider allowed path, a framework fix, a rerun, a retry after a stop) you decide, do, log in
+supervision.md, and report in one line.
+
+Judge every agent's work before you let it stand, most of all when a gate passes after a struggle. Read the diff of
+the gate commit (`git show --stat`, then the parts that matter), not only the verdict. Reject it as cheating if it:
+- loosens a threshold, edits a frozen test, a golden, `tasks.yaml`, `state.json` or `results/`, or skips a check;
+- special-cases the test: recognizes the golden input or layer, hard-codes outputs, or reads the golden inside the model;
+- hides CPU work in a device module (torch math in a forward, a host round-trip per chunk, per-call constant rebuilds);
+- silences the problem instead of fixing it (a try/except that swallows it, a fallback path only the test takes);
+- fakes an interface (attributes set only to get past a check, e.g. an MLA field on a non-MLA model).
+Accept it if the change is the honest fix, even when it touches shared code: a generic hook in the engine, a new
+branch for a new layout, a fix in a shared op with its own test. To reject: pause, revert the gate commit
+(`git revert`), add one bullet to the model's findings saying what was wrong and what the honest fix is, then
+`$B rerun --from <task>`. Log the decision either way.
 
 Never:
 - edit anything in the tree while an agent step runs. `python -m models.demos.common.bringup.orchestrator pause --spec <spec>`
   stops it before its next task; the path check would charge your edit to the running agent;
-- approve for the person, loosen a threshold, or edit a frozen test;
-- change the spec without asking (a spec edit voids the intake approval; re-approve on their word). Agents change
-  what their step needs without extra approvals (the contract step may change the prefill engine);
+- approve the intake, plan or performance picks for the person, loosen a threshold, or edit a frozen test;
+- change the spec without asking (a spec edit voids the intake approval; re-approve on their word);
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
-Report briefly on each gate the person would care about; say plainly when you stopped something and why.
+Report briefly on each gate the person would care about; say plainly what you decided, stopped or rejected, and why.
 
 ### Keep the session's context small
 
