@@ -77,6 +77,12 @@ int main(void)
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
 #endif
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    for (std::uint32_t slot = 0; slot < 3; ++slot)
+    {
+        host_signal::write(slot, ckernel::RESET_VAL);
+    }
+#endif
     device_setup();
     clear_trisc_soft_reset(); // Release the rest of the triscs
 #endif
@@ -109,6 +115,9 @@ int main(void)
     }
 
     *mailbox = ckernel::KERNEL_COMPLETE;
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    host_signal::write(mailbox_offset / sizeof(std::uint32_t), ckernel::KERNEL_COMPLETE);
+#endif
 }
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
