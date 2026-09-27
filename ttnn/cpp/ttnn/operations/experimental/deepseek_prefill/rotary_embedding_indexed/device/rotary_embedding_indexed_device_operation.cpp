@@ -4,9 +4,12 @@
 
 #include "rotary_embedding_indexed_device_operation.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -15,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
+#include "ttnn/config.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -699,10 +703,36 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_mesh_workload
     tensor_return_value_t& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    // A program differs between devices only in its SP coordinate and, when present, the
+    // sequence subshard coordinate. Without sequence subsharding, all TP neighbors in the
+    // same SP row/column can run one program. Keep separate contiguous ranges in case the
+    // participating tensor coordinates cover only part of the mesh.
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<ttnn::MeshCoordinate>> groups;
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
+        const uint32_t sp_index =
+            ::ttnn::ccl::get_linearized_index_from_physical_coord(tensor_args.cos, coord, args.cluster_axis);
+        const uint32_t physical_sp_coord = coord[args.cluster_axis];
+        // A subsharded query also bakes its TP offset into the program, so each coordinate
+        // must remain a separate range in that case.
+        groups[{physical_sp_coord, args.seq_subshard_axis.has_value() ? coord[1 - args.cluster_axis] : sp_index}]
+            .push_back(coord);
+    }
+    const uint32_t other_axis = 1 - args.cluster_axis;
+    for (auto& [key, coords] : groups) {
+        std::sort(coords.begin(), coords.end(), [other_axis](const auto& a, const auto& b) {
+            return a[other_axis] < b[other_axis];
+        });
+        for (size_t start = 0; start < coords.size();) {
+            size_t end = start;
+            while (end + 1 < coords.size() && coords[end + 1][other_axis] == coords[end][other_axis] + 1) {
+                ++end;
+            }
+            const ttnn::MeshCoordinateRange range(coords[start], coords[end]);
+            auto cached_program = create_at(args, coords[start], tensor_args, output);
+            workload.add_program(range, std::move(cached_program.program));
+            shared_variables.emplace(range, cached_program.shared_variables);
+            start = end + 1;
+        }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
@@ -733,10 +763,11 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         run_args.kernel_run_args = {reader_run};
     }
 
-    // All stamped programs declare identical tensor specs and runtime schemas; only my_sp_coord
-    // differs. Validate this update once, then refresh every program's bindings without repeating
-    // the same spec/name checks. Validation still runs on every invocation, including fresh metadata.
-    bool validated = false;
+    // All stamped programs declare identical tensor specs and runtime schemas; only the baked
+    // coordinate values differ. In validation mode, check one update per invocation. Otherwise
+    // the cache key already guarantees matching tensor specs, and validate_runtime_args checks
+    // the changing scalar or metadata tensor on each invocation.
+    bool validated = !ttnn::CONFIG.get<"validate_program_args">();
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
         validated = true;
