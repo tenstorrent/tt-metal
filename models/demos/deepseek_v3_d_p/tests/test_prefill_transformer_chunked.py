@@ -23,11 +23,14 @@ Override the trace dir with PREFILL_TRACE_DIR.
 """
 
 import copy
+import cProfile
 import gc
 import json
 import os
+import pstats
 import statistics
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -45,6 +48,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.perf.glm52_chunk_host_profile import ChunkHostProfile
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -1605,6 +1609,9 @@ def run_chunked_transformer_updated(
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    host_profile_enabled = os.environ.get("GLM52_CHUNK_HOST_PROFILE") == "1"
+    if host_profile_enabled and (variant.name != "glm_5_2" or use_trace or num_iters < 3 or n_chunks < 6):
+        raise ValueError("GLM52_CHUNK_HOST_PROFILE requires eager glm_5_2 with >=3 iterations and >=6 chunks")
 
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
@@ -2156,17 +2163,42 @@ def run_chunked_transformer_updated(
             # intermediates dict, or None when none were requested -- no first_token: the transformer has
             # no norm / LM-head / sampling tail.
             reset_fused_ring_host_timing()
-            layer_outputs = transformer.forward(
-                tt_tokens,
-                tt_kvpe_cache,
-                actual_isl=CHUNK,
-                actual_start=kv_actual,
-                actual_end=kv_actual + CHUNK,
-                cache_user_id=0,
-                return_intermediates=check_layer_pcc,
-                index_kv_cache=tt_index_kv_cache,
-            )
+            host_profile = ChunkHostProfile() if host_profile_enabled and it == 2 and c == 5 else None
+            python_profile = cProfile.Profile() if host_profile_enabled and it == 3 and c == 5 else None
+            if python_profile:
+                python_profile.enable()
+            with host_profile.capture_forward() if host_profile else nullcontext():
+                layer_outputs = transformer.forward(
+                    tt_tokens,
+                    tt_kvpe_cache,
+                    actual_isl=CHUNK,
+                    actual_start=kv_actual,
+                    actual_end=kv_actual + CHUNK,
+                    cache_user_id=0,
+                    return_intermediates=check_layer_pcc,
+                    index_kv_cache=tt_index_kv_cache,
+                )
+            if python_profile:
+                python_profile.disable()
+                stats = pstats.Stats(python_profile)
+                rows = sorted(
+                    (
+                        (self_time, count, path.rsplit("/", 1)[-1], line, function)
+                        for (path, line, function), (_, count, self_time, _) in stats.stats.items()
+                        if "/models/demos/deepseek_v3_d_p/tt/" in path or path.endswith("/ttnn/ttnn/decorators.py")
+                    ),
+                    reverse=True,
+                )
+                print(
+                    "[glm52 Python profile] iter=3 chunk=5 model/dispatch self time (ms, calls, location):", flush=True
+                )
+                for self_time, count, filename, line, function in rows[:40]:
+                    print(f"  {self_time * 1e3:8.3f} {count:6d}  {filename}:{line}:{function}", flush=True)
+            sync_start_ns = time.perf_counter_ns() if host_profile else 0
             ttnn.synchronize_device(mesh_device)
+            if host_profile:
+                host_profile.sync_ns = time.perf_counter_ns() - sync_start_ns
+                host_profile.report(it, c)
             if check_layer_pcc:
                 # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
                 # each iteration replays the same chunks into the same cache region).
