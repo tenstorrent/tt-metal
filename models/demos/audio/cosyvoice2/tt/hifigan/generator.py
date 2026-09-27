@@ -429,6 +429,9 @@ class TtHiFTDecoder:
             dtype=dtype,
         )
 
+    def _as_own_dtype(self, t):
+        return t if t.dtype == self.dtype else ttnn.typecast(t, self.dtype)
+
     def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
         """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform (NHWC).
 
@@ -436,7 +439,14 @@ class TtHiFTDecoder:
         instance's *own* `upsample_rates`/`upsample_kernel_sizes` -- explicitly,
         every time, with no default to silently fall back onto. See the module
         docstring for why that specific call site mattered.
+
+        dtype boundary: this decoder runs at its own `dtype` (fp32 with real weights, see
+        test_hift_checkpoint.py) whatever dtype `mel` and `s` arrive in, and converts them here,
+        once. The generator's F0/source path can run at bf16 (its real-weight accuracy holds
+        there), and `TtStft` builds its framing/padding tensors at the decoder's dtype -- a bf16 `s`
+        reaching it unconverted failed `ttnn.concat`'s same-dtype check (TT_FATAL).
         """
+        mel_own, s_own = self._as_own_dtype(mel), self._as_own_dtype(s)
         trace = shape_trace(
             mel_frames,
             self.base_channels,
@@ -447,10 +457,14 @@ class TtHiFTDecoder:
             self.in_channels,
         )
 
-        s_stft, _ = self.stft(s, trace["audio_length"], batch_size)  # [B, 2*bins, T]
+        s_stft, _ = self.stft(s_own, trace["audio_length"], batch_size)  # [B, 2*bins, T]
+        if s_own is not s:
+            ttnn.deallocate(s_own)  # a converted copy made above; the caller still owns `s`
         s_stft = ttnn.permute(s_stft, (0, 2, 1))  # [B, T, 2*bins]
 
-        x, _ = self.conv_pre(mel, mel_frames, batch_size)
+        x, _ = self.conv_pre(mel_own, mel_frames, batch_size)
+        if mel_own is not mel:
+            ttnn.deallocate(mel_own)
 
         for st in trace["stages"]:
             act = ttnn.leaky_relu(x, self.lrelu_slope)

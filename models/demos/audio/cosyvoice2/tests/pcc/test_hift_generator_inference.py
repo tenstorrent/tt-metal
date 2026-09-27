@@ -103,3 +103,51 @@ def test_device_hift_generator_inference_matches_torch_reference(device, mel_fra
     passed, pcc = comp_pcc(want, got, GATE_BF16)
     print(f"\n  device HiFTGenerator.inference (T_mel={mel_frames}) PCC {pcc}")
     assert passed, pcc
+
+
+# bf16 generator (F0 predictor + NSF source) feeding an fp32 decoder: the real-weight configuration
+# (the F0 predictor holds at bf16 with real weights; the decoder needs fp32, see test_hift_checkpoint.py).
+# Gate over the whole waveform: PCC >= GATE_BF16 and max|diff| <= HIFT_MIXED_MAX_ABS. Measured 2026-09-27 (N150,
+# random weights): PCC 0.999994-0.999998, max|diff| 0.0004-0.0012, the same for bf16 and fp32 mel inputs.
+HIFT_MIXED_MAX_ABS = 0.01
+
+
+@needs_l1_small
+@pytest.mark.parametrize("mel_dtype", ["bfloat16", "float32"])
+@pytest.mark.parametrize("mel_frames", [8, 20])
+def test_device_hift_generator_bf16_source_fp32_decoder(device, mel_frames, mel_dtype):
+    """`TtHiFTGenerator` at bf16 with a `TtHiFTDecoder` at fp32. The decoder converts its inputs to its
+    own dtype at `decode()` (one boundary); before that, the bf16 source signal reached `TtStft`'s fp32
+    framing/padding tensors unconverted and `ttnn.concat` failed with TT_FATAL (same-dtype check) --
+    on that code this test errors out. The mel arrives as the flow hands it over (fp32) or as bf16."""
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.hifigan.f0_predictor import TorchConvRNNF0PredictorRef
+    from models.demos.audio.cosyvoice2.tt.hifigan.generator import (
+        TorchHiFTDecodeRef,
+        TorchHiFTGeneratorInferenceRef,
+        TtHiFTDecoder,
+        TtHiFTGenerator,
+    )
+
+    torch.manual_seed(mel_frames)
+    decode_ref = TorchHiFTDecodeRef(seed=mel_frames)
+    f0_ref = TorchConvRNNF0PredictorRef(seed=mel_frames)
+    ref = TorchHiFTGeneratorInferenceRef(decode_ref, f0_ref, torch.randn(1, 9) * 0.1, torch.randn(1) * 0.1)
+    mel = torch.randn(1, mel_frames, 80) * 0.5
+    sine_noise = torch.randn(1, mel_frames * ref.upsample_scale, ref.harmonic_num + 1)
+    with torch.no_grad():
+        want = ref.inference(mel, sine_noise=sine_noise)
+
+    dec = TtHiFTDecoder(device, decode_ref, dtype=ttnn.float32)
+    tt_gen = TtHiFTGenerator(device, ref, dec, dtype=ttnn.bfloat16)
+    mel_dev = ttnn.from_torch(mel, dtype=getattr(ttnn, mel_dtype), layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.to_torch(tt_gen.inference(mel_dev, mel_frames, 1, sine_noise=sine_noise)).reshape(1, -1).float()
+
+    assert got.shape == want.shape
+    passed, pcc = comp_pcc(want, got, GATE_BF16)
+    max_abs = (want - got).abs().max().item()
+    print(
+        f"\n  bf16 generator + fp32 decoder, mel {mel_dtype} (T_mel={mel_frames}): PCC {pcc}, max|diff| {max_abs:.4g}"
+    )
+    assert passed, pcc
+    assert max_abs <= HIFT_MIXED_MAX_ABS, max_abs
