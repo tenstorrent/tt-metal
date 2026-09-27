@@ -12,7 +12,13 @@ each; the traced prefill is deterministic) and compare the per-admission digests
         models/demos/blackhole/qwen36/tests/test_gdn_slot_write_fast_tp2_scratch.py
     python models/demos/blackhole/qwen36/tests/test_gdn_slot_write_fast_tp2_scratch.py a.json b.json   # compare
 
-Env: SLOT_FAST_LAYERS (default 16 = 12 GDN + 4 attention layers), SLOT_FAST_B (default 32 = the tp2 max_num_seqs).
+Env: SLOT_FAST_LAYERS (default 16 = 12 GDN + 4 attention layers), SLOT_FAST_B (default 32 = the tp2 max_num_seqs),
+SLOT_FAST_DECODE (default 0): > 0 = the served interleaving -- decode traces are captured at widths 8 and B BEFORE the
+chunk-prefill trace (the plugin's warmup order), and after every admission step SLOT_FAST_DECODE traced decode steps
+run over every admitted slot (inactive rows at position -1, width = 8 while all live slots are < 8, else B, like the
+plugin's decode bucketing), so each later admission lands next to live, advanced decode rows (fused-conv decode:
+stale taps, advanced packed history). Every decode step's logits rows and the full GDN state after the decode steps
+are digested too.
 """
 
 import hashlib
@@ -85,6 +91,28 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
         (num_blocks + 1, args.n_local_kv_heads, BLOCK, args.head_dim), ttnn.bfloat8_b, batch_size=B
     )
     warm_pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    n_decode = int(os.environ.get("SLOT_FAST_DECODE", "0"))
+    pt_full = torch.stack([torch.arange(s * BPU, (s + 1) * BPU, dtype=torch.int32) for s in range(B)])
+    dec_traces = {}
+    if n_decode:
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        model.sync_gdn_decode_state()
+        for w in sorted({min(8, B), B}):
+            tokens = torch.full((w, 1), 100, dtype=torch.int32)
+            pos = torch.full((w,), -1, dtype=torch.int32)
+            dev0 = model.prepare_inputs_decode(tokens, pos, page_table=pt_full[:w])
+            model.ttnn_decode_forward(dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3])  # compile
+            ttnn.synchronize_device(mesh_device)
+            host = model.prepare_decode_inputs_host(tokens, pos, page_table=pt_full[:w])
+            dev = copy_host_to_device(host, mesh_device=mesh_device)
+            tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            out, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            dec_traces[w] = (tid, dev, out)
+        logger.info(f"[slot_fast] decode traces captured at widths {sorted(dec_traces)}")
+    live_pos = {}  # slot -> next decode position
     prev = model._bind_gdn_prefill_scratch()
     try:
         model.capture_prefill_trace_chunked(mesh_device, warm_pt, chunk_size=2048)
@@ -145,10 +173,35 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
             "logits": [_digest(lg.float()) for lg in logits],
             "state": _state_digests(model, comp),
         }
+        for s, T in zip(slots, lens):
+            live_pos[s] = T
+        if n_decode:
+            w = min(8, B) if max(live_pos) < min(8, B) else B
+            tid, dev, out = dec_traces[w]
+            dec_logits = []
+            for _ in range(n_decode):
+                tokens = torch.full((w, 1), 100, dtype=torch.int32)
+                pos = torch.full((w,), -1, dtype=torch.int32)
+                for s, p in live_pos.items():
+                    tokens[s, 0] = int(torch.randint(1000, 100000, (1,), generator=g))
+                    pos[s] = p
+                host = model.prepare_decode_inputs_host(tokens, pos, page_table=pt_full[:w])
+                copy_host_to_device(host, device_tensors=dev)
+                ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+                lg = model.process_output_decode(out, w)[:, 0, : model.vocab_size].float()
+                dec_logits.append({str(s): _digest(lg[s].contiguous()) for s in sorted(live_pos)})
+                for s in live_pos:
+                    live_pos[s] += 1
+            ttnn.synchronize_device(mesh_device)
+            rec["decode_width"] = w
+            rec["decode_logits"] = dec_logits
+            rec["state_after_decode"] = _state_digests(model, comp)
         logger.info(f"[slot_fast knob={knob}] slots={slots} lens={lens} prefill_paged_slots {dt * 1e3:.1f} ms")
         steps.append(rec)
+    for tid, _, _ in dec_traces.values():
+        ttnn.release_trace(mesh_device, tid)
     with open(out_path, "w") as f:
-        json.dump({"knob": knob, "B": B, "n_layers": n_layers, "steps": steps}, f, indent=1)
+        json.dump({"knob": knob, "B": B, "n_layers": n_layers, "n_decode": n_decode, "steps": steps}, f, indent=1)
     logger.info(f"[slot_fast] wrote {out_path}")
 
 
@@ -159,9 +212,22 @@ def _compare(a_path, b_path):
         diff = [k for k in sa["state"] if sa["state"][k] != sb["state"].get(k)]
         ld = sa["logits"] != sb["logits"]
         bad += len(diff) + int(ld)
+        dec = ""
+        if "decode_logits" in sa or "decode_logits" in sb:
+            sd_a, sd_b = sa.get("state_after_decode", {}), sb.get("state_after_decode", {})
+            ddiff = [k for k in sd_a if sd_a[k] != sd_b.get(k)] + (["<missing>"] if not sd_a or not sd_b else [])
+            dl = [j for j, (x, y) in enumerate(zip(sa.get("decode_logits", []), sb.get("decode_logits", []))) if x != y]
+            dl += ["<len>"] if len(sa.get("decode_logits", [])) != len(sb.get("decode_logits", [])) else []
+            bad += len(ddiff) + len(dl)
+            n_rows = sum(len(x) for x in sa.get("decode_logits", []))
+            dec = (
+                f"; +{len(sa.get('decode_logits', []))} decode steps @w{sa.get('decode_width')} ({n_rows} rows): "
+                f"logits steps differ {dl if dl else 'none'}, state after decode {len(ddiff)} differ"
+                f"{' ' + str(ddiff[:6]) if ddiff else ''}"
+            )
         print(
             f"step {i} slots={sa['slots']} lens={sa['lens']}: {len(sa['state'])} buffers, {len(diff)} differ"
-            f"{' ' + str(diff[:6]) if diff else ''}; logits {'DIFFER' if ld else 'equal'}; "
+            f"{' ' + str(diff[:6]) if diff else ''}; logits {'DIFFER' if ld else 'equal'}{dec}; "
             f"wall {sa['wall_ms']} ms (knob {a['knob']}) vs {sb['wall_ms']} ms (knob {b['knob']})"
         )
     print("BIT-EXACT" if bad == 0 and len(a["steps"]) == len(b["steps"]) else f"MISMATCH ({bad})")

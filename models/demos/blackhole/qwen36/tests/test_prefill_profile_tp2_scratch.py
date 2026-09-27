@@ -23,6 +23,10 @@ Runs the traced chunk-outer replay (+ masked-bucket tail) between tracy signpost
 layers="0,1,2,3" -> 3 GDN layers + 1 full-attention layer (real checkpoint layers, real types).
 Env knobs: PROFILE_REPEATS (default 1), PROFILE_DUMP_LOGITS=<tag> (save the last logits row to
 profiles/p1d1_opt/logits_<tag>.pt for before/after numerics checks), PROFILE_REAL_PROMPT=1.
+PROFILE_EAGER=1 (TP=2 fork): run the EAGER prompt prefill instead of the traced one -- prompts < one chunk take the
+eager masked bucket (prefill_masked_bucket; set QWEN36_PREFILL_BUCKET_TRACE=0 so no bucket trace is replayed), longer
+prompts the eager chunk loop _prefill_chunked_eager_tp (the forward the tp2-dflash2 spec prompt prefill runs, minus the
+drafter taps); used to gate QWEN36_EAGER_FULL_CHUNK_UNMASKED.
 """
 
 import os
@@ -123,11 +127,21 @@ def _prompt_ids(model, isl):
     return token_ids
 
 
+def _prefill(model, token_ids, page_table, isl):
+    if os.environ.get("PROFILE_EAGER") != "1":
+        return model.prefill_traced_chunked(token_ids, page_table, actual_len=isl)
+    num_full, tail = isl // CHUNK, isl % CHUNK
+    model._build_request_rope(token_ids[:, :isl], None)
+    if num_full == 0:
+        return model.prefill_masked_bucket(token_ids[:, :isl], page_table, actual_len=isl, chunk_start=0)
+    return model._prefill_chunked_eager_tp(token_ids, page_table, isl, num_full, CHUNK, tail)
+
+
 def _run_one(model, device, page_table, isl, repeats):
     token_ids = _prompt_ids(model, isl)
 
     # Untimed warm request (anything lazily allocated/compiled happens here, not in the profiled region).
-    _ = model.prefill_traced_chunked(token_ids, page_table, actual_len=isl)
+    _ = _prefill(model, token_ids, page_table, isl)
     ttnn.synchronize_device(device)
 
     ttfts = []
@@ -135,7 +149,7 @@ def _run_one(model, device, page_table, isl, repeats):
     signpost("start")
     for _ in range(repeats):
         t0 = time.time()
-        logits = model.prefill_traced_chunked(token_ids, page_table, actual_len=isl)
+        logits = _prefill(model, token_ids, page_table, isl)
         ttnn.synchronize_device(device)
         ttfts.append(time.time() - t0)
     signpost("stop")
