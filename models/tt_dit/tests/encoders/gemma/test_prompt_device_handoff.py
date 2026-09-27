@@ -125,6 +125,8 @@ def test_prompt_device_handoff(mesh_device, device_params):
     guard_checked = False
     source_paths = [
         __file__,
+        "models/tt_dit/tests/encoders/gemma/test_gemma_prompt_replay.py",
+        "models/tt_dit/utils/cache.py",
         "models/tt_dit/encoders/gemma/encoder_pair.py",
         "models/tt_dit/pipelines/ltx/pipeline_ltx.py",
         "models/tt_dit/pipelines/ltx/pipeline_ltx_distilled.py",
