@@ -12,7 +12,7 @@ from helpers.test_config import BuildMode, TestConfig
 def get_expected_overhead():
     match get_chip_architecture():
         case ChipArchitecture.WORMHOLE:
-            return 29
+            return 20
         case ChipArchitecture.BLACKHOLE:
             return 30
         case _:
