@@ -1,0 +1,571 @@
+{
+  "ifeval": {
+    "dataset_path": "google/IFEval",
+    "dataset_name": null,
+    "test_split": "train",
+    "validation_split": null,
+    "num_fewshot": 0,
+    "generation_kwargs": {
+      "until": [],
+      "do_sample": false,
+      "temperature": 0.0,
+      "max_gen_toks": 1280
+    },
+    "filter_list": null,
+    "metric_list": [
+      {
+        "metric": "prompt_level_strict_acc",
+        "aggregation": "mean",
+        "higher_is_better": true
+      },
+      {
+        "metric": "inst_level_strict_acc",
+        "aggregation": "<function agg_inst_level_acc at 0x78ad4e774310>",
+        "higher_is_better": true
+      },
+      {
+        "metric": "prompt_level_loose_acc",
+        "aggregation": "mean",
+        "higher_is_better": true
+      },
+      {
+        "metric": "inst_level_loose_acc",
+        "aggregation": "<function agg_inst_level_acc at 0x78ad4e774310>",
+        "higher_is_better": true
+      }
+    ]
+  },
+  "mmlu_pro_biology": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_business": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_chemistry": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_computer_science": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_economics": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_engineering": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_health": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_history": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_law": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_math": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_other": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_philosophy": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_physics": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "mmlu_pro_psychology": {
+    "dataset_path": "TIGER-Lab/MMLU-Pro",
+    "dataset_name": null,
+    "test_split": "test",
+    "validation_split": null,
+    "num_fewshot": 5,
+    "generation_kwargs": {
+      "until": [
+        "Question:"
+      ],
+      "max_gen_toks": 2048,
+      "do_sample": false,
+      "temperature": 0.0
+    },
+    "filter_list": [
+      {
+        "name": "custom-extract",
+        "filter": [
+          {
+            "function": "regex",
+            "regex_pattern": "answer is \\(?([ABCDEFGHIJ])\\)?"
+          },
+          {
+            "function": "take_first"
+          }
+        ]
+      }
+    ],
+    "metric_list": [
+      {
+        "metric": "exact_match",
+        "aggregation": "mean",
+        "higher_is_better": true,
+        "ignore_case": true,
+        "ignore_punctuation": true
+      }
+    ]
+  },
+  "nltk_punkt_tab": "/home/mvasiljevic/.cache/nltk_data/tokenizers/punkt_tab"
+}

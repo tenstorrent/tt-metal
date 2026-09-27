@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Offline phase reducer; preparation only, not connected to live serving.
+"""Pure host phase reducer for immutable serving completion events.
 
 Each event has submission_id, event (dispatch/completion), timestamp_ns,
 phase (prefill/decode), and request_ids. Metadata must match across the pair.
@@ -84,7 +84,7 @@ def reduce_phases(events, request_ids):
         seconds[segment["phase"]] += segment["duration_ns"] / 1e9
     return dict(
         schema_version=1,
-        status="offline_reduction_only_not_live_collector",
+        status="validated_host_phase_reduction",
         scope="first measured dispatch through final measured completion; transition gaps assigned to following phase",
         request_ids=sorted(cohort),
         first_dispatch_ns=first,

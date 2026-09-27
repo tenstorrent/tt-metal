@@ -1,0 +1,15 @@
+{
+  "recorded_wall_time": 1790534966.930727,
+  "supplied_server_running": false,
+  "previous_startup_seconds_approx": 190,
+  "previous_startup_evidence": "../optimized_vllm/candidate_server_runner.log",
+  "prior_launch_configuration": "../optimized_vllm/server_command.json",
+  "setup": "Operator-provisioned client; dataset download and freeze, native tokenizer and transport checks, host collector tests; no live inference before timed invocation. Existing old run archived as setup-previous. First32-slot launch is timed.",
+  "device_nodes": [
+    "/dev/tenstorrent/3",
+    "/dev/tenstorrent/2",
+    "/dev/tenstorrent/1",
+    "/dev/tenstorrent/0"
+  ],
+  "context_sha256": "dc2a250ac132929c96ee1e267f51d5ceec9fe982767688f2261548736aaa5fb2"
+}
