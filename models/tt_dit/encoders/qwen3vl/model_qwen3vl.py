@@ -97,15 +97,13 @@ def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[in
     return runs
 
 
-def vision_gather_indices(
-    runs: Sequence[tuple[int, int]], seq_len: int, *, vision_offset: int, keep_text: bool
-) -> torch.Tensor:
+def vision_gather_indices(runs: Sequence[tuple[int, int]], seq_len: int, *, vision_offset: int) -> torch.Tensor:
     """Source-table row of each of `seq_len` sequence rows, for a gather that places vision tokens.
 
-    The rows of `runs` take consecutive table rows from `vision_offset`, in run order. Every other
-    row maps to itself when `keep_text`, else to row 0.
+    The rows of `runs` take consecutive table rows from `vision_offset` (at least 1), in run order.
+    Every other row maps to row 0.
     """
-    indices = torch.arange(seq_len) if keep_text else torch.zeros(seq_len, dtype=torch.int64)
+    indices = torch.zeros(seq_len, dtype=torch.int64)
     cursor = taken = 0
     for start, length in runs:
         if start < cursor:
@@ -304,14 +302,13 @@ class Qwen3VlTextEncoder(Module):
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
 
+        if self._sp_axis is not None:
+            input_embeds = ttnn.mesh_partition(input_embeds, dim=1, cluster_axis=self._sp_axis)
+            pos_embeds = tuple(ttnn.mesh_partition(x, dim=2, cluster_axis=self._sp_axis) for x in pos_embeds)
+
         deepstack_rows: list[ttnn.Tensor] = []
         if vision_embeds is not None:
             input_embeds, deepstack_rows = self.merge_vision(input_embeds, vision_embeds, vision_runs, deepstack_embeds)
-
-        if self._sp_axis is not None:
-            deepstack_rows = [ttnn.mesh_partition(x, dim=1, cluster_axis=self._sp_axis) for x in deepstack_rows]
-            input_embeds = ttnn.mesh_partition(input_embeds, dim=1, cluster_axis=self._sp_axis)
-            pos_embeds = tuple(ttnn.mesh_partition(x, dim=2, cluster_axis=self._sp_axis) for x in pos_embeds)
 
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
@@ -353,44 +350,40 @@ class Qwen3VlTextEncoder(Module):
         """`input_embeds` with the `vision_runs` rows replaced by the tower's tokens, and each deepstack
         feature laid out along the sequence (zeros off the vision rows), ready to add to the hidden states.
 
-        A row gather from `[text | tower rows]` rather than slicing around each run, so every program is
-        keyed only on the sequence length and the tower's row count; the run layout lives in the index
-        values. `vision_embeds` may carry the tower's SP pad rows after the real tokens: nothing indexes
-        them.
+        `input_embeds` is this device's sequence shard under SP, and so is everything returned. Each
+        output is a row gather from `[zeros | tower rows]` rather than slices around each run, so every
+        program is keyed only on the sequence length and the tower's row count; the run layout lives in
+        the index values. The text rows come back through a 0/1 row select, which keeps the table to the
+        tower's rows: `ttnn.embedding` takes a row-major copy of it. `vision_embeds` may carry the tower's
+        SP pad rows after the real tokens: nothing indexes them.
         """
-        seq_len, hidden = input_embeds.shape[-2], input_embeds.shape[-1]
+        seq_len, hidden = input_embeds.shape[-2] * self._sp_factor, input_embeds.shape[-1]
         real_tokens = sum(length for _, length in vision_runs)
         if real_tokens > vision_embeds.shape[-2]:
             msg = f"runs cover {real_tokens} rows but the tower emitted {vision_embeds.shape[-2]}"
             raise ValueError(msg)
 
-        def gather(parts: list[ttnn.Tensor], indices: ttnn.Tensor) -> ttnn.Tensor:
-            table = ttnn.concat(parts, dim=0)
-            rows = ttnn.embedding(indices, table, layout=ttnn.TILE_LAYOUT)
-            ttnn.deallocate(table)
-            return ttnn.reshape(rows, (1, seq_len, hidden))
-
-        def upload(indices: torch.Tensor) -> ttnn.Tensor:
-            return tensor.from_torch(
-                indices.reshape(1, -1),
-                device=self._device,
-                dtype=ttnn.uint32,
-                layout=ttnn.Layout.ROW_MAJOR,
-                mesh_axes=[None, None],
-            )
-
-        text_rows = ttnn.reshape(input_embeds, (seq_len, hidden))
-        merged = gather(
-            [text_rows, vision_embeds],
-            upload(vision_gather_indices(vision_runs, seq_len, vision_offset=seq_len, keep_text=True)),
+        indices = vision_gather_indices(vision_runs, seq_len, vision_offset=ttnn.TILE_SIZE)
+        text_mask = tensor.from_torch(
+            (indices == 0).float().reshape(1, -1, 1), device=self._device, mesh_axes=[None, self._sp_axis, None]
         )
+        indices = tensor.from_torch(
+            indices.reshape(1, -1),
+            device=self._device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None, self._sp_axis],
+        )
+        zeros = tensor.from_torch(torch.zeros(ttnn.TILE_SIZE, hidden), device=self._device, mesh_axes=[None, None])
 
-        deepstack_rows = []
-        if deepstack_embeds:
-            zeros = tensor.from_torch(torch.zeros(ttnn.TILE_SIZE, hidden), device=self._device, mesh_axes=[None, None])
-            indices = upload(vision_gather_indices(vision_runs, seq_len, vision_offset=ttnn.TILE_SIZE, keep_text=False))
-            deepstack_rows = [gather([zeros, feature], indices) for feature in deepstack_embeds]
-        return merged, deepstack_rows
+        def gather(rows: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.concat([zeros, rows], dim=0)
+            placed = ttnn.embedding(indices, table, layout=ttnn.TILE_LAYOUT)
+            ttnn.deallocate(table)
+            return placed
+
+        merged = ttnn.add(ttnn.multiply(input_embeds, text_mask), gather(vision_embeds))
+        return merged, [gather(feature) for feature in deepstack_embeds or ()]
 
     def create_rope_tensors(
         self, batch_size: int, sequence_length: int, attention_mask: torch.Tensor | None
