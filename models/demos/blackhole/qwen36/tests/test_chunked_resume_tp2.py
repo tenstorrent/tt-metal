@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Device test (TP=2, (1,2) mesh): scheduler-driven chunked prefill == unchunked prefill (QWEN36_CHUNKED_PREFILL).
 
-ONE process, ONE (1,2) mesh, the real 27B at max_batch_size=8 (the tp2 serving shape: prefill_paged_slots on the
-persistent B=1 GDN scratch). For each prompt length T:
+ONE process, ONE (1,2) mesh, the real 27B through prefill_paged_slots on the persistent B=1 GDN scratch (the batched
+TP serving path). P1C_B sets max_batch_size (default 8; the tp2 servers run max_num_seqs=32, so P1C_B=32 is the served
+decode-buffer shape) and P1C_LONG_SLOT the long prompt's decode slot (default 0; e.g. 13 = a high, odd slot, which
+exercises the slot index and the parity-tagged packed conv history). Riders take the highest other slots (slots 1..7 at
+the default B=8 / slot 0). For each prompt length T:
 
-  reference : the prompt prefilled in ONE prefill_paged_slots call into slot 0 (R_REF times: the run-to-run envelope);
+  reference : the prompt prefilled in ONE prefill_paged_slots call into the long slot (R_REF times: the envelope);
               every rider prompt is also prefilled alone once (its reference logits).
   chunked   : the SAME prompt prefilled in 2048-token calls (intermediate chunks final_mask=False, continuations
               resume_mask=True at the chunk start), with other prompts ("riders", own slots and KV blocks) interleaved in
@@ -17,13 +20,14 @@ persistent B=1 GDN scratch). For each prompt length T:
               earlier device-side slot copies drifted only on later requests).
 
 Compared per chunked request: the long prompt's last-position logits, its whole GDN decode-slot state (every layer's
-recurrent row + conv taps), and every rider's logits against its reference. P1C_MODE=eager (QWEN36_PREFILL_BUCKET_TRACE=0
+recurrent row + conv taps + its packed fused-conv history row when that buffer is live), and every rider's logits against its reference. P1C_MODE=eager (QWEN36_PREFILL_BUCKET_TRACE=0
 and no chunk trace: the eager TP path) must be BIT-EXACT; P1C_MODE=traced (the served path: chunk trace + traced masked
 bucket) is judged against the reference-vs-reference envelope (review M5 of the state critique: traced TP=2 prefill was
 run-to-run nondeterministic before the AGMM out-AG barrier). The program cache must not grow after the first chunked
 request (traced mode; eager compiles on demand).
 
 Env: P1C_MODE eager|traced (default traced), P1C_LENS (default 2049,4096,6444,32768), P1C_NSEQ (3), P1C_RREF (3),
+P1C_B (8), P1C_LONG_SLOT (0),
 P1C_LAYERS (all), P1C_OUT (JSON), QWEN36_CP_PARK_HOST (1 = host park fallback).
 
 Run (chips 0,3): source profiles/opt_round4/laneC_env.sh; cd $TT_METAL_HOME; P1C_MODE=eager pytest -svq \
@@ -45,7 +49,7 @@ BLOCK = 64
 C = 2048
 LONG_BLOCKS = 520  # region of the long prompt (33k tokens)
 RIDER_BLOCKS = 40  # 2560 tokens per rider region
-N_RIDER_SLOTS = 7  # slots 1..7
+N_RIDER_SLOTS = 7  # the 7 highest slots other than the long prompt's (1..7 at B=8, long slot 0)
 RIDER_LENS = [512, 90, 1500, 2047, 300, 1024, 64]
 
 
@@ -74,6 +78,9 @@ def _slot_state(model, slot):
             ttnn.to_torch(c, mesh_composer=comp).reshape(model.num_devices, -1, c.shape[-1])[:, slot].clone()
             for c in dn.conv_states
         ]
+        packed = getattr(dn, "conv_hist_packed", None)
+        if packed is not None and getattr(dn, "_hist_packed_valid", False):
+            convs.append(ttnn.to_torch(packed, mesh_composer=comp).reshape(model.num_devices, B, -1)[:, slot].clone())
         out.append((rec, convs))
     return out
 
@@ -107,7 +114,10 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
     n_layers = int(os.environ["P1C_LAYERS"]) if os.environ.get("P1C_LAYERS") else None
     out_path = os.environ.get("P1C_OUT", os.path.join(os.getcwd(), f"p1c_chunked_resume_{mode}.json"))
     assert mesh_device.get_num_devices() == 2
-    B = 8
+    B = int(os.environ.get("P1C_B", "8"))
+    long_slot = int(os.environ.get("P1C_LONG_SLOT", "0"))
+    assert 0 <= long_slot < B and B - 1 >= N_RIDER_SLOTS, (B, long_slot)
+    rider_slots = [s for s in range(B - 1, -1, -1) if s != long_slot][:N_RIDER_SLOTS][::-1]
     num_blocks = 1024  # multiple of 32 (chunk page-table width); +1 below = the pad block, never in a row
     assert LONG_BLOCKS + N_RIDER_SLOTS * RIDER_BLOCKS <= num_blocks
     assert max(lens) <= LONG_BLOCKS * BLOCK
@@ -118,7 +128,10 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
     model.allocate_kv_caches(
         (num_blocks + 1, args.n_local_kv_heads, BLOCK, args.head_dim), ttnn.bfloat8_b, batch_size=B
     )
-    logger.info(f"[p1c] model loaded in {time.perf_counter() - t0:.0f}s mode={mode} lens={lens}")
+    logger.info(
+        f"[p1c] model loaded in {time.perf_counter() - t0:.0f}s mode={mode} lens={lens} B={B} long_slot={long_slot} "
+        f"rider_slots={rider_slots}"
+    )
 
     warm_pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
     prev = model._bind_gdn_prefill_scratch()
@@ -156,7 +169,7 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
     # Rider references (alone, unchunked), in their own slots/regions.
     rider_ref = []
     for i, ids in enumerate(rider_ids):
-        hl = call([(ids, rider_rows[i], 1 + i, ids.shape[1], 0, False, True)])
+        hl = call([(ids, rider_rows[i], rider_slots[i], ids.shape[1], 0, False, True)])
         rider_ref.append(hl[0].reshape(-1)[:vocab].clone())
 
     results = {}
@@ -167,9 +180,9 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
         # ---- references (unchunked, slot 0) ----
         refs, ref_states = [], []
         for _ in range(r_ref):
-            hl = call([(ids, long_row, 0, T, 0, False, True)])
+            hl = call([(ids, long_row, long_slot, T, 0, False, True)])
             refs.append(hl[0].reshape(-1)[:vocab].clone())
-            ref_states.append(_slot_state(model, 0))
+            ref_states.append(_slot_state(model, long_slot))
         env_logit = max(float((r - refs[0]).abs().max()) for r in refs)
         env_state = max(_state_diff(s, ref_states[0]) for s in ref_states)
         # ---- chunked sequences ----
@@ -184,14 +197,14 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
                 i = (rider_i + k) % N_RIDER_SLOTS
                 rider_i += 1
                 ids_r = rider_ids[i]
-                return i, (ids_r, rider_rows[i], 1 + i, ids_r.shape[1], 0, False, True)
+                return i, (ids_r, rider_rows[i], rider_slots[i], ids_r.shape[1], 0, False, True)
 
             t1 = time.perf_counter()
             prev_end = 0
             lg_final = None
             for ci, end in enumerate(ends):
                 final = end == T
-                long_r = (ids, long_row, 0, end, prev_end, prev_end > 0, final)
+                long_r = (ids, long_row, long_slot, end, prev_end, prev_end > 0, final)
                 if ci % 2 == 1 and not final:
                     # a call with ONLY a rider between two chunks (B1), then the continuation alone
                     i, rr = next_rider()
@@ -211,7 +224,7 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
                 prev_end = end
             ttnn.synchronize_device(mesh_device)
             dt = time.perf_counter() - t1
-            st = _slot_state(model, 0)
+            st = _slot_state(model, long_slot)
             if n_pc_first is None:
                 n_pc_first = mesh_device.num_program_cache_entries()
             d_logit = float((lg_final - refs[0]).abs().max())
@@ -249,6 +262,9 @@ def test_chunked_resume_tp2(mesh_device, reset_seeds, ensure_gc):
         "mode": mode,
         "park": "host" if os.environ.get("QWEN36_CP_PARK_HOST", "0") == "1" else "device",
         "n_layers": n_layers,
+        "max_batch_size": B,
+        "long_slot": long_slot,
+        "rider_slots": rider_slots,
         "program_cache_growth_after_first_chunked_request": grew,
         # Eager mode compiles on demand (no parked trace to clobber), so growth only gates the traced mode.
         "pass": bool(ok and (grew == 0 or mode == "eager")),
