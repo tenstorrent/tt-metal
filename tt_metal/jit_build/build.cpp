@@ -484,17 +484,16 @@ void JitBuildEnv::init(
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::StableHasher hasher;
-    hasher.update(build_key);
-    hasher.update(enchantum::to_underlying(this->arch_));
-    hasher.update(cflags_);
-    hasher.update(lflags_);
-    hasher.update(defines_);
-
     if (get_rtoptions().get_build_map_enabled()) {
-        // Do not hash compiler version when generating compiler logs
-        // so that we may compare them between different compilers
-        // without undue difficulty.
+        // Do not hash when generating compiler logs so that we may
+        // compare them between different compilers without undue
+        // difficulty.
     } else {
+        hasher.update(build_key);
+        hasher.update(enchantum::to_underlying(this->arch_));
+        hasher.update(cflags_);
+        hasher.update(lflags_);
+        hasher.update(defines_);
         hasher.update(tt::jit_build::utils::compiler_version(gpp_));
     }
 
