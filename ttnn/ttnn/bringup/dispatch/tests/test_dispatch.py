@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""ttnn.bringup.dispatch against its torch semantics (reference.py), one random-input case per captured call
+(cases.py). Pure data movement: every row the op writes (one per (token, top-k slot) routed to a present expert) is
+compared exactly, buffer and metadata. Don't-care: buffer / metadata rows no (token, slot) lands on (tile padding
+between expert regions and the unused tail)."""
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+import torch
+
+import ttnn
+
+_HERE = Path(__file__).resolve().parent
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(f"bringup_dispatch_tests_{name}", _HERE / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+ref = _load("reference")
+CASES = _load("cases").CASES
+
+
+def _device_params(c):
+    p = dict(c["device_params"])
+    p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    return p
+
+
+def _to_mesh(mesh, t, spec):
+    """t [cols * n0, ...]: device (0, col) gets rows col*n0..(col+1)*n0 (a 1-row mesh; per-device data differs)."""
+    return ttnn.from_torch(
+        t,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh.shape, dims=(None, 0)),
+        device=mesh,
+        dtype=getattr(ttnn.DataType, spec["dtype"]),
+        layout=getattr(ttnn.Layout, spec["layout"]),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _per_device(t):
+    return [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, case",
+    [(tuple(c["mesh"]), _device_params(c), c) for c in CASES],
+    ids=[c["id"] for c in CASES],
+    indirect=["mesh_device", "device_params"],
+)
+def test_dispatch(mesh_device, device_params, case):
+    c = case
+    rows, cols = c["mesh"]
+    assert rows == 1 and c["dispatch_group_size"] == 1, "reference covers a 1-device dispatch axis (mesh rows)"
+    S, H, E, K, epc = (
+        c["seq_len_per_chip"],
+        c["emb_dim"],
+        c["num_routed_experts"],
+        c["num_experts_per_tok"],
+        c["experts_per_chip"],
+    )
+    assert E == epc * cols
+    g = torch.Generator().manual_seed(c["seed"])
+
+    # Random inputs per device: x, top-k ids (distinct per token); offsets / table built from them by the op's rules.
+    x = torch.randn(cols, S, H, generator=g).to(torch.bfloat16)
+    idx = torch.stack([ref.random_topk(S, E, K, g) for _ in range(cols)])  # [cols, S, K]
+    table = ref.dispatch_table(E, cols)  # [cols, E + 1]
+    offs = torch.stack([ref.offsets_counts_regions(idx[d], table[d], epc)[0] for d in range(cols)])  # [cols, E]
+
+    tt_x = _to_mesh(mesh_device, x, c["input"])
+    tt_idx = _to_mesh(mesh_device, idx.to(torch.int32), c["indices"])
+    tt_off = _to_mesh(mesh_device, offs.to(torch.int32), c["offsets"])
+    tt_tab = _to_mesh(mesh_device, table, c["table"])
+
+    buf, meta = ttnn.bringup.dispatch(
+        input_tensor=tt_x,
+        indices_tensor=tt_idx,
+        expert_offsets_tensor=tt_off,
+        expert_dispatch_table_tensor=tt_tab,
+        dispatch_group_size=c["dispatch_group_size"],
+        experts_per_chip=epc,
+        num_routed_experts=E,
+        num_experts_per_tok=K,
+        metadata_len=c["metadata_len"],
+        max_dispatch_buffer_token_size=c["max_dispatch_buffer_token_size"],
+        cluster_axis=c["cluster_axis"],
+        num_links=c["num_links"],
+        topology=getattr(ttnn.Topology, c["topology"]),
+        fp8_output=c["fp8_output"],
+        subdevice_id=c["subdevice_id"],
+        num_workers_per_sender=c["num_workers_per_sender"],
+    )
+    bufs, metas = _per_device(buf), _per_device(meta)
+    N = c["max_dispatch_buffer_token_size"]
+    for d in range(cols):
+        b = bufs[d].reshape(N, H)
+        m = metas[d].reshape(N, c["metadata_len"]).to(torch.int64)
+        rows_d, want_b, want_m = ref.dispatch(x[d], idx[d], offs[d].long(), table[d], group=d, num_groups=cols)
+        assert rows_d.numel() > 0 and int(rows_d.max()) < N
+        got_m = m[rows_d, :3]
+        bad_m = (got_m != want_m).any(dim=1)
+        assert not bad_m.any(), f"dev {d}: {int(bad_m.sum())}/{rows_d.numel()} metadata rows differ"
+        bad_b = (b[rows_d] != want_b).any(dim=1)
+        assert not bad_b.any(), f"dev {d}: {int(bad_b.sum())}/{rows_d.numel()} buffer rows differ"

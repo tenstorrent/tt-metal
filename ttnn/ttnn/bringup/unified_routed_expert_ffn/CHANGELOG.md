@@ -31,3 +31,10 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: `unified_routed_expert_ffn.{hpp,cpp}`, `unified_routed_expert_ffn_nanobind.cpp`,
   `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`, `device/unified_routed_expert_ffn_program_factory.cpp`,
   `device/unified_routed_expert_ffn_types.hpp`
+
+### Tests: fork test suite with a first model case
+- What: `tests/` (cases.py, reference.py, test file) with a random-input case for the call mimo_v2_6_d_p makes
+  (bringup-fork-tests skill). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: mimo_v2_6_d_p O.1
+- Files: `tests/__init__.py`, `tests/cases.py`, `tests/reference.py`, `tests/test_*.py`

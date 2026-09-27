@@ -39,7 +39,7 @@ python -m models.demos.common.bringup.testing.fork_cases --capture <fork_calls.j
 
 ```
 ttnn/ttnn/bringup/<fork>/tests/
-  __init__.py      empty (tests/ is a package, so reference.py imports cleanly)
+  __init__.py      empty
   cases.py         CASES = [ {...}, ... ]  one dict per captured call, every model's, appended
   reference.py     the op's semantics in torch, including the fork's own changes
   test_<fork>.py   one parametrized test over CASES
@@ -91,6 +91,11 @@ them from the model's output.
 - Build the inputs, run `ttnn.bringup.<op>(...)` with the case's arguments, bring the result to torch, and compare it
   with `reference.py`.
 - Parametrize over `CASES`, with `ids=[c["id"] for c in CASES]`.
+- Load `cases.py` and `reference.py` by file path (`importlib.util.spec_from_file_location`), not with `import`. Every
+  fork has a package named `tests`, and pytest runs with `--import-mode=importlib`, so the names clash (see
+  `ttnn/ttnn/bringup/dispatch/tests/test_dispatch.py`).
+- Build heavy inputs lean (weights one expert at a time), and give a case that needs more than pytest.ini's 300 s a
+  `@pytest.mark.timeout`.
 - Run on device only through `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests`, in the
   foreground.
 
