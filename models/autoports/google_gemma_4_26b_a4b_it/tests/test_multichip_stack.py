@@ -5,6 +5,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -14,7 +15,7 @@ from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 import ttnn
 from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import load_layer
 from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
-from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import CollectiveBufferPool, MultichipDecoder
 from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
 
 
@@ -36,7 +37,13 @@ def main():
     parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
     parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
     parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat8_b")
+    parser.add_argument("--attention-precision", choices=["baseline", "qkv", "output", "both"])
     parser.add_argument("--sharded-residual", action="store_true")
+    parser.add_argument("--pool-ccl", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--layers", type=int, nargs=2, default=[4, 5])
+    parser.add_argument("--fixture", type=Path)
+    parser.add_argument("--steps", type=int, default=2)
+    parser.add_argument("--length", type=int, default=33)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.expert_parallel and args.hybrid_experts:
@@ -53,10 +60,25 @@ def main():
         for name in ("tt/multichip_decoder.py", "tt/optimized_decoder.py", "tests/test_multichip_stack.py")
     }
     config = AutoConfig.from_pretrained(Path(__file__).parent).text_config
-    layers = (0, 5)
-    length, steps, block, extent = 33, 2, 32, 128
+    layers = tuple(args.layers)
+    if not all(0 <= layer < len(config.layer_types) for layer in layers) or not 1 <= args.steps <= 128:
+        parser.error("Valid layer indices and1..128 recorded decode steps are required")
+    if not 1 <= args.length <= 4096:
+        parser.error("Length must fit the recorded 4096-token fixture")
+    length, steps, block = args.length, args.steps, 32
+    extent = (length + steps + 127) // 128 * 128
     hf_layers = {layer: load_layer(config, layer, True) for layer in layers}
-    fixture = torch.load(root / "doc/optimized_decoder/actual_text_layer0_4096_128.pt", weights_only=True)
+    fixture_stage = "optimized_multichip_decoder" if layers[0] == 4 else "optimized_decoder"
+    fixture_length = length if layers[0] > 0 else 4096
+    fixture_path = args.fixture or root / f"doc/{fixture_stage}/actual_text_layer{layers[0]}_{fixture_length}_128.pt"
+    fixture = torch.load(fixture_path, weights_only=True)
+    if fixture["metadata"]["layer"] != layers[0]:
+        parser.error("Recorded activation boundary must match the first tested layer")
+    if layers[0] > 0 and fixture["metadata"]["length"] != length:
+        parser.error("Contextual HF activations must use their recorded prefill length")
+    if fixture["decode"].shape[1] < steps:
+        parser.error("Fixture has fewer decode activations than requested")
+    fixture_hash = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
     prefill_input = fixture["prefill"][:, :length].unsqueeze(0)
     decode_inputs = fixture["decode"][:, :steps].unsqueeze(0)
     tables = {layer: torch.randperm(extent // block, dtype=torch.int32)[None] for layer in layers}
@@ -100,6 +122,7 @@ def main():
                 return parts[0]
 
             contexts = []
+            pool = CollectiveBufferPool(mesh) if tp == 4 and args.pool_ccl else None
             for layer in layers:
                 decoder = decoder_class.from_state_dict(
                     hf_layers[layer].state_dict(),
@@ -109,6 +132,8 @@ def main():
                     **(
                         {
                             "expert_parallel": args.expert_parallel,
+                            "attention_precision": args.attention_precision,
+                            "collective_buffer_pool": pool,
                             "sharded_residual": args.sharded_residual,
                             "hybrid_experts": args.hybrid_experts,
                             "fused_tail": args.fused_tail,
@@ -251,8 +276,27 @@ def main():
                     pcc=pcc(results[1]["decode"][step][index], results[4]["decode"][step][index]),
                 )
             )
+    output_hashes = {
+        str(tp): {
+            "prefill": [
+                hashlib.sha256(value.contiguous().numpy().tobytes()).hexdigest() for value in results[tp]["prefill"]
+            ],
+            "decode": [
+                [hashlib.sha256(value.contiguous().numpy().tobytes()).hexdigest() for value in step]
+                for step in results[tp]["decode"]
+            ],
+        }
+        for tp in results
+    }
     report = dict(
+        shared_collective_pool=args.pool_ccl,
+        attention_precision=args.attention_precision,
+        output_sha256=output_hashes,
         layers=list(layers),
+        real_model_adjacency=layers[1] == layers[0] + 1,
+        fixture_layer=fixture["metadata"]["layer"],
+        fixture_sha256=fixture_hash,
+        fixture_path=str(fixture_path),
         layer_types=[config.layer_types[layer] for layer in layers],
         length=length,
         decode_positions=list(range(length, length + steps)),
@@ -276,7 +320,7 @@ def main():
         runtime_audit="clean",
         source_sha256=source_hashes,
         comparisons=comparisons,
-        passed=min(value["pcc"] for value in comparisons) >= 0.995,
+        passed=all(math.isfinite(value["pcc"]) and value["pcc"] >= 0.995 for value in comparisons),
     )
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(report, flush=True)

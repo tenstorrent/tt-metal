@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+    "--layers",
+    "4",
+    "5",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_stack_mixed_4096.json"
+  ],
+  "environment": {},
+  "exit_code": 0,
+  "source_sha256": {
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py": "1e6ce4fca7b62fcb296c4a023f0cad3f93f8107c5f845829c7cd22bf601b34f6"
+  }
+}

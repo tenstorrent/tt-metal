@@ -5,8 +5,10 @@
 import argparse
 import hashlib
 import json
+import math
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -16,8 +18,12 @@ from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 import ttnn
 from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import load_layer
 from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
-from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import CollectiveBufferPool, MultichipDecoder
 from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
+
+
+def _pcc_values_pass(values):
+    return bool(values) and all(math.isfinite(value) and value >= 0.995 for value in values)
 
 
 def main():
@@ -26,6 +32,28 @@ def main():
     parser.add_argument("--length", type=int, default=65)
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--persistent-ccl", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--optimized-decode", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--ccl-l1", action="store_true")
+    parser.add_argument("--ccl-workers", type=int, choices=[1, 2, 4])
+    parser.add_argument("--ccl-buffers", type=int, choices=[1, 2])
+    parser.add_argument("--ccl-chunks", type=int, choices=[1, 4])
+    parser.add_argument("--attention-bfp4", choices=["qkv", "output", "both"])
+    parser.add_argument("--expert-fidelity", choices=["LoFi", "HiFi2", "HiFi4"])
+    parser.add_argument("--expert-gate-dtype", choices=["bfloat4_b", "bfloat8_b"])
+    parser.add_argument("--attention-precision", choices=["baseline", "qkv", "output", "both"])
+    parser.add_argument("--activation-bfp8", choices=["attention", "shared"])
+    parser.add_argument("--sharded-moe-bfp8", action="store_true")
+    parser.add_argument("--fused-mmrs", action="store_true")
+    parser.add_argument("--output-agmm", action="store_true")
+    parser.add_argument("--split-qkv", action="store_true")
+    parser.add_argument("--residual-l1", action="store_true")
+    parser.add_argument("--diagnose-residual", action="store_true")
+    parser.add_argument("--dram-readers", type=int, choices=[1, 2, 3], default=1)
+    parser.add_argument("--dram-storage-cores", type=int, choices=[4, 8], default=8)
+    parser.add_argument("--shared-prefill-k", type=int)
+    parser.add_argument("--shared-prefill-l1", action="store_true")
+    parser.add_argument("--shared-prefill-subblock", type=int, choices=[1, 2, 4], default=1)
     parser.add_argument("--tp", type=int, choices=[1, 4])
     parser.add_argument("--expert-parallel", action="store_true")
     parser.add_argument("--fused-tail", action=argparse.BooleanOptionalAction, default=True)
@@ -37,7 +65,7 @@ def main():
     parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
     parser.add_argument(
         "--dense-geometry",
-        choices=["baseline", "qkv-n2", "qkv-n4", "output-n2", "output-n4", "router-n2", "router-n4"],
+        choices=["baseline", "qkv-n1", "qkv-n2", "qkv-n4", "output-n2", "output-n4", "router-n2", "router-n4"],
         default="baseline",
     )
     parser.add_argument("--sharded-decode-rope", action=argparse.BooleanOptionalAction, default=None)
@@ -54,7 +82,9 @@ def main():
     parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat8_b")
     parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--sparse-gate-geometry", choices=["baseline", "n2-k44", "n2-k88"], default="baseline")
+    parser.add_argument(
+        "--sparse-gate-geometry", choices=["baseline", "n1-k88", "n2-k44", "n2-k88"], default="baseline"
+    )
     parser.add_argument("--sparse-down-geometry", choices=["baseline", "n2-k6"], default="baseline")
     parser.add_argument("--check-cache", action="store_true")
     parser.add_argument("--repeat-input", action="store_true")
@@ -150,9 +180,29 @@ def main():
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1) if tp == 4 and args.sharded_residual else mapper,
+                    memory_config=(
+                        decoder.decode_residual_memory
+                        if tp == 4 and args.residual_l1 and value.shape[-2] == 1
+                        else ttnn.DRAM_MEMORY_CONFIG
+                    ),
                 )
 
             def read(value, phase, *, step=None, replay="first"):
+                if args.diagnose_residual and tp == 4 and phase == "decode" and step == 0:
+                    captured = {
+                        name: [ttnn.to_torch(v).float() for v in ttnn.get_device_tensors(t)]
+                        for name, t in decoder.debug_tensors.items()
+                    }
+                    captured["norms"] = [
+                        (
+                            ttnn.to_torch(ttnn.get_device_tensors(a)[0]).float(),
+                            ttnn.to_torch(ttnn.get_device_tensors(b)[0]).float(),
+                        )
+                        for a, b in decoder.debug_norms
+                    ]
+                    captured["layer_scalar"] = decoder.layer.layer_scalar
+                    captured["epsilon"] = config.rms_norm_eps
+                    torch.save(captured, args.output.with_suffix(".tensors.pt"))
                 if tp == 4 and args.sharded_residual:
                     parts = [ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()]
                 else:
@@ -204,6 +254,11 @@ def main():
                 **(
                     {
                         "sharded_residual": args.sharded_residual,
+                        "persistent_ccl": args.persistent_ccl,
+                        "optimized_decode": args.optimized_decode,
+                        "attention_precision": args.attention_precision,
+                        "expert_gate_dtype": getattr(ttnn, args.expert_gate_dtype) if args.expert_gate_dtype else None,
+                        "collective_buffer_pool": CollectiveBufferPool(mesh) if args.reserve_full_stack else None,
                         "fused_agmm": args.fused_agmm,
                         "topology": ttnn.Topology.Ring if args.ring else ttnn.Topology.Linear,
                         "fused_tail": args.fused_tail,
@@ -225,6 +280,253 @@ def main():
                     else {}
                 ),
             )
+            if tp == 4 and args.attention_bfp4:
+                attention = decoder.layer.self_attn
+                if args.attention_bfp4 in ("qkv", "both"):
+                    projection = attention.source.weights.wqkv
+                    projection.weight = ttnn.typecast(projection.weight, ttnn.bfloat4_b)
+                if args.attention_bfp4 in ("output", "both"):
+                    attention.source.weights = replace(
+                        attention.source.weights,
+                        o_proj=ttnn.typecast(attention.source.weights.o_proj, ttnn.bfloat4_b),
+                    )
+            if tp == 4 and args.ccl_l1:
+                decoder.collective_memory = ttnn.L1_MEMORY_CONFIG
+            if tp == 4:
+                ccl_tuning = {
+                    key: value
+                    for key, value in (
+                        ("num_workers_per_link", args.ccl_workers),
+                        ("num_buffers_per_channel", args.ccl_buffers),
+                        ("chunks_per_sync", args.ccl_chunks),
+                    )
+                    if value is not None
+                }
+                if ccl_tuning:
+                    if not decoder.persistent_ccl:
+                        raise ValueError("CCL tuning controls use the selected persistent path")
+                    decoder.ccl_tuning = ccl_tuning
+            if tp == 4 and args.residual_l1:
+                decoder.debug_residual = args.diagnose_residual
+                decoder.debug_norms = []
+                decoder.decode_residual_memory = ttnn.create_sharded_memory_config(
+                    (32, 704),
+                    ttnn.CoreGrid(x=4, y=1),
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                norm_program = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(4, 1),
+                    subblock_w=2,
+                    block_h=1,
+                    block_w=22,
+                    inplace=False,
+                )
+                original_normalize = decoder.normalize
+
+                def normalize(value, epsilon, weight=None):
+                    if value.shape[-2] != 1:
+                        return original_normalize(value, epsilon, weight)
+                    value = ttnn.to_memory_config(ttnn.typecast(value, ttnn.float32), decoder.decode_residual_memory)
+                    original_value = value
+                    value = ttnn.rms_norm(
+                        value,
+                        epsilon=epsilon,
+                        program_config=norm_program,
+                        compute_kernel_config=decoder.layer.self_attn.compute,
+                        memory_config=decoder.decode_residual_memory,
+                    )
+                    if args.diagnose_residual:
+                        decoder.debug_norms.append(
+                            (
+                                ttnn.to_memory_config(original_value, ttnn.DRAM_MEMORY_CONFIG),
+                                ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG),
+                            )
+                        )
+                    return (
+                        value
+                        if weight is None
+                        else ttnn.mul(value, weight, memory_config=decoder.decode_residual_memory)
+                    )
+
+                decoder.normalize = normalize
+            if tp == 4 and args.activation_bfp8:
+                if args.activation_bfp8 == "attention":
+                    decoder.layer.self_attn.source.weights.wqkv.input_bfp8 = True
+                    decoder.layer.self_attn.output_input_bfp8 = True
+                else:
+                    decoder.layer.shared_mlp.input_bfp8 = True
+            if tp == 4 and args.sharded_moe_bfp8:
+                if not args.sharded_residual:
+                    raise ValueError("Sharded MoE payload candidate requires the sharded residual family")
+                decoder.sharded_moe_bfp8 = True
+                decoder.layer.shared_mlp.reduce = lambda value: decoder.reduce_scatter(
+                    ttnn.typecast(value, ttnn.bfloat8_b)
+                )
+            if tp == 4 and args.fused_mmrs:
+                if not (args.ring and args.sharded_residual):
+                    raise ValueError("Fused output requires a Ring mesh and carried sharded residual")
+                attention = decoder.layer.self_attn
+                dtype = decoder.attention_ccl_dtype
+                intermediate = upload(torch.zeros(1, 1, 32, 2816), dtype)
+                reduced_buffer = upload(torch.zeros(1, 1, 32, 704), dtype)
+                semaphores = decoder.ccl.get_rs_ping_pong_semaphore()
+                barrier = decoder.ccl.get_barrier_semaphore()
+                program = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(11, 6),
+                    in0_block_w=16,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=1,
+                    per_core_N=8,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+
+                def fused_output(value):
+                    value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+                    value = ttnn.pad(value, [(0, 0), (0, 0), (0, 31), (0, 0)], 0)
+                    _, reduced = ttnn.experimental.matmul_reduce_scatter_async(
+                        value,
+                        attention.source.weights.o_proj,
+                        persistent_intermediate_buffer=intermediate,
+                        persistent_output_buffer=reduced_buffer,
+                        multi_device_global_semaphore=semaphores,
+                        barrier_semaphore=barrier,
+                        reduce_scatter_core_grid_offset=(0, 6),
+                        dim=3,
+                        num_links=1,
+                        topology=ttnn.Topology.Ring,
+                        subdevice_id=ttnn.SubDeviceId(0),
+                        memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+                        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                        program_config=program,
+                        compute_kernel_config=attention.output_compute,
+                        dtype=dtype,
+                    )
+                    return reduced[:, :, :1, :]
+
+                attention.decode_output_fused = fused_output
+            if tp == 4 and args.output_agmm:
+                if not args.ring or args.fused_mmrs:
+                    raise ValueError("Output AGMM requires Ring and excludes MMRS")
+                attention = decoder.layer.self_attn
+                weight = ttnn.from_torch(
+                    hf.state_dict()["self_attn.o_proj.weight"].T[None, None],
+                    device=mesh,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+                )
+                if args.attention_bfp4 in ("output", "both"):
+                    weight = ttnn.typecast(weight, ttnn.bfloat4_b)
+                width = attention.config.num_attention_heads * attention.config.head_dim * 4
+                gathered = upload(torch.zeros(1, 1, 1, width), ttnn.bfloat16)
+                semaphores = decoder.ccl.get_ag_ping_pong_semaphore()
+                barrier = decoder.ccl.get_barrier_semaphore()
+                program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(11, 1),
+                    in0_block_w=16,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    per_core_M=1,
+                    per_core_N=2,
+                    fuse_batch=True,
+                    mcast_in0=True,
+                )
+
+                def gathered_output(value):
+                    _, projected = ttnn.experimental.all_gather_matmul_async(
+                        ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG),
+                        weight,
+                        persistent_output_buffer=gathered,
+                        dim=3,
+                        multi_device_global_semaphore=semaphores,
+                        all_gather_core_grid_offset=(0, 8),
+                        barrier_semaphore=barrier,
+                        num_links=1,
+                        topology=ttnn.Topology.Ring,
+                        memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+                        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                        program_config=program,
+                        compute_kernel_config=attention.output_compute,
+                        dtype=ttnn.float32,
+                    )
+                    projected = projected[:, :, :1, :]
+                    return (
+                        projected
+                        if args.sharded_residual
+                        else decoder.gather(ttnn.typecast(projected, decoder.attention_ccl_dtype))
+                    )
+
+                attention.decode_output_fused = gathered_output
+            if tp == 4 and (args.shared_prefill_k or args.shared_prefill_l1):
+                shared = decoder.layer.shared_mlp
+                weight = shared.down.__closure__[0].cell_contents
+
+                def shared_down(value):
+                    rows = value.padded_shape[-2]
+                    per_m = (rows // 32 + 7) // 8
+                    sub_h = args.shared_prefill_subblock
+                    while per_m % sub_h:
+                        sub_h //= 2
+                    program = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(11, 8),
+                        in0_block_w=args.shared_prefill_k or 1,
+                        out_subblock_h=sub_h,
+                        out_subblock_w=2,
+                        per_core_M=per_m,
+                        per_core_N=8,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=False,
+                    )
+                    if args.shared_prefill_l1:
+                        value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
+                    return ttnn.linear(value, weight, program_config=program, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+                shared.down = shared_down
+            if tp == 4 and args.attention_dram:
+                from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import _DramAttentionProjection
+
+                attention = decoder.layer.self_attn
+                owner = attention.source.weights.wqkv if args.attention_dram == "qkv" else attention
+                attribute = "decode_dram" if args.attention_dram == "qkv" else "decode_output_dram"
+                weight = (
+                    attention.source.weights.wqkv.weight
+                    if args.attention_dram == "qkv"
+                    else attention.source.weights.o_proj
+                )
+                setattr(
+                    owner,
+                    attribute,
+                    _DramAttentionProjection(
+                        weight,
+                        mesh,
+                        weight.shape[-2] // (32 * args.dram_storage_cores),
+                        readers=args.dram_readers,
+                        storage_cores=args.dram_storage_cores,
+                    ),
+                )
+            if tp == 4 and args.shared_dram and args.dram_readers != 1:
+                decoder.layer.shared_mlp.configure_decode(
+                    hf.state_dict(),
+                    mesh,
+                    config.layer_types[args.layer] == "sliding_attention",
+                    readers=args.dram_readers,
+                )
+            if tp == 4 and args.expert_fidelity:
+                experts = getattr(decoder.layer.moe.experts, "decode", decoder.layer.moe.experts)
+                experts.decode_compute = ttnn.init_device_compute_kernel_config(
+                    mesh.arch(),
+                    math_fidelity=getattr(ttnn.MathFidelity, args.expert_fidelity),
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=False,
+                )
             if tp == 4 and (args.sparse_gate_geometry != "baseline" or args.sparse_down_geometry != "baseline"):
                 experts = decoder.layer.moe.experts
                 experts = getattr(experts, "decode", experts)
@@ -254,7 +556,10 @@ def main():
 
                 if args.sparse_gate_geometry != "baseline":
                     gate_block = 44 if args.sparse_gate_geometry == "n2-k44" else 88
-                    experts.gate_config = sparse_geometry((6, 1), gate_block)
+                    if args.sparse_gate_geometry == "n1-k88":
+                        experts.gate_config.in0_block_w = 88
+                    else:
+                        experts.gate_config = sparse_geometry((6, 1), gate_block)
                 if args.sparse_down_geometry != "baseline":
                     experts.down_config = sparse_geometry((11, 4), 6)
             if tp == 4:
@@ -269,6 +574,8 @@ def main():
                     if role == "qkv":
                         owner, field = attention.source.weights.wqkv, "program"
                         grid = (8, (64 if config.layer_types[args.layer] == "sliding_attention" else 96) // width // 8)
+                        if width == 1 and config.layer_types[args.layer] == "full_attention":
+                            grid = (11, 9)
                     elif role == "output":
                         owner, field = attention, "output_program"
                         grid = (11, 88 // width // 11)
@@ -429,6 +736,50 @@ def main():
                 if args.projection_k <= 0 or tiles % args.projection_k:
                     raise ValueError("Projection K block must divide the input tile width")
                 program.in0_block_w = args.projection_k
+            if tp == 4 and args.split_qkv:
+                if args.fused_agmm or args.attention_dram:
+                    raise ValueError("Split QKV control requires interleaved projections")
+                projection = decoder.layer.self_attn.source.weights.wqkv
+                cfg = decoder.layer.self_attn.config
+                q_width = cfg.num_attention_heads * cfg.head_dim
+                kv_width = cfg.num_key_value_heads * cfg.head_dim
+                cuts = (0, q_width, q_width + kv_width, q_width + 2 * kv_width)
+                assert cuts[-1] == projection.weight.shape[-1]
+                projection.split_weights = tuple(projection.weight[..., a:b] for a, b in zip(cuts, cuts[1:]))
+                projection.split_programs = tuple(
+                    ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(8, weight.shape[-1] // 32 // 2 // 8),
+                        in0_block_w=projection.program.in0_block_w,
+                        out_subblock_h=1,
+                        out_subblock_w=2,
+                        per_core_M=1,
+                        per_core_N=2,
+                        fuse_batch=True,
+                        mcast_in0=True,
+                    )
+                    for weight in projection.split_weights
+                )
+                original_class = type(projection)
+
+                class SplitQKV(original_class):
+                    def __call__(self, value):
+                        if value.shape[-2] != 1:
+                            return super().__call__(value)
+                        value = ttnn.to_memory_config(value, ttnn.L1_MEMORY_CONFIG)
+                        parts = [
+                            ttnn.linear(
+                                value,
+                                weight,
+                                dtype=ttnn.float32,
+                                program_config=program,
+                                compute_kernel_config=self.decode_compute,
+                                memory_config=ttnn.L1_MEMORY_CONFIG,
+                            )
+                            for weight, program in zip(self.split_weights, self.split_programs)
+                        ]
+                        return ttnn.concat(parts, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+                projection.__class__ = SplitQKV
             cfg = decoder.layer.self_attn.config
             cache = [
                 upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b)
@@ -482,6 +833,14 @@ def main():
                     assert extra_bytes[kind] == decoder.attention_dram_extra_weight_bytes
                     resident += sum(extra_bytes[layer_type] for layer_type in config.layer_types)
                     current_weights += extra_bytes[kind]
+                optimized_plan = None
+                if decoder.optimized_decode:
+                    optimized_plan = json.loads(
+                        (root / "doc/optimized_multichip_decoder/final_memory_plan.json").read_text()
+                    )
+                    resident += optimized_plan["full_stack_extra_dram_weight_bytes_per_device"]
+                    current_weights += optimized_plan["per_device_extra_attention_weights"][kind]
+                    current_weights += optimized_plan.get("per_device_extra_expert_weights", {}).get(kind, 0)
                 # Reserve other layers, tied embeddings, and shared per-kind RoPE.
                 # Leave the independent 2 GiB workspace allowance available.
                 current_cache = 2 * pages * cfg.num_key_value_heads * (block // 32) * (cfg.head_dim // 32) * 1088
@@ -500,7 +859,29 @@ def main():
                     )
                     for _ in range(count)
                 ]
+                # Each layer keeps private global semaphores even when the
+                # writable collective payload pool is shared across layers.
+                reservations.extend(
+                    type(decoder.ccl)(mesh, 1, decoder.topology) for _ in range(len(config.layer_types) - 1)
+                )
+                l1_reserve_bytes = 0
+                if optimized_plan is not None and decoder.persistent_ccl:
+                    # Prime the actual shared pool's complete selected dtype/role
+                    # union before prefill, as after a previous decoded request.
+                    for role, planes, dtype in (
+                        ("attention", 1, ttnn.bfloat8_b),
+                        ("attention", 1, ttnn.bfloat16),
+                        ("moe_pair", 2, ttnn.bfloat8_b),
+                        ("moe_pair", 2, ttnn.bfloat16),
+                    ):
+                        value = upload(torch.zeros(1, planes, 1, 2816), dtype)
+                        decoder.allreduce(value, role=role)
+                    ttnn.synchronize_device(mesh)
+                    del value
+                    l1_reserve_bytes = optimized_plan["pooled_persistent_ccl_bytes_per_device"]
                 capacity = dict(
+                    resident_layer_ccl_managers=len(config.layer_types),
+                    persistent_ccl_l1_payload_reserved_bytes_per_device=l1_reserve_bytes,
                     reserved_other_resident_bytes_per_device=count * allocation_bytes,
                     current_weight_bound=current_weights,
                     current_cache_bytes=current_cache,
@@ -641,7 +1022,7 @@ def main():
 
                 a, b = ordered(wanted), ordered(actual)
                 cache_pcc.append(torch.corrcoef(torch.stack((a.flatten().double(), b.flatten().double())))[0, 1].item())
-        if min(cache_pcc) < 0.995:
+        if not _pcc_values_pass(cache_pcc):
             args.output.with_suffix(".failure.json").write_text(
                 json.dumps(
                     dict(
@@ -661,9 +1042,16 @@ def main():
     result = dict(
         runtime_sha256=runtime_hash,
         runner_sha256=runner_hash,
+        optimized_decode=decoder.optimized_decode if 4 in outputs else None,
+        attention_precision=decoder.attention_precision if 4 in outputs else None,
+        persistent_ccl=decoder.persistent_ccl if 4 in outputs else None,
+        ccl_tuning=decoder.ccl_tuning if 4 in outputs else None,
+        collective_memory=str(decoder.collective_memory) if 4 in outputs else None,
         dense_geometry=args.dense_geometry,
         moe_ccl_bfp8=args.moe_ccl_bfp8,
         expert_gate_bfp4=args.expert_gate_bfp4,
+        expert_gate_dtype_requested=args.expert_gate_dtype,
+        expert_fidelity_override=args.expert_fidelity,
         shared_gate_bfp4=args.shared_gate_bfp4,
         shared_down_bfp4=args.shared_down_bfp4,
         expert_activation_bfp8=args.expert_activation_bfp8,
@@ -694,7 +1082,7 @@ def main():
         length=args.length,
         steps=args.steps,
         pcc=values,
-        passed=min(values) >= 0.995 if values else None,
+        passed=_pcc_values_pass(values) if values else None,
         trace=args.trace,
         duplicate_replays_per_position=args.duplicate_replays if args.trace and not args.profile else 0,
         timings=timings,

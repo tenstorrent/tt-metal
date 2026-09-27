@@ -29,16 +29,53 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
 
+class _MeshCCLManager(CCLManager):
+    """Cover every worker that native CCL may choose on this mesh."""
+
+    def _init_subdevice(self):
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        self.ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        )
+        self.ccl_sub_device_id = ttnn.SubDeviceId(0)
+
+
+class CollectiveBufferPool:
+    """Caller-owned buffers for serial layers on one mesh/command queue.
+
+    Attention and paired-MoE buffers must stay distinct: the intervening
+    allreduce establishes that every rank consumed the previous role's output.
+    Persistent CCL kernels omit their startup barrier, so arbitrary concurrent
+    callers or cross-role aliases are not safe. Layer outputs own fresh storage.
+    """
+
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
+        self.buffers = {}
+
+
 class _DramAttentionProjection:
     """Decode-only bank-sharded copy; compute policy is supplied at each call."""
 
-    def __init__(self, weight, mesh, block):
+    def __init__(self, weight, mesh, block, readers=1, storage_cores=8):
         k, n = weight.shape[-2], weight.shape[-1]
-        if mesh.dram_grid_size().x != 8 or k % 256 or n % 256 or weight.dtype != ttnn.bfloat8_b:
-            raise ValueError("Attention DRAM projection requires eight banks and tile-aligned BFP8 weights")
-        if (k // 256) % block:
+        self.logical_output_width = n
+        padded_n = ((n + 256 * readers - 1) // (256 * readers)) * 256 * readers
+        if padded_n != n:
+            padding = [(0, 0)] * len(weight.shape)
+            padding[-1] = (0, padded_n - n)
+            dtype = weight.dtype
+            if dtype == ttnn.bfloat4_b:
+                weight = ttnn.typecast(weight, ttnn.bfloat16)
+            weight = ttnn.pad(weight, padding, 0)
+            if weight.dtype != dtype:
+                weight = ttnn.typecast(weight, dtype)
+            n = padded_n
+        if mesh.dram_grid_size().x != 8 or k % 256 or n % 256 or weight.dtype not in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            raise ValueError("Attention DRAM projection requires eight banks and tile-aligned BFP8/BFP4 weights")
+        if (k // (32 * storage_cores)) % block:
             raise ValueError("Attention DRAM input shard must divide the K block")
-        grid = ttnn.CoreGrid(x=8, y=1)
+        grid = ttnn.CoreGrid(x=storage_cores, y=1)
         bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
         weight_memory = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -49,7 +86,7 @@ class _DramAttentionProjection:
         self.weight = ttnn.to_memory_config(weight, weight_memory)
         self.input_memory, self.output_memory = (
             ttnn.create_sharded_memory_config(
-                (32, width // 8),
+                (32, width // storage_cores),
                 grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -60,10 +97,10 @@ class _DramAttentionProjection:
         self.program = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=block,
             per_core_M=1,
-            per_core_N=n // 256,
-            num_workers_per_dram_bank=1,
+            per_core_N=n // (32 * storage_cores),
+            num_workers_per_dram_bank=readers,
         )
-        self.extra_weight_bytes = (k // 32) * (n // 32) * 1088
+        self.extra_weight_bytes = (k // 32) * (n // 32) * (1088 if weight.dtype == ttnn.bfloat8_b else 576)
 
     def __call__(self, value, *, compute, memory_config):
         output = ttnn.linear(
@@ -74,7 +111,8 @@ class _DramAttentionProjection:
             program_config=self.program,
             compute_kernel_config=compute,
         )
-        return ttnn.to_memory_config(output, memory_config)
+        output = ttnn.to_memory_config(output, memory_config)
+        return output if output.shape[-1] == self.logical_output_width else output[..., : self.logical_output_width]
 
 
 class _Projection:
@@ -105,6 +143,8 @@ class _Projection:
     def __call__(self, x):
         if x.shape[-2] > 1:
             return self.prefill(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if getattr(self, "input_bfp8", False):
+            x = ttnn.typecast(x, ttnn.bfloat8_b)
         if self.decode_dram is not None:
             return self.decode_dram(x, compute=self.decode_compute, memory_config=ttnn.L1_MEMORY_CONFIG)
         return ttnn.linear(
@@ -128,6 +168,9 @@ class _GatherProjection:
         self.hidden = self.weight.shape[-2]
         self.local_hidden = self.hidden // 4
         self.local_output = self.weight.shape[-1]
+        block = projection.program.in0_block_w
+        if block <= 0 or (self.local_hidden // 32) % block:
+            raise ValueError("Fused gather-QKV K block must divide each local ready slice")
         grid = mesh.compute_with_storage_grid_size()
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         self.semaphores = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(2)]
@@ -225,7 +268,11 @@ class _LocalAttention(OptimizedAttention):
         return ttnn.typecast(result, value.dtype)
 
     def project(self, attention, decode):
-        if not decode or getattr(self, "decode_output_dram", None) is None:
+        input_bfp8 = getattr(self, "output_input_bfp8", False)
+        fused_output = getattr(self, "decode_output_fused", None)
+        if not decode or (
+            getattr(self, "decode_output_dram", None) is None and fused_output is None and not input_bfp8
+        ):
             return self.reduce(super().project(attention, decode))
         cfg = self.source.config
         memory = ttnn.create_sharded_memory_config(
@@ -240,6 +287,21 @@ class _LocalAttention(OptimizedAttention):
         )
         width = cfg.num_attention_heads * cfg.head_dim
         combined = ttnn.reshape(combined, (1, 1, 1, width), (1, 1, 32, width))
+        if input_bfp8:
+            combined = ttnn.typecast(ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG), ttnn.bfloat8_b)
+        if fused_output is not None:
+            return fused_output(combined)
+        if getattr(self, "decode_output_dram", None) is None:
+            return self.reduce(
+                ttnn.linear(
+                    combined,
+                    self.source.weights.o_proj,
+                    dtype=ttnn.float32,
+                    program_config=self.output_program,
+                    compute_kernel_config=self.output_compute,
+                    memory_config=self.output_memory,
+                )
+            )
         projected = self.decode_output_dram(combined, compute=self.output_compute, memory_config=self.output_memory)
         return self.reduce(projected)
 
@@ -307,6 +369,8 @@ class _SharedMLP:
     def __call__(self, x, *, reduce_output=True):
         # Imported Gemma4 loader packs [up_i, gate_i] on each rank.
         decode = self.decode_weights is not None and x.shape[-2] == 1
+        if decode and getattr(self, "input_bfp8", False):
+            x = ttnn.typecast(x, ttnn.bfloat8_b)
         gu = (
             ttnn.linear(
                 x,
@@ -321,6 +385,8 @@ class _SharedMLP:
         )
         up, gate = gu[..., : self.width], gu[..., self.width :]
         hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
+        if decode and getattr(self, "input_bfp8", False):
+            hidden = ttnn.typecast(hidden, ttnn.bfloat8_b)
         output = (
             ttnn.linear(
                 hidden,
@@ -339,7 +405,7 @@ class _SharedMLP:
 class _DramSharedMLP(_SharedMLP):
     """Bank-sharded shared decode; the inherited BF16 prefill stays unchanged."""
 
-    def configure_decode(self, state, mesh, sliding, geometry=0):
+    def configure_decode(self, state, mesh, sliding, geometry=0, readers=1):
         import torch
 
         banks = mesh.dram_grid_size().x
@@ -352,7 +418,10 @@ class _DramSharedMLP(_SharedMLP):
         gate, up = (torch.nn.functional.pad(t, (0, padding)) for t in (gate, up))
         down = torch.nn.functional.pad(down, (0, 0, 0, padding))
         local_n = 2 * self.width
-        physical_n = ((local_n + banks * 32 - 1) // (banks * 32)) * banks * 32
+        alignment = banks * 32 * readers
+        physical_n = ((local_n + alignment - 1) // alignment) * alignment
+        down_n = ((2816 + alignment - 1) // alignment) * alignment
+        down = torch.nn.functional.pad(down, (0, down_n - 2816))
         # Bank padding belongs inside each mesh rank, after its [up, gate] pair.
         packed = torch.cat(
             [
@@ -369,7 +438,7 @@ class _DramSharedMLP(_SharedMLP):
         self.decode_programs = []
         for matrix, axis, k, n, cores, block, dtype in (
             (packed, -1, 2816, physical_n, 8, 11, ttnn.bfloat4_b),
-            (down, -2, self.width, 2816, 1, 17, down_dtype),
+            (down, -2, self.width, down_n, 1, 17, down_dtype),
         ):
             weight_memory = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -402,7 +471,7 @@ class _DramSharedMLP(_SharedMLP):
                     in0_block_w=block,
                     per_core_M=1,
                     per_core_N=n // 32 // cores,
-                    num_workers_per_dram_bank=1,
+                    num_workers_per_dram_bank=readers,
                 )
             )
         self.decode_compute = ttnn.init_device_compute_kernel_config(
@@ -431,7 +500,7 @@ class _DramSharedMLP(_SharedMLP):
         gu = self._project(x, 0)[..., : 2 * self.width]
         up, gate = gu[..., : self.width], gu[..., self.width :]
         hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
-        output = self._project(hidden, 1)
+        output = self._project(hidden, 1)[..., :2816]
         return self.reduce(output) if reduce_output else output
 
 
@@ -606,6 +675,11 @@ class MultichipDecoder(OptimizedDecoder):
         attention_dram=None,
         sharded_decode_rope=None,
         moe_ccl_bfp8=None,
+        persistent_ccl=None,
+        optimized_decode=True,
+        attention_precision=None,
+        expert_gate_dtype=None,
+        collective_buffer_pool=None,
     ):
         import torch
 
@@ -629,6 +703,14 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("Shared DRAM decode requires shared_geometry=0")
         config = getattr(hf_config, "text_config", hf_config)
         sliding = config.layer_types[layer_idx] == "sliding_attention"
+        if attention_precision is None:
+            attention_precision = "qkv" if optimized_decode and not sliding else "baseline"
+        if attention_precision not in ("baseline", "qkv", "output", "both"):
+            raise ValueError("Unknown attention precision policy")
+        if expert_gate_dtype is None:
+            expert_gate_dtype = ttnn.bfloat8_b if optimized_decode and sliding else ttnn.bfloat4_b
+        if expert_gate_dtype not in (ttnn.bfloat4_b, ttnn.bfloat8_b):
+            raise ValueError("Expert gate weights must use BFP4 or BFP8")
         if shared_geometry is None:
             shared_geometry = 2 if sliding else 1
         if chunk_size != 1024:
@@ -645,8 +727,21 @@ class MultichipDecoder(OptimizedDecoder):
         if fused_agmm and (not sharded_residual or topology != ttnn.Topology.Ring):
             raise ValueError("Fused gather-QKV requires sharded residuals and Ring fabric/topology")
         self.topology = topology
+        self.optimized_decode = optimized_decode
+        self.attention_precision = attention_precision
+        self.ccl_tuning = {"num_workers_per_link": 1 if sliding else 2} if optimized_decode else {}
+        self.persistent_ccl = optimized_decode if persistent_ccl is None else persistent_ccl
+        self.collective_memory = ttnn.L1_MEMORY_CONFIG if optimized_decode else ttnn.DRAM_MEMORY_CONFIG
+        if collective_buffer_pool is not None:
+            if collective_buffer_pool.mesh_device is not mesh_device:
+                raise ValueError("Collective buffers belong to a different mesh")
+            if topology != ttnn.Topology.Linear or sharded_residual or not grouped_moe_reduce:
+                raise ValueError("Shared CCL buffers require Linear replicated residuals and grouped MoE")
+            self._collective_buffers = collective_buffer_pool.buffers
+        else:
+            self._collective_buffers = {}
         self.fused_agmm = fused_agmm
-        self.ccl = CCLManager(mesh_device, 1, topology)
+        self.ccl = _MeshCCLManager(mesh_device, 1, topology)
         if grouped_moe_reduce and sharded_residual:
             raise ValueError("Grouped MoE reduction requires replicated residuals")
         self.grouped_moe_reduce = grouped_moe_reduce
@@ -684,7 +779,6 @@ class MultichipDecoder(OptimizedDecoder):
             max_seq_len=config.max_position_embeddings,
             max_local_batch_size=32,
         )
-        sliding = config.layer_types[layer_idx] == "sliding_attention"
         self.attention_ccl_dtype = (
             full_attention_ccl_dtype if not sliding and full_attention_ccl_dtype is not None else attention_ccl_dtype
         )
@@ -720,6 +814,10 @@ class MultichipDecoder(OptimizedDecoder):
         projection = _Projection(
             ttnn.typecast(source.weights.wqkv, ttnn.bfloat8_b), compute, mesh_device, sliding, qkv_fidelity
         )
+        if attention_precision in ("qkv", "both"):
+            projection.weight = ttnn.typecast(projection.weight, ttnn.bfloat4_b)
+        if optimized_decode and not fused_agmm:
+            projection.program.in0_block_w = 44
         if attention_dram == "qkv":
             projection.decode_dram = _DramAttentionProjection(projection.weight, mesh_device, 11)
             self.attention_dram_extra_weight_bytes = projection.decode_dram.extra_weight_bytes
@@ -756,6 +854,12 @@ class MultichipDecoder(OptimizedDecoder):
         attention.configure_prefill_output(
             mesh_device, 1024, minimal=True, minimal_block_w=8, fidelity=ttnn.MathFidelity.LoFi
         )
+        if attention_precision in ("output", "both"):
+            # Prefill owns its original BFP8 weight through configure_prefill_output.
+            attention.source.weights = replace(
+                attention.source.weights,
+                o_proj=ttnn.typecast(attention.source.weights.o_proj, ttnn.bfloat4_b),
+            )
         if attention_dram == "output":
             attention.decode_output_dram = _DramAttentionProjection(
                 attention.source.weights.o_proj, mesh_device, 4 if sliding else 8
@@ -792,7 +896,7 @@ class MultichipDecoder(OptimizedDecoder):
         )
         experts = OptimizedExperts(
             packed,
-            gate_dtype=ttnn.bfloat4_b,
+            gate_dtype=expert_gate_dtype,
             down_dtype=ttnn.bfloat4_b,
             block_w=6,
             gate_block_w=44,
@@ -808,7 +912,8 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
         if sliding:
-            # Host BFP4 packing and device BF16-to-BFP4 conversion round differently.
+            # Pack directly from checkpoint values; widening a BFP4 tensor
+            # cannot recover the BF8 policy used by consecutive sliding layers.
             gate, up = state_dict["experts.gate_up_proj"].chunk(2, dim=-2)
             gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, 64)) for t in (gate, up))
             packed_gate = torch.cat(
@@ -818,7 +923,7 @@ class MultichipDecoder(OptimizedDecoder):
             experts.gate_up = ttnn.from_torch(
                 packed_gate.unsqueeze(0),
                 device=mesh_device,
-                dtype=ttnn.bfloat4_b,
+                dtype=expert_gate_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
@@ -1008,25 +1113,131 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("Grouped MoE reduction requires BF16 local outputs")
         if tuple(shared.shape) != tuple(routed.shape) or tuple(shared.shape)[:2] != (1, 1):
             raise ValueError("Grouped MoE outputs must share shape [1,1,S,H]")
-        paired = ttnn.concat((shared, routed), dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        memory = (
+            getattr(self, "collective_memory", ttnn.DRAM_MEMORY_CONFIG)
+            if shared.shape[-2] == 1
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
+        paired = ttnn.concat((shared, routed), dim=1, memory_config=memory)
         if getattr(self, "moe_ccl_bfp8", False):
             paired = ttnn.typecast(paired, ttnn.bfloat8_b)
-        reduced = self.allreduce(paired)
+        reduced = self.allreduce(paired, role="moe_pair")
         if reduced.dtype != ttnn.bfloat16:
             reduced = ttnn.typecast(reduced, ttnn.bfloat16)
         return reduced[:, :1, :, :], reduced[:, 1:2, :, :]
 
     def _reduce_attention(self, value):
-        return self.allreduce(ttnn.typecast(value, self.attention_ccl_dtype))
+        return self.allreduce(ttnn.typecast(value, self.attention_ccl_dtype), role="attention")
 
-    def allreduce(self, value):
-        value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
-        return self.mesh_config.allreduce(value, self.ccl, axis=1)
+    def allreduce(self, value, *, role="shared"):
+        memory = (
+            getattr(self, "collective_memory", ttnn.DRAM_MEMORY_CONFIG)
+            if value.shape[-2] == 1
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
+        value = ttnn.to_memory_config(value, memory)
+        if self.persistent_ccl and value.shape[-2] == 1:
+            key = (role, tuple(value.shape), tuple(value.padded_shape), value.dtype, str(memory))
+            if key not in self._collective_buffers:
+                output_shape = list(value.shape)
+                output_shape[-1] //= 4
 
-    def reduce_scatter(self, value):
+                def allocate(shape):
+                    return ttnn.empty(
+                        shape,
+                        dtype=value.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                        memory_config=memory,
+                    )
+
+                scattered = allocate(output_shape)
+                gathered = allocate(value.shape)
+                if self.topology == ttnn.Topology.Ring:
+                    staging = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                        value,
+                        dim=3,
+                        topology=self.topology,
+                        cluster_axis=1,
+                    )
+                    buffers = [staging[0], scattered, staging[1]]
+                else:
+                    intermediate_shape = list(value.padded_shape)
+                    intermediate_shape[0] *= 2
+                    buffers = [allocate(intermediate_shape), scattered]
+                self._collective_buffers[key] = (buffers, gathered)
+            buffers, gathered = self._collective_buffers[key]
+            scattered = ttnn.experimental.reduce_scatter_minimal_async(
+                value,
+                persistent_output_buffers=buffers,
+                dim=3,
+                multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
+                barrier_semaphore=self.ccl.get_barrier_semaphore(),
+                num_links=1,
+                memory_config=memory,
+                topology=self.topology,
+                cluster_axis=1,
+                **getattr(self, "ccl_tuning", {}),
+            )
+            tuning = getattr(self, "ccl_tuning", {})
+            output_args = (
+                {"persistent_output_buffer": gathered}
+                if "chunks_per_sync" in tuning
+                else {"persistent_output_tensor": gathered, "mesh_device": self.mesh_device}
+            )
+            return ttnn.experimental.all_gather_async(
+                scattered,
+                **output_args,
+                dim=3,
+                cluster_axis=1,
+                topology=self.topology,
+                multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
+                barrier_semaphore=self.ccl.get_barrier_semaphore(),
+                num_links=1,
+                memory_config=memory,
+                **getattr(self, "ccl_tuning", {}),
+            )
+        return self.mesh_config.allreduce(value, self.ccl, memory_config=memory, axis=1)
+
+    def reduce_scatter(self, value, *, role="shared"):
         value = ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+        buffers = None
+        if self.persistent_ccl and value.shape[-2] == 1:
+            key = ("scatter", role, tuple(value.shape), value.dtype)
+            if key not in self._collective_buffers:
+                shape = list(value.shape)
+                shape[-1] //= 4
+                scattered = ttnn.empty(
+                    shape,
+                    dtype=value.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if self.topology == ttnn.Topology.Ring:
+                    staging = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                        value,
+                        dim=3,
+                        topology=self.topology,
+                        cluster_axis=1,
+                    )
+                    buffers = [staging[0], scattered, staging[1]]
+                else:
+                    intermediate_shape = list(value.padded_shape)
+                    intermediate_shape[0] *= 2
+                    intermediate = ttnn.empty(
+                        intermediate_shape,
+                        dtype=value.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    buffers = [intermediate, scattered]
+                self._collective_buffers[key] = buffers
+            buffers = self._collective_buffers[key]
         return ttnn.experimental.reduce_scatter_minimal_async(
             value,
+            persistent_output_buffers=buffers,
             dim=3,
             multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
             num_links=1,
@@ -1037,6 +1248,30 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
     def gather(self, value):
+        if self.persistent_ccl and value.shape[-2] == 1:
+            key = ("gather", tuple(value.shape), value.dtype)
+            if key not in self._collective_buffers:
+                shape = list(value.shape)
+                shape[-1] *= 4
+                self._collective_buffers[key] = ttnn.empty(
+                    shape,
+                    dtype=value.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            return ttnn.experimental.all_gather_async(
+                value,
+                persistent_output_tensor=self._collective_buffers[key],
+                dim=3,
+                cluster_axis=1,
+                mesh_device=self.mesh_device,
+                topology=self.topology,
+                multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
+                barrier_semaphore=self.ccl.get_barrier_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         return self.mesh_config.allgather(value, self.ccl, axis=1)
 
     def distributed_norm(self, value, name=None):
@@ -1061,7 +1296,10 @@ class MultichipDecoder(OptimizedDecoder):
         normalized = self.gather(self.distributed_norm(residual))
         routes = self.layer.moe.router(residual, normalized=normalized)
         expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
-        routed = self.reduce_scatter(self.layer.moe.experts(expert_input, routes))
+        routed = self.layer.moe.experts(expert_input, routes)
+        if getattr(self, "sharded_moe_bfp8", False):
+            routed = ttnn.typecast(routed, ttnn.bfloat8_b)
+        routed = self.reduce_scatter(routed, role="routed")
         shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
         shared = self.layer.shared_mlp(shared_input)
         combined = ttnn.add(
@@ -1074,6 +1312,9 @@ class MultichipDecoder(OptimizedDecoder):
     def _forward(self, x, **attention_kwargs):
         if self.sharded_residual:
             return self._sharded_forward(x, **attention_kwargs)
+        memory = getattr(self, "decode_residual_memory", None) if x.shape[-2] == 1 else None
+        if memory is not None:
+            x = ttnn.to_memory_config(x, memory)
         eps = self.config.rms_norm_eps
         normed = self.normalize(x, eps, self.input_norm_weight)
         attention = self.layer.self_attn(normed, **attention_kwargs)
@@ -1083,10 +1324,14 @@ class MultichipDecoder(OptimizedDecoder):
         normalized = self.normalize(residual, eps)
         routes = self.layer.moe.router(residual, normalized=normalized)
         expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+        if memory is not None:
+            expert_input = ttnn.to_memory_config(expert_input, ttnn.L1_MEMORY_CONFIG)
         routed = self.layer.moe.experts(expert_input, routes)
         if not self.grouped_moe_reduce:
-            routed = self.allreduce(routed)
+            routed = self.allreduce(routed, role="routed")
         shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
+        if memory is not None:
+            shared_input = ttnn.to_memory_config(shared_input, ttnn.L1_MEMORY_CONFIG)
         shared = self.layer.shared_mlp(shared_input, reduce_output=not self.grouped_moe_reduce)
         if self.grouped_moe_reduce:
             shared, routed = self._reduce_moe_pair(shared, routed)
@@ -1101,6 +1346,12 @@ class MultichipDecoder(OptimizedDecoder):
     def _fused_tail(self, residual, shared, routed, decode):
         layer = self.layer
         norm = layer.post_feedforward_layernorm
+        debug = getattr(self, "debug_residual", False) and residual.shape[-2] == 1
+        if debug:
+            self.debug_tensors = {
+                name: ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG)
+                for name, value in (("residual", residual), ("shared", shared), ("routed", routed))
+            }
         if decode:
 
             def normalize(value, norm):
@@ -1125,10 +1376,22 @@ class MultichipDecoder(OptimizedDecoder):
             shared = layer.post_feedforward_layernorm_1.forward(shared)
             routed = layer.post_feedforward_layernorm_2.forward(routed)
             combined = ttnn.rms_norm(shared, residual_input_tensor=routed, weight=norm.tt_weight, epsilon=norm.eps)
-        return ttnn.add(
+        memory = getattr(self, "decode_residual_memory", None) if residual.shape[-2] == 1 else None
+        if debug:
+            self.debug_tensors["combined_before_reshard"] = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
+        if memory is not None:
+            combined = ttnn.to_memory_config(combined, memory)
+        result = ttnn.add(
             residual,
             combined,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory or ttnn.DRAM_MEMORY_CONFIG,
+            fast_and_approximate_mode=memory is None,
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, layer.layer_scalar)],
         )
+        if debug:
+            self.debug_tensors.update(
+                combined_after_reshard=ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG),
+                final=ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG),
+            )
+        return result

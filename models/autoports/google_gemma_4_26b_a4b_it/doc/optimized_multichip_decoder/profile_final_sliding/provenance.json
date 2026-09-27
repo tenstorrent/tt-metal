@@ -1,0 +1,108 @@
+{
+  "native_binary_sha256": "3c6e55d5335dcfe106bc5ec4ece7422e6508cfd01983d6b3b1f028ef8705eba5",
+  "native_binary": "build/lib/_ttnncpp.so",
+  "native_kernel_sha256": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+  "native_kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp",
+  "files": [
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/reports/tp4/2026_09_27_06_01_55/ops_perf_results_tp4_2026_09_27_06_01_55.csv",
+      "bytes": 150329822,
+      "sha256": "f562dd4416ec269d1bf5a8bdaa151dbee300d2e179fdcc2cb02de8819ecc72a7"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/prefill_table.txt",
+      "bytes": 1074965,
+      "sha256": "f6cabeaac966f9616556fa844d67c1ab871cd027a2660f084038721f7fdabf55"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/accounting.log",
+      "bytes": 323831,
+      "sha256": "a5ffefe7f42dd08034f2eb19a9396a3c096148ab88392af5ca5867547a32b94a"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/decode_perf_report.csv",
+      "bytes": 2911371,
+      "sha256": "bdff5ab830faaf81a52275a80bb7ad2c1bbe1cb567dbb9bcdffd2c54acb600c5"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/prefill_perf_report_stacked.png",
+      "bytes": 246558,
+      "sha256": "f6d6063cbae70253cec74bfc83bd610dc070941f8a05a688e9d0964715b8fba8"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/capture_audit.log",
+      "bytes": 562,
+      "sha256": "cbe5b1aa73cb05fd6f0ba2f43cf44549b3d05581e4c388cc7c440b8b1ce49071"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/whole_layer.json",
+      "bytes": 323831,
+      "sha256": "a5ffefe7f42dd08034f2eb19a9396a3c096148ab88392af5ca5867547a32b94a"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/capture_command.json",
+      "bytes": 878,
+      "sha256": "56f1972e3f7c838baac79ca418f513d8861053691ccc0aa5eeec4388bce199f4"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/decode_perf_report_stacked.png",
+      "bytes": 381175,
+      "sha256": "14e3f2e516f3fd07c9724fc1687a46660f61c4178987ba77926e4ed26487efc9"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/prefill_perf_report.csv",
+      "bytes": 478412,
+      "sha256": "64cea2fab711d531b36e214e3db5060e9f305d309f2bced3becfc65ec1e99a5e"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/decode_table.txt",
+      "bytes": 3553856,
+      "sha256": "90cef554c3992fc6c12ac00b64555fd346b8e12925da284c8d5b0b52aea8c948"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/prefill_csv.log",
+      "bytes": 2135,
+      "sha256": "b32e3a18988392f3b2bc82fb2691f017859fe89631412439839b83c3a8b57b91"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/run.json",
+      "bytes": 5687,
+      "sha256": "90710a12a8a120c8cc270ecb86be2674e86cd11fd3be3ced33d5871e4f994a2a"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/capture_integrity.json",
+      "bytes": 942,
+      "sha256": "c237bf750043ed2b4590a6769bc0756ef12e04c9e7e26be3f8bd9479324ea530"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/commands.json",
+      "bytes": 3698,
+      "sha256": "e98ba291f9a0cfc78a77eb19ea1cdf7474cdf8ff56bd52989d6bc284bc8156fa"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/native_decode_policy_rows.json",
+      "bytes": 1178549,
+      "sha256": "d386d65a7af62667291667f26806b1d8643f1be66988a2943c8ff3155ec76451"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/decode_csv.log",
+      "bytes": 1859,
+      "sha256": "4486afb39200d4ab22262b04f305f0cfdb49a9a013cbff959294b6e01a747209"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/decode_perf_report_stacked.csv",
+      "bytes": 2945,
+      "sha256": "c3bc16454d685d21a84d188bad4fb01de876dd107e44e6d25863a66d8fbe0b80"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/prefill_perf_report_stacked.csv",
+      "bytes": 2338,
+      "sha256": "4455d718f08360c69062d8ba11a2c2b2ebcba6f6e9028a533e9311aeb7fd5408"
+    },
+    {
+      "path": "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/profile_final_sliding/whole_layer.windows.csv",
+      "bytes": 18119,
+      "sha256": "205686c7a53f8eabc9f86ecf2806d4f9afc19156e7a06d6f7f07a32422785598"
+    }
+  ]
+}

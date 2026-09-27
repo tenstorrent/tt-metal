@@ -5,6 +5,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -39,6 +40,7 @@ def main():
     parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
     parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
     parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat8_b")
+    parser.add_argument("--attention-precision", choices=["baseline", "qkv", "output", "both"])
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.expert_parallel and args.hybrid_experts:
@@ -95,6 +97,7 @@ def main():
                     {
                         "expert_parallel": args.expert_parallel,
                         "hybrid_experts": args.hybrid_experts,
+                        "attention_precision": args.attention_precision,
                         "fused_tail": args.fused_tail,
                         "optimized_shared": args.optimized_shared,
                         "shared_geometry": args.shared_geometry,
@@ -209,6 +212,7 @@ def main():
     prefills = [pcc(a, b) for a, b in zip(results[1]["prefill"], results[4]["prefill"])]
     decodes = [pcc(results[1]["decode"][:, :, i : i + 1], results[4]["decode"][:, :, i : i + 1]) for i in range(batch)]
     report = dict(
+        attention_precision=args.attention_precision,
         layer_type=config.layer_types[args.layer],
         expert_parallel=args.expert_parallel,
         hybrid_experts=args.hybrid_experts,
@@ -229,7 +233,7 @@ def main():
         decode_pcc=decodes,
         cache_preservation=preservation,
         runtime_audit="clean",
-        passed=min(prefills + decodes) >= 0.995,
+        passed=all(math.isfinite(value) and value >= 0.995 for value in prefills + decodes),
         runtime_sha256=hashlib.sha256((root / "tt/multichip_decoder.py").read_bytes()).hexdigest(),
     )
     args.output.write_text(json.dumps(report, indent=2) + "\n")

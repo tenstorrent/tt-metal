@@ -1,0 +1,23 @@
+{
+  "status": "candidate only; apply to contract after default selection and capacity verification",
+  "mesh": [
+    1,
+    4
+  ],
+  "context": 262144,
+  "per_device_extra_attention_weights": {
+    "sliding_attention": 3244032,
+    "full_attention": 8110080
+  },
+  "per_device_persistent_ccl_payload": {
+    "sliding_attention": 1208064,
+    "full_attention": 1482624
+  },
+  "full_stack_extra_dram_weight_bytes_per_device": 121651200,
+  "full_stack_persistent_ccl_bytes_per_device": 37614720,
+  "basis": [
+    "30 layers:25 sliding,5 full; QKV keeps BFP8 prefill weight and adds BFP4 decode; full WO retains BFP8 prefill and adds BFP4 decode.",
+    "Each Linear RS intermediate has twice input padded shape, output widthH/4, AG outputH. A role has286 tiles per logical input plane; groupedMoE has2 planes. BF16 tiles2048bytes; BFP8 tiles1088bytes; BFP4 tiles576bytes.",
+    "Selected CCL candidate uses L1 persistent buffers; weight copies are DRAM. Payload excludes bank allocation rounding; capacity test must allocate representative buffers."
+  ]
+}

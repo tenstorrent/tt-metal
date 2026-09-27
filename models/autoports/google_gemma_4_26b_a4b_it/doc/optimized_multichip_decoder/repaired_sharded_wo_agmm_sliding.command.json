@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+    "--layer",
+    "0",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--trace",
+    "--check-cache",
+    "--ring",
+    "--sharded-residual",
+    "--no-grouped-moe-reduce",
+    "--fused-agmm",
+    "--sharded-moe-bfp8",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/repaired_sharded_wo_agmm_sliding.json",
+    "--output-agmm"
+  ],
+  "exit_code": 0,
+  "runtime_sha256": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3"
+}

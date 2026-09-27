@@ -1,0 +1,22 @@
+{
+  "sources": [
+    {
+      "path": "tests/run_multichip_decoder.py",
+      "before_sha256": "a798215f8ca1d3565a09d09edc3834203fad4c2207b522bfe4a7611ea02dbaf9",
+      "after_sha256": "3ea427ba49605809a48bdcc0bebc5c65fb99eeefb60c34c7d7307449a24d8bec"
+    },
+    {
+      "path": "tests/test_multichip_contracts.py",
+      "before_sha256": "442d05125e3eb34ab663fc3e3ce33de16d3037fe0ba4e3ef1ce17c0fe480afd8",
+      "after_sha256": "391c5b6de39d2fb70318df1b19f711ebc1ecb13b1fbfb8b3f0a66a204233e59e"
+    },
+    {
+      "path": "tests/test_multichip_stack.py",
+      "before_sha256": "1e6ce4fca7b62fcb296c4a023f0cad3f93f8107c5f845829c7cd22bf601b34f6",
+      "after_sha256": "107383ec7bcc43a5becfeef84d0802c30baa0fd382b5967411378f28e6c40984"
+    }
+  ],
+  "patch": "finite_gate_source_delta.patch",
+  "basis": "Only host-side acceptance after device execution changes, from min-only to explicit finite and threshold checks. Imports/math helper do not alter timed device calls or inputs. Existing measurements retain original runner hashes and every saved accepted vector was rechecked offline.",
+  "audit": "finite_gate_audit.json"
+}

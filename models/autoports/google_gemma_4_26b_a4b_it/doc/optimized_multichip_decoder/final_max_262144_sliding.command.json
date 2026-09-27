@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+    "--layer",
+    "0",
+    "--length",
+    "262144",
+    "--steps",
+    "0",
+    "--trace",
+    "--check-cache",
+    "--repeat-input",
+    "--reserve-full-stack",
+    "--prefill-timing-samples",
+    "1",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_max_262144_sliding.json"
+  ],
+  "environment": {},
+  "exit_code": 0,
+  "source_sha256": {
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py": "a798215f8ca1d3565a09d09edc3834203fad4c2207b522bfe4a7611ea02dbaf9"
+  }
+}

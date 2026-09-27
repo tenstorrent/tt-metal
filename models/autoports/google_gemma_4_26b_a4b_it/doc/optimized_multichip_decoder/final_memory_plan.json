@@ -1,0 +1,30 @@
+{
+  "status": "validated; independent stage-review clean-pass",
+  "mesh": [
+    1,
+    4
+  ],
+  "context": 262144,
+  "per_device_extra_attention_weights": {
+    "sliding_attention": 0,
+    "full_attention": 4866048
+  },
+  "per_device_persistent_ccl_payload": {
+    "sliding_attention": 1208064,
+    "full_attention": 1482624
+  },
+  "full_stack_extra_dram_weight_bytes_per_device": 1754480640,
+  "full_stack_persistent_ccl_bytes_per_device": 37614720,
+  "basis": [
+    "30 layers:25 sliding,5 full. Sliding decode QKV staysBFP8; gate/up experts nowBFP8 loaded directly fromcheckpoint withsame TP packing. Full attention retains BFP4decode QKV plus BFP8prefill QKV. WO remainsBFP8. All expert down weights remainBFP4.",
+    "Extra sliding expert bytes are88 Ktiles *12 local packed gate/up Ntiles *128resident experts *(1088-576)bytes/tile. Runtime activates8experts, but memory counts all128weights.",
+    "Each Linear role requires286 tiles perinputplane: twicefullinput scratch, H/4 RSoutput and fullH AGoutput. Attention has1plane; pairedMoE2planes. Sharedpool holds attentionBF16/BFP8 andMoEBF16/BFP8 entries,2690688B/device. L1bankrounding excluded; actualpool primed incapacitytests.",
+    "Private semaphore buffers cover11x10 workers on each of30layers; actualallocations reserved beforeprefill. Payloadpool is shared across serial layers only."
+  ],
+  "pooled_persistent_ccl_bytes_per_device": 2690688,
+  "per_device_extra_expert_weights": {
+    "sliding_attention": 69206016,
+    "full_attention": 0
+  },
+  "review": "stage_review.md"
+}

@@ -1,0 +1,46 @@
+{
+  "sliding": {
+    "prefill_device_us": 329194.6762962963,
+    "decode_device_us": 710.512699384284,
+    "prefill_flops_pct": 0.1010001482563015,
+    "decode_dram_pct": 9.293627870018698,
+    "prefill_useful_flops": 882489950208,
+    "decode_dram_bytes": 135234368.0,
+    "peak_flops_per_s": 2654208000000000.0,
+    "peak_dram_bytes_per_s": 2048000000000.0,
+    "peak_basis": "Four P300 Blackhole ASICs, theoretical120 Tensix/ASIC,4096 FLOP/core/cycle at1.35GHz LoFi reference;512GB/s DRAM/ASIC. Runtime mixes fidelities.",
+    "assumptions": [
+      "Each device window spans first firmware start to final firmware end of the entire layer, including gaps. Mesh latency uses the maximum per-device span; clocks are not assumed cross-device synchronized. This excludes host input refresh/readback between replays.",
+      "Useful work uses4096 logical tokens and8 selected experts; padding, inactive prefill union work, normalization/transcendentals excluded from numerator only. All their device time remains included.",
+      "DRAM estimate sums native operand reads/writes across all four devices with indexed active-expert metadata, BFP tile exponent bytes, selected embedding/slice rows and paged writes. SDPA uses validated local heads and metadata-derived chunk-rounded reads. Minimal reduce-scatter counts INPUT_0 and its real OUTPUT_1; scratch OUTPUT_0/OUTPUT_2 allocations are excluded, not treated as writes. Grouped CCL payloads and attention dtype follow recorded shapes and dtypes. Extra per-core reads, internal CCL scratch passes/NoC and profiler traffic excluded; not controller counters.",
+      "No utilization value is clamped. These rooflines are estimates, not averaged per-op percentages."
+    ],
+    "baseline_device_us": {
+      "prefill": 325830.5325925926,
+      "decode": 705.4204917659946
+    },
+    "baseline_evidence": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_sliding/whole_layer.json"
+  },
+  "full": {
+    "prefill_device_us": 339373.4029629629,
+    "decode_device_us": 744.8955208308607,
+    "prefill_flops_pct": 0.13493032324622206,
+    "decode_dram_pct": 8.969919858757166,
+    "prefill_useful_flops": 1215408635904,
+    "decode_dram_bytes": 136840256.0,
+    "peak_flops_per_s": 2654208000000000.0,
+    "peak_dram_bytes_per_s": 2048000000000.0,
+    "peak_basis": "Four P300 Blackhole ASICs, theoretical120 Tensix/ASIC,4096 FLOP/core/cycle at1.35GHz LoFi reference;512GB/s DRAM/ASIC. Runtime mixes fidelities.",
+    "assumptions": [
+      "Each device window spans first firmware start to final firmware end of the entire layer, including gaps. Mesh latency uses the maximum per-device span; clocks are not assumed cross-device synchronized. This excludes host input refresh/readback between replays.",
+      "Useful work uses4096 logical tokens and8 selected experts; padding, inactive prefill union work, normalization/transcendentals excluded from numerator only. All their device time remains included.",
+      "DRAM estimate sums native operand reads/writes across all four devices with indexed active-expert metadata, BFP tile exponent bytes, selected embedding/slice rows and paged writes. SDPA uses validated local heads and metadata-derived chunk-rounded reads. Minimal reduce-scatter counts INPUT_0 and its real OUTPUT_1; scratch OUTPUT_0/OUTPUT_2 allocations are excluded, not treated as writes. Grouped CCL payloads and attention dtype follow recorded shapes and dtypes. Extra per-core reads, internal CCL scratch passes/NoC and profiler traffic excluded; not controller counters.",
+      "No utilization value is clamped. These rooflines are estimates, not averaged per-op percentages."
+    ],
+    "baseline_device_us": {
+      "prefill": 309683.7066666666,
+      "decode": 766.5836177911771
+    },
+    "baseline_evidence": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_final_full/whole_layer.json"
+  }
+}

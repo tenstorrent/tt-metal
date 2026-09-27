@@ -1,0 +1,23 @@
+{
+  "label": "prefill/layer1",
+  "tp": 4,
+  "nonfinite_per_rank": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "changed_from_rank0": [
+    0,
+    0,
+    2802,
+    2802
+  ],
+  "sharded_residual": false,
+  "source_sha256": {
+    "tt/multichip_decoder.py": "b7d00ca94ef5f73f5febed4b767c8f52dd47a9d89868863d502123a612077e8f",
+    "tt/optimized_decoder.py": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+    "tests/test_multichip_stack.py": "88def04a74dbfe6481b428ced76478dac06d1543e70f28f0e6da18dfe6f85d08"
+  },
+  "passed": false
+}

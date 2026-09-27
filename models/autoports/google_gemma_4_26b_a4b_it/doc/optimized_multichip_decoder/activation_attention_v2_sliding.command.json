@@ -1,0 +1,20 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+    "--layer",
+    "0",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--trace",
+    "--check-cache",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/activation_attention_v2_sliding.json",
+    "--activation-bfp8",
+    "attention"
+  ],
+  "exit_code": 0
+}
