@@ -1,0 +1,68 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
+@@ -39,6 +39,8 @@
+     parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"])
+     parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+     parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
++    parser.add_argument("--sparse-gate-geometry", choices=["baseline", "n2-k44", "n2-k88"], default="baseline")
++    parser.add_argument("--sparse-down-geometry", choices=["baseline", "n2-k6"], default="baseline")
+     parser.add_argument("--check-cache", action="store_true")
+     parser.add_argument("--repeat-input", action="store_true")
+     parser.add_argument("--reserve-full-stack", action="store_true")
+@@ -49,6 +51,8 @@
+     parser.add_argument("--fused-agmm", action="store_true")
+     parser.add_argument("--output", type=Path, required=True)
+     args = parser.parse_args()
++    if args.expert_parallel and (args.sparse_gate_geometry != "baseline" or args.sparse_down_geometry != "baseline"):
++        parser.error("Sparse geometry candidates require TP or hybrid indexed decode experts")
+     if args.expert_parallel and args.hybrid_experts:
+         parser.error("--expert-parallel requires --no-hybrid-experts")
+     if args.shared_geometry and not args.optimized_shared:
+@@ -153,6 +157,38 @@
+                     else {}
+                 ),
+             )
++            if tp == 4 and (args.sparse_gate_geometry != "baseline" or args.sparse_down_geometry != "baseline"):
++                experts = decoder.layer.moe.experts
++                experts = getattr(experts, "decode", experts)
++                if experts.indexed_router is None or experts.expert_split or experts.config.top_k != 8:
++                    raise ValueError("Sparse geometry candidates require packed indexed top-8 decode")
++                if tuple(experts.gate_up.shape) != (1, 128, 2816, 384):
++                    raise ValueError("Unexpected local gate/up weight geometry")
++                if tuple(experts.down.shape) != (1, 128, 192, 2816):
++                    raise ValueError("Unexpected local down weight geometry")
++
++                def sparse_geometry(grid, block):
++                    available = mesh.compute_with_storage_grid_size()
++                    if grid[0] > available.x or grid[1] > available.y:
++                        raise ValueError("Sparse geometry grid exceeds available workers")
++                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++                        compute_with_storage_grid_size=grid,
++                        in0_block_w=block,
++                        out_subblock_h=1,
++                        out_subblock_w=2,
++                        out_block_h=1,
++                        out_block_w=2,
++                        per_core_M=1,
++                        per_core_N=2,
++                        fuse_batch=False,
++                        mcast_in0=True,
++                    )
++
++                if args.sparse_gate_geometry != "baseline":
++                    gate_block = 44 if args.sparse_gate_geometry == "n2-k44" else 88
++                    experts.gate_config = sparse_geometry((6, 1), gate_block)
++                if args.sparse_down_geometry != "baseline":
++                    experts.down_config = sparse_geometry((11, 4), 6)
+             cfg = decoder.layer.self_attn.config
+             cache = [
+                 upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b)
+@@ -361,6 +397,8 @@
+         shared_dram=args.shared_dram,
+         attention_dram=args.attention_dram,
+         shared_geometry=args.shared_geometry,
++        sparse_gate_geometry=args.sparse_gate_geometry,
++        sparse_down_geometry=args.sparse_down_geometry,
+         grouped_moe_reduce=args.grouped_moe_reduce,
+         hybrid_experts=args.hybrid_experts,
+         cache_pcc=cache_pcc,

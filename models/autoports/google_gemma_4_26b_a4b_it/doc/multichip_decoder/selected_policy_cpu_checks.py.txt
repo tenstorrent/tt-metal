@@ -1,0 +1,56 @@
+from pathlib import Path
+import argparse,ast,contextlib,io,json,sys,hashlib
+root=Path('/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it');doc=root/'doc/multichip_decoder'
+checks={};snapshots={}
+for stem in ('run_multichip_decoder','test_multichip_stack','test_multichip_contracts'):
+ p=doc/f'selected_policy_{stem}.py.txt';source=p.read_text();tree=ast.parse(source);snapshots[stem]=hashlib.sha256(source.encode()).hexdigest()
+ main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main');prefix=[]
+ for stmt in main.body:
+  if isinstance(stmt,ast.Expr) and isinstance(stmt.value,ast.Call) and ast.unparse(stmt.value.func)=='torch.set_num_threads':break
+  if isinstance(stmt,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='runtime_hash' for t in stmt.targets):continue
+  prefix.append(stmt)
+ fn=ast.FunctionDef(name='parse_candidate',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=prefix+[ast.Return(value=ast.Name(id='args',ctx=ast.Load()))],decorator_list=[])
+ ns={'argparse':argparse,'Path':Path};exec(compile(ast.fix_missing_locations(ast.Module(body=[fn],type_ignores=[])),'parser_only','exec'),ns)
+ def parse(extra):
+  old=sys.argv;sys.argv=[stem,'--output','/tmp/unused-selected-policy.json',*extra]
+  try:return ns['parse_candidate']()
+  finally:sys.argv=old
+ args=parse([])
+ for flag in ('hybrid_experts','fused_tail','optimized_shared','grouped_moe_reduce'):assert getattr(args,flag) is True
+ assert args.shared_geometry==1 and args.qkv_fidelity==args.output_fidelity=='LoFi'
+ assert args.attention_ccl_dtype=='bfloat16' and args.full_attention_ccl_dtype is None
+ assert args.expert_parallel is False
+ if hasattr(args,'sharded_residual'):assert args.sharded_residual is False
+ disabled=parse(['--no-hybrid-experts','--no-fused-tail','--no-optimized-shared','--no-grouped-moe-reduce','--shared-geometry','0'])
+ assert not any(getattr(disabled,k) for k in ('hybrid_experts','fused_tail','optimized_shared','grouped_moe_reduce'))
+ mixed=parse(['--full-attention-ccl-dtype','bfloat8_b']);assert mixed.attention_ccl_dtype=='bfloat16' and mixed.full_attention_ccl_dtype=='bfloat8_b'
+ precision=parse(['--qkv-fidelity','HiFi2','--output-fidelity','HiFi4','--attention-ccl-dtype','float32']);assert (precision.qkv_fidelity,precision.output_fidelity,precision.attention_ccl_dtype)==('HiFi2','HiFi4','float32')
+ assert parse(['--expert-parallel','--no-hybrid-experts']).expert_parallel
+ if hasattr(args,'sharded_residual'):assert parse(['--sharded-residual','--no-grouped-moe-reduce']).sharded_residual
+ if stem=='run_multichip_decoder':
+  assert parse(['--shared-dram','--shared-geometry','0']).shared_dram
+  assert parse(['--attention-dram','output']).attention_dram=='output'
+ for extra in (['--expert-parallel'],['--no-optimized-shared']):
+  with contextlib.redirect_stderr(io.StringIO()):
+   try:parse(extra)
+   except SystemExit as e:assert e.code==2
+   else:raise AssertionError('Invalid default combination was accepted')
+ keys={n.value for n in ast.walk(tree) if isinstance(n,ast.Constant) and isinstance(n.value,str)}
+ for key in ('qkv_fidelity','output_fidelity','attention_ccl_dtype','full_attention_ccl_dtype','shared_geometry','grouped_moe_reduce'):assert key in keys
+ checks[stem]=dict(defaults={k:getattr(args,k) for k in ('hybrid_experts','fused_tail','optimized_shared','grouped_moe_reduce','shared_geometry','qkv_fidelity','output_fidelity','attention_ccl_dtype','full_attention_ccl_dtype')},explicit_disable=True,candidate_overrides=True,mixed_ccl_override=True,invalid_combinations_rejected=True)
+s=(doc/'selected_policy_multichip_decoder.py.txt').read_text();tree=ast.parse(s)
+cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='MultichipDecoder');factory=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='from_state_dict')
+defaults={a.arg:ast.unparse(d) for a,d in zip(factory.args.kwonlyargs,factory.args.kw_defaults) if d is not None}
+for flag in ('hybrid_experts','fused_tail','optimized_shared','grouped_moe_reduce'):assert defaults[flag]=='True'
+assert defaults['shared_geometry']=='1';assert defaults['qkv_fidelity']==defaults['output_fidelity']=='ttnn.MathFidelity.LoFi'
+assert defaults['attention_ccl_dtype']=='ttnn.bfloat16' and defaults['full_attention_ccl_dtype']=='None'
+# Execute only the real dtype-resolution assignment and the attention reduction adapter.
+assign=next(n for n in ast.walk(factory) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Attribute) and t.attr=='attention_ccl_dtype' for t in n.targets))
+from types import SimpleNamespace as NS
+for sliding,wanted in ((True,'BF16'),(False,'BFP8')):
+ obj=NS();ns={'self':obj,'sliding':sliding,'attention_ccl_dtype':'BF16','full_attention_ccl_dtype':'BFP8'}
+ exec(compile(ast.Module(body=[assign],type_ignores=[]),'resolve_dtype','exec'),ns);assert obj.attention_ccl_dtype==wanted
+method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_reduce_attention');ns={'ttnn':NS(typecast=lambda v,d:(v,d))}
+exec(compile(ast.Module(body=[method],type_ignores=[]),'attention_adapter','exec'),ns);assert ns['_reduce_attention'](NS(attention_ccl_dtype='BF16',allreduce=lambda v:('reduce',v)),'projection')==('reduce',('projection','BF16'))
+report=dict(ttnn_imported=False,hardware_used=False,constructor_defaults=defaults,harness_checks=checks,per_kind_dtype_resolution=True,attention_cast_before_existing_reduce=True,candidate_snapshots_sha256=snapshots)
+(doc/'selected_policy_cpu_checks.json').write_text(json.dumps(report,indent=2)+'\n');(doc/'selected_policy_cpu_checks.py.txt').write_text(Path(__file__).read_text());print(json.dumps(report,indent=2))

@@ -1,0 +1,14 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -709,9 +709,9 @@
+             projection_block_w=22 if sliding else 44,
+             projection_fidelity=ttnn.MathFidelity.HiFi4 if sliding else ttnn.MathFidelity.LoFi,
+         )
+-        # Keep the single-core gate off the indexed experts' multicast sender.
++        # Isolate the single-core gate from expert and normalization compute workers.
+         router = self.layer.moe.router
+-        router_core = ttnn.CoreCoord(1, 0)
++        router_core = ttnn.CoreCoord(10, 9)
+         router.memory = ttnn.MemoryConfig(
+             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+             ttnn.BufferType.L1,

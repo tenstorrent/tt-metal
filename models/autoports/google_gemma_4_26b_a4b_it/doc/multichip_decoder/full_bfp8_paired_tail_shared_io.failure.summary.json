@@ -1,0 +1,914 @@
+{
+  "tail_shared_reduced": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    }
+  ],
+  "tail_shared_reduced__physical": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    }
+  ],
+  "tail_shared_sharded": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    }
+  ],
+  "tail_shared_sharded__physical": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 14490,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    }
+  ],
+  "tail_shared_weight": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        88,
+        32
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        88,
+        32
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        88,
+        32
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        88,
+        32
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    }
+  ],
+  "tail_shared": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 4,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0625,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          42
+        ],
+        [
+          0,
+          0,
+          0,
+          44
+        ],
+        [
+          0,
+          0,
+          0,
+          60
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ]
+      ]
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 4,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0625,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          42
+        ],
+        [
+          0,
+          0,
+          0,
+          44
+        ],
+        [
+          0,
+          0,
+          0,
+          60
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ]
+      ]
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 4,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0625,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          42
+        ],
+        [
+          0,
+          0,
+          0,
+          44
+        ],
+        [
+          0,
+          0,
+          0,
+          60
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ]
+      ]
+    }
+  ],
+  "tail_shared__physical": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 24,
+      "nonfinite": 0,
+      "finite_maxdiff": 4.611686018427388e+18,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          42
+        ],
+        [
+          0,
+          0,
+          0,
+          44
+        ],
+        [
+          0,
+          0,
+          0,
+          60
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ],
+        [
+          0,
+          0,
+          7,
+          38
+        ],
+        [
+          0,
+          0,
+          8,
+          44
+        ],
+        [
+          0,
+          0,
+          8,
+          54
+        ],
+        [
+          0,
+          0,
+          8,
+          59
+        ],
+        [
+          0,
+          0,
+          11,
+          39
+        ],
+        [
+          0,
+          0,
+          11,
+          49
+        ]
+      ]
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 24,
+      "nonfinite": 0,
+      "finite_maxdiff": 4.611686018427388e+18,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          42
+        ],
+        [
+          0,
+          0,
+          0,
+          44
+        ],
+        [
+          0,
+          0,
+          0,
+          60
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ],
+        [
+          0,
+          0,
+          7,
+          38
+        ],
+        [
+          0,
+          0,
+          8,
+          44
+        ],
+        [
+          0,
+          0,
+          8,
+          54
+        ],
+        [
+          0,
+          0,
+          8,
+          59
+        ],
+        [
+          0,
+          0,
+          11,
+          39
+        ],
+        [
+          0,
+          0,
+          11,
+          49
+        ]
+      ]
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 24,
+      "nonfinite": 0,
+      "finite_maxdiff": 4.611686018427388e+18,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          42
+        ],
+        [
+          0,
+          0,
+          0,
+          44
+        ],
+        [
+          0,
+          0,
+          0,
+          60
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ],
+        [
+          0,
+          0,
+          7,
+          38
+        ],
+        [
+          0,
+          0,
+          8,
+          44
+        ],
+        [
+          0,
+          0,
+          8,
+          54
+        ],
+        [
+          0,
+          0,
+          8,
+          59
+        ],
+        [
+          0,
+          0,
+          11,
+          39
+        ],
+        [
+          0,
+          0,
+          11,
+          49
+        ]
+      ]
+    }
+  ],
+  "output": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 2,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0078125,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          43
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ]
+      ]
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 2,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0078125,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          43
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ]
+      ]
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "changed_bits": 2,
+      "nonfinite": 0,
+      "finite_maxdiff": 0.0078125,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          43
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ]
+      ]
+    }
+  ],
+  "output__physical": [
+    {
+      "rank": 0,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 0,
+      "nonfinite": 41239,
+      "finite_maxdiff": 0.0,
+      "first_indices": []
+    },
+    {
+      "rank": 1,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 7,
+      "nonfinite": 41239,
+      "finite_maxdiff": 1.0,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          43
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ],
+        [
+          0,
+          0,
+          11,
+          39
+        ],
+        [
+          0,
+          0,
+          16,
+          36
+        ],
+        [
+          0,
+          0,
+          16,
+          43
+        ],
+        [
+          0,
+          0,
+          16,
+          46
+        ],
+        [
+          0,
+          0,
+          27,
+          56
+        ]
+      ]
+    },
+    {
+      "rank": 2,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 7,
+      "nonfinite": 41239,
+      "finite_maxdiff": 1.0,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          43
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ],
+        [
+          0,
+          0,
+          11,
+          39
+        ],
+        [
+          0,
+          0,
+          16,
+          36
+        ],
+        [
+          0,
+          0,
+          16,
+          43
+        ],
+        [
+          0,
+          0,
+          16,
+          46
+        ],
+        [
+          0,
+          0,
+          27,
+          56
+        ]
+      ]
+    },
+    {
+      "rank": 3,
+      "shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "changed_bits": 7,
+      "nonfinite": 41239,
+      "finite_maxdiff": 1.0,
+      "first_indices": [
+        [
+          0,
+          0,
+          0,
+          43
+        ],
+        [
+          0,
+          0,
+          0,
+          63
+        ],
+        [
+          0,
+          0,
+          11,
+          39
+        ],
+        [
+          0,
+          0,
+          16,
+          36
+        ],
+        [
+          0,
+          0,
+          16,
+          43
+        ],
+        [
+          0,
+          0,
+          16,
+          46
+        ],
+        [
+          0,
+          0,
+          27,
+          56
+        ]
+      ]
+    }
+  ]
+}

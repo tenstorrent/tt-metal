@@ -1,0 +1,82 @@
+{
+  "ttnn_imported": false,
+  "hardware_used": false,
+  "constructor_defaults": {
+    "chunk_size": "1024",
+    "sharded_residual": "False",
+    "expert_parallel": "False",
+    "fused_tail": "True",
+    "hybrid_experts": "True",
+    "grouped_moe_reduce": "True",
+    "fused_agmm": "False",
+    "topology": "ttnn.Topology.Linear",
+    "optimized_shared": "True",
+    "shared_dram": "False",
+    "shared_geometry": "1",
+    "qkv_fidelity": "ttnn.MathFidelity.LoFi",
+    "output_fidelity": "ttnn.MathFidelity.LoFi",
+    "attention_ccl_dtype": "ttnn.bfloat16",
+    "full_attention_ccl_dtype": "None",
+    "attention_dram": "None"
+  },
+  "harness_checks": {
+    "run_multichip_decoder": {
+      "defaults": {
+        "hybrid_experts": true,
+        "fused_tail": true,
+        "optimized_shared": true,
+        "grouped_moe_reduce": true,
+        "shared_geometry": 1,
+        "qkv_fidelity": "LoFi",
+        "output_fidelity": "LoFi",
+        "attention_ccl_dtype": "bfloat16",
+        "full_attention_ccl_dtype": null
+      },
+      "explicit_disable": true,
+      "candidate_overrides": true,
+      "mixed_ccl_override": true,
+      "invalid_combinations_rejected": true
+    },
+    "test_multichip_stack": {
+      "defaults": {
+        "hybrid_experts": true,
+        "fused_tail": true,
+        "optimized_shared": true,
+        "grouped_moe_reduce": true,
+        "shared_geometry": 1,
+        "qkv_fidelity": "LoFi",
+        "output_fidelity": "LoFi",
+        "attention_ccl_dtype": "bfloat16",
+        "full_attention_ccl_dtype": null
+      },
+      "explicit_disable": true,
+      "candidate_overrides": true,
+      "mixed_ccl_override": true,
+      "invalid_combinations_rejected": true
+    },
+    "test_multichip_contracts": {
+      "defaults": {
+        "hybrid_experts": true,
+        "fused_tail": true,
+        "optimized_shared": true,
+        "grouped_moe_reduce": true,
+        "shared_geometry": 1,
+        "qkv_fidelity": "LoFi",
+        "output_fidelity": "LoFi",
+        "attention_ccl_dtype": "bfloat16",
+        "full_attention_ccl_dtype": null
+      },
+      "explicit_disable": true,
+      "candidate_overrides": true,
+      "mixed_ccl_override": true,
+      "invalid_combinations_rejected": true
+    }
+  },
+  "per_kind_dtype_resolution": true,
+  "attention_cast_before_existing_reduce": true,
+  "candidate_snapshots_sha256": {
+    "run_multichip_decoder": "06f0a0573dbd14e852be4a27c88b72faa610a51961b90cf33365025747898581",
+    "test_multichip_stack": "7e5e1ad3b084214a15b44e22ede77637f1c3f3c96103f5fa2bdc8d1564dbb5cc",
+    "test_multichip_contracts": "b625802d77cd2d2e7794f347e2da701ec689883393908eba431fed4c678f909f"
+  }
+}

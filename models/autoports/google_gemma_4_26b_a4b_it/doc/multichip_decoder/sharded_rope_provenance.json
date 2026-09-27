@@ -1,0 +1,6 @@
+{
+  "base_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "candidate_sha256": "5e49bc4e76e1d1061a34a84319c984ba3a917dcbfe71033b379112c845ef5eca",
+  "status": "unapplied; CPU syntax only; hardware pending",
+  "enable": "Set decoder.layer.self_attn.sharded_decode_rope=True for TP4 only in candidate harness"
+}

@@ -26,9 +26,25 @@ def pcc(left, right):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--expert-parallel", action="store_true")
+    parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fused-tail", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--optimized-shared", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=None)
+    parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--sliding-sharded-rope", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
+    parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat8_b")
     parser.add_argument("--sharded-residual", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.expert_parallel and args.hybrid_experts:
+        parser.error("--expert-parallel requires --no-hybrid-experts")
+    if args.shared_geometry and not args.optimized_shared:
+        parser.error("--no-optimized-shared requires --shared-geometry 0")
+    if args.sharded_residual and args.grouped_moe_reduce:
+        parser.error("--sharded-residual requires --no-grouped-moe-reduce")
     torch.set_num_threads(8)
     torch.manual_seed(47)
     root = Path(__file__).parents[1]
@@ -62,11 +78,25 @@ def main():
             def upload(value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mapper=replicated):
                 return ttnn.from_torch(value, device=mesh, dtype=dtype, layout=layout, mesh_mapper=mapper)
 
-            def read(value):
+            def read(value, label):
                 if sharded:
-                    return ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()
-                parts = [ttnn.to_torch(part).float() for part in ttnn.get_device_tensors(value)]
-                assert all(torch.equal(parts[0], part) for part in parts[1:]), "Stack output replicas differ"
+                    parts = [ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()]
+                else:
+                    parts = [ttnn.to_torch(part).float() for part in ttnn.get_device_tensors(value)]
+                nonfinite = [int((~torch.isfinite(part)).sum()) for part in parts]
+                changed = [int((parts[0] != part).sum()) for part in parts]
+                if any(nonfinite) or any(changed):
+                    failure = dict(
+                        label=label,
+                        tp=tp,
+                        nonfinite_per_rank=nonfinite,
+                        changed_from_rank0=changed,
+                        sharded_residual=sharded,
+                        source_sha256=source_hashes,
+                        passed=False,
+                    )
+                    args.output.with_suffix(".failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                    raise AssertionError(f"Stack output finite/replica check failed: {failure}")
                 return parts[0]
 
             contexts = []
@@ -77,11 +107,31 @@ def main():
                     layer_idx=layer,
                     mesh_device=mesh,
                     **(
-                        {"expert_parallel": args.expert_parallel, "sharded_residual": args.sharded_residual}
+                        {
+                            "expert_parallel": args.expert_parallel,
+                            "sharded_residual": args.sharded_residual,
+                            "hybrid_experts": args.hybrid_experts,
+                            "fused_tail": args.fused_tail,
+                            "optimized_shared": args.optimized_shared,
+                            "shared_geometry": args.shared_geometry,
+                            "grouped_moe_reduce": args.grouped_moe_reduce,
+                            "qkv_fidelity": getattr(ttnn.MathFidelity, args.qkv_fidelity),
+                            "output_fidelity": getattr(ttnn.MathFidelity, args.output_fidelity),
+                            "attention_ccl_dtype": getattr(ttnn, args.attention_ccl_dtype),
+                            "full_attention_ccl_dtype": (
+                                getattr(ttnn, args.full_attention_ccl_dtype) if args.full_attention_ccl_dtype else None
+                            ),
+                        }
                         if tp == 4
                         else {}
                     ),
                 )
+                if (
+                    tp == 4
+                    and args.sliding_sharded_rope is not None
+                    and config.layer_types[layer] == "sliding_attention"
+                ):
+                    decoder.layer.self_attn.sharded_decode_rope = args.sliding_sharded_rope
                 attention = decoder.layer.self_attn.config
                 contexts.append(
                     dict(
@@ -119,7 +169,7 @@ def main():
                         kv_cache=context["cache"],
                     )
                     prefill_outputs.append(hidden)
-            prefills = [read(value) for value in prefill_outputs]
+            prefills = [read(value, f"prefill/layer{layer}") for layer, value in zip(layers, prefill_outputs)]
             assert all(tuple(value.shape) == (1, 1, length, config.hidden_size) for value in prefills)
             token = upload(decode_inputs[:, :, :1], mapper=input_mapper)
 
@@ -164,13 +214,21 @@ def main():
                             )
                             ttnn.copy_host_to_device_tensor(host, destination)
                     ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-                    values = [read(value) for value in decode_outputs]
+                    values = [
+                        read(value, f"decode/step{step}/layer{layer}/first")
+                        for layer, value in zip(layers, decode_outputs)
+                    ]
                     assert all(tuple(value.shape) == (1, 1, 1, config.hidden_size) for value in values)
                     ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-                    repeated = [read(value) for value in decode_outputs]
+                    repeated = [
+                        read(value, f"decode/step{step}/layer{layer}/repeat")
+                        for layer, value in zip(layers, decode_outputs)
+                    ]
                     assert all(
                         torch.equal(first, second) for first, second in zip(values, repeated)
-                    ), "Stack replay differs"
+                    ), f"Stack replay differs at TP{tp} step{step}; changed per layer: " + str(
+                        {layer: int((first != second).sum()) for layer, first, second in zip(layers, values, repeated)}
+                    )
                     decoded.append(values)
             finally:
                 ttnn.release_trace(mesh, trace)
@@ -199,6 +257,16 @@ def main():
         length=length,
         decode_positions=list(range(length, length + steps)),
         expert_parallel=args.expert_parallel,
+        hybrid_experts=args.hybrid_experts,
+        fused_tail=args.fused_tail,
+        optimized_shared=args.optimized_shared,
+        shared_geometry=args.shared_geometry,
+        grouped_moe_reduce=args.grouped_moe_reduce,
+        sliding_sharded_rope_override=args.sliding_sharded_rope,
+        qkv_fidelity=args.qkv_fidelity,
+        output_fidelity=args.output_fidelity,
+        attention_ccl_dtype=args.attention_ccl_dtype,
+        full_attention_ccl_dtype_override=args.full_attention_ccl_dtype,
         sharded_residual=args.sharded_residual,
         direct_interlayer_handoff=True,
         independent_layer_caches=True,

@@ -1,0 +1,47 @@
+{
+  "layer_type": "sliding_attention",
+  "expert_parallel": false,
+  "hybrid_experts": true,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "shared_geometry": null,
+  "grouped_moe_reduce": true,
+  "sliding_sharded_rope_override": null,
+  "qkv_fidelity": "LoFi",
+  "output_fidelity": "LoFi",
+  "attention_ccl_dtype": "bfloat16",
+  "full_attention_ccl_dtype_override": "bfloat8_b",
+  "batch": 1,
+  "base_length": 1056,
+  "continuation_lengths": [
+    1025
+  ],
+  "lengths": [
+    1056
+  ],
+  "prefill_pcc": [
+    0.9995432858341695
+  ],
+  "decode_pcc": [
+    0.9996982004356634
+  ],
+  "cache_preservation": {
+    "1": {
+      "prefix_unchanged": true,
+      "other_slots_unchanged": true,
+      "all_device_outputs_equal": true,
+      "repeat_trace_equal": true,
+      "refreshed_request_page_ownership": true
+    },
+    "4": {
+      "prefix_unchanged": true,
+      "other_slots_unchanged": true,
+      "all_device_outputs_equal": true,
+      "repeat_trace_equal": true,
+      "refreshed_request_page_ownership": true
+    }
+  },
+  "runtime_audit": "clean",
+  "passed": true,
+  "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255"
+}

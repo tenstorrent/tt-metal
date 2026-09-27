@@ -1,0 +1,54 @@
+{
+  "scope": "CPU parser only; no TTNN import/device execution",
+  "checks": [
+    {
+      "arguments": [],
+      "accepted": true
+    },
+    {
+      "arguments": [
+        "--dense-geometry",
+        "qkv-n4"
+      ],
+      "accepted": true
+    },
+    {
+      "arguments": [
+        "--sparse-gate-geometry",
+        "n2-k88",
+        "--sparse-down-geometry",
+        "n2-k6"
+      ],
+      "accepted": true
+    },
+    {
+      "arguments": [
+        "--dense-geometry",
+        "output-n2",
+        "--attention-dram",
+        "output"
+      ],
+      "accepted": false
+    },
+    {
+      "arguments": [
+        "--dense-geometry",
+        "router-n4",
+        "--fused-agmm",
+        "--ring",
+        "--sharded-residual",
+        "--no-grouped-moe-reduce"
+      ],
+      "accepted": false
+    },
+    {
+      "arguments": [
+        "--sparse-gate-geometry",
+        "n2-k44",
+        "--expert-parallel",
+        "--no-hybrid-experts"
+      ],
+      "accepted": false
+    }
+  ]
+}

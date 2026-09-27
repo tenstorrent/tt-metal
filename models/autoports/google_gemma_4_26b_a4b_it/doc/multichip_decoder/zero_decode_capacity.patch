@@ -1,0 +1,146 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
+@@ -41,6 +41,10 @@
+     parser.add_argument("--fused-agmm", action="store_true")
+     parser.add_argument("--output", type=Path, required=True)
+     args = parser.parse_args()
++    if not 0 <= args.steps <= 128:
++        parser.error("--steps must be between0 and128 for the recorded fixture")
++    if args.profile and not args.steps:
++        parser.error("--profile requires a decode window; steps0 is a capacity check")
+     if args.fused_agmm and not (args.ring and args.sharded_residual):
+         parser.error("--fused-agmm requires --ring and --sharded-residual")
+     runtime_hash = hashlib.sha256(
+@@ -201,70 +205,72 @@
+                 del y
+             timings[tp] = dict(prefill_host_us=prefill_times)
+             decoded = []
+-            token = input_upload(decode[:, :1].unsqueeze(0))
+-            pos = upload(torch.tensor([[args.length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+-            cache_pos = upload(torch.tensor([args.length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+-
+-            def forward():
+-                with device_only():
+-                    return decoder.decode_forward(
+-                        token,
+-                        rope_mats=rope_decode,
+-                        current_pos=pos,
+-                        cache_pos=cache_pos,
+-                        page_table=page_table,
+-                        kv_cache=cache,
+-                    )
+-
+-            trace_id = None
+-            if args.trace:
+-                for _ in range(2):
++            decode_times = []
++            if args.steps:
++                token = input_upload(decode[:, :1].unsqueeze(0))
++                pos = upload(torch.tensor([[args.length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
++                cache_pos = upload(torch.tensor([args.length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
++
++                def forward():
++                    with device_only():
++                        return decoder.decode_forward(
++                            token,
++                            rope_mats=rope_decode,
++                            current_pos=pos,
++                            cache_pos=cache_pos,
++                            page_table=page_table,
++                            kv_cache=cache,
++                        )
++
++                trace_id = None
++                if args.trace:
++                    for _ in range(2):
++                        y = forward()
++                    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+                     y = forward()
+-                trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+-                y = forward()
+-                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+-            decode_times = []
+-            if args.profile:
+-                signpost("PERF_DECODE")
+-            for step in range(args.steps):
+-                for value, dst, dtype, layout in (
+-                    (decode[:, step : step + 1].unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+-                    (torch.tensor([[args.length + step]], dtype=torch.int32), pos, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+-                    (
+-                        torch.tensor([args.length + step], dtype=torch.int32),
+-                        cache_pos,
+-                        ttnn.int32,
+-                        ttnn.ROW_MAJOR_LAYOUT,
+-                    ),
+-                ):
+-                    host = ttnn.from_torch(
+-                        value,
+-                        dtype=dtype,
+-                        layout=layout,
+-                        mesh_mapper=(
+-                            ttnn.ShardTensorToMesh(mesh, dim=-1)
+-                            if dst is token and tp == 4 and args.sharded_residual
+-                            else mapper
++                    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
++                decode_times = []
++                if args.profile:
++                    signpost("PERF_DECODE")
++                for step in range(args.steps):
++                    for value, dst, dtype, layout in (
++                        (decode[:, step : step + 1].unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
++                        (torch.tensor([[args.length + step]], dtype=torch.int32), pos, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
++                        (
++                            torch.tensor([args.length + step], dtype=torch.int32),
++                            cache_pos,
++                            ttnn.int32,
++                            ttnn.ROW_MAJOR_LAYOUT,
+                         ),
+-                    )
+-                    ttnn.copy_host_to_device_tensor(host, dst)
+-                ttnn.synchronize_device(mesh)
+-                before = time.perf_counter()
+-                if args.trace:
+-                    ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+-                else:
+-                    y = forward()
++                    ):
++                        host = ttnn.from_torch(
++                            value,
++                            dtype=dtype,
++                            layout=layout,
++                            mesh_mapper=(
++                                ttnn.ShardTensorToMesh(mesh, dim=-1)
++                                if dst is token and tp == 4 and args.sharded_residual
++                                else mapper
++                            ),
++                        )
++                        ttnn.copy_host_to_device_tensor(host, dst)
+                     ttnn.synchronize_device(mesh)
+-                decode_times.append((time.perf_counter() - before) * 1e6)
+-                decoded.append(read(y))
+-                if args.trace and not args.profile:
+-                    ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+-                    assert torch.equal(decoded[-1], read(y)), "Replay is not deterministic"
+-            if args.profile:
+-                signpost("PERF_DECODE_END")
++                    before = time.perf_counter()
++                    if args.trace:
++                        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
++                    else:
++                        y = forward()
++                        ttnn.synchronize_device(mesh)
++                    decode_times.append((time.perf_counter() - before) * 1e6)
++                    decoded.append(read(y))
++                    if args.trace and not args.profile:
++                        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
++                        assert torch.equal(decoded[-1], read(y)), "Replay is not deterministic"
++                if args.profile:
++                    signpost("PERF_DECODE_END")
++                if trace_id is not None:
++                    ttnn.release_trace(mesh, trace_id)
+             timings[tp]["decode_host_us"] = decode_times
+-            if trace_id is not None:
+-                ttnn.release_trace(mesh, trace_id)
+             outputs[tp] = [prefill, *decoded]
+             if args.check_cache:
+                 caches[tp] = [[ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(c)] for c in cache]

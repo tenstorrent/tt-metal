@@ -1,0 +1,612 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Diagnosis-only ordinary runner snapshot retaining one actual TP4 boundary.
+
+Source runner SHA256: c531a9a2f00db1eb9b2135f9b4397cbdf5a388db50776c17b6d4c670899b36ff
+"""
+
+import argparse
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+
+import torch
+from transformers import AutoConfig
+from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+import ttnn
+from models.autoports.google_gemma_4_26b_a4b_it.tests.run_decoder import load_layer
+from models.autoports.google_gemma_4_26b_a4b_it.tests.runtime_audit import device_only
+from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import MultichipDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import OptimizedDecoder
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--layer", type=int, default=0)
+    parser.add_argument("--length", type=int, default=65)
+    parser.add_argument("--steps", type=int, default=2)
+    parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--tp", type=int, choices=[1, 4])
+    parser.add_argument("--expert-parallel", action="store_true")
+    parser.add_argument("--fused-tail", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--optimized-shared", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shared-dram", action="store_true")
+    parser.add_argument("--attention-dram", choices=["qkv", "output"])
+    parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=1)
+    parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
+    parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"])
+    parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--check-cache", action="store_true")
+    parser.add_argument("--repeat-input", action="store_true")
+    parser.add_argument("--reserve-full-stack", action="store_true")
+    parser.add_argument("--prefill-timing-samples", type=int, default=3)
+    parser.add_argument("--trace", action="store_true")
+    parser.add_argument("--sharded-residual", action="store_true")
+    parser.add_argument("--ring", action="store_true")
+    parser.add_argument("--fused-agmm", action="store_true")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--probe",
+        choices=[
+            "none",
+            "attention_ag",
+            "post_attention_norm",
+            "moe_reduced",
+            "tail_shared",
+            "tail_shared_io",
+            "tail_routed",
+            "tail_combined",
+        ],
+        default="attention_ag",
+    )
+    parser.add_argument("--router-core", nargs=2, type=int, metavar=("X", "Y"))
+    parser.add_argument("--duplicates", type=int, default=1)
+    parser.add_argument("--roundtrip-router-buffers", action="store_true")
+    args = parser.parse_args()
+    if not 1 <= args.duplicates <= 16:
+        parser.error("duplicates must be between 1 and 16")
+    if args.expert_parallel and args.hybrid_experts:
+        parser.error("--expert-parallel requires --no-hybrid-experts")
+    if args.shared_geometry and not args.optimized_shared:
+        parser.error("--no-optimized-shared requires --shared-geometry 0")
+    if args.sharded_residual and args.grouped_moe_reduce:
+        parser.error("--sharded-residual requires --no-grouped-moe-reduce")
+    if args.attention_dram == "qkv" and args.fused_agmm:
+        parser.error("--attention-dram qkv and --fused-agmm are separate backends")
+    if args.shared_dram and not args.optimized_shared:
+        parser.error("--shared-dram requires --optimized-shared")
+    if args.shared_dram and args.shared_geometry:
+        parser.error("--shared-dram requires --shared-geometry 0")
+    if not 0 <= args.steps <= 128:
+        parser.error("--steps must be between0 and128 for the recorded fixture")
+    if args.profile and not args.steps:
+        parser.error("--profile requires a decode window; steps0 is a capacity check")
+    if args.fused_agmm and not (args.ring and args.sharded_residual):
+        parser.error("--fused-agmm requires --ring and --sharded-residual")
+    runtime_hash = hashlib.sha256(
+        Path(__file__).parents[1].joinpath("tt/multichip_decoder.py").read_bytes()
+    ).hexdigest()
+    runner_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    source_hashes = dict(runtime_sha256=runtime_hash, runner_sha256=runner_hash)
+    print("SOURCE_HASHES", json.dumps(source_hashes), flush=True)
+
+    def fail(details):
+        report = dict(
+            command=sys.argv, **source_hashes, layer=args.layer, router_buffer_addresses=router_addresses, **details
+        )
+        args.output.with_suffix(".failure.json").write_text(json.dumps(report, indent=2) + "\n")
+        snapshots = {}
+        for name, value in {**retained, "output": y}.items():
+            snapshots[name] = [ttnn.to_torch(part).float().clone() for part in ttnn.get_device_tensors(value)]
+            if value.layout == ttnn.TILE_LAYOUT:
+                padded = ttnn.Shape(value.padded_shape)
+                physical = ttnn.reshape(value, padded, padded)
+                snapshots[name + "__physical"] = [
+                    ttnn.to_torch(part).float().clone() for part in ttnn.get_device_tensors(physical)
+                ]
+        torch.save(snapshots, args.output.with_suffix(".failure.pt"))
+        raise AssertionError(json.dumps(report))
+
+    torch.set_num_threads(8)
+    torch.manual_seed(42)
+    root = Path(__file__).parents[1]
+    config = AutoConfig.from_pretrained(Path(__file__).parent).text_config
+    hf = load_layer(config, args.layer, True)
+    fixture = torch.load(root / f"doc/optimized_decoder/actual_text_layer{args.layer}_4096_128.pt", weights_only=True)
+    source_prefill = fixture["prefill"]
+    if args.repeat_input:
+        source_prefill = source_prefill.repeat(
+            1, (args.length + source_prefill.shape[1] - 1) // source_prefill.shape[1], 1
+        )
+    x = source_prefill[:, : args.length]
+    assert x.shape[1] == args.length, "Long inputs require --repeat-input or a matching fixture"
+    assert args.length + args.steps <= config.max_position_embeddings
+    decode = fixture["decode"][:, : args.steps]
+    extent = (args.length + args.steps + 1023) // 1024 * 1024
+    cos, sin = Gemma4TextRotaryEmbedding(config)(
+        x, torch.arange(extent)[None], layer_type=config.layer_types[args.layer]
+    )
+    block = 32
+    pages = extent // block
+    table = torch.randperm(pages, dtype=torch.int32)[None]
+    outputs = {}
+    caches = {}
+    timings = {}
+    capacity = {}
+    router_addresses = {}
+    for tp, cls in ((1, OptimizedDecoder), (4, MultichipDecoder)):
+        if args.tp is not None and tp != args.tp:
+            continue
+        fabric = ttnn.FabricConfig.FABRIC_1D_RING if args.ring else ttnn.FabricConfig.FABRIC_1D
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if tp == 1 else fabric)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, tp), trace_region_size=16777216)
+        try:
+            mapper = ttnn.ReplicateTensorToMesh(mesh)
+
+            def upload(value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+                return ttnn.from_torch(value, device=mesh, dtype=dtype, layout=layout, mesh_mapper=mapper)
+
+            def input_upload(value):
+                return ttnn.from_torch(
+                    value,
+                    device=mesh,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1) if tp == 4 and args.sharded_residual else mapper,
+                )
+
+            def read(value, phase, *, step=None, replay="first"):
+                if phase == "decode" and tp == 4:
+                    for name, boundary in retained.items():
+                        read(boundary, name, step=step, replay=replay)
+                if tp == 4 and args.sharded_residual:
+                    parts = [ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()]
+                else:
+                    parts = [ttnn.to_torch(v).float() for v in ttnn.get_device_tensors(value)]
+                finite_counts = [int(torch.isfinite(part).sum()) for part in parts]
+                replicas_equal = all(torch.equal(parts[0], part) for part in parts[1:])
+                nonfinite = any(count != part.numel() for count, part in zip(finite_counts, parts))
+                if nonfinite or not replicas_equal:
+                    ranks = []
+                    for rank, part in enumerate(parts):
+                        finite_pair = torch.isfinite(parts[0]) & torch.isfinite(part)
+                        ranks.append(
+                            dict(
+                                rank=rank,
+                                elements=part.numel(),
+                                finite=finite_counts[rank],
+                                nan=int(torch.isnan(part).sum()),
+                                positive_infinity=int(torch.isposinf(part).sum()),
+                                negative_infinity=int(torch.isneginf(part).sum()),
+                                equal_to_rank0=torch.equal(parts[0], part),
+                                bits_equal_to_rank0=torch.equal(parts[0].view(torch.int32), part.view(torch.int32)),
+                                changed_vs_rank0=int((parts[0] != part).sum()),
+                                finite_max_abs_diff=(
+                                    float((parts[0][finite_pair] - part[finite_pair]).abs().max())
+                                    if finite_pair.any()
+                                    else None
+                                ),
+                            )
+                        )
+                    fail(
+                        dict(
+                            kind="nonfinite" if nonfinite else "replica_difference",
+                            tp=tp,
+                            phase=phase,
+                            step=step,
+                            replay=replay,
+                            absolute_position=args.length + step if step is not None else None,
+                            replicas_equal=replicas_equal,
+                            ranks=ranks,
+                        )
+                    )
+                return parts[0]
+
+            decoder = cls.from_state_dict(
+                hf.state_dict(),
+                hf_config=config,
+                layer_idx=args.layer,
+                mesh_device=mesh,
+                **(
+                    {
+                        "sharded_residual": args.sharded_residual,
+                        "fused_agmm": args.fused_agmm,
+                        "topology": ttnn.Topology.Ring if args.ring else ttnn.Topology.Linear,
+                        "fused_tail": args.fused_tail,
+                        "optimized_shared": args.optimized_shared,
+                        "shared_dram": args.shared_dram,
+                        "attention_dram": args.attention_dram,
+                        "shared_geometry": args.shared_geometry,
+                        "grouped_moe_reduce": args.grouped_moe_reduce,
+                        "qkv_fidelity": getattr(ttnn.MathFidelity, args.qkv_fidelity),
+                        "output_fidelity": getattr(ttnn.MathFidelity, args.output_fidelity),
+                        "attention_ccl_dtype": getattr(ttnn, args.attention_ccl_dtype),
+                        "full_attention_ccl_dtype": (
+                            getattr(ttnn, args.full_attention_ccl_dtype) if args.full_attention_ccl_dtype else None
+                        ),
+                        "hybrid_experts": args.hybrid_experts,
+                        **({"expert_parallel": True} if args.expert_parallel else {}),
+                    }
+                    if tp == 4
+                    else {}
+                ),
+            )
+            if tp == 4 and args.router_core is not None:
+                grid = mesh.compute_with_storage_grid_size()
+                rx, ry = args.router_core
+                if not (0 <= rx < grid.x and 0 <= ry < grid.y):
+                    raise ValueError(f"Router core {(rx, ry)} outside {grid}")
+                router = decoder.layer.moe.router
+                core = ttnn.CoreCoord(rx, ry)
+                router.memory = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        ttnn.CoreRangeSet({ttnn.CoreRange(core, core)}),
+                        (32, 32),
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                router_copy_owners = []
+                for name in ("bias", "indices", "output", "output_indices"):
+                    previous = getattr(router, name)
+                    intermediate_address = None
+                    if args.roundtrip_router_buffers:
+                        if previous.memory_config() != router.memory:
+                            raise ValueError("Copy-only control requires the existing router core")
+                        alternate = ttnn.CoreCoord(10, 9)
+                        temporary_memory = ttnn.MemoryConfig(
+                            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            ttnn.BufferType.L1,
+                            ttnn.ShardSpec(
+                                ttnn.CoreRangeSet({ttnn.CoreRange(alternate, alternate)}),
+                                (32, 32),
+                                ttnn.ShardOrientation.ROW_MAJOR,
+                            ),
+                        )
+                        temporary = ttnn.to_memory_config(previous, temporary_memory)
+                        router_copy_owners.extend((previous, temporary))
+                        intermediate_address = temporary.buffer_address()
+                        replacement = ttnn.to_memory_config(temporary, router.memory)
+                        del temporary
+                    else:
+                        replacement = ttnn.to_memory_config(previous, router.memory)
+                    router_addresses[name] = dict(
+                        before=previous.buffer_address(),
+                        intermediate=intermediate_address,
+                        after=replacement.buffer_address(),
+                    )
+                    setattr(router, name, replacement)
+                    del previous, replacement
+                router_copy_owners.clear()
+                print(
+                    "DIAGNOSTIC_ROUTER_CORE", (rx, ry), "DEVICE_GRID", grid, "ADDRESSES", router_addresses, flush=True
+                )
+            retained = {}
+            if tp == 4:
+                if args.probe == "attention_ag":
+                    original_reduce = decoder.layer.self_attn.reduce
+
+                    def observed_reduce(value):
+                        result = original_reduce(value)
+                        if value.shape[-2] == 1:
+                            retained["attention_ag"] = result
+                        return result
+
+                    decoder.layer.self_attn.reduce = observed_reduce
+                elif args.probe == "post_attention_norm":
+                    original_normalize = decoder.normalize
+
+                    def observed_normalize(value, epsilon, weight=None):
+                        result = original_normalize(value, epsilon, weight)
+                        if value.shape[-2] == 1 and weight is decoder.post_attention_norm_weight:
+                            retained["post_attention_norm"] = result
+                        return result
+
+                    decoder.normalize = observed_normalize
+                elif args.probe == "moe_reduced":
+                    original_pair = decoder._reduce_moe_pair
+
+                    def observed_pair(shared, routed):
+                        results = original_pair(shared, routed)
+                        if shared.shape[-2] == 1:
+                            retained.update(zip(("shared_reduced", "routed_reduced"), results))
+                        return results
+
+                    decoder._reduce_moe_pair = observed_pair
+                elif args.probe.startswith("tail_"):
+                    original_tail = decoder._fused_tail
+
+                    def observed_tail(residual, shared, routed, decode):
+                        if not decode:
+                            return original_tail(residual, shared, routed, decode)
+                        original_rms = ttnn.rms_norm
+                        norm_index = 0
+                        if args.probe == "tail_shared_io":
+                            retained["tail_shared_reduced"] = shared
+
+                        def observed_rms(*values, **kwargs):
+                            nonlocal norm_index
+                            if args.probe == "tail_shared_io" and norm_index == 0:
+                                retained["tail_shared_sharded"] = values[0]
+                                retained["tail_shared_weight"] = kwargs["weight"]
+                            result = original_rms(*values, **kwargs)
+                            name = ("tail_shared", "tail_routed", "tail_combined")[norm_index]
+                            norm_index += 1
+                            if name == args.probe or (args.probe == "tail_shared_io" and name == "tail_shared"):
+                                retained[name] = result
+                            return result
+
+                        ttnn.rms_norm = observed_rms
+                        try:
+                            return original_tail(residual, shared, routed, decode)
+                        finally:
+                            ttnn.rms_norm = original_rms
+
+                    decoder._fused_tail = observed_tail
+            cfg = decoder.layer.self_attn.config
+            cache = [
+                upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b)
+                for _ in range(2)
+            ]
+            page_table = upload(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            rope = tuple(upload(t.unsqueeze(0)) for t in (cos, sin))
+            rope_decode = tuple(upload(t.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for t in (cos, sin))
+            reservations = []
+            if args.reserve_full_stack and tp == 4:
+                plan = json.loads((root / "doc/multichip_decoder/memory_capacity_plan.json").read_text())
+                kind = config.layer_types[args.layer]
+                layer_plan = plan["per_device"][kind]
+                resident = plan["full_stack_per_device"]["resident_and_reserve_bound_bytes"]
+                current_weights = layer_plan["weight_bound"]
+                if args.hybrid_experts:
+                    dual = plan["hypothetical_dual_expert_layout"]
+                    resident = dual["resident_and_reserve_bound_bytes"]
+                    current_weights += dual[
+                        (
+                            "extra_ep_experts_per_sliding_layer_bytes"
+                            if kind == "sliding_attention"
+                            else "extra_ep_experts_per_full_layer_bytes"
+                        )
+                    ]
+                elif args.expert_parallel:
+                    raise ValueError("Reservation accounting currently covers TP or hybrid experts")
+                if args.optimized_shared:
+                    shared_plan = plan["optimized_shared_decode"]
+                    resident += shared_plan["extra_full_stack_bytes"]
+                    current_weights += shared_plan[
+                        "extra_sliding_layer_bytes" if kind == "sliding_attention" else "extra_full_layer_bytes"
+                    ]
+                if args.shared_dram:
+                    extra_tiles = decoder.layer.shared_mlp.extra_decode_weight_tiles
+                    extra_bytes = {"sliding_attention": extra_tiles * 1088, "full_attention": extra_tiles * 576}
+                    resident += sum(extra_bytes[layer_type] for layer_type in config.layer_types)
+                    current_weights += extra_bytes[kind]
+                if args.attention_dram:
+                    extra_bytes = {}
+                    for layer_type in set(config.layer_types):
+                        is_sliding = layer_type == "sliding_attention"
+                        head_dim = config.head_dim if is_sliding else config.global_head_dim
+                        q_heads = config.num_attention_heads // 4
+                        if args.attention_dram == "qkv":
+                            kv_heads = config.num_key_value_heads if is_sliding else config.num_global_key_value_heads
+                            k, n = config.hidden_size, (q_heads + 2 * max(1, kv_heads // 4)) * head_dim
+                        else:
+                            k, n = q_heads * head_dim, config.hidden_size
+                        extra_bytes[layer_type] = (k // 32) * (n // 32) * 1088
+                    assert extra_bytes[kind] == decoder.attention_dram_extra_weight_bytes
+                    resident += sum(extra_bytes[layer_type] for layer_type in config.layer_types)
+                    current_weights += extra_bytes[kind]
+                # Reserve other layers, tied embeddings, and shared per-kind RoPE.
+                # Leave the independent 2 GiB workspace allowance available.
+                current_cache = 2 * pages * cfg.num_key_value_heads * (block // 32) * (cfg.head_dim // 32) * 1088
+                current_rope = 2 * (cos.numel() + sin.numel()) * 2
+                reserve = resident - plan["full_stack_per_device"]["reserved_trace_activation_allocator_bytes"]
+                reserve -= current_weights + current_cache + current_rope
+                allocation_bytes = 64 * 1024**2
+                count = (reserve + allocation_bytes - 1) // allocation_bytes
+                reservations = [
+                    ttnn.empty(
+                        (1, 1, 32768, 1024),
+                        device=mesh,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(count)
+                ]
+                capacity = dict(
+                    reserved_other_resident_bytes_per_device=count * allocation_bytes,
+                    current_weight_bound=current_weights,
+                    current_cache_bytes=current_cache,
+                    current_rope_bytes=current_rope,
+                    accounting="memory_capacity_plan.json",
+                    limitation="Anonymous DRAM reservations exercise capacity, not a full-model stack",
+                )
+                print("CAPACITY_RESERVED", capacity, flush=True)
+            dx = input_upload(x.unsqueeze(0))
+            with device_only():
+                y = decoder.prefill_forward(dx, rope_mats=rope, page_table=page_table, kv_cache=cache)
+            prefill = read(y, "prefill")
+            del y
+            prefill_times = []
+            for sample in range(args.prefill_timing_samples):
+                ttnn.synchronize_device(mesh)
+                if args.profile and sample == args.prefill_timing_samples - 1:
+                    from tracy import signpost
+
+                    signpost("PERF_PREFILL")
+                before = time.perf_counter()
+                with device_only():
+                    y = decoder.prefill_forward(dx, rope_mats=rope, page_table=page_table, kv_cache=cache)
+                ttnn.synchronize_device(mesh)
+                prefill_times.append((time.perf_counter() - before) * 1e6)
+                if args.profile and sample == args.prefill_timing_samples - 1:
+                    signpost("PERF_PREFILL_END")
+                del y
+            timings[tp] = dict(prefill_host_us=prefill_times)
+            decoded = []
+            decode_times = []
+            if args.steps:
+                token = input_upload(decode[:, :1].unsqueeze(0))
+                pos = upload(torch.tensor([[args.length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+                cache_pos = upload(torch.tensor([args.length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+                def forward():
+                    # Release previous warm-call checkpoints before prefix allocations.
+                    retained.clear()
+                    with device_only():
+                        return decoder.decode_forward(
+                            token,
+                            rope_mats=rope_decode,
+                            current_pos=pos,
+                            cache_pos=cache_pos,
+                            page_table=page_table,
+                            kv_cache=cache,
+                        )
+
+                trace_id = None
+                if args.trace:
+                    for _ in range(2):
+                        y = forward()
+                    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+                    y = forward()
+                    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+                decode_times = []
+                if args.profile:
+                    signpost("PERF_DECODE")
+                for step in range(args.steps):
+                    for value, dst, dtype, layout in (
+                        (decode[:, step : step + 1].unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                        (
+                            torch.tensor([[args.length + step]], dtype=torch.int32),
+                            pos,
+                            ttnn.uint32,
+                            ttnn.ROW_MAJOR_LAYOUT,
+                        ),
+                        (
+                            torch.tensor([args.length + step], dtype=torch.int32),
+                            cache_pos,
+                            ttnn.int32,
+                            ttnn.ROW_MAJOR_LAYOUT,
+                        ),
+                    ):
+                        host = ttnn.from_torch(
+                            value,
+                            dtype=dtype,
+                            layout=layout,
+                            mesh_mapper=(
+                                ttnn.ShardTensorToMesh(mesh, dim=-1)
+                                if dst is token and tp == 4 and args.sharded_residual
+                                else mapper
+                            ),
+                        )
+                        ttnn.copy_host_to_device_tensor(host, dst)
+                    ttnn.synchronize_device(mesh)
+                    before = time.perf_counter()
+                    if args.trace:
+                        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+                    else:
+                        y = forward()
+                        ttnn.synchronize_device(mesh)
+                    decode_times.append((time.perf_counter() - before) * 1e6)
+                    decoded.append(read(y, "decode", step=step))
+                    if args.trace and not args.profile:
+                        for duplicate in range(args.duplicates):
+                            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+                            repeated = read(y, "decode", step=step, replay=f"repeat{duplicate + 1}")
+                            if not torch.equal(decoded[-1], repeated):
+                                fail(
+                                    dict(
+                                        kind="replay_difference",
+                                        tp=tp,
+                                        phase="decode",
+                                        step=step,
+                                        replay=f"repeat{duplicate + 1}",
+                                        absolute_position=args.length + step,
+                                        changed_elements=int((decoded[-1] != repeated).sum()),
+                                        max_abs_diff=float((decoded[-1] - repeated).abs().max()),
+                                    )
+                                )
+                if args.profile:
+                    signpost("PERF_DECODE_END")
+                if trace_id is not None:
+                    ttnn.release_trace(mesh, trace_id)
+            timings[tp]["decode_host_us"] = decode_times
+            outputs[tp] = [prefill, *decoded]
+            if args.check_cache:
+                caches[tp] = [[ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(c)] for c in cache]
+            print("TP_DONE", tp, flush=True)
+        finally:
+            ttnn.close_mesh_device(mesh)
+    values = []
+    for a, b in zip(outputs.get(1, []), outputs.get(4, [])):
+        assert torch.isfinite(a).all() and torch.isfinite(b).all()
+        values.append(torch.corrcoef(torch.stack((a.flatten().double(), b.flatten().double())))[0, 1].item())
+    cache_pcc = []
+    if len(caches) == 2:
+        logical_end = args.length + args.steps
+        for ref_ranks, actual_ranks in zip(caches[1], caches[4]):
+            source = ref_ranks[0]
+            for rank, actual in enumerate(actual_ranks):
+                local_heads = actual.shape[1]
+                head_start = rank * local_heads if config.layer_types[args.layer] == "sliding_attention" else rank // 2
+                wanted = source[:, head_start : head_start + local_heads]
+
+                def ordered(c):
+                    return c[table[0].long()].permute(1, 0, 2, 3).reshape(local_heads, extent, -1)[:, :logical_end]
+
+                a, b = ordered(wanted), ordered(actual)
+                cache_pcc.append(torch.corrcoef(torch.stack((a.flatten().double(), b.flatten().double())))[0, 1].item())
+        assert min(cache_pcc) >= 0.995, cache_pcc
+    result = dict(
+        runtime_sha256=runtime_hash,
+        runner_sha256=runner_hash,
+        router_buffer_addresses=router_addresses,
+        duplicate_comparisons_per_tp=args.steps * args.duplicates if args.trace and not args.profile else 0,
+        qkv_fidelity=args.qkv_fidelity,
+        output_fidelity=args.output_fidelity,
+        attention_ccl_dtype=args.attention_ccl_dtype,
+        full_attention_ccl_dtype_override=args.full_attention_ccl_dtype,
+        command=sys.argv,
+        expert_parallel=args.expert_parallel,
+        fused_tail=args.fused_tail,
+        optimized_shared=args.optimized_shared,
+        shared_dram=args.shared_dram,
+        attention_dram=args.attention_dram,
+        shared_geometry=args.shared_geometry,
+        grouped_moe_reduce=args.grouped_moe_reduce,
+        hybrid_experts=args.hybrid_experts,
+        cache_pcc=cache_pcc,
+        capacity=capacity,
+        layer_type=config.layer_types[args.layer],
+        length=args.length,
+        steps=args.steps,
+        pcc=values,
+        passed=min(values) >= 0.995 if values else None,
+        trace=args.trace,
+        timings=timings,
+        all_replicas_equal=not args.sharded_residual,
+        sharded_residual=args.sharded_residual,
+        topology="ring" if args.ring else "linear",
+        fused_agmm=args.fused_agmm,
+    )
+    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    print(
+        {k: v for k, v in result.items() if k not in ("timings", "pcc")},
+        "min_pcc",
+        min(values) if values else None,
+        flush=True,
+    )
+    if values:
+        assert result["passed"]
+
+
+if __name__ == "__main__":
+    main()

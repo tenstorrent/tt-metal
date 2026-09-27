@@ -1,0 +1,67 @@
+from pathlib import Path
+from types import SimpleNamespace as NS
+import ast,json,hashlib
+root=Path('/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it');doc=root/'doc/multichip_decoder'
+s=(doc/'attention_dram_candidate.py.txt').read_text();tree=ast.parse(s)
+classes=[n for n in tree.body if isinstance(n,ast.ClassDef) and n.name in ('_DramAttentionProjection','_Projection','_LocalAttention')]
+class Tensor:
+ def __init__(self,shape,dtype,memory=None): self.shape=shape;self.dtype=dtype;self.memory=memory
+class FakeTT:
+ bfloat8_b='BFP8';float32='FP32';L1_MEMORY_CONFIG='L1';DRAM_MEMORY_CONFIG='DRAM'
+ TensorMemoryLayout=NS(WIDTH_SHARDED='width');BufferType=NS(DRAM='DRAM');ShardOrientation=NS(ROW_MAJOR='row')
+ ShardStrategy=NS(WIDTH='width',HEIGHT='height')
+ def __init__(self):
+  self.calls=[];self.experimental=NS(nlp_concat_heads_decode=self.concat_heads)
+ def CoreGrid(self,**kw): return kw
+ def CoreCoord(self,*args): return args
+ def CoreRange(self,*args): return args
+ def CoreRangeSet(self,arg): return tuple(arg)
+ def ShardSpec(self,*args): return args
+ def MemoryConfig(self,*args): return args
+ def create_sharded_memory_config(self,*args,**kw): return NS(args=args,kwargs=kw)
+ def MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(self,**kw): return NS(**kw)
+ def to_memory_config(self,value,memory): return Tensor(value.shape,value.dtype,memory)
+ def linear(self,value,weight,**kw):
+  self.calls.append((value,weight,kw));return Tensor((*value.shape[:-1],weight.shape[-1]),kw['dtype'],kw['memory_config'])
+ def concat_heads(self,value,*,num_heads): return Tensor((1,1,32,num_heads*value.shape[-1]),value.dtype)
+ def reshape(self,value,shape,padded_shape): return Tensor(shape,value.dtype,value.memory)
+fake=FakeTT()
+class BaseAttention:
+ def project(self,value,decode): return ('original_project',value,decode)
+ns={'ttnn':fake,'OptimizedAttention':BaseAttention}
+exec(compile(ast.Module(body=classes,type_ignores=[]),'candidate_classes','exec'),ns)
+config=json.loads((root/'tests/config.json').read_text())['text_config'];checks=[];extra={}
+for role in ('qkv','output'):
+ extra[role]={}
+ for kind in ('sliding_attention','full_attention'):
+  sliding=kind=='sliding_attention';hd=config['head_dim'] if sliding else config['global_head_dim'];qh=config['num_attention_heads']//4
+  if role=='qkv':
+   kvh=config['num_key_value_heads'] if sliding else config['num_global_key_value_heads'];k,n=config['hidden_size'],(qh+2*max(1,kvh//4))*hd;block=11;input_dtype='FP32'
+  else: k,n=qh*hd,config['hidden_size'];block=4 if sliding else 8;input_dtype='BF16'
+  weight=Tensor((1,1,k,n),'BFP8');helper=ns['_DramAttentionProjection'](weight,NS(dram_grid_size=lambda:NS(x=8)),block)
+  assert k%256==n%256==0 and (k//32)%block==0 and (k//256)%block==0
+  assert helper.input_memory.args[0]==(32,k//8);assert helper.output_memory.args[0]==(32,n//8)
+  assert helper.program.per_core_M==1 and helper.program.per_core_N==n//256
+  policy=object();out=helper(Tensor((1,1,1,k),input_dtype),compute=policy,memory_config='L1')
+  assert fake.calls[-1][0].dtype==input_dtype and fake.calls[-1][2]['compute_kernel_config'] is policy
+  assert out.dtype=='FP32' and out.shape==(1,1,1,n)
+  assert weight.memory is None and helper.weight is not weight
+  extra[role][kind]=helper.extra_weight_bytes
+  checks.append(dict(role=role,kind=kind,k=k,n=n,bank_shard=[k,n//8],input_shard=[32,k//8],output_shard=[32,n//8],block=block,per_core_M=1,per_core_N=n//256,input_dtype=input_dtype,weight_dtype='BFP8',output_dtype='FP32',extra_bytes=helper.extra_weight_bytes,primary_worker_a_cb_bytes=block*(4096 if role=='qkv' else 2048)*2,primary_worker_b_cb_bytes=block*(n//256)*1088*3))
+ extra[role]['full_stack_bytes']=sum(extra[role][kind] for kind in config['layer_types'])
+# Verify the actual QKV adapter reads the latest overridden compute object.
+p=ns['_Projection'].__new__(ns['_Projection']);p.prefill=lambda value,**kw:('original_prefill',value,kw)
+p.decode_dram=lambda value,**kw:kw['compute'];p.decode_compute=object();first=p.decode_compute
+assert p(Tensor((1,1,1,2816),'FP32')) is first
+p.decode_compute=object();assert p(Tensor((1,1,1,2816),'FP32')) is p.decode_compute
+assert p(Tensor((1,1,33,2816),'FP32'))[0]=='original_prefill'
+# Verify WO retains its original prefill branch and latest output compute override.
+a=ns['_LocalAttention']();a.source=NS(config=NS(head_dim=256,num_attention_heads=4));a.reduce=lambda x:x;a.output_memory='L1'
+a.decode_output_dram=lambda value,**kw:(value.dtype,kw['compute']);a.output_compute=object()
+assert a.project(Tensor((1,1,4,256),'BF16'),True)==('BF16',a.output_compute)
+a.output_compute=object();assert a.project(Tensor((1,1,4,256),'BF16'),True)==('BF16',a.output_compute)
+assert a.project(Tensor((1,4,33,256),'BF16'),False)[0]=='original_project'
+report=dict(candidate_sha256=hashlib.sha256(s.encode()).hexdigest(),ttnn_imported=False,hardware_used=False,checks='AST-extracted adapters with a CPU stand-in: geometry, branch selection, live compute-policy forwarding; no numerical validation',geometry=checks,extra_weight_bytes=extra,qkv_prefill_preserved=True,output_prefill_preserved=True,live_compute_policy_forwarding=True,input_dtype_preserved=True)
+(doc/'attention_dram_cpu_checks.json').write_text(json.dumps(report,indent=2)+'\n')
+(doc/'attention_dram_cpu_checks.py.txt').write_text(Path(__file__).read_text())
+print(json.dumps(report,indent=2))

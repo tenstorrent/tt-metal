@@ -1,0 +1,99 @@
+{
+  "capture": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k",
+  "traces_host_metadata": {
+    "3": {
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1
+    },
+    "2": {
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1
+    },
+    "1": {
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1
+    },
+    "0": {
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1
+    }
+  },
+  "total_device_rows": {
+    "0": 21634,
+    "1": 21634,
+    "3": 21634,
+    "2": 21634
+  },
+  "per_device": {
+    "0": {
+      "replay_sessions": 128,
+      "session_id_min": 1,
+      "session_id_max": 128,
+      "rows_per_session_histogram": {
+        "126": 128
+      },
+      "same_op_set_all_sessions": true,
+      "host_expected_prefill_ops": 2585,
+      "device_prefill_ops": 2585,
+      "missing_prefill_op_ids": []
+    },
+    "1": {
+      "replay_sessions": 128,
+      "session_id_min": 1,
+      "session_id_max": 128,
+      "rows_per_session_histogram": {
+        "126": 128
+      },
+      "same_op_set_all_sessions": true,
+      "host_expected_prefill_ops": 2585,
+      "device_prefill_ops": 2585,
+      "missing_prefill_op_ids": []
+    },
+    "2": {
+      "replay_sessions": 128,
+      "session_id_min": 1,
+      "session_id_max": 128,
+      "rows_per_session_histogram": {
+        "126": 128
+      },
+      "same_op_set_all_sessions": true,
+      "host_expected_prefill_ops": 2585,
+      "device_prefill_ops": 2585,
+      "missing_prefill_op_ids": []
+    },
+    "3": {
+      "replay_sessions": 128,
+      "session_id_min": 1,
+      "session_id_max": 128,
+      "rows_per_session_histogram": {
+        "126": 128
+      },
+      "same_op_set_all_sessions": true,
+      "host_expected_prefill_ops": 2585,
+      "device_prefill_ops": 2585,
+      "missing_prefill_op_ids": []
+    }
+  },
+  "malformed_host_metadata": 0,
+  "duplicate_device_keys": [],
+  "nonpositive_or_missing_fw_spans": [],
+  "signposts_ns": {
+    "PERF_PREFILL": 21563481062,
+    "PERF_PREFILL_END": 21903936849,
+    "PERF_DECODE": 26624575801,
+    "PERF_DECODE_END": 26801108741
+  },
+  "passed": true
+}

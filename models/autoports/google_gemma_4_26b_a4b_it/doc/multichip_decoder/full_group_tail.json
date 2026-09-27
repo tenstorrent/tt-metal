@@ -1,0 +1,69 @@
+{
+  "runtime_sha256": "d3dee9c50f549b6a48e657f0f8b2745a42c436a81ebecb8d8b099e1ae34f454b",
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "--fused-tail",
+    "--hybrid-experts",
+    "--optimized-shared",
+    "--layer",
+    "5",
+    "--length",
+    "32769",
+    "--repeat-input",
+    "--steps",
+    "2",
+    "--trace",
+    "--check-cache",
+    "--prefill-timing-samples",
+    "1",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/full_group_tail.json"
+  ],
+  "expert_parallel": false,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "hybrid_experts": true,
+  "cache_pcc": [
+    0.9999710210296545,
+    0.9999710210296545,
+    0.9999714936128392,
+    0.9999714936128392,
+    0.9999725878246912,
+    0.9999725878246912,
+    0.9999728800467316,
+    0.9999728800467316
+  ],
+  "capacity": {},
+  "layer_type": "full_attention",
+  "length": 32769,
+  "steps": 2,
+  "pcc": [
+    0.9999640334835295,
+    0.9999085977691076,
+    0.9999510217565999
+  ],
+  "passed": true,
+  "trace": true,
+  "timings": {
+    "1": {
+      "prefill_host_us": [
+        1829466.3121923804
+      ],
+      "decode_host_us": [
+        1047.9707270860672,
+        1043.3131828904152
+      ]
+    },
+    "4": {
+      "prefill_host_us": [
+        731063.3715242147
+      ],
+      "decode_host_us": [
+        903.9780125021935,
+        905.672088265419
+      ]
+    }
+  },
+  "all_replicas_equal": true,
+  "sharded_residual": false
+}

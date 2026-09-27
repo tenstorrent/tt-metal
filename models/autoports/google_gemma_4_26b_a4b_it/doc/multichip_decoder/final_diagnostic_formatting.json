@@ -1,0 +1,14 @@
+[
+  {
+    "file": "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_multichip_progress.py",
+    "before_sha256": "09ebf86addd141a2b295d3ab2ee52c3e6a7a230a2bc815256a6bf519f998a3ae",
+    "after_sha256": "6d18cc14e90cf9ee2b8c80f8cfcdf8bacb1eb93ef557f0f6b6c919fecad0ee32",
+    "nonimport_ast_equal": true
+  },
+  {
+    "file": "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_attention_ccl_replay.py",
+    "before_sha256": "fb9453754b6bbb29d4f698a0380778fac0c1d4d6f5cbd36230079f395f2620b5",
+    "after_sha256": "a901958de86bc704094e84b514b6f47dd7d772eebbb8fb84d3269b0a1ef8e020",
+    "nonimport_ast_equal": true
+  }
+]

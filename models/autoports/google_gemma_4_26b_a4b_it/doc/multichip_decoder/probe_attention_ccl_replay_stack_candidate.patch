@@ -1,0 +1,225 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_attention_ccl_replay.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_attention_ccl_replay.py
+@@ -1,6 +1,6 @@
+ # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+ # SPDX-License-Identifier: Apache-2.0
+-"""Isolate attention-shaped cast -> native RS -> AG exact replay."""
++"""Isolate native CCL replica agreement, sum correctness, and trace replay."""
+ 
+ import argparse
+ import hashlib
+@@ -13,87 +13,179 @@
+ from models.demos.gpt_oss.tt.ccl import CCLManager
+ 
+ 
++def comparison_metrics(want, got):
++    finite = bool(torch.isfinite(want).all() and torch.isfinite(got).all())
++    if not finite:
++        return dict(finite=False, exact=False, changed_elements=int(torch.count_nonzero(want != got)))
++    difference = got.double() - want.double()
++    denominator = float(torch.linalg.vector_norm(want.double()))
++    return dict(
++        finite=True,
++        exact=bool(torch.equal(want, got)),
++        changed_elements=int(torch.count_nonzero(want != got)),
++        max_abs_diff=float(difference.abs().max()),
++        relative_l2=float(torch.linalg.vector_norm(difference)) / max(denominator, 1e-30),
++        pcc=float(torch.corrcoef(torch.stack((want.flatten().double(), got.flatten().double())))[0, 1]),
++    )
++
++
+ def main():
+     p = argparse.ArgumentParser(__doc__)
+     p.add_argument("--dtype", choices=["bfloat16", "bfloat8_b"], required=True)
+     p.add_argument("--precast", action="store_true")
++    p.add_argument("--stack-graph", action="store_true")
++    p.add_argument("--input-memory", choices=["dram", "l1"], default="dram")
++    p.add_argument("--integer-inputs", action="store_true")
++    p.add_argument("--oracle-pcc", type=float, default=0.995)
++    p.add_argument("--oracle-relative-l2", type=float, default=0.05)
+     p.add_argument("--seeds", type=int, default=128)
+     p.add_argument("--repeats", type=int, default=3)
+     p.add_argument("--output", type=Path, required=True)
+     a = p.parse_args()
++    if a.seeds < 1 or a.repeats < 1:
++        p.error("seeds and repeats must be positive")
+     torch.set_num_threads(4)
+     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=4 * 1024**2)
+     result = dict(
+         dtype=a.dtype,
+         precast=a.precast,
++        stack_graph=a.stack_graph,
++        input_memory=a.input_memory,
++        integer_inputs=a.integer_inputs,
+         seeds=a.seeds,
+         repeats=a.repeats,
++        oracle=(
++            "exact FP32 sum of integer rank-local inputs; all values and partial sums are BF8-representable"
++            if a.integer_inputs
++            else "FP32 sum of unquantized rank-local inputs; quantization and reduction errors are included"
++        ),
++        oracle_pcc_threshold=a.oracle_pcc,
++        oracle_relative_l2_threshold=a.oracle_relative_l2,
+         failures=[],
+         passed=False,
+         source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+     )
++    trace = None
+     try:
+         mapper = ttnn.ShardTensorToMesh(mesh, dim=-1)
+-        ccl = CCLManager(mesh, 1, ttnn.Topology.Linear)
++        managers = [CCLManager(mesh, 1, ttnn.Topology.Linear) for _ in range(2 if a.stack_graph else 1)]
+         config = MeshConfig(mesh.shape, decode=ModeConfig(tp=4))
++        # Independent frozen inputs isolate CCL resource reuse. This reproduces
++        # the stack's ordered collective shapes/dtypes, not its intervening ops.
++        calls = (
++            [
++                ("layer0_attention", 1, "bfloat16", 0),
++                ("layer0_grouped_moe", 2, "bfloat16", 0),
++                ("layer5_attention", 1, a.dtype, 1),
++                ("layer5_grouped_moe", 2, "bfloat16", 1),
++            ]
++            if a.stack_graph
++            else [("attention", 1, a.dtype, 0)]
++        )
++        result["collectives"] = [
++            dict(name=name, shape=[1, groups, 1, 2816], dtype=dtype, manager=manager)
++            for name, groups, dtype, manager in calls
++        ]
++        result["oracle_summary"] = {
++            name: dict(min_pcc=1.0, max_relative_l2=0.0, max_abs_diff=0.0) for name, _, _, _ in calls
++        }
++        memory = ttnn.L1_MEMORY_CONFIG if a.input_memory == "l1" else ttnn.DRAM_MEMORY_CONFIG
+ 
+-        def sample(seed):
+-            generator = torch.Generator().manual_seed(seed)
+-            return torch.randn(1, 1, 1, 2816 * 4, generator=generator)
++        def sample(seed, call_index, groups):
++            generator = torch.Generator().manual_seed(seed * len(calls) + call_index)
++            shape = (1, groups, 1, 2816 * 4)
++            if a.integer_inputs:
++                return torch.randint(-4, 5, shape, generator=generator).float()
++            return torch.randn(shape, generator=generator)
+ 
+-        input_dtype = getattr(ttnn, a.dtype) if a.precast else ttnn.float32
+-        x = ttnn.from_torch(
+-            sample(0),
+-            dtype=input_dtype,
+-            layout=ttnn.TILE_LAYOUT,
+-            device=mesh,
+-            mesh_mapper=mapper,
+-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+-        )
++        input_dtypes = [getattr(ttnn, dtype) if a.precast else ttnn.float32 for _, _, dtype, _ in calls]
++        inputs = [
++            ttnn.from_torch(
++                sample(0, index, groups),
++                dtype=input_dtypes[index],
++                layout=ttnn.TILE_LAYOUT,
++                device=mesh,
++                mesh_mapper=mapper,
++                memory_config=memory,
++            )
++            for index, (_, groups, _, _) in enumerate(calls)
++        ]
+ 
+         def forward():
+-            return config.allreduce(x if a.precast else ttnn.typecast(x, getattr(ttnn, a.dtype)), ccl, axis=1)
++            outputs = []
++            for value, (_, _, dtype, manager) in zip(inputs, calls):
++                converted = value if a.precast else ttnn.typecast(value, getattr(ttnn, dtype))
++                converted = ttnn.to_memory_config(converted, ttnn.DRAM_MEMORY_CONFIG)
++                outputs.append(config.allreduce(converted, managers[manager], axis=1))
++            return outputs
+ 
+-        def read(t):
+-            return [ttnn.to_torch(v).float() for v in ttnn.get_device_tensors(t)]
++        def read(values):
++            return [[ttnn.to_torch(part).float() for part in ttnn.get_device_tensors(value)] for value in values]
++
++        def validate(values, oracles, seed, repeat, reference=None):
++            for index, (name, _, _, _) in enumerate(calls):
++                for rank, value in enumerate(values[index]):
++                    context = dict(seed=seed, repeat=repeat, collective=name, rank=rank)
++                    if not bool(torch.isfinite(value).all()):
++                        result["failures"].append(dict(kind="nonfinite", **context))
++                        continue
++                    replica = comparison_metrics(values[index][0], value)
++                    if not replica["exact"]:
++                        result["failures"].append(dict(kind="replicas_differ", metrics=replica, **context))
++                    oracle = comparison_metrics(oracles[index], value)
++                    summary = result["oracle_summary"][name]
++                    summary["min_pcc"] = min(summary["min_pcc"], oracle["pcc"])
++                    summary["max_relative_l2"] = max(summary["max_relative_l2"], oracle["relative_l2"])
++                    summary["max_abs_diff"] = max(summary["max_abs_diff"], oracle["max_abs_diff"])
++                    oracle_passed = (
++                        oracle["exact"]
++                        if a.integer_inputs
++                        else oracle["pcc"] >= a.oracle_pcc and oracle["relative_l2"] <= a.oracle_relative_l2
++                    )
++                    if not oracle_passed:
++                        result["failures"].append(dict(kind="oracle_mismatch", metrics=oracle, **context))
++                    if reference is not None:
++                        replay = comparison_metrics(reference[index][rank], value)
++                        if not replay["exact"]:
++                            result["failures"].append(dict(kind="replay_differs", metrics=replay, **context))
+ 
+         for _ in range(2):
+-            y = forward()
++            outputs = forward()
+         ttnn.synchronize_device(mesh)
+         trace = ttnn.begin_trace_capture(mesh, cq_id=0)
+-        y = forward()
++        outputs = forward()
+         ttnn.end_trace_capture(mesh, trace, cq_id=0)
+         for seed in range(a.seeds):
+-            host = ttnn.from_torch(sample(seed), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+-            ttnn.copy_host_to_device_tensor(host, x)
++            oracles = []
++            for index, (_, groups, _, _) in enumerate(calls):
++                source = sample(seed, index, groups)
++                oracles.append(torch.stack(source.chunk(4, dim=-1)).sum(dim=0))
++                host = ttnn.from_torch(
++                    source, dtype=input_dtypes[index], layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
++                )
++                ttnn.copy_host_to_device_tensor(host, inputs[index])
+             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+-            reference = read(y)
+-            for repeat in range(a.repeats):
++            reference = read(outputs)
++            validate(reference, oracles, seed, 0)
++            if result["failures"]:
++                break
++            for repeat in range(1, a.repeats + 1):
+                 ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+-                actual = read(y)
+-                for rank, (want, got) in enumerate(zip(reference, actual)):
+-                    if not torch.equal(want, got):
+-                        result["failures"].append(
+-                            dict(
+-                                seed=seed,
+-                                repeat=repeat,
+-                                rank=rank,
+-                                changed_elements=int(torch.count_nonzero(want != got)),
+-                                max_abs_diff=float((want - got).abs().max()),
+-                            )
+-                        )
++                actual = read(outputs)
++                validate(actual, oracles, seed, repeat, reference)
+                 if result["failures"]:
+                     break
+             if result["failures"]:
+                 break
+         result["completed_seeds"] = seed + 1
+         result["passed"] = not result["failures"]
+-        ttnn.release_trace(mesh, trace)
+         a.output.write_text(json.dumps(result, indent=2) + "\n")
+         print(json.dumps(result), flush=True)
+         assert result["passed"], result["failures"]
+     finally:
++        if trace is not None:
++            ttnn.release_trace(mesh, trace)
+         ttnn.close_mesh_device(mesh)
+ 
+ 

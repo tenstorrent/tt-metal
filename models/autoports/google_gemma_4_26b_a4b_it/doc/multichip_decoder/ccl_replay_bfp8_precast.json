@@ -1,0 +1,10 @@
+{
+  "dtype": "bfloat8_b",
+  "precast": true,
+  "seeds": 128,
+  "repeats": 3,
+  "failures": [],
+  "passed": true,
+  "source_sha256": "fb9453754b6bbb29d4f698a0380778fac0c1d4d6f5cbd36230079f395f2620b5",
+  "completed_seeds": 128
+}

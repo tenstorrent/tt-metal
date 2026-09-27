@@ -1,0 +1,43 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
+@@ -37,8 +37,12 @@
+     parser.add_argument("--prefill-timing-samples", type=int, default=3)
+     parser.add_argument("--trace", action="store_true")
+     parser.add_argument("--sharded-residual", action="store_true")
++    parser.add_argument("--ring", action="store_true")
++    parser.add_argument("--fused-agmm", action="store_true")
+     parser.add_argument("--output", type=Path, required=True)
+     args = parser.parse_args()
++    if args.fused_agmm and not (args.ring and args.sharded_residual):
++        parser.error("--fused-agmm requires --ring and --sharded-residual")
+     runtime_hash = hashlib.sha256(
+         Path(__file__).parents[1].joinpath("tt/multichip_decoder.py").read_bytes()
+     ).hexdigest()
+@@ -71,7 +75,8 @@
+     for tp, cls in ((1, OptimizedDecoder), (4, MultichipDecoder)):
+         if args.tp is not None and tp != args.tp:
+             continue
+-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if tp == 1 else ttnn.FabricConfig.FABRIC_1D)
++        fabric = ttnn.FabricConfig.FABRIC_1D_RING if args.ring else ttnn.FabricConfig.FABRIC_1D
++        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if tp == 1 else fabric)
+         mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, tp), trace_region_size=16777216)
+         try:
+             mapper = ttnn.ReplicateTensorToMesh(mesh)
+@@ -103,6 +108,8 @@
+                 **(
+                     {
+                         "sharded_residual": args.sharded_residual,
++                        "fused_agmm": args.fused_agmm,
++                        "topology": ttnn.Topology.Ring if args.ring else ttnn.Topology.Linear,
+                         "fused_tail": args.fused_tail,
+                         "optimized_shared": args.optimized_shared,
+                         "hybrid_experts": args.hybrid_experts,
+@@ -302,6 +309,8 @@
+         timings=timings,
+         all_replicas_equal=not args.sharded_residual,
+         sharded_residual=args.sharded_residual,
++        topology="ring" if args.ring else "linear",
++        fused_agmm=args.fused_agmm,
+     )
+     args.output.write_text(json.dumps(result, indent=2) + "\n")
+     print(

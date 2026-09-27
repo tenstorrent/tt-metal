@@ -1,0 +1,54 @@
+from pathlib import Path
+import csv,hashlib,json,sys
+from models.autoports.google_gemma_4_26b_a4b_it.tests import summarize_multichip_perf as m
+from models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_perf import element_bytes,sparse_weight_groups,tensor_elements,traffic,useful_prefill_flops
+assert 'ttnn' not in sys.modules
+root=Path('/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it');doc=root/'doc/multichip_decoder'
+csvpath=next((doc/'profile_v0/reports').rglob('ops_perf_results*.csv'));selected=[];phase=False
+for row in csv.DictReader(csvpath.open()):
+ if row['OP CODE']=='PERF_DECODE':phase=True
+ elif row['OP CODE']=='PERF_DECODE_END':phase=False
+ elif phase and row['OP TYPE']=='tt_dnn_device':selected.append(row)
+old=sum(traffic(row,m.tp4_cache_reads(row,4096,'sliding_attention')[0]) if m.is_native_sdpa_decode(row) else traffic(row) for row in selected)
+corrected=sum(traffic(row,m.tp4_cache_reads(row,4096,'sliding_attention')[0]) if m.is_native_sdpa_decode(row) else m.collective_traffic(row)[0] for row in selected)
+assert old==199607360 and corrected==193840192
+sparse=[sparse_weight_groups(r) for r in selected if 'sparsematmul' in r['OP CODE'].lower()]
+assert len(sparse)==8 and all(r['active']==8 and r['groups']==128 and r['indexed'] for r in sparse)
+rs=next(r for r in selected if 'ReduceScatterMinimal' in r['OP CODE'] and r['INPUT_0_DATATYPE']=='BFLOAT16')
+ag=next(r for r in selected if 'AllGatherAsync' in r['OP CODE'] and r['INPUT_0_DATATYPE']=='BFLOAT16')
+payloads={}
+for dtype in ('FLOAT32','BFLOAT16','BFLOAT8_B'):
+ single=0;grouped=0
+ for row in (rs,ag):
+  s=dict(row);g=dict(row)
+  for key,value in row.items():
+   if key.endswith('_DATATYPE') and value:s[key]=g[key]=dtype
+   if key.endswith('_Z_PAD[LOGICAL]') and value:g[key]='2[2]'
+  a=m.collective_traffic(s)[0];b=m.collective_traffic(g)[0]
+  assert b==2*a
+  single+=4*a;grouped+=4*b
+ expected=4*2*(32*2816+32*704)*element_bytes(dtype)
+ assert single==expected
+ payloads[dtype]=dict(single_branch_rs_ag_mesh_io_bytes=single,paired_branch_rs_ag_mesh_io_bytes=grouped)
+assert payloads['BFLOAT8_B']['single_branch_rs_ag_mesh_io_bytes']==957440
+sdpa=next(r for r in selected if m.is_native_sdpa_decode(r));native={}
+for kind,heads,width,expected in [('sliding_attention',2,256,5009152),('full_attention',1,512,18382848)]:
+ r=dict(sdpa);r['INPUT_0_X_PAD[LOGICAL]']=str(width)
+ for prefix in ('INPUT_1','INPUT_2'):
+  r[f'{prefix}_Z_PAD[LOGICAL]']=str(heads);r[f'{prefix}_X_PAD[LOGICAL]']=str(width)
+ if kind=='full_attention':r['ATTRIBUTES']=r['ATTRIBUTES'].replace("'sliding_window_size': '1024'","'sliding_window_size': 'std::nullopt'")
+ reads=[m.tp4_cache_reads(r,p,kind)[1] for p in range(4096,4224)]
+ mean=sum(x['kv_dram_bytes'] for x in reads)/128*4
+ assert mean==expected and all(x['chunk_tokens']==128 for x in reads)
+ native[kind]=dict(mean_mesh_kv_bytes=mean,first_read_tokens=reads[0]['read_tokens'],last_read_tokens=reads[-1]['read_tokens'])
+ bad=dict(r);bad['ATTRIBUTES']=bad['ATTRIBUTES'].replace('fp32_dest_acc_en=1','fp32_dest_acc_en=0')
+ try:m.tp4_cache_reads(bad,4096,kind,128)
+ except ValueError:pass
+ else:raise AssertionError('Contradictory effective chunk accepted')
+flops={kind:useful_prefill_flops(kind) for kind in ('sliding_attention','full_attention')}
+assert sum(flops['sliding_attention'].values())==882489950208
+assert sum(flops['full_attention'].values())==1215408635904
+actual=json.loads((doc/'profile_v0/whole_layer_audited.json').read_text());historical=json.loads((doc/'profile_v0/whole_layer.json').read_text())
+for key in ('prefill_device_us','decode_device_us','prefill_useful_flops','peak_flops_per_s','peak_dram_bytes_per_s'):assert actual[key]==historical[key]
+report=dict(ttnn_imported=False,hardware_used=False,source_csv=str(csvpath),source_csv_sha256=hashlib.sha256(csvpath.read_bytes()).hexdigest(),summarizer_sha256=hashlib.sha256((root/'tests/summarize_multichip_perf.py').read_bytes()).hexdigest(),baseline_summarizer_sha256=hashlib.sha256((root/'tests/summarize_perf.py').read_bytes()).hexdigest(),old_estimated_dram_bytes=old,corrected_estimated_dram_bytes=corrected,removed_scratch_allocations=old-corrected,whole_layer_windows_unchanged=True,sparse_native_ops=sparse,synthetic_grouped_ccl_checks=payloads,native_128_position_checks=native,useful_flops_terms=flops,peak_flops_per_s=4*120*4096*1.35e9,peak_dram_bytes_per_s=4*512e9)
+(doc/'native_accounting_cpu_checks.json').write_text(json.dumps(report,indent=2)+'\n');(doc/'native_accounting_cpu_checks.py.txt').write_text(Path(__file__).read_text());print(json.dumps(report,indent=2))

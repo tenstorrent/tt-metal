@@ -1,0 +1,19 @@
+{
+  "status": "unapplied; CPU syntax only; no hardware claims",
+  "base_runner_sha256": "c531a9a2f00db1eb9b2135f9b4397cbdf5a388db50776c17b6d4c670899b36ff",
+  "candidate_sha256": "b592fa085d2e324e2042aafa3fa1402e8a09d778c77bbc14634ae7d6a475852c",
+  "patch_sha256": "41c5a5fbfc2f9afe5bea212189e4443c906e465ecd92338c3e25f8624b1fcbd5",
+  "variants": [
+    "qkv-n2",
+    "qkv-n4",
+    "output-n2",
+    "output-n4",
+    "router-n2",
+    "router-n4",
+    "sparse-gate-n2-k44",
+    "sparse-gate-n2-k88",
+    "sparse-down-n2-k6",
+    "sharded-decode-rope"
+  ],
+  "dependencies": "sharded-decode-rope requires separate runtime candidate patch; do not enable without it"
+}

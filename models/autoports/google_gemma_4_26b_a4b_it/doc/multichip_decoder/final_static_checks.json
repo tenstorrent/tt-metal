@@ -1,0 +1,50 @@
+{
+  "python_files": [
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_multichip_progress.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_paired_boundary.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_paired_cleanup.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_attention_ccl_replay.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_indexed_expert_replay.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_multichip_fused_ccl.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/probe_sharded_rope_contract.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_multichip_candidates.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/summarize_multichip_perf.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_contracts.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py"
+  ],
+  "ast_parse": "pass",
+  "black": {
+    "exit_code": 0,
+    "output": "All done! \u2728 \ud83c\udf70 \u2728\n14 files would be left unchanged.\n"
+  },
+  "isort": {
+    "exit_code": 0,
+    "output": ""
+  },
+  "autoflake": "All14 files passed --check --remove-all-unused-imports before formatting-only changes",
+  "build": "Not required: Python/tests/docs only; no C++/CMake changes",
+  "context_contract_check": {
+    "command": "python .agents/scripts/check_context_contract.py --model-dir models/autoports/google_gemma_4_26b_a4b_it --hf-model google/gemma-4-26B-A4B-it --stage 04-multichip-decoder --require-contract",
+    "result": "pass: target262144, supported262144"
+  },
+  "text_hygiene": {
+    "result": "pass",
+    "newline_only_changes": [
+      {
+        "file": "full_max_triage_summary.txt",
+        "before_sha256": "f53f560bc077203f87f8d186a5fb027a1b9d182c5fb88fff4f1c841098c7b3ff",
+        "after_sha256": "e8351a1b1e209ff9054424a125704fb4f3bbc46f71965f9efc2f8acb503b13e7",
+        "change": "Added required final newline only"
+      },
+      {
+        "file": "fused_mmrs_triage_summary.txt",
+        "before_sha256": "f53f560bc077203f87f8d186a5fb027a1b9d182c5fb88fff4f1c841098c7b3ff",
+        "after_sha256": "e8351a1b1e209ff9054424a125704fb4f3bbc46f71965f9efc2f8acb503b13e7",
+        "change": "Added required final newline only"
+      }
+    ]
+  }
+}

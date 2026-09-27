@@ -28,16 +28,83 @@ def main():
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--tp", type=int, choices=[1, 4])
     parser.add_argument("--expert-parallel", action="store_true")
+    parser.add_argument("--fused-tail", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--optimized-shared", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shared-dram", action="store_true")
+    parser.add_argument("--attention-dram", choices=["qkv", "output"])
+    parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=None)
+    parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument(
+        "--dense-geometry",
+        choices=["baseline", "qkv-n2", "qkv-n4", "output-n2", "output-n4", "router-n2", "router-n4"],
+        default="baseline",
+    )
+    parser.add_argument("--sharded-decode-rope", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--moe-ccl-bfp8", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--expert-gate-bfp4", action="store_true")
+    parser.add_argument("--shared-gate-bfp4", action="store_true")
+    parser.add_argument("--shared-down-bfp4", action="store_true")
+    parser.add_argument("--expert-activation-bfp8", action="store_true")
+    parser.add_argument("--split-expert-gate", action="store_true")
+    parser.add_argument("--split-shared-gate", action="store_true")
+    parser.add_argument("--projection-k", type=int)
+    parser.add_argument("--projection-role", choices=["qkv", "output", "router"], default="qkv")
+    parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
+    parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat8_b")
+    parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--sparse-gate-geometry", choices=["baseline", "n2-k44", "n2-k88"], default="baseline")
+    parser.add_argument("--sparse-down-geometry", choices=["baseline", "n2-k6"], default="baseline")
     parser.add_argument("--check-cache", action="store_true")
     parser.add_argument("--repeat-input", action="store_true")
+    parser.add_argument("--reserve-full-stack", action="store_true")
     parser.add_argument("--prefill-timing-samples", type=int, default=3)
     parser.add_argument("--trace", action="store_true")
+    parser.add_argument("--duplicate-replays", type=int, default=1)
     parser.add_argument("--sharded-residual", action="store_true")
+    parser.add_argument("--ring", action="store_true")
+    parser.add_argument("--fused-agmm", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.reserve_full_stack and not args.hybrid_experts:
+        parser.error("--reserve-full-stack uses the selected hybrid expert memory plan")
+    if args.duplicate_replays < 1:
+        parser.error("--duplicate-replays must be positive")
+    if args.dense_geometry != "baseline" and (args.attention_dram or args.fused_agmm):
+        parser.error("Dense geometry trials require the interleaved projection backend")
+    if args.expert_parallel and (args.sparse_gate_geometry != "baseline" or args.sparse_down_geometry != "baseline"):
+        parser.error("Sparse geometry candidates require TP or hybrid indexed decode experts")
+    if args.expert_parallel and args.hybrid_experts:
+        parser.error("--expert-parallel requires --no-hybrid-experts")
+    if args.shared_geometry and not args.optimized_shared:
+        parser.error("--no-optimized-shared requires --shared-geometry 0")
+    if args.sharded_residual and args.grouped_moe_reduce:
+        parser.error("--sharded-residual requires --no-grouped-moe-reduce")
+    if args.attention_dram == "qkv" and args.fused_agmm:
+        parser.error("--attention-dram qkv and --fused-agmm are separate backends")
+    if args.shared_dram and not args.optimized_shared:
+        parser.error("--shared-dram requires --optimized-shared")
+    if args.shared_dram and args.shared_geometry:
+        parser.error("--shared-dram requires --shared-geometry 0")
+    if not 0 <= args.steps <= 128:
+        parser.error("--steps must be between0 and128 for the recorded fixture")
+    if args.profile and not args.steps:
+        parser.error("--profile requires a decode window; steps0 is a capacity check")
+    if args.fused_agmm and not (args.ring and args.sharded_residual):
+        parser.error("--fused-agmm requires --ring and --sharded-residual")
     runtime_hash = hashlib.sha256(
         Path(__file__).parents[1].joinpath("tt/multichip_decoder.py").read_bytes()
     ).hexdigest()
+    runner_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    source_hashes = dict(runtime_sha256=runtime_hash, runner_sha256=runner_hash)
+    print("SOURCE_HASHES", json.dumps(source_hashes), flush=True)
+
+    def fail(details):
+        report = dict(command=sys.argv, **source_hashes, layer=args.layer, **details)
+        args.output.with_suffix(".failure.json").write_text(json.dumps(report, indent=2) + "\n")
+        raise AssertionError(json.dumps(report))
+
     torch.set_num_threads(8)
     torch.manual_seed(42)
     root = Path(__file__).parents[1]
@@ -63,10 +130,12 @@ def main():
     outputs = {}
     caches = {}
     timings = {}
+    capacity = {}
     for tp, cls in ((1, OptimizedDecoder), (4, MultichipDecoder)):
         if args.tp is not None and tp != args.tp:
             continue
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if tp == 1 else ttnn.FabricConfig.FABRIC_1D)
+        fabric = ttnn.FabricConfig.FABRIC_1D_RING if args.ring else ttnn.FabricConfig.FABRIC_1D
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if tp == 1 else fabric)
         mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, tp), trace_region_size=16777216)
         try:
             mapper = ttnn.ReplicateTensorToMesh(mesh)
@@ -83,11 +152,48 @@ def main():
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1) if tp == 4 and args.sharded_residual else mapper,
                 )
 
-            def read(value):
+            def read(value, phase, *, step=None, replay="first"):
                 if tp == 4 and args.sharded_residual:
-                    return ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()
-                parts = [ttnn.to_torch(v).float() for v in ttnn.get_device_tensors(value)]
-                assert all(torch.equal(parts[0], v) for v in parts[1:]), "Replicas differ"
+                    parts = [ttnn.to_torch(value, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1)).float()]
+                else:
+                    parts = [ttnn.to_torch(v).float() for v in ttnn.get_device_tensors(value)]
+                finite_counts = [int(torch.isfinite(part).sum()) for part in parts]
+                replicas_equal = all(torch.equal(parts[0], part) for part in parts[1:])
+                nonfinite = any(count != part.numel() for count, part in zip(finite_counts, parts))
+                if nonfinite or not replicas_equal:
+                    ranks = []
+                    for rank, part in enumerate(parts):
+                        finite_pair = torch.isfinite(parts[0]) & torch.isfinite(part)
+                        ranks.append(
+                            dict(
+                                rank=rank,
+                                elements=part.numel(),
+                                finite=finite_counts[rank],
+                                nan=int(torch.isnan(part).sum()),
+                                positive_infinity=int(torch.isposinf(part).sum()),
+                                negative_infinity=int(torch.isneginf(part).sum()),
+                                equal_to_rank0=torch.equal(parts[0], part),
+                                bits_equal_to_rank0=torch.equal(parts[0].view(torch.int32), part.view(torch.int32)),
+                                changed_vs_rank0=int((parts[0] != part).sum()),
+                                finite_max_abs_diff=(
+                                    float((parts[0][finite_pair] - part[finite_pair]).abs().max())
+                                    if finite_pair.any()
+                                    else None
+                                ),
+                            )
+                        )
+                    fail(
+                        dict(
+                            kind="nonfinite" if nonfinite else "replica_difference",
+                            tp=tp,
+                            phase=phase,
+                            step=step,
+                            replay=replay,
+                            absolute_position=args.length + step if step is not None else None,
+                            replicas_equal=replicas_equal,
+                            ranks=ranks,
+                        )
+                    )
                 return parts[0]
 
             decoder = cls.from_state_dict(
@@ -98,12 +204,231 @@ def main():
                 **(
                     {
                         "sharded_residual": args.sharded_residual,
+                        "fused_agmm": args.fused_agmm,
+                        "topology": ttnn.Topology.Ring if args.ring else ttnn.Topology.Linear,
+                        "fused_tail": args.fused_tail,
+                        "optimized_shared": args.optimized_shared,
+                        "shared_dram": args.shared_dram,
+                        "attention_dram": args.attention_dram,
+                        "shared_geometry": args.shared_geometry,
+                        "grouped_moe_reduce": args.grouped_moe_reduce,
+                        "qkv_fidelity": getattr(ttnn.MathFidelity, args.qkv_fidelity),
+                        "output_fidelity": getattr(ttnn.MathFidelity, args.output_fidelity),
+                        "attention_ccl_dtype": getattr(ttnn, args.attention_ccl_dtype),
+                        "full_attention_ccl_dtype": (
+                            getattr(ttnn, args.full_attention_ccl_dtype) if args.full_attention_ccl_dtype else None
+                        ),
+                        "hybrid_experts": args.hybrid_experts,
                         **({"expert_parallel": True} if args.expert_parallel else {}),
                     }
                     if tp == 4
                     else {}
                 ),
             )
+            if tp == 4 and (args.sparse_gate_geometry != "baseline" or args.sparse_down_geometry != "baseline"):
+                experts = decoder.layer.moe.experts
+                experts = getattr(experts, "decode", experts)
+                if experts.indexed_router is None or experts.expert_split or experts.config.top_k != 8:
+                    raise ValueError("Sparse geometry candidates require packed indexed top-8 decode")
+                if tuple(experts.gate_up.shape) != (1, 128, 2816, 384):
+                    raise ValueError("Unexpected local gate/up weight geometry")
+                if tuple(experts.down.shape) != (1, 128, 192, 2816):
+                    raise ValueError("Unexpected local down weight geometry")
+
+                def sparse_geometry(grid, block):
+                    available = mesh.compute_with_storage_grid_size()
+                    if grid[0] > available.x or grid[1] > available.y:
+                        raise ValueError("Sparse geometry grid exceeds available workers")
+                    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=grid,
+                        in0_block_w=block,
+                        out_subblock_h=1,
+                        out_subblock_w=2,
+                        out_block_h=1,
+                        out_block_w=2,
+                        per_core_M=1,
+                        per_core_N=2,
+                        fuse_batch=False,
+                        mcast_in0=True,
+                    )
+
+                if args.sparse_gate_geometry != "baseline":
+                    gate_block = 44 if args.sparse_gate_geometry == "n2-k44" else 88
+                    experts.gate_config = sparse_geometry((6, 1), gate_block)
+                if args.sparse_down_geometry != "baseline":
+                    experts.down_config = sparse_geometry((11, 4), 6)
+            if tp == 4:
+                attention = decoder.layer.self_attn
+                if args.sharded_decode_rope is not None:
+                    attention.sharded_decode_rope = args.sharded_decode_rope
+                if args.moe_ccl_bfp8 is not None:
+                    decoder.moe_ccl_bfp8 = args.moe_ccl_bfp8
+                if args.dense_geometry != "baseline":
+                    role, width = args.dense_geometry.split("-n")
+                    width = int(width)
+                    if role == "qkv":
+                        owner, field = attention.source.weights.wqkv, "program"
+                        grid = (8, (64 if config.layer_types[args.layer] == "sliding_attention" else 96) // width // 8)
+                    elif role == "output":
+                        owner, field = attention, "output_program"
+                        grid = (11, 88 // width // 11)
+                    else:
+                        owner, field = decoder.layer.moe.router, "projection_program"
+                        grid = (4 // width, 1)
+                    previous = getattr(owner, field)
+                    setattr(
+                        owner,
+                        field,
+                        ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                            compute_with_storage_grid_size=grid,
+                            in0_block_w=previous.in0_block_w,
+                            out_subblock_h=1,
+                            out_subblock_w=width,
+                            out_block_h=1,
+                            out_block_w=width,
+                            per_core_M=1,
+                            per_core_N=width,
+                            fuse_batch=True,
+                            fused_activation=None,
+                            mcast_in0=True,
+                        ),
+                    )
+            if tp == 4 and args.expert_gate_bfp4:
+                experts = getattr(decoder.layer.moe.experts, "decode", decoder.layer.moe.experts)
+                if args.expert_parallel or tuple(experts.gate_up.shape) != (1, 128, 2816, 384):
+                    raise ValueError("Gate precision candidate requires TP indexed expert layout")
+                fused = hf.state_dict()["experts.gate_up_proj"]
+                gate, up = fused.chunk(2, dim=-2)
+                gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, 64)) for t in (gate, up))
+                packed = torch.cat(
+                    [torch.cat((g, u), dim=-1) for g, u in zip(gate.chunk(4, -1), up.chunk(4, -1))], dim=-1
+                )
+                experts.gate_up = ttnn.from_torch(
+                    packed.unsqueeze(0),
+                    device=mesh,
+                    dtype=ttnn.bfloat4_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+                )
+            if tp == 4 and args.expert_activation_bfp8:
+                experts = getattr(decoder.layer.moe.experts, "decode", decoder.layer.moe.experts)
+                if args.expert_parallel:
+                    raise ValueError("Activation candidate requires indexed TP experts")
+                experts.decode_activation_dtype = ttnn.bfloat8_b
+            if tp == 4 and (args.shared_gate_bfp4 or args.shared_down_bfp4):
+                shared = decoder.layer.shared_mlp
+                if args.shared_dram or shared.decode_weights is None:
+                    raise ValueError("Shared precision trial requires the interleaved backend")
+                weights = list(shared.decode_weights)
+                state = hf.state_dict()
+                if args.shared_gate_bfp4:
+                    gate, up = (
+                        torch.nn.functional.pad(state[name].transpose(-2, -1), (0, 64))
+                        for name in ("mlp.gate_proj.weight", "mlp.up_proj.weight")
+                    )
+                    packed = torch.cat(
+                        [torch.cat((u, g), dim=-1) for u, g in zip(up.chunk(4, -1), gate.chunk(4, -1))], dim=-1
+                    )
+                    weights[0] = ttnn.from_torch(
+                        packed[None, None],
+                        device=mesh,
+                        dtype=ttnn.bfloat4_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+                    )
+                if args.shared_down_bfp4:
+                    down = torch.nn.functional.pad(state["mlp.down_proj.weight"].transpose(-2, -1), (0, 0, 0, 64))
+                    weights[1] = ttnn.from_torch(
+                        down[None, None],
+                        device=mesh,
+                        dtype=ttnn.bfloat4_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-2),
+                    )
+                shared.decode_weights = tuple(weights)
+            if tp == 4 and args.split_expert_gate:
+                experts = getattr(decoder.layer.moe.experts, "decode", decoder.layer.moe.experts)
+                if args.expert_parallel or experts.indexed_router is None:
+                    raise ValueError("Split expert trial requires indexed TP decode")
+                experts.gate = experts.gate_up[..., : experts.width]
+                experts.up = experts.gate_up[..., experts.width :]
+                experts.separate_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(6, 1),
+                    in0_block_w=44,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=1,
+                    per_core_M=1,
+                    per_core_N=1,
+                    fuse_batch=False,
+                    mcast_in0=True,
+                )
+                experts.expert_split = True
+            if tp == 4 and args.split_shared_gate:
+                shared = decoder.layer.shared_mlp
+                if args.shared_dram or shared.decode_weights is None:
+                    raise ValueError("Split shared trial requires the interleaved decode backend")
+
+                class SplitShared(type(shared)):
+                    def __call__(self, x, *, reduce_output=True):
+                        if x.shape[-2] != 1:
+                            return super().__call__(x, reduce_output=reduce_output)
+                        common = dict(
+                            dtype=ttnn.bfloat16,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                            compute_kernel_config=self.decode_compute,
+                            program_config=self.split_program,
+                        )
+                        up = ttnn.linear(x, self.split_weights[0], **common)
+                        gate = ttnn.linear(x, self.split_weights[1], **common)
+                        hidden = ttnn.mul(
+                            gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)]
+                        )
+                        result = ttnn.linear(
+                            hidden,
+                            self.decode_weights[1],
+                            dtype=ttnn.bfloat16,
+                            memory_config=ttnn.L1_MEMORY_CONFIG,
+                            compute_kernel_config=self.decode_compute,
+                            program_config=self.decode_programs[1],
+                        )
+                        return self.reduce(result) if reduce_output else result
+
+                shared.split_weights = (
+                    shared.decode_weights[0][..., : shared.width],
+                    shared.decode_weights[0][..., shared.width :],
+                )
+                shared.split_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(11, 2),
+                    in0_block_w=44,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=1,
+                    out_block_w=1,
+                    per_core_M=1,
+                    per_core_N=1,
+                    fuse_batch=True,
+                    mcast_in0=True,
+                )
+                shared.__class__ = SplitShared
+            if tp == 4 and args.projection_k is not None:
+                if args.attention_dram or args.fused_agmm:
+                    raise ValueError("Projection K overrides require the interleaved backend")
+                attention = decoder.layer.self_attn
+                if args.projection_role == "qkv":
+                    program, tiles = attention.source.weights.wqkv.program, 88
+                elif args.projection_role == "output":
+                    program = attention.output_program
+                    tiles = 32 if config.layer_types[args.layer] == "sliding_attention" else 64
+                else:
+                    program, tiles = decoder.layer.moe.router.projection_program, 88
+                if args.projection_k <= 0 or tiles % args.projection_k:
+                    raise ValueError("Projection K block must divide the input tile width")
+                program.in0_block_w = args.projection_k
             cfg = decoder.layer.self_attn.config
             cache = [
                 upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b)
@@ -111,10 +436,84 @@ def main():
             ]
             page_table = upload(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             rope = tuple(upload(t.unsqueeze(0)) for t in (cos, sin))
+            rope_decode = tuple(upload(t.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for t in (cos, sin))
+            reservations = []
+            if args.reserve_full_stack and tp == 4:
+                plan = json.loads((root / "doc/multichip_decoder/memory_capacity_plan.json").read_text())
+                kind = config.layer_types[args.layer]
+                layer_plan = plan["per_device"][kind]
+                resident = plan["full_stack_per_device"]["resident_and_reserve_bound_bytes"]
+                current_weights = layer_plan["weight_bound"]
+                if args.hybrid_experts:
+                    dual = plan["hypothetical_dual_expert_layout"]
+                    resident = dual["resident_and_reserve_bound_bytes"]
+                    current_weights += dual[
+                        (
+                            "extra_ep_experts_per_sliding_layer_bytes"
+                            if kind == "sliding_attention"
+                            else "extra_ep_experts_per_full_layer_bytes"
+                        )
+                    ]
+                elif args.expert_parallel:
+                    raise ValueError("Reservation accounting currently covers TP or hybrid experts")
+                if args.optimized_shared:
+                    shared_plan = plan["optimized_shared_decode"]
+                    resident += shared_plan["extra_full_stack_bytes"]
+                    current_weights += shared_plan[
+                        "extra_sliding_layer_bytes" if kind == "sliding_attention" else "extra_full_layer_bytes"
+                    ]
+                if args.shared_dram:
+                    extra_tiles = decoder.layer.shared_mlp.extra_decode_weight_tiles
+                    extra_bytes = {"sliding_attention": extra_tiles * 576, "full_attention": extra_tiles * 576}
+                    resident += sum(extra_bytes[layer_type] for layer_type in config.layer_types)
+                    current_weights += extra_bytes[kind]
+                if args.attention_dram:
+                    extra_bytes = {}
+                    for layer_type in set(config.layer_types):
+                        is_sliding = layer_type == "sliding_attention"
+                        head_dim = config.head_dim if is_sliding else config.global_head_dim
+                        q_heads = config.num_attention_heads // 4
+                        if args.attention_dram == "qkv":
+                            kv_heads = config.num_key_value_heads if is_sliding else config.num_global_key_value_heads
+                            k, n = config.hidden_size, (q_heads + 2 * max(1, kv_heads // 4)) * head_dim
+                        else:
+                            k, n = q_heads * head_dim, config.hidden_size
+                        extra_bytes[layer_type] = (k // 32) * (n // 32) * 1088
+                    assert extra_bytes[kind] == decoder.attention_dram_extra_weight_bytes
+                    resident += sum(extra_bytes[layer_type] for layer_type in config.layer_types)
+                    current_weights += extra_bytes[kind]
+                # Reserve other layers, tied embeddings, and shared per-kind RoPE.
+                # Leave the independent 2 GiB workspace allowance available.
+                current_cache = 2 * pages * cfg.num_key_value_heads * (block // 32) * (cfg.head_dim // 32) * 1088
+                current_rope = 2 * (cos.numel() + sin.numel()) * 2
+                reserve = resident - plan["full_stack_per_device"]["reserved_trace_activation_allocator_bytes"]
+                reserve -= current_weights + current_cache + current_rope
+                allocation_bytes = 64 * 1024**2
+                count = (reserve + allocation_bytes - 1) // allocation_bytes
+                reservations = [
+                    ttnn.empty(
+                        (1, 1, 32768, 1024),
+                        device=mesh,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(count)
+                ]
+                capacity = dict(
+                    reserved_other_resident_bytes_per_device=count * allocation_bytes,
+                    current_weight_bound=current_weights,
+                    current_cache_bytes=current_cache,
+                    current_rope_bytes=current_rope,
+                    accounting="memory_capacity_plan.json",
+                    limitation="Anonymous DRAM reservations exercise capacity, not a full-model stack",
+                )
+                print("CAPACITY_RESERVED", capacity, flush=True)
             dx = input_upload(x.unsqueeze(0))
             with device_only():
                 y = decoder.prefill_forward(dx, rope_mats=rope, page_table=page_table, kv_cache=cache)
-            prefill = read(y)
+            prefill = read(y, "prefill")
+            del y
             prefill_times = []
             for sample in range(args.prefill_timing_samples):
                 ttnn.synchronize_device(mesh)
@@ -129,73 +528,94 @@ def main():
                 prefill_times.append((time.perf_counter() - before) * 1e6)
                 if args.profile and sample == args.prefill_timing_samples - 1:
                     signpost("PERF_PREFILL_END")
+                del y
             timings[tp] = dict(prefill_host_us=prefill_times)
-            rope_decode = tuple(upload(t.squeeze(0), layout=ttnn.ROW_MAJOR_LAYOUT) for t in (cos, sin))
             decoded = []
-            token = input_upload(decode[:, :1].unsqueeze(0))
-            pos = upload(torch.tensor([[args.length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-            cache_pos = upload(torch.tensor([args.length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-
-            def forward():
-                with device_only():
-                    return decoder.decode_forward(
-                        token,
-                        rope_mats=rope_decode,
-                        current_pos=pos,
-                        cache_pos=cache_pos,
-                        page_table=page_table,
-                        kv_cache=cache,
-                    )
-
-            trace_id = None
-            if args.trace:
-                for _ in range(2):
-                    y = forward()
-                trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
-                y = forward()
-                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
             decode_times = []
-            if args.profile:
-                signpost("PERF_DECODE")
-            for step in range(args.steps):
-                for value, dst, dtype, layout in (
-                    (decode[:, step : step + 1].unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
-                    (torch.tensor([[args.length + step]], dtype=torch.int32), pos, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-                    (
-                        torch.tensor([args.length + step], dtype=torch.int32),
-                        cache_pos,
-                        ttnn.int32,
-                        ttnn.ROW_MAJOR_LAYOUT,
-                    ),
-                ):
-                    host = ttnn.from_torch(
-                        value,
-                        dtype=dtype,
-                        layout=layout,
-                        mesh_mapper=(
-                            ttnn.ShardTensorToMesh(mesh, dim=-1)
-                            if dst is token and tp == 4 and args.sharded_residual
-                            else mapper
-                        ),
-                    )
-                    ttnn.copy_host_to_device_tensor(host, dst)
-                ttnn.synchronize_device(mesh)
-                before = time.perf_counter()
+            if args.steps:
+                token = input_upload(decode[:, :1].unsqueeze(0))
+                pos = upload(torch.tensor([[args.length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+                cache_pos = upload(torch.tensor([args.length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+                def forward():
+                    with device_only():
+                        return decoder.decode_forward(
+                            token,
+                            rope_mats=rope_decode,
+                            current_pos=pos,
+                            cache_pos=cache_pos,
+                            page_table=page_table,
+                            kv_cache=cache,
+                        )
+
+                trace_id = None
                 if args.trace:
-                    ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
-                else:
+                    for _ in range(2):
+                        y = forward()
+                    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
                     y = forward()
+                    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+                decode_times = []
+                if args.profile:
+                    signpost("PERF_DECODE")
+                for step in range(args.steps):
+                    for value, dst, dtype, layout in (
+                        (decode[:, step : step + 1].unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                        (
+                            torch.tensor([[args.length + step]], dtype=torch.int32),
+                            pos,
+                            ttnn.uint32,
+                            ttnn.ROW_MAJOR_LAYOUT,
+                        ),
+                        (
+                            torch.tensor([args.length + step], dtype=torch.int32),
+                            cache_pos,
+                            ttnn.int32,
+                            ttnn.ROW_MAJOR_LAYOUT,
+                        ),
+                    ):
+                        host = ttnn.from_torch(
+                            value,
+                            dtype=dtype,
+                            layout=layout,
+                            mesh_mapper=(
+                                ttnn.ShardTensorToMesh(mesh, dim=-1)
+                                if dst is token and tp == 4 and args.sharded_residual
+                                else mapper
+                            ),
+                        )
+                        ttnn.copy_host_to_device_tensor(host, dst)
                     ttnn.synchronize_device(mesh)
-                decode_times.append((time.perf_counter() - before) * 1e6)
-                decoded.append(read(y))
-                if args.trace and not args.profile:
-                    ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
-                    assert torch.equal(decoded[-1], read(y)), "Replay is not deterministic"
-            if args.profile:
-                signpost("PERF_DECODE_END")
+                    before = time.perf_counter()
+                    if args.trace:
+                        ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+                    else:
+                        y = forward()
+                        ttnn.synchronize_device(mesh)
+                    decode_times.append((time.perf_counter() - before) * 1e6)
+                    decoded.append(read(y, "decode", step=step))
+                    if args.trace and not args.profile:
+                        for duplicate in range(args.duplicate_replays):
+                            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+                            repeated = read(y, "decode", step=step, replay=f"repeat{duplicate + 1}")
+                            if not torch.equal(decoded[-1], repeated):
+                                fail(
+                                    dict(
+                                        kind="replay_difference",
+                                        tp=tp,
+                                        phase="decode",
+                                        step=step,
+                                        replay=f"repeat{duplicate + 1}",
+                                        absolute_position=args.length + step,
+                                        changed_elements=int((decoded[-1] != repeated).sum()),
+                                        max_abs_diff=float((decoded[-1] - repeated).abs().max()),
+                                    )
+                                )
+                if args.profile:
+                    signpost("PERF_DECODE_END")
+                if trace_id is not None:
+                    ttnn.release_trace(mesh, trace_id)
             timings[tp]["decode_host_us"] = decode_times
-            if trace_id is not None:
-                ttnn.release_trace(mesh, trace_id)
             outputs[tp] = [prefill, *decoded]
             if args.check_cache:
                 caches[tp] = [[ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(c)] for c in cache]
@@ -221,21 +641,67 @@ def main():
 
                 a, b = ordered(wanted), ordered(actual)
                 cache_pcc.append(torch.corrcoef(torch.stack((a.flatten().double(), b.flatten().double())))[0, 1].item())
-        assert min(cache_pcc) >= 0.995, cache_pcc
+        if min(cache_pcc) < 0.995:
+            args.output.with_suffix(".failure.json").write_text(
+                json.dumps(
+                    dict(
+                        kind="cache_pcc",
+                        cache_pcc=cache_pcc,
+                        pcc=values,
+                        runtime_sha256=runtime_hash,
+                        runner_sha256=runner_hash,
+                        command=sys.argv,
+                        passed=False,
+                    ),
+                    indent=2,
+                )
+                + "\n"
+            )
+            raise AssertionError(cache_pcc)
     result = dict(
         runtime_sha256=runtime_hash,
+        runner_sha256=runner_hash,
+        dense_geometry=args.dense_geometry,
+        moe_ccl_bfp8=args.moe_ccl_bfp8,
+        expert_gate_bfp4=args.expert_gate_bfp4,
+        shared_gate_bfp4=args.shared_gate_bfp4,
+        shared_down_bfp4=args.shared_down_bfp4,
+        expert_activation_bfp8=args.expert_activation_bfp8,
+        split_expert_gate=args.split_expert_gate,
+        split_shared_gate=args.split_shared_gate,
+        projection_k=args.projection_k,
+        projection_role=args.projection_role,
+        sharded_decode_rope=args.sharded_decode_rope,
+        qkv_fidelity=args.qkv_fidelity,
+        output_fidelity=args.output_fidelity,
+        attention_ccl_dtype=args.attention_ccl_dtype,
+        full_attention_ccl_dtype_override=args.full_attention_ccl_dtype,
         command=sys.argv,
         expert_parallel=args.expert_parallel,
+        fused_tail=args.fused_tail,
+        optimized_shared=args.optimized_shared,
+        shared_dram=args.shared_dram,
+        attention_dram=args.attention_dram,
+        shared_geometry_requested=args.shared_geometry,
+        shared_geometry=decoder.shared_geometry if 4 in outputs else None,
+        sparse_gate_geometry=args.sparse_gate_geometry,
+        sparse_down_geometry=args.sparse_down_geometry,
+        grouped_moe_reduce=args.grouped_moe_reduce,
+        hybrid_experts=args.hybrid_experts,
         cache_pcc=cache_pcc,
+        capacity=capacity,
         layer_type=config.layer_types[args.layer],
         length=args.length,
         steps=args.steps,
         pcc=values,
         passed=min(values) >= 0.995 if values else None,
         trace=args.trace,
+        duplicate_replays_per_position=args.duplicate_replays if args.trace and not args.profile else 0,
         timings=timings,
         all_replicas_equal=not args.sharded_residual,
         sharded_residual=args.sharded_residual,
+        topology="ring" if args.ring else "linear",
+        fused_agmm=args.fused_agmm,
     )
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(

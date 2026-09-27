@@ -1,0 +1,514 @@
+{
+  "layer_type": "sliding_attention",
+  "selected_mesh": [
+    1,
+    4
+  ],
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_v0/reports/tp4/2026_09_26_20_28_12/ops_perf_results_tp4_2026_09_26_20_28_12.csv",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 1,
+    "batch": 1,
+    "concurrency": 1,
+    "decode_start_position": 4096
+  },
+  "target_workload_measured": false,
+  "whole_layer_windows": {
+    "prefill": {
+      "device_us": 825575.9466666667,
+      "samples": 1,
+      "min_device_us": 825575.9466666667,
+      "max_device_us": 825575.9466666667
+    },
+    "decode": {
+      "device_us": 999.8451851851852,
+      "samples": 1,
+      "min_device_us": 999.8451851851852,
+      "max_device_us": 999.8451851851852,
+      "estimated_dram_bytes": 193840192.0,
+      "estimated_collective_io_bytes": 7208960,
+      "excluded_collective_scratch_allocation_bytes": 5767168
+    }
+  },
+  "prefill_device_us": 825575.9466666667,
+  "decode_device_us": 999.8451851851852,
+  "prefill_useful_flops": 882489950208,
+  "useful_flops_terms": {
+    "qkv_and_output_projections": 283467841536,
+    "shared_mlp": 146163105792,
+    "active_experts_top8": 389768282112,
+    "router_projection": 2952790016,
+    "causal_attention_qk_and_pv": 60137930752
+  },
+  "precision_policy": null,
+  "sparse_weight_reads": [
+    {
+      "device": "3",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "3",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "2",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "2",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "1",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "1",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "0",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    },
+    {
+      "device": "0",
+      "active": 8,
+      "groups": 128,
+      "indexed": true,
+      "basis": "CSV use_indices=true and compact OUTPUT_0 logical group dimension"
+    }
+  ],
+  "collective_examples": [
+    {
+      "device": "3",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 720896
+    },
+    {
+      "device": "3",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "3",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "3",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "3",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "3",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "2",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 720896
+    },
+    {
+      "device": "2",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "2",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "2",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "2",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "2",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "1",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 720896
+    },
+    {
+      "device": "1",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "1",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "1",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "1",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "1",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "0",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 720896
+    },
+    {
+      "device": "0",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "FLOAT32",
+      "estimated_io_bytes": 450560,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "0",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "0",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    },
+    {
+      "device": "0",
+      "op": "ReduceScatterMinimalAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 360448
+    },
+    {
+      "device": "0",
+      "op": "AllGatherAsyncDeviceOperation",
+      "input_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "input_dtype": "BFLOAT16",
+      "estimated_io_bytes": 225280,
+      "excluded_scratch_allocation_bytes": 0
+    }
+  ],
+  "native_sdpa_cache_reads": [
+    {
+      "session": "1",
+      "device": "3",
+      "position": 4096,
+      "logical_start": 3073,
+      "logical_end_exclusive": 4097,
+      "logical_tokens": 1024,
+      "read_start": 3072,
+      "read_end_exclusive": 4224,
+      "read_tokens": 1152,
+      "chunk_tokens": 128,
+      "chunk_basis": "CSV k_chunk_size=0 and fp32_dest_acc_en; dynamic chunk capped at 4/8 tiles",
+      "cache_dtypes": {
+        "INPUT_1": "BFLOAT8_B",
+        "INPUT_2": "BFLOAT8_B"
+      },
+      "kv_dram_bytes": 1253376.0,
+      "allocated_kv_bytes": 5570560.0,
+      "local_kv_heads": 2,
+      "local_query_heads": 4
+    },
+    {
+      "session": "1",
+      "device": "2",
+      "position": 4096,
+      "logical_start": 3073,
+      "logical_end_exclusive": 4097,
+      "logical_tokens": 1024,
+      "read_start": 3072,
+      "read_end_exclusive": 4224,
+      "read_tokens": 1152,
+      "chunk_tokens": 128,
+      "chunk_basis": "CSV k_chunk_size=0 and fp32_dest_acc_en; dynamic chunk capped at 4/8 tiles",
+      "cache_dtypes": {
+        "INPUT_1": "BFLOAT8_B",
+        "INPUT_2": "BFLOAT8_B"
+      },
+      "kv_dram_bytes": 1253376.0,
+      "allocated_kv_bytes": 5570560.0,
+      "local_kv_heads": 2,
+      "local_query_heads": 4
+    },
+    {
+      "session": "1",
+      "device": "1",
+      "position": 4096,
+      "logical_start": 3073,
+      "logical_end_exclusive": 4097,
+      "logical_tokens": 1024,
+      "read_start": 3072,
+      "read_end_exclusive": 4224,
+      "read_tokens": 1152,
+      "chunk_tokens": 128,
+      "chunk_basis": "CSV k_chunk_size=0 and fp32_dest_acc_en; dynamic chunk capped at 4/8 tiles",
+      "cache_dtypes": {
+        "INPUT_1": "BFLOAT8_B",
+        "INPUT_2": "BFLOAT8_B"
+      },
+      "kv_dram_bytes": 1253376.0,
+      "allocated_kv_bytes": 5570560.0,
+      "local_kv_heads": 2,
+      "local_query_heads": 4
+    },
+    {
+      "session": "1",
+      "device": "0",
+      "position": 4096,
+      "logical_start": 3073,
+      "logical_end_exclusive": 4097,
+      "logical_tokens": 1024,
+      "read_start": 3072,
+      "read_end_exclusive": 4224,
+      "read_tokens": 1152,
+      "chunk_tokens": 128,
+      "chunk_basis": "CSV k_chunk_size=0 and fp32_dest_acc_en; dynamic chunk capped at 4/8 tiles",
+      "cache_dtypes": {
+        "INPUT_1": "BFLOAT8_B",
+        "INPUT_2": "BFLOAT8_B"
+      },
+      "kv_dram_bytes": 1253376.0,
+      "allocated_kv_bytes": 5570560.0,
+      "local_kv_heads": 2,
+      "local_query_heads": 4
+    }
+  ],
+  "decode_dram_bytes": 193840192.0,
+  "peak_flops_per_s": 2654208000000000.0,
+  "peak_dram_bytes_per_s": 2048000000000.0,
+  "prefill_flops_pct": 0.040273352494528965,
+  "decode_dram_pct": 9.46631865136899,
+  "peak_basis": "Four P300 Blackhole ASICs, theoretical120 Tensix/ASIC,4096 FLOP/core/cycle at1.35GHz LoFi reference;512GB/s DRAM/ASIC. Runtime mixes fidelities.",
+  "assumptions": [
+    "Each device window spans first firmware start to final firmware end of the entire layer, including gaps. Mesh latency uses the maximum per-device span; clocks are not assumed cross-device synchronized. This excludes host input refresh/readback between replays.",
+    "Useful work uses4096 logical tokens and8 selected experts; padding, inactive prefill union work, normalization/transcendentals excluded from numerator only. All their device time remains included.",
+    "DRAM estimate sums native operand reads/writes across all four devices with indexed active-expert metadata, BFP tile exponent bytes, selected embedding/slice rows and paged writes. SDPA uses validated local heads and metadata-derived chunk-rounded reads. Minimal reduce-scatter counts INPUT_0 and its real OUTPUT_1; scratch OUTPUT_0/OUTPUT_2 allocations are excluded, not treated as writes. Grouped CCL payloads and attention dtype follow recorded shapes and dtypes. Extra per-core reads, internal CCL scratch passes/NoC and profiler traffic excluded; not controller counters.",
+    "No utilization value is clamped. These rooflines are estimates, not averaged per-op percentages."
+  ]
+}

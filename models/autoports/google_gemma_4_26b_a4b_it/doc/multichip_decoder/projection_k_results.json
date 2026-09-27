@@ -1,0 +1,74 @@
+[
+  {
+    "artifact": "full_router109_output_k16.json",
+    "passed": true,
+    "decode_host_us": 724.512618035078,
+    "min_pcc": 0.9994477563467595
+  },
+  {
+    "artifact": "full_router109_output_k32.json",
+    "passed": true,
+    "decode_host_us": 725.6809622049332,
+    "min_pcc": 0.9994477563467595
+  },
+  {
+    "artifact": "full_router109_output_k64.json",
+    "passed": true,
+    "decode_host_us": 725.6409153342247,
+    "min_pcc": 0.9994477563467595
+  },
+  {
+    "artifact": "full_router109_qkv_k44.json",
+    "passed": true,
+    "decode_host_us": 724.3026047945023,
+    "min_pcc": 0.9994477563467595
+  },
+  {
+    "artifact": "full_router109_qkv_k88.json",
+    "passed": true,
+    "decode_host_us": 727.4593226611614,
+    "min_pcc": 0.9994477563467595
+  },
+  {
+    "artifact": "full_router109_router_k88.json",
+    "passed": true,
+    "decode_host_us": 724.8390465974808,
+    "min_pcc": 0.9994477563467595
+  },
+  {
+    "artifact": "sliding_router109_output_k16.json",
+    "passed": true,
+    "decode_host_us": 673.5916249454021,
+    "min_pcc": 0.9978613806276473
+  },
+  {
+    "artifact": "sliding_router109_output_k32.json",
+    "passed": true,
+    "decode_host_us": 658.0217741429806,
+    "min_pcc": 0.9978613806276473
+  },
+  {
+    "artifact": "sliding_router109_qkv_k44.json",
+    "passed": true,
+    "decode_host_us": 671.65307700634,
+    "min_pcc": 0.9978613806276473
+  },
+  {
+    "artifact": "sliding_router109_qkv_k88.json",
+    "passed": true,
+    "decode_host_us": 672.5848652422428,
+    "min_pcc": 0.9978613806276473
+  },
+  {
+    "artifact": "sliding_router109_router_k44.json",
+    "passed": true,
+    "decode_host_us": 672.0279343426228,
+    "min_pcc": 0.9978613806276473
+  },
+  {
+    "artifact": "sliding_router109_router_k88.json",
+    "passed": true,
+    "decode_host_us": 672.3790429532528,
+    "min_pcc": 0.9978613806276473
+  }
+]

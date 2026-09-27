@@ -1,0 +1,24 @@
+import json, os, subprocess, sys, shutil
+from pathlib import Path
+root=Path('/workspace/tt-metal')
+p=root/'models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder'
+base='models.autoports.google_gemma_4_26b_a4b_it.tests.'
+queue=[]
+for kind,layer in [('sliding',0),('full',5)]:
+ queue.append((f'{kind}_final_batch32',base+'test_multichip_contracts',['--layer',str(layer)],{}))
+ queue.append((f'{kind}_final_long_prefix',base+'test_multichip_contracts',['--layer',str(layer),'--batch','1','--base-length','1056'],{}))
+for kind,layer in [('sliding',0),('full',5)]:
+ for length,steps in [(262143,1),(262144,0)]:
+  queue.append((f'{kind}_final_max_{length}',base+'run_multichip_decoder',['--layer',str(layer),'--length',str(length),'--repeat-input','--steps',str(steps),'--trace','--check-cache','--prefill-timing-samples','1','--reserve-full-stack'],{}))
+for kind,layer in [('sliding',0),('full',5)]:
+ queue.append((f'{kind}_final_watcher',base+'run_multichip_decoder',['--layer',str(layer),'--length','4096','--steps','128','--trace','--check-cache'],{'TT_METAL_WATCHER':'10','TT_METAL_WATCHER_NOINLINE':'1'}))
+for name,module,opts,env in queue:
+ command=[str(root/'python_env/bin/python'),'-m',module,*opts,'--output',str(p/(name+'.json'))]
+ print('START',name,flush=True)
+ with (p/(name+'.log')).open('w') as log:
+  r=subprocess.run(command,cwd=root,env={**os.environ,'HF_HUB_OFFLINE':'1',**env},stdout=log,stderr=subprocess.STDOUT)
+ (p/(name+'.command.json')).write_text(json.dumps(dict(command=command,environment=env,exit_code=r.returncode),indent=2)+'\n')
+ if env.get('TT_METAL_WATCHER') and (root/'generated/watcher/watcher.log').exists():
+  shutil.copyfile(root/'generated/watcher/watcher.log',p/(name+'.watcher.log'))
+ print('END',name,r.returncode,flush=True)
+ if r.returncode: sys.exit(r.returncode)

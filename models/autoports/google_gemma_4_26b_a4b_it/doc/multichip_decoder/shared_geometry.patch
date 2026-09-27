@@ -1,0 +1,82 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -135,7 +135,7 @@
+         self.reduce = reduce
+         self.decode_weights = None
+ 
+-    def configure_decode(self, state, mesh, sliding):
++    def configure_decode(self, state, mesh, sliding, geometry=0):
+         import torch
+ 
+         gate = state["mlp.gate_proj.weight"].transpose(-2, -1)
+@@ -166,6 +166,26 @@
+             packer_l1_acc=True,
+         )
+ 
++        self.decode_programs = (None, None)
++        if geometry:
++            gate_grid, gate_n, gate_k = ((11, 4), 1, 44) if geometry == 1 else ((9, 2), 2, 88)
++
++            def program(grid, per_n, block_k):
++                return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++                    compute_with_storage_grid_size=grid,
++                    in0_block_w=block_k,
++                    out_subblock_h=1,
++                    out_subblock_w=per_n,
++                    out_block_h=1,
++                    out_block_w=per_n,
++                    per_core_M=1,
++                    per_core_N=per_n,
++                    fuse_batch=True,
++                    mcast_in0=True,
++                )
++
++            self.decode_programs = (program(gate_grid, gate_n, gate_k), program((11, 4), 2, 17))
++
+     def __call__(self, x):
+         # Imported Gemma4 loader packs [up_i, gate_i] on each rank.
+         decode = self.decode_weights is not None and x.shape[-2] == 1
+@@ -176,6 +196,7 @@
+                 dtype=ttnn.bfloat16,
+                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                 compute_kernel_config=self.decode_compute,
++                program_config=self.decode_programs[0],
+             )
+             if decode
+             else self.gate_up(x)
+@@ -189,6 +210,7 @@
+                 dtype=ttnn.bfloat16,
+                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                 compute_kernel_config=self.decode_compute,
++                program_config=self.decode_programs[1],
+             )
+             if decode
+             else self.down(hidden)
+@@ -357,6 +379,7 @@
+         fused_agmm=False,
+         topology=ttnn.Topology.Linear,
+         optimized_shared=False,
++        shared_geometry=0,
+     ):
+         import torch
+ 
+@@ -365,6 +388,10 @@
+         config = getattr(hf_config, "text_config", hf_config)
+         if chunk_size != 1024:
+             raise ValueError("Internal prefill chunk size must be 1024; logical lengths are unrestricted")
++        if shared_geometry not in (0, 1, 2):
++            raise ValueError("shared_geometry must be 0 (automatic), 1 or 2")
++        if shared_geometry and not optimized_shared:
++            raise ValueError("Explicit shared geometry requires optimized_shared=True")
+         self = cls()
+         self.config, self.layer_idx, self.chunk_size = config, layer_idx, chunk_size
+         self.mesh_device = mesh_device
+@@ -545,7 +572,7 @@
+         self.expert_parallel = expert_parallel
+         self.layer.shared_mlp = _SharedMLP(self.layer.shared_mlp, compute, self.allreduce)
+         if optimized_shared:
+-            self.layer.shared_mlp.configure_decode(state_dict, mesh_device, sliding)
++            self.layer.shared_mlp.configure_decode(state_dict, mesh_device, sliding, shared_geometry)
+         positions = torch.arange(config.max_position_embeddings, dtype=torch.int32)[None]
+         mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+         self.positions_u32 = ttnn.from_torch(

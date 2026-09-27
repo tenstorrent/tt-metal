@@ -1,0 +1,93 @@
+[
+  {
+    "file": "full_bfp8_router109_output.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 724.2131978273392,
+    "runtime_sha256": "070613ddc32b5cc8a22fd92a64cb541de9a9f27152852f1caad0843d1d06903d"
+  },
+  {
+    "file": "full_bfp8_router109_stress1024.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 724.507961422205,
+    "runtime_sha256": "070613ddc32b5cc8a22fd92a64cb541de9a9f27152852f1caad0843d1d06903d"
+  },
+  {
+    "file": "full_bfp8_router109_tail_io.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 725.0052876770496,
+    "runtime_sha256": "070613ddc32b5cc8a22fd92a64cb541de9a9f27152852f1caad0843d1d06903d"
+  },
+  {
+    "file": "full_router109_integrated_bf16.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994762093738185,
+    "decode_host_us": 729.3778471648693,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "full_router109_integrated_bfp8.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 724.2928259074688,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "full_router109_sparse_down_geometry_n2-k6.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 725.2790965139866,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "full_router109_sparse_gate_geometry_n2-k44.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 756.2139071524143,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "full_router109_sparse_gate_geometry_n2-k88.json",
+    "kind": "full_attention",
+    "min_pcc": 0.9994477563467595,
+    "decode_host_us": 758.4979757666588,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "sliding_router109_integrated_bf16.json",
+    "kind": "sliding_attention",
+    "min_pcc": 0.9988541343337518,
+    "decode_host_us": 737.442634999752,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "sliding_router109_integrated_bfp8.json",
+    "kind": "sliding_attention",
+    "min_pcc": 0.9987453343584687,
+    "decode_host_us": 737.557653337717,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "sliding_router109_sparse_down_geometry_n2-k6.json",
+    "kind": "sliding_attention",
+    "min_pcc": 0.9987453343584687,
+    "decode_host_us": 739.4864223897457,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "sliding_router109_sparse_gate_geometry_n2-k44.json",
+    "kind": "sliding_attention",
+    "min_pcc": 0.9987453343584687,
+    "decode_host_us": 758.717767894268,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  },
+  {
+    "file": "sliding_router109_sparse_gate_geometry_n2-k88.json",
+    "kind": "sliding_attention",
+    "min_pcc": 0.9987453343584687,
+    "decode_host_us": 762.145034968853,
+    "runtime_sha256": "f57234ba01a6a6e20e3188ea7690f8508c5a5ca6c075b1fba56bf1b6df28a44b"
+  }
+]
