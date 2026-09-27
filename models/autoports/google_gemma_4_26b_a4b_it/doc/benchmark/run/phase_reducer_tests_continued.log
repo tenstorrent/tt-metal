@@ -1,0 +1,12 @@
+$ python models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_phases.py
+test_async_overlap_counted_once_and_gap_included (__main__.PhaseReducerTests) ... ok
+test_invalid_evidence_rejected (__main__.PhaseReducerTests) ... ok
+test_transition_gap_goes_to_following_phase (__main__.PhaseReducerTests) ... ok
+test_warmup_excluded_and_unordered_events_supported (__main__.PhaseReducerTests) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.000s
+
+OK
+
+exit=0

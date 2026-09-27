@@ -27,5 +27,7 @@
     "run/stage10_server_command.json",
     "run/stage10_cleanup.json"
   ],
-  "identity_limitations": "No live server import, effective configuration, or tokenizer revision established for this attempt. Model revision and full layer count are inherited from context_contract.json."
+  "identity_limitations": "No live server import, effective configuration, or tokenizer revision established for this attempt. Model revision and full layer count are inherited from context_contract.json.",
+  "offline_tokenizer_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "offline_tokenizer_evidence": "run/tokenizer_preflight.json"
 }

@@ -48,3 +48,40 @@ Check results: {"evidence_check": {"exit_code": 1, "log": "evidence_check.log"},
 Initial checker raised AttributeError on null generator_module; omitted that unknown optional field and reran. Final evidence check exit2 correctly reports missing generated implementation identity; context check exit0. Initial failure retained.
 
 Local evidence commit: `93f3f7dfb88d1147a83781f57295b19ed419ac0a`. Commit hooks passed; no push. Initial commit command lacked author identity; retry used the established prior-stage Codex identity via per-command Git configuration.
+
+## Continued setup work
+
+Previous turn classified as progress: failure evidence and local commits were
+produced, without claiming completion. Revalidation still finds no lm_eval.
+A clarification asking for an existing client or authorization for isolated
+client provisioning is pending; no dependency was installed.
+
+Offline pinned tokenizer check:
+`python models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_tokenizer_check.py
+--output models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/tokenizer_preflight.json`.
+Passes both thinking modes, one BOS and render/tokenization identity. The first
+one-off probe assumed a list return and failed: this Transformers version returns
+BatchEncoding; extracting input_ids fixes the probe without modifying the native
+template. No request was sent. Model/tokenizer revision and source hashes are
+retained; this does not prove the future server has loaded that revision.
+
+`vllm bench serve --help` exited0 (vllm_client_help.log). Readiness launch log
+`../optimized_vllm/candidate_server_runner.log` reports ~190s prior startup.
+Both prospective slot profiles preserve262144 context, selected precision and
+Stage10 trace settings; planned commands explicitly pin model/tokenizer revision.
+Plans are not launched or observed server identity. Real process ownership,
+reservation checks, instrumentation and effective API configuration remain needed.
+
+PHASE_COLLECTION_DESIGN.md identifies plugin completion/request hooks.
+benchmark_phases.py is a host-only reducer for paired dispatch/completion events;
+there are no live events yet. It includes same-phase gaps, counts overlapping
+submissions once, and rejects cross-phase overlap rather than invent attribution.
+benchmark_server_config.py prepares argv and rejects observed context/slots/
+revision/cache/trace drift; no server-control lifecycle implementation is claimed.
+
+Host parameter probe proved top_k64 is capped to32 for the active row. An AutoFix
+source investigation examines explicit request-specific host sampling for accuracy;
+actual upstream client payload forwarding and live output still need validation.
+Published references are retained without comparing absent local scores.
+
+Continued checks: {"phase_reducer_tests": {"exit_code": 0, "log": "phase_reducer_tests_continued.log"}, "server_config_tests": {"exit_code": 0, "log": "server_config_tests_continued.log"}, "evidence_check": {"exit_code": 2, "log": "evidence_check_continued.log"}, "context_check": {"exit_code": 0, "log": "context_check_continued.log"}}. Python-only setup tools; no C++ build required. Explicit Black check passed; repository pre-commit passed.

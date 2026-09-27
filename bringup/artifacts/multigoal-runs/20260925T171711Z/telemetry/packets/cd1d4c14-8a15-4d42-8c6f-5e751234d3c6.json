@@ -35,6 +35,7 @@
   },
   "notes": [
     "Blocked during setup; benchmark_stage run not invoked. No one-hour completion claim. No accuracy verdict.",
-    "Four device nodes observed; no mesh opened and no server owned by this attempt."
+    "Four device nodes observed; no mesh opened and no server owned by this attempt.",
+    "Offline native-template and collector/configuration preparation progressed; no new inference measurements."
   ]
 }

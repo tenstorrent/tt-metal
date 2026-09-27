@@ -1,0 +1,120 @@
+{
+  "timestamp": "2026-09-27T17:50:51.712082+00:00",
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "tokenizer_class": "GemmaTokenizer",
+  "local_files_only": true,
+  "source_files": {
+    "config.json": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/config.json",
+      "sha256": "ed0c1eb3633de771906e9ba004a44cc5635bcc06ee2062077c3d2e88a50707d3"
+    },
+    "generation_config.json": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/generation_config.json",
+      "sha256": "d4226bbe3117d2d253ba4609720ba82c6c4ce4627a9a6ae05387c78983ac03de"
+    },
+    "tokenizer_config.json": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/tokenizer_config.json",
+      "sha256": "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633"
+    },
+    "chat_template.jinja": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/chat_template.jinja",
+      "sha256": "ae53464bf3be25802b3a5b37def7fd89667067d7577049b3b2d74c4d8de4c6d4"
+    },
+    "tokenizer.json": {
+      "path": "/home/mvasiljevic/.cache/huggingface/hub/models--google--gemma-4-26B-A4B-it/snapshots/4d7ae4984b7db7de8f8457170b3f1a419ee76d52/tokenizer.json",
+      "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f"
+    }
+  },
+  "template_probe": {
+    "false": {
+      "rendered": "<bos><|turn>system\nYou are a helpful assistant.<turn|>\n<|turn>user\nWhat is two plus two?<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "token_ids": [
+        2,
+        105,
+        9731,
+        107,
+        3048,
+        659,
+        496,
+        11045,
+        16326,
+        236761,
+        106,
+        107,
+        105,
+        2364,
+        107,
+        3689,
+        563,
+        1156,
+        2915,
+        1156,
+        236881,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "bos_count": 1,
+      "native_render_matches_tokenization": true,
+      "apply_chat_template_return_type": "BatchEncoding"
+    },
+    "true": {
+      "rendered": "<bos><|turn>system\n<|think|>\nYou are a helpful assistant.<turn|>\n<|turn>user\nWhat is two plus two?<turn|>\n<|turn>model\n",
+      "token_ids": [
+        2,
+        105,
+        9731,
+        107,
+        98,
+        107,
+        3048,
+        659,
+        496,
+        11045,
+        16326,
+        236761,
+        106,
+        107,
+        105,
+        2364,
+        107,
+        3689,
+        563,
+        1156,
+        2915,
+        1156,
+        236881,
+        106,
+        107,
+        105,
+        4368,
+        107
+      ],
+      "bos_count": 1,
+      "native_render_matches_tokenization": true,
+      "apply_chat_template_return_type": "BatchEncoding"
+    }
+  },
+  "generation_config": {
+    "bos_token_id": 2,
+    "do_sample": true,
+    "eos_token_id": [
+      1,
+      106,
+      50
+    ],
+    "pad_token_id": 0,
+    "temperature": 1.0,
+    "top_k": 64,
+    "top_p": 0.95,
+    "transformers_version": "5.5.0.dev0"
+  },
+  "scope": "Offline tokenizer check only; does not establish lm_eval request formatting or live server identity."
+}

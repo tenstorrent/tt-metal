@@ -1,0 +1,11 @@
+$ python models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_server_config.py
+test_drift_rejected (__main__.ServerConfigurationTests) ... ok
+test_profiles_preserve_context_and_pin_revisions (__main__.ServerConfigurationTests) ... ok
+test_wrong_trace_rejected (__main__.ServerConfigurationTests) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.002s
+
+OK
+
+exit=0

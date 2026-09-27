@@ -1,0 +1,36 @@
+{
+  "scope": "AST-extracted actual routing function; mocked metadata; no imports, hardware or API calls",
+  "source": "/home/container_app_user/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py",
+  "results": [
+    {
+      "max_num_logprobs": null,
+      "is_decode": false,
+      "device_sampling": true
+    },
+    {
+      "max_num_logprobs": null,
+      "is_decode": true,
+      "device_sampling": true
+    },
+    {
+      "max_num_logprobs": 0,
+      "is_decode": false,
+      "device_sampling": false
+    },
+    {
+      "max_num_logprobs": 0,
+      "is_decode": true,
+      "device_sampling": false
+    },
+    {
+      "max_num_logprobs": 1,
+      "is_decode": false,
+      "device_sampling": false
+    },
+    {
+      "max_num_logprobs": 1,
+      "is_decode": true,
+      "device_sampling": false
+    }
+  ]
+}
