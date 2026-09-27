@@ -1,0 +1,58 @@
+539 cases in both (539 oob, 539 v2)
+
+speedup = oob time / v2 time
+
+tier        n  geomean    min    p50     max  <0.95  >1.05
+issues     79    1.628   0.95   1.21   38.08      1     56
+models     48    1.150   0.98   1.08    2.36      0     28
+generic    90    1.619   0.93   1.07   26.36      1     48
+sharded    11    1.138   0.99   1.00    3.90      0      1
+traced    304    1.883   0.82   1.16   14.33      3    189
+ALL       532    1.700   0.82   1.13   38.08      5    322
+
+Status changes:
+  s_o_h_8192x512x512                                     error -> ok
+
+Largest regressions:
+  t_linear_3c39fac2e6                                0.82x      344.4 ->     422.0us  ReuseMultiCast1D[2/2/8/2/8/2/4] -> ReuseMultiCast[8/16/1/16/1/8/1]
+  t_linear_3f7267544b                                0.88x       24.1 ->      27.3us  ReuseMultiCast1D[1/2/6/2/6/2/3] -> ReuseMultiCast[3/16/1/16/1/8/1]
+  g_256x4096x1024_bfp8_dram                          0.93x       58.5 ->      62.7us  ReuseMultiCast[16/1/4/1/4/1/4] -> ReuseMultiCast[8/1/4/1/4/1/4]
+  i31743-dram.dram.l1                                0.95x      576.9 ->     609.2us  ReuseMultiCast1D[2/8/4/8/4/4/2]mcast_in0 -> ReuseMultiCast[8/1/28/1/28/1/7]
+  t_linear_7e2d79e94a                                0.95x       81.6 ->      86.0us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  g_32x4096x4096_bf16_dram                           0.96x      162.5 ->     169.4us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  t_s_linear_77e58ec415                              0.96x        1.8 ->       1.9us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> ReuseMultiCast1D[1/1/1/1/1/1/1]
+  t_linear_4281c10fb7                                0.96x       53.1 ->      55.3us  ReuseMultiCast1D[1/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  t_linear_43d3e0b56e                                0.96x      101.9 ->     106.0us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  t_linear_17461009dc                                0.96x       52.5 ->      54.6us  ReuseMultiCast1D[1/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  i35396_bwd_dw_proj-grid                            0.96x      264.2 ->     274.5us  ReuseMultiCast[4/2/2/2/2/2/2] -> ReuseMultiCast[8/2/2/2/2/2/2]
+  g_1024x1024x1024_bfp8_dram                         0.96x       65.8 ->      68.2us  ReuseMultiCast[4/4/4/4/4/4/2] -> ReuseMultiCast[8/4/4/4/4/2/4]
+  g_4096x4096x1024_bfp8_dram                         0.97x      711.2 ->     736.4us  ReuseMultiCast[8/16/4/16/4/4/2] -> ReuseMultiCast[8/16/4/16/4/2/4]
+  g_32x4096x4096_bf16_l1                             0.97x      159.7 ->     165.3us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  t_linear_ad1bead2c2                                0.97x       52.9 ->      54.7us  ReuseMultiCast1D[1/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  t_linear_03a4e09812                                0.97x       36.4 ->      37.6us  ReuseMultiCast[4/1/5/1/5/1/5] -> ReuseMultiCast[8/1/5/1/5/1/5]
+  t_linear_3eedcb9d29                                0.97x     2397.9 ->    2476.3us  ReuseMultiCast1D[2/32/4/128/4/4/2] -> ReuseMultiCast1D[2/64/4/128/4/2/4]
+  t_linear_0b4370e28a                                0.97x      250.0 ->     257.9us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  g_32x1024x4096_bf16_l1                             0.97x       41.6 ->      42.9us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+  t_linear_774b0f8c4c                                0.97x      963.6 ->     993.3us  ReuseMultiCast1D[2/1/2/1/2/1/2]mcast_in0 -> ReuseMultiCast1D[4/1/2/1/2/1/2]mcast_in0
+
+Largest improvements:
+  i56976_gemma4_mlp-dram.dram.l1                    38.08x    20174.3 ->     529.8us  MultiCore -> ReuseMultiCast[14/4/21/4/21/1/7]
+  i56976_gemma4_mlp-l1.dram.l1                      30.21x    16136.9 ->     534.2us  MultiCore -> ReuseMultiCast[12/4/21/4/21/1/7]
+  g_1024x4096x16384_bf16_l1                         26.36x    45971.2 ->    1744.3us  MultiCore -> ReuseMultiCast1D[2/16/8/32/8/2/4]mcast_in0
+  i56976_gemma4_mlp-l1.dram.dram                    25.34x    16066.0 ->     634.0us  MultiCore -> ReuseMultiCast[14/4/21/4/21/1/7]
+  g_4096x4096x1024_bf16_l1                          25.05x    11450.0 ->     457.1us  MultiCore -> ReuseMultiCast[4/16/4/16/4/2/4]
+  g_1024x4096x4096_bf16_l1                          23.55x    10649.7 ->     452.2us  MultiCore -> ReuseMultiCast[8/4/16/4/16/2/4]
+  g_4096x1024x1024_bf16_l1                          22.04x     2763.2 ->     125.4us  MultiCore -> ReuseMultiCast[8/16/4/16/4/2/4]
+  g_4096x1024x4096_bf16_l1                          20.50x     9881.1 ->     481.9us  MultiCore -> ReuseMultiCast[4/16/8/16/16/2/4]
+  g_4096x4096x1024_bfp8_l1                          19.35x     8689.8 ->     449.0us  MultiCore -> ReuseMultiCast[4/16/4/16/4/2/4]
+  t_matmul_5b705da2a3                               14.33x      101.8 ->       7.1us  ReuseMultiCast1D[2/1/1/1/1/1/1] -> ReuseMultiCast1D[1/2/1/2/1/2/1]
+  t_matmul_323b2816fe                               13.07x       52.5 ->       4.0us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_9079b030be                               13.02x       52.2 ->       4.0us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_3401c018ee                               12.95x       52.5 ->       4.1us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_b3be3cab9f                               12.89x       52.5 ->       4.1us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_bdea53e0b0                               12.84x       52.4 ->       4.1us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_9df6dba0b1                               12.80x       52.2 ->       4.1us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_174f667b8b                               12.66x       52.3 ->       4.1us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_1cbb8cb7f6                               12.56x       52.2 ->       4.2us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  t_matmul_78f7952c7e                               12.56x       52.3 ->       4.2us  ReuseMultiCast1D[1/1/1/1/1/1/1] -> Reuse[1/1/1/1/1]
+  g_1024x4096x1024_bfp8_l1                          11.95x     1255.3 ->     105.1us  ReuseMultiCast[2/16/16/16/16/1/8] -> ReuseMultiCast[8/4/4/4/4/2/4]

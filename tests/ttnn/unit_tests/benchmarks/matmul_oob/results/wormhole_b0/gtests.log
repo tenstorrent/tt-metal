@@ -1,0 +1,35 @@
+Running main() from gmock_main.cc
+Note: Google Test filter = MatmulAutoConfig.*
+[==========] Running 11 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 11 tests from MatmulAutoConfig
+[ RUN      ] MatmulAutoConfig.EmittedConfigsAreValid
+[       OK ] MatmulAutoConfig.EmittedConfigsAreValid (5 ms)
+[ RUN      ] MatmulAutoConfig.TransposeAFitsL1
+[       OK ] MatmulAutoConfig.TransposeAFitsL1 (0 ms)
+[ RUN      ] MatmulAutoConfig.BatchedBUsesReuse
+[       OK ] MatmulAutoConfig.BatchedBUsesReuse (0 ms)
+[ RUN      ] MatmulAutoConfig.UsesWholeGridForLargeMatmul
+[       OK ] MatmulAutoConfig.UsesWholeGridForLargeMatmul (0 ms)
+[ RUN      ] MatmulAutoConfig.NoBlockFloatPartials
+[       OK ] MatmulAutoConfig.NoBlockFloatPartials (0 ms)
+[ RUN      ] MatmulAutoConfig.SubblockShape
+[       OK ] MatmulAutoConfig.SubblockShape (0 ms)
+[ RUN      ] MatmulAutoConfig.OneDOutputBlockSplit
+[       OK ] MatmulAutoConfig.OneDOutputBlockSplit (0 ms)
+[ RUN      ] MatmulAutoConfig.LargeBlockKDepth
+[       OK ] MatmulAutoConfig.LargeBlockKDepth (0 ms)
+[ RUN      ] MatmulAutoConfig.OneDAvoidsSingleTileK
+[       OK ] MatmulAutoConfig.OneDAvoidsSingleTileK (0 ms)
+[ RUN      ] MatmulAutoConfig.ShardedLayouts
+[       OK ] MatmulAutoConfig.ShardedLayouts (0 ms)
+[ RUN      ] MatmulAutoConfig.FamilyChoice
+[       OK ] MatmulAutoConfig.FamilyChoice (0 ms)
+[ DISABLED ] MatmulAutoConfig.DISABLED_PrintSelections
+[----------] 11 tests from MatmulAutoConfig (5 ms total)
+
+[----------] Global test environment tear-down
+[==========] 11 tests from 1 test suite ran. (6 ms total)
+[  PASSED  ] 11 tests.
+
+  YOU HAVE 1 DISABLED TEST

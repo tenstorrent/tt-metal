@@ -16,25 +16,35 @@ Speedup is legacy time / v2 time; a regression is below 0.95.
 
 import argparse
 import csv
+import gzip
 import json
 import math
 import os
 from collections import Counter
 
 
+def open_text(path):
+    """`path`, or `path`.gz (the published reference results are compressed)."""
+    if os.path.exists(path):
+        return open(path)
+    if os.path.exists(path + ".gz"):
+        return gzip.open(path + ".gz", "rt")
+    return None
+
+
 def load_suite(run_dir):
     rows = {}
-    for r in csv.DictReader(open(os.path.join(run_dir, "suite.csv"))):
+    for r in csv.DictReader(open_text(os.path.join(run_dir, "suite.csv"))):
         rows.setdefault(r["case"], {})[r["mode"]] = r
     return rows
 
 
 def load_pytest(run_dir, mode):
-    path = os.path.join(run_dir, f"pytest_{mode}.jsonl")
-    if not os.path.exists(path):
+    f = open_text(os.path.join(run_dir, f"pytest_{mode}.jsonl"))
+    if f is None:
         return {}
     out = {}
-    for line in open(path):
+    for line in f:
         r = json.loads(line)
         out[r["test"]] = r
     return out

@@ -98,28 +98,31 @@ noise (±20% on tiny tests on Wormhole).
 
 ### Wormhole reference (n150, 8x8 grid)
 
-With the fixed harness (each call sees one live output), same case list:
+`results/wormhole_b0/` (compressed; `compare_runs.py` reads it directly), from commit 64f6f185ae6:
 
 | Tier | Cases | Geomean v2 / legacy | Faster >5% | Slower >5% |
 |---|---|---|---|---|
 | issues | 79 | 1.63 | 56 | 1 |
-| models | 48 | 1.15 | 29 | 0 |
-| generic | 90 | 1.61 | 53 | 3 |
+| models | 48 | 1.15 | 28 | 0 |
+| generic | 90 | 1.62 | 48 | 1 |
 | sharded | 11 | 1.14 | 1 | 0 |
-| traced | 303 | 1.89 | 190 | 4 |
-| all | 531 | 1.70 | 329 | 8 |
+| traced | 304 | 1.88 | 189 | 3 |
+| all | 532 | 1.70 | 322 | 5 |
 
-(Run of the selection with the current rules except the 1D single-tile-K fallback, which fixes two of the 8.)
-0 v2 errors or PCC failures, and no v2 fallbacks to the legacy selection. The remaining regressions (5-14%) are
-understood and are not fixable with a generic heuristic on Wormhole data:
+No v2 errors or PCC failures and no v2 fallbacks to the legacy selection; one case that fails with the legacy
+selection (`s_o_h_8192x512x512`) works. The 5 regressions (5-18%) are understood and are not fixable with a
+generic heuristic on Wormhole data:
 
-- N of at most 8 tiles (e.g. `t_linear_3c39fac2e6`): 2D degenerates to one-tile-wide blocks, legacy uses 1D.
-- Decode linears with bf16 weights on 40-64 cores: DRAM-bandwidth bound, a shallower K block would be better.
-- `g_256x4096x1024_bfp8_dram`: a small 2D block that wants a deeper K block.
+- N of at most 8 tiles (`t_linear_3c39fac2e6` 0.82x, `t_linear_3f7267544b` 0.88x): 2D degenerates to
+  one-tile-wide blocks, legacy uses 1D.
+- `g_256x4096x1024_bfp8_dram` (0.93x): a small 2D block that wants a deeper K block.
+- `i31743-dram.dram.l1` (0.95x): 1D vs 2D; the same shape with a DRAM output goes the other way.
+- `t_linear_7e2d79e94a` (0.95x), and other decode linears with bf16 weights on 40-64 cores just under 5%:
+  DRAM-bandwidth bound, a shallower K block would be better.
 
 Matmul pytest directory, flag on vs off: 1 outcome change, `test_matmul_activation_with_sharded_input` (PCC
 0.99988 against its 0.9999 threshold; v2's deeper K block, and neither selection reaches 0.9999 against an fp32
-reference). Device time geomean 1.15x over 892 timed tests.
+reference). Device time geomean 1.15x over 893 timed tests.
 
 The selection has no Blackhole-specific rules yet. Blackhole results that differ from these patterns (for
 example a different number of regressions from the core-count or K-depth choices) are exactly what this run is
