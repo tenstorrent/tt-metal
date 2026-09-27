@@ -4743,6 +4743,171 @@
   "status": "PASS",
   "waiting": "pick opportunities in models/demos/mimo_v2_6_d_p/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
  },
+ "X.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "5ecf2313-0f2f-41bf-9fff-496f29ad6a43"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/X.3.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "eb02228aec4d68e24f038c915a5484258282a725",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "15e4e542c3ac99c2c2c4d57306664be05c79d5c2",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/X.3.fix.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 286.5,
+    "session_id": "5ecf2313-0f2f-41bf-9fff-496f29ad6a43",
+    "t": "2026-09-27T01:05:46"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 127.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-27T01:00:59"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-27T01:08:47"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-27T01:10:55"
+   }
+  ],
+  "last_run": "2026-09-27T01:10:55",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/X.3.log",
+  "metrics": {
+   "chunk_len": 5120,
+   "chunk_seconds_c00": 0.382,
+   "chunk_seconds_c01": 0.183,
+   "chunk_seconds_c02": 0.189,
+   "chunk_seconds_c03": 0.194,
+   "chunk_seconds_c04": 0.201,
+   "chunk_seconds_c05": 0.205,
+   "chunk_seconds_c06": 0.21,
+   "chunk_seconds_c07": 0.214,
+   "chunk_seconds_c08": 0.219,
+   "chunk_seconds_c09": 0.224,
+   "chunk_seconds_c10": 0.494,
+   "chunk_start": 51200,
+   "chunk_wall_ms": 226.5,
+   "covered_layers": 6,
+   "device_model_hybrid": 0,
+   "device_ms_attention": 111.22,
+   "device_ms_attention_ccl": 5.28,
+   "device_ms_attention_kv_tail": 0.9,
+   "device_ms_attention_kv_write": 0.22,
+   "device_ms_attention_o_proj": 20.77,
+   "device_ms_attention_qkv": 24.12,
+   "device_ms_attention_rope": 3.22,
+   "device_ms_attention_sdpa": 54.2,
+   "device_ms_attention_sliding_sdpa": 2.5,
+   "device_ms_attn_norm": 2.33,
+   "device_ms_attn_residual": 1.7,
+   "device_ms_chip0": 224.84,
+   "device_ms_chip1": 224.84,
+   "device_ms_chip2": 224.98,
+   "device_ms_chip3": 225.1,
+   "device_ms_experts": 92.9,
+   "device_ms_ffn_norm": 2.33,
+   "device_ms_ffn_residual": 1.41,
+   "device_ms_mlp": 6.0,
+   "device_ms_mlp_residual": 0.28,
+   "device_ms_router": 7.1,
+   "device_ms_total": 225.26,
+   "host_overhead_ms": 1.2,
+   "host_transfers_per_layer": 0,
+   "model_load_s": 10.6,
+   "pcc_chunk_out": 0.9984105253430613,
+   "pcc_layer_L00": 0.9985815660361707,
+   "pcc_layer_L01": 0.9984542887789537,
+   "pcc_layer_L02": 0.9984324515810563,
+   "pcc_layer_L03": 0.9985196473427447,
+   "pcc_layer_L04": 0.9987924922785754,
+   "pcc_layer_L05": 0.9984094411547495,
+   "pcc_state_key_L00": 0.9999953729337548,
+   "pcc_state_key_L01": 0.9979604596733026,
+   "pcc_state_key_L02": 0.9963211072182194,
+   "pcc_state_key_L03": 0.9976244229026145,
+   "pcc_state_key_L04": 0.9985634650084156,
+   "pcc_state_key_L05": 0.9996418602312446,
+   "pcc_state_min": 0.9963211072182194,
+   "pcc_state_value_L00": 0.9999955734346874,
+   "pcc_state_value_L01": 0.9972671635691052,
+   "pcc_state_value_L02": 0.996442588068318,
+   "pcc_state_value_L03": 0.9971728680325155,
+   "pcc_state_value_L04": 0.9974947621462796,
+   "pcc_state_value_L05": 0.9984877851940102,
+   "pos_chunk": 5120,
+   "pos_ms_0": 174.8,
+   "pos_ms_102400": 274.1,
+   "pos_ms_153600": 324.5,
+   "pos_ms_204800": 375.0,
+   "pos_ms_51200": 223.1,
+   "prefill_chunk": 5120,
+   "prefill_chunk_ms_c00": 175.1,
+   "prefill_chunk_ms_c01": 181.1,
+   "prefill_chunk_ms_c02": 186.2,
+   "prefill_chunk_ms_c03": 191.2,
+   "prefill_chunk_ms_c04": 198.3,
+   "prefill_chunk_ms_c05": 202.0,
+   "prefill_chunk_ms_c06": 207.0,
+   "prefill_chunk_ms_c07": 211.7,
+   "prefill_chunk_ms_c08": 216.7,
+   "prefill_chunk_ms_c09": 221.2,
+   "prefill_chunk_ms_c10": 227.6,
+   "prefill_layers": 6,
+   "prefill_ms_full": 2208.7,
+   "prefill_seconds": 2.716,
+   "prefill_seq": 56320,
+   "prefill_tok_s": 25498.9,
+   "profiled_programs": 1292,
+   "rung_chunk": 5120,
+   "rung_seq": 56320,
+   "rung_start": 0,
+   "subset": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "started": "2026-09-27T01:08:48",
+  "status": "PASS",
+  "waiting": null
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-26T15:40:23",

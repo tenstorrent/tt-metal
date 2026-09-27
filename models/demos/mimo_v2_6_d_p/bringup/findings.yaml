@@ -13,3 +13,16 @@ findings:
     use n = len(s.layers()) in engine_env ("PREFILL_NUM_LAYERS") and in run_contract_test (L); gqa_independent_pcc's loop
     over range(s.num_layers) needs the same change. The adapter already serves only the subset (served_layers,
     num_kv_cache_layers, read_slot_kv_and_check_pcc). Attempt 3 (2026-09-27): contract.py still unchanged, same result; retrying the contract role cannot pass until the framework fix lands.
+- id: X3-full-prefill-layer-subset
+  task: X.3
+  kind: HARNESS
+  title: prefill_ms_full is never recorded on a layer-subset run (framework fix needed)
+  detail: >-
+    testing/profile.py:full_prefill returns None unless layers == list(range(s.num_layers)). The spec brings up layers "0-5"
+    of num_layers 48, so BRINGUP_FULL_PREFILL=1 has no effect and the X.3 threshold prefill_ms_full > 0 (from
+    plan/ledger_gen.py) is MISSING. No module is at fault: re-run 2026-09-27 passes all three tests (ladder, profile chunk
+    [51200,56320) wall 227 ms / device 225 ms, positions), and the log has no "full prefill" line. The attempt-1 metrics were
+    all in range: pcc_layer_L00-L05 >= 0.99841, pcc_state_min 0.99632, pos_chunk 5120. Fix is outside the fix role's paths:
+    either let full_prefill run on a contiguous subset starting at layer 0 (same idea as contract.py:served_layers, F41;
+    model.embed -> layers 0-5 -> final_norm, and report it as a subset number, never full-model), or have ledger_gen drop
+    prefill_ms_full from X.3 when s.layers() != all layers. Retrying the fix role cannot pass until one of these lands.
