@@ -321,9 +321,18 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
         rows = {}
         for li in layers:
             for r in ops.get(f"L{li}.{key}", []):
-                k = (r["op"], r["shape"])
+                k = (r["op"], r["shape"], r.get("mem", ""))
                 acc = rows.setdefault(
-                    k, {"op": r["op"], "shape": r["shape"], "calls": 0, "ms": 0.0, "pc": {}, "tl": {}}
+                    k,
+                    {
+                        "op": r["op"],
+                        "shape": r["shape"],
+                        "mem": r.get("mem", ""),
+                        "calls": 0,
+                        "ms": 0.0,
+                        "pc": {},
+                        "tl": {},
+                    },
                 )
                 acc["calls"] += r["calls"]
                 acc["ms"] += r["ms"]
@@ -336,6 +345,7 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
             {
                 "op": r["op"],
                 "shape": r["shape"],
+                "mem": r["mem"],
                 "calls": round(r["calls"] / n, 2),
                 "ms": round(r["ms"] / n, 3),
                 "per_chip": [round(r["pc"].get(str(c), 0.0) / n, 3) for c in range(nch)],
