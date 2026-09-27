@@ -489,8 +489,18 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         empty_slots = [int(s) for s in empty_slots]
         token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
-        logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
         chunked = resume_mask is not None or final_mask is not None
+        chunk_desc = ""
+        if chunked and (
+            (resume_mask is not None and any(resume_mask)) or (final_mask is not None and not all(final_mask))
+        ):
+            # (start, end, resume, final) per row: the one line that shows a split prefill in the server log
+            res = [bool(resume_mask[u]) if resume_mask is not None else False for u in range(N)]
+            fin = [bool(final_mask[u]) if final_mask is not None else True for u in range(N)]
+            chunk_desc = " chunked rows " + str(
+                [(int(start_pos[u]) if res[u] else 0, plens[u], res[u], fin[u]) for u in range(N)]
+            )
+        logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket){chunk_desc}")
         host_logits = model.prefill_paged_slots(
             token_ids_list,
             pt,
