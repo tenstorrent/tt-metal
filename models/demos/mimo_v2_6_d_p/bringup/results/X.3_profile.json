@@ -1,0 +1,197 @@
+{
+ "rung": "last",
+ "chunk": [
+  51200,
+  56320
+ ],
+ "layers": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "wall_ms": 226.45092010498047,
+ "device_ms": {
+  "attention": 111.218627,
+  "experts": 92.896338,
+  "router": 7.096724,
+  "mlp": 5.997368,
+  "ffn_norm": 2.333162,
+  "attn_norm": 2.331771,
+  "attn_residual": 1.696842,
+  "ffn_residual": 1.405012,
+  "mlp_residual": 0.283083
+ },
+ "sections_ms": {
+  "experts": 92.896338,
+  "attention.sdpa": 54.203682,
+  "attention.qkv": 24.124925,
+  "attention.o_proj": 20.765765,
+  "router": 7.096724,
+  "mlp": 5.997368,
+  "attention.ccl": 5.279464,
+  "attention.rope": 3.223766,
+  "attention.sliding_sdpa": 2.504283,
+  "ffn_norm": 2.333162,
+  "attn_norm": 2.331771,
+  "attn_residual": 1.696842,
+  "ffn_residual": 1.405012,
+  "attention.kv_tail": 0.897201,
+  "mlp_residual": 0.283083,
+  "attention.kv_write": 0.219541,
+  "attention": 0.0
+ },
+ "sections_ms_per_chip": {
+  "attn_norm": {
+   "1": 2.327004,
+   "3": 2.318048,
+   "0": 2.324356,
+   "2": 2.314658
+  },
+  "attention": {},
+  "attention.qkv": {
+   "1": 24.106137,
+   "3": 24.122839,
+   "0": 24.097554,
+   "2": 24.085475
+  },
+  "attention.rope": {
+   "1": 3.200859,
+   "3": 3.206222,
+   "0": 3.214459,
+   "2": 3.207295
+  },
+  "attention.kv_write": {
+   "1": 0.215648,
+   "3": 0.217507,
+   "0": 0.218516,
+   "2": 0.216747
+  },
+  "attention.sdpa": {
+   "1": 54.201867,
+   "3": 54.201128,
+   "0": 54.201369,
+   "2": 54.203682
+  },
+  "attention.o_proj": {
+   "1": 20.749024,
+   "3": 20.750272,
+   "0": 20.753618,
+   "2": 20.757749
+  },
+  "attention.ccl": {
+   "1": 5.140751,
+   "3": 5.279464,
+   "0": 5.130331,
+   "2": 5.207983
+  },
+  "attn_residual": {
+   "1": 1.687777,
+   "3": 1.688061,
+   "0": 1.691719,
+   "2": 1.693649
+  },
+  "ffn_norm": {
+   "1": 2.325552,
+   "3": 2.321055,
+   "0": 2.325502,
+   "2": 2.318123
+  },
+  "mlp": {
+   "1": 5.979765,
+   "3": 5.992365,
+   "0": 5.980579,
+   "2": 5.997368
+  },
+  "mlp_residual": {
+   "1": 0.280117,
+   "3": 0.279117,
+   "0": 0.281951,
+   "2": 0.283083
+  },
+  "attention.kv_tail": {
+   "1": 0.887316,
+   "3": 0.893524,
+   "0": 0.888208,
+   "2": 0.8839
+  },
+  "attention.sliding_sdpa": {
+   "1": 2.489323,
+   "3": 2.497297,
+   "0": 2.495421,
+   "2": 2.495373
+  },
+  "router": {
+   "1": 7.065393,
+   "3": 7.071513,
+   "0": 7.085119,
+   "2": 7.082118
+  },
+  "experts": {
+   "1": 92.778098,
+   "3": 92.871574,
+   "0": 92.752208,
+   "2": 92.83682
+  },
+  "ffn_residual": {
+   "1": 1.401343,
+   "3": 1.393688,
+   "0": 1.394231,
+   "2": 1.399078
+  }
+ },
+ "programs": {
+  "attn_norm": 24,
+  "attention": 0,
+  "attention.qkv": 48,
+  "attention.rope": 240,
+  "attention.kv_write": 48,
+  "attention.sdpa": 8,
+  "attention.o_proj": 48,
+  "attention.ccl": 48,
+  "attn_residual": 24,
+  "ffn_norm": 24,
+  "mlp": 28,
+  "mlp_residual": 4,
+  "attention.kv_tail": 96,
+  "attention.sliding_sdpa": 32,
+  "router": 340,
+  "experts": 260,
+  "ffn_residual": 20
+ },
+ "settings": {
+  "sdpa_full_cfg": "A",
+  "sdpa_sliding_cfg": "S",
+  "sdpa_full_chunks": [
+   512,
+   128
+  ],
+  "sdpa_sliding_chunks": [
+   128,
+   128
+  ],
+  "experts_mode": "unified",
+  "experts_fidelity": "HiFi4",
+  "router_mode": "fp32"
+ },
+ "full_prefill": {
+  "tokens": 56320,
+  "chunk": 5120,
+  "ms": 2208.7206840515137,
+  "chunk_ms": [
+   175.1,
+   181.1,
+   186.2,
+   191.2,
+   198.3,
+   202.0,
+   207.0,
+   211.7,
+   216.7,
+   221.2,
+   227.6
+  ]
+ }
+}
