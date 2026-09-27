@@ -322,9 +322,14 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
         for li in layers:
             for r in ops.get(f"L{li}.{key}", []):
                 k = (r["op"], r["shape"])
-                acc = rows.setdefault(k, {"op": r["op"], "shape": r["shape"], "calls": 0, "ms": 0.0, "pc": {}})
+                acc = rows.setdefault(
+                    k, {"op": r["op"], "shape": r["shape"], "calls": 0, "ms": 0.0, "pc": {}, "tl": {}}
+                )
                 acc["calls"] += r["calls"]
                 acc["ms"] += r["ms"]
+                for f in ("gap_ms", "host_ms", "slot_ms"):
+                    if f in r:
+                        acc["tl"][f] = acc["tl"].get(f, 0.0) + r[f]
                 for c, v in r.get("ms_per_chip", {}).items():
                     acc["pc"][c] = acc["pc"].get(c, 0.0) + v
         return [
@@ -334,6 +339,7 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
                 "calls": round(r["calls"] / n, 2),
                 "ms": round(r["ms"] / n, 3),
                 "per_chip": [round(r["pc"].get(str(c), 0.0) / n, 3) for c in range(nch)],
+                **{f: round(v / n, 4) for f, v in r["tl"].items()},
             }
             for r in rows.values()
             if r["ms"] > 0 or r["calls"]
@@ -382,6 +388,7 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
         "wall_ms": round(prof["wall_ms"], 1),
         "steps": steps,
         "views": views,
+        "timeline": prof.get("timeline"),
         "source": prof_p.name,
         "heading": f"Where the time goes: one {a:,}→{b:,} chunk",
         "note": f"Device kernel time per section, summed over {len(prof.get('layers', []))} layers of one {b - a:,}-token chunk "

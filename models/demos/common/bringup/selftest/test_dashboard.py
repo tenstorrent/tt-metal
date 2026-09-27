@@ -214,7 +214,9 @@ def test_op_rows_keep_execution_order():
     """F43: op mode books each outermost ttnn call to its layer's section, merging only back-to-back repeats."""
     from models.demos.common.bringup.testing import profiler as P
 
-    P._P.update(mesh=None, current_full="L3.attention.rope", op_ns={}, dev_to_chip={0: 0, 1: 1})
+    P._P.update(
+        mesh=None, current_full="L3.attention.rope", op_ns={}, seq=[], last_n_dev={0: 1}, dev_to_chip={0: 0, 1: 1}
+    )
     for op, shape in [("slice", "a"), ("slice", "a"), ("rotary_embedding", "b"), ("slice", "a")]:
         P._book_op(op, shape, {0: 1e6, 1: 2e6}, 1)
     rows = P._P["op_ns"]["L3.attention.rope"]
@@ -248,3 +250,34 @@ def test_profile_views_per_block_type(fx, tmp_path):
     for v in P["views"][1:]:
         lays = v["layers"]
         assert v["steps"][0]["ms"] == round(sum(1.5 + i for i in lays) / len(lays), 2)  # per layer
+
+
+def test_timeline_alignment_splits_programs_by_op_mode_counts():
+    """F44: the pipelined run's programs are split per call with the op-mode run's per-chip counts; gap = idle before
+    a call on the critical chip, slot = end - previous end, so kernels + gaps = the device timeline."""
+    from models.demos.common.bringup.testing.profiler import align_timeline
+
+    op_seq = [
+        {"key": None, "op": "embedding", "shape": "e", "n_dev": {0: 1, 1: 1}},
+        {"key": "L0.a", "op": "linear", "shape": "x", "n_dev": {0: 2, 1: 2}},
+        {"key": "L0.a", "op": "(other)", "shape": "", "n_dev": {0: 1, 1: 1}},
+        {"key": "L0.b", "op": "sync_only", "shape": "", "n_dev": {}},
+    ]
+    tl_seq = [
+        dict(key=c["key"], op=c["op"], shape=c["shape"], host_ns=h)
+        for c, h in zip([op_seq[0], op_seq[1], op_seq[3]], (5, 7, 1))
+    ]
+    M = 1e6  # times in ms
+    progs = {  # (start, end, kernel) ns; chip 1 is the longer timeline
+        0: [(0, 10 * M, 10 * M), (10 * M, 20 * M, 10 * M), (20 * M, 30 * M, 10 * M), (30 * M, 35 * M, 5 * M)],
+        1: [(0, 10 * M, 10 * M), (15 * M, 25 * M, 10 * M), (25 * M, 40 * M, 15 * M), (50 * M, 60 * M, 10 * M)],
+    }
+    tl = align_timeline(op_seq, tl_seq, progs, {0: 0, 1: 1})
+    assert tl["summary"]["critical_chip"] == 1 and tl["summary"]["device_timeline_ms"] == 60
+    lin = tl["calls"][1]
+    assert (lin["kernel_ns"], lin["gap_ns"], lin["slot_ns"], lin["host_ns"]) == (25 * M, 5 * M, 30 * M, 7)
+    other = tl["calls"][2]
+    assert (other["gap_ns"], other["slot_ns"], other["host_ns"]) == (10 * M, 20 * M, 0.0)
+    assert tl["summary"]["kernel_ms"] + tl["summary"]["gap_ms"] == 60
+    assert "error" in align_timeline(op_seq, tl_seq[:2], progs, {0: 0, 1: 1})  # sequences differ
+    assert "error" in align_timeline(op_seq, tl_seq, {0: progs[0][:3], 1: progs[1]}, {0: 0, 1: 1})  # lost programs
