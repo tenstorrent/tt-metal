@@ -29,7 +29,8 @@ the test that runs the model at its serving chunk size.
 - each tensor as `{shape` (per device), `dtype, layout, buffer, memory_layout, [shard_shape, shard_cores], mesh,
   devices}`;
 - everything else by value.
-`sig` names the call. Then list the calls with no case yet:
+`device` records how the mesh was opened: the fabric config, plus the test's `device_params` when it has them. A case
+uses the same values. `sig` names the call. Then list the calls with no case yet:
 
 ```
 python -m models.demos.common.bringup.testing.fork_cases --capture <fork_calls.json> --spec <spec>   # or --model <name>
