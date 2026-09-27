@@ -97,7 +97,9 @@ Never:
 - approve the intake, plan or performance picks for the person, loosen a threshold, or edit a frozen test. When the
   person delegates the picks, add each as a perf task (step `perf`, role `perf`, `brief.details` with the exact
   change, deps on X.2 or the previous pick, gate = an accuracy rung plus the profile with a time threshold below the
-  X.1 baseline); perf tasks do not void the plan approval;
+  X.1 baseline); perf tasks do not void the plan approval. The picks include the precision tasks, in this order:
+  HiFi4 -> HiFi2 for one group of matmuls per task (a group that fails stays at HiFi4), then weights one step lower
+  per task (e.g. bf16 -> bfp8). No bfp4 unless the HF checkpoint is 4-bit there, and no activation changes;
 - change the spec without asking (a spec edit voids the intake approval; re-approve on their word);
 - run `tt-smi -r`, or use long timeouts for a device check (the box test takes seconds).
 
