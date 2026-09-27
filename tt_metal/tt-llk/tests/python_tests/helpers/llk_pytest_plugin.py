@@ -41,6 +41,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+
 # ttsim runs in-process (no ExalensServer). Its init must complete before the
 # skip_for_* markers in this plugin call get_chip_architecture() (which reaches
 # check_context()) at module-load time.
@@ -952,6 +954,35 @@ def pytest_sessionstart(session):
         _exalens_server.start()
 
 
+_REPORTS_WRITTEN = set()
+
+
+def _dump_or_append(report, path):
+    """Write the report, keeping the rows of earlier chunks of this module on this worker (worksteal can run a
+    module in several chunks). A file this process has not written yet is stale and gets replaced.
+    """
+    if path not in _REPORTS_WRITTEN or not path.exists() or path.stat().st_size == 0:
+        _REPORTS_WRITTEN.add(path)
+        report.dump_csv(path)
+        return
+    chunk = path.with_name(path.name + ".chunk")
+    report.dump_csv(chunk)
+    frames = [
+        f for f in (_read_csv_or_none(path), _read_csv_or_none(chunk)) if f is not None
+    ]
+    if frames:
+        pd.concat(frames, ignore_index=True).to_csv(path, index=False)
+    chunk.unlink(missing_ok=True)
+
+
+def _read_csv_or_none(path):
+    # A chunk whose tests were all skipped dumps a file with no header.
+    try:
+        return pd.read_csv(path, low_memory=False)
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        return None
+
+
 @pytest.fixture(scope="module", autouse=True)
 def counter_report(request, worker_id):
     """Separate report for raw hardware counter CSV data (--dump-perf-counters)."""
@@ -982,11 +1013,7 @@ def counter_report(request, worker_id):
     )
 
     counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
-
-    if counters_path.exists():
-        counters_path.unlink()
-
-    temp_report.dump_csv(counters_path)
+    _dump_or_append(temp_report, counters_path)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1015,15 +1042,9 @@ def perf_report(request, worker_id):
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"
 
-    if raw_path.exists():
-        raw_path.unlink()
-
-    if post_path.exists():
-        post_path.unlink()
-
-    temp_report.dump_csv(raw_path)
+    _dump_or_append(temp_report, raw_path)
     temp_report.post_process()
-    temp_report.dump_csv(post_path)
+    _dump_or_append(temp_report, post_path)
 
 
 def pytest_sessionfinish(session):
