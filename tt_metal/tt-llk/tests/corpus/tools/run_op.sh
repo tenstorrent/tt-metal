@@ -17,7 +17,7 @@
 #   IDMAP   op<TAB>sem_variant<TAB>sem_text<TAB>hand_variant<TAB>hand_text
 #           required for SWEEP=fp32, optional for SWEEP=binary
 #   BUILD   a dir containing tt-llk-build/ with both legs' prebuilt ELFs
-#   GOLDEN  0 turns OFF the ULP/golden leg (default on).  The leg RIDES this
+#   GOLDEN  0 turns OFF the same-oracle tolerance/relative-ULP leg (default on). It RIDES this
 #           pass -- the streamer exports SFPU_GOLDEN, the device test folds
 #           every streamed chunk through threeway_golden.py and writes a .corr
 #           sidecar, and the sweep turns those into <op>-CORRECTNESS-LEDGER.tsv.

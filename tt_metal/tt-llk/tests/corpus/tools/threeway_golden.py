@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""laneMR — host-side TRUE-MATH golden + ULP-contract leg for the 2^32 streamer.
+"""Host-side true-math golden and relative-ULP leg for the 2^32 streamer.
 
 This turns the laneMK/laneMQ 2-way (sem-vs-hand *equivalence*) galaxy sweep into a
 3-WAY check that also asks: is each certified leg *correct* vs the true-math oracle,
 not merely equal-to-the-expert? The golden is computed HOST-SIDE (CPU torch) for the
 same raw uint32 inputs a chunk streamed to the device, so it rides along for free on
 the same device pass with NO 16GB retention: per chunk we fold a per-leg running
-max-ULP, an out-of-tolerance counter, and the FIRST out-of-tolerance witness.
+per-input-class max ULP, an out-of-tolerance counter, and the FIRST
+out-of-tolerance witness.  Admission compares the candidate to the hand leg on
+the same oracle and class population; it does not claim an absolute ULP budget.
 
 Design (faithful reuse, NOT a reinvention):
   * The op->true-math map and every dispatch constant are lifted verbatim from the
@@ -31,10 +33,12 @@ are marked checkable=False with a reason rather than faked.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import numpy as np
+
+from ulp_admission import format_class_ulp
 
 try:
     import torch
@@ -74,6 +78,23 @@ def bf16_bitdistance(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
     ref = _ordered_bf16_bits(_to_bf16_bits(y_true))
     approx = _ordered_bf16_bits(_to_bf16_bits(y_pred))
     return np.abs(ref - approx).astype(np.float64)
+
+
+def _fold_class_ulps(
+    aggregate: dict[str, tuple[int, float]],
+    ulp: np.ndarray,
+    classes: dict[str, np.ndarray],
+) -> None:
+    """Fold per-input-class population and max ULP without retaining samples."""
+    for name, mask in classes.items():
+        count = int(np.count_nonzero(mask))
+        if not count:
+            continue
+        values = ulp[mask]
+        finite = values[np.isfinite(values)]
+        maximum = float(np.max(finite)) if finite.size else 0.0
+        old_count, old_maximum = aggregate.get(name, (0, 0.0))
+        aggregate[name] = (old_count + count, max(old_maximum, maximum))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -388,6 +409,7 @@ class CorrectnessAccumulator:
     first_witness_golden: float = 0.0
     # tanhderiv extra: distance to the TRUE math (sech^2), reported alongside the LUT contract.
     max_ulp_true: float = 0.0
+    class_ulp: dict[str, tuple[int, float]] = field(default_factory=dict)
 
     def _classify(self, u32: int, xf: float) -> str:
         if not math.isfinite(xf):
@@ -415,6 +437,23 @@ class CorrectnessAccumulator:
         )
 
         ulp = bf16_bitdistance(golden, dev)
+        finite_input = np.isfinite(xin)
+        if self.spec.domain is None:
+            in_domain = finite_input
+            out_of_domain = np.zeros_like(finite_input)
+        else:
+            lo, hi = self.spec.domain
+            in_domain = finite_input & (xin > lo) & (xin < hi)
+            out_of_domain = finite_input & ~in_domain
+        _fold_class_ulps(
+            self.class_ulp,
+            ulp,
+            {
+                "in_domain": in_domain,
+                "out_of_domain": out_of_domain,
+                "nonfinite_input": ~finite_input,
+            },
+        )
         # tolerance check on the (bf16) values, matching passed_test isclose + equal_nan.
         g = golden.astype(np.float64)
         d = dev.astype(np.float64)
@@ -470,7 +509,8 @@ class CorrectnessAccumulator:
             f"within_contract={self.n_out_of_tol == 0},"
             f"first_witness=0x{max(w,0):08x},first_witness_class={self.first_witness_class or '-'},"
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
-            f"atol={self.spec.atol},rtol={self.spec.rtol}{extra}"
+            f"atol={self.spec.atol},rtol={self.spec.rtol},"
+            f"class_ulp={format_class_ulp(self.class_ulp)}{extra}"
         )
 
 
@@ -517,6 +557,7 @@ class BinaryPowAccumulator:
     first_witness_class: str = ""
     first_witness_dev: float = 0.0
     first_witness_golden: float = 0.0
+    class_ulp: dict[str, tuple[int, float]] = field(default_factory=dict)
 
     def update(
         self, dispatch_start: int, pairs: int, result_region_bytes: bytes
@@ -543,6 +584,18 @@ class BinaryPowAccumulator:
             dev = _bf16_bits_to_f32(dev16.astype(np.uint32)).astype(np.float32)
 
             ulp = bf16_bitdistance(golden, dev)
+            base_values = _bf16_bits_to_f32(base_arr)
+            exp_values = _bf16_bits_to_f32(exp16.astype(np.uint32))
+            finite_inputs = np.isfinite(base_values) & np.isfinite(exp_values)
+            _fold_class_ulps(
+                self.class_ulp,
+                ulp,
+                {
+                    "base_positive": finite_inputs & (base_values > 0),
+                    "base_nonpositive": finite_inputs & (base_values <= 0),
+                    "nonfinite_input": ~finite_inputs,
+                },
+            )
             g = golden.astype(np.float64)
             d = dev.astype(np.float64)
             both_nan = np.isnan(g) & np.isnan(d)
@@ -579,5 +632,6 @@ class BinaryPowAccumulator:
             f"n_out_of_tol={self.n_out_of_tol},within_contract={self.n_out_of_tol == 0},"
             f"first_witness=0x{w:08x},first_witness_class={self.first_witness_class or '-'},"
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
-            f"atol={self.atol},rtol={self.rtol}"
+            f"atol={self.atol},rtol={self.rtol},"
+            f"class_ulp={format_class_ulp(self.class_ulp)}"
         )

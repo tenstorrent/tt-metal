@@ -18,6 +18,7 @@ import fp32_stream_sweep as fp32  # noqa: E402
 import galaxy_combine  # noqa: E402
 import prove_all  # noqa: E402
 import stream_resume  # noqa: E402
+import ulp_admission  # noqa: E402
 
 
 def test_resume_provenance() -> None:
@@ -46,13 +47,29 @@ def test_resume_provenance() -> None:
         output = root / "band.txt"
         metadata = root / "band.txt.provenance.json"
         output.write_text("output_sha256=" + "a" * 64 + "\n")
+        corr = root / "band.txt.corr"
+        corr.write_text("SFPU_CORRECTNESS,fixture=1\n")
         try:
             stream_resume.require_matching_cache(output, metadata, record)
             raise AssertionError("legacy cache was accepted")
         except RuntimeError as error:
             assert "legacy cache" in str(error)
-        stream_resume.write_cache_record(metadata, record)
+        stream_resume.write_cache_record(metadata, record, output)
         assert stream_resume.require_matching_cache(output, metadata, record)
+        output.write_text("output_sha256=" + "b" * 64 + "\n")
+        try:
+            stream_resume.require_matching_cache(output, metadata, record)
+            raise AssertionError("tampered cached output was accepted")
+        except RuntimeError as error:
+            assert "output digest mismatch" in str(error)
+        output.write_text("output_sha256=" + "a" * 64 + "\n")
+        corr.write_text("SFPU_CORRECTNESS,tampered=1\n")
+        try:
+            stream_resume.require_matching_cache(output, metadata, record)
+            raise AssertionError("tampered cached correctness was accepted")
+        except RuntimeError as error:
+            assert "correctness digest mismatch" in str(error)
+        corr.write_text("SFPU_CORRECTNESS,fixture=1\n")
         changed = dict(record, count=17)
         try:
             stream_resume.require_matching_cache(output, metadata, changed)
@@ -71,7 +88,7 @@ def test_partial_tolerance_coverage_refuses() -> None:
             out, "fp", "BIT-EXACT-ALL-INPUTS", fp_legs, 10
         )
         text = (out / "fp-CORRECTNESS-VERDICT.txt").read_text()
-        assert "NUMERIC_GATE=FAIL" in text and "NOT-ULP-CERTIFIED" in text
+        assert "NUMERIC_GATE=FAIL" in text and "NOT-ABSOLUTE-ULP-CERTIFIED" in text
 
         binary_legs = {"sem": binary._new_leg(), "hand": binary._new_leg()}
         binary_legs["sem"].update(checked=True, joints=10)
@@ -79,6 +96,82 @@ def test_partial_tolerance_coverage_refuses() -> None:
         assert not binary.write_correctness_ledger(
             out, "binary", "BIT-EXACT-ALL-INPUTS", binary_legs, 10
         )
+
+
+def test_per_class_ulp_admission() -> None:
+    candidate = {"ordinary": (100, 5.0), "special": (2, 5.0)}
+    hand = {"ordinary": (100, 5.0), "special": (2, 100.0)}
+    assert ulp_admission.candidate_not_worse(candidate, hand)[0]
+
+    # A global max comparison would pass 5 <= 100, but the candidate is worse
+    # in the ordinary class and must therefore be refused.
+    regressed = {"ordinary": (100, 6.0), "special": (2, 5.0)}
+    ok, reason = ulp_admission.candidate_not_worse(regressed, hand)
+    assert not ok and reason == "candidate-ulp-regression-ordinary"
+    assert not ulp_admission.candidate_not_worse(
+        candidate, {"ordinary": (99, 5.0), "special": (2, 100.0)}
+    )[0]
+    assert not ulp_admission.candidate_not_worse({}, hand)[0]
+    for invalid in (float("nan"), float("inf"), -1.0, 1.5):
+        ok, reason = ulp_admission.candidate_not_worse(
+            {"ordinary": (100, invalid)}, {"ordinary": (100, 5.0)}
+        )
+        assert not ok and reason == "invalid-class-metric-ordinary"
+    encoded = ulp_admission.format_class_ulp(
+        {"ordinary": (100, 65535.0), "special": (2, 0.0)}
+    )
+    assert ulp_admission.parse_class_ulp(encoded) == {
+        "ordinary": (100, 65535.0),
+        "special": (2, 0.0),
+    }
+    for malformed in ("ordinary:1:1.5", "ordinary:0:1", "ordinary:1:nan"):
+        try:
+            ulp_admission.parse_class_ulp(malformed)
+            raise AssertionError(f"malformed class ULP accepted: {malformed}")
+        except ValueError:
+            pass
+
+    with tempfile.TemporaryDirectory() as temporary:
+        out = Path(temporary)
+        legs = {"sem": fp32._new_leg(), "hand": fp32._new_leg()}
+        for leg in legs.values():
+            leg.update(checked=True, patterns=102, n_out=0)
+        legs["sem"]["class_ulp"] = candidate
+        legs["hand"]["class_ulp"] = hand
+        assert fp32.write_correctness_ledger(
+            out, "op", "DIVERGENT", legs, 102
+        )
+        verdict = (out / "op-CORRECTNESS-VERDICT.txt").read_text()
+        assert "NUMERIC_GATE=PASS" in verdict and "ULP_ADMISSION=PASS" in verdict
+
+        legs["sem"]["class_ulp"] = regressed
+        assert not fp32.write_correctness_ledger(
+            out, "op", "DIVERGENT", legs, 102
+        )
+        verdict = (out / "op-CORRECTNESS-VERDICT.txt").read_text()
+        assert "NUMERIC_GATE=FAIL" in verdict and "ULP_ADMISSION=FAIL" in verdict
+
+
+def test_correctness_sidecar_identity_and_class_data() -> None:
+    args = SimpleNamespace(golden="exp")
+    good = {
+        "op": "exp",
+        "leg": "sem",
+        "patterns": "16",
+        "class_ulp": "in_domain:16:2",
+    }
+    fp32.validate_corr(good, args, "sem", 16)
+    for changed, message in (
+        (dict(good, op="other"), "identity mismatch"),
+        (dict(good, patterns="15"), "coverage mismatch"),
+        (dict(good, class_ulp="in_domain:15:2"), "class coverage mismatch"),
+        (dict(good, class_ulp=""), "invalid golden sidecar"),
+    ):
+        try:
+            fp32.validate_corr(changed, args, "sem", 16)
+            raise AssertionError(f"bad sidecar accepted: {changed}")
+        except RuntimeError as error:
+            assert message in str(error)
 
 
 def _write_slice(
@@ -100,7 +193,9 @@ def _write_slice(
     )
     if numeric:
         (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
-            f"OP={op} NUMERIC_GATE=PASS CONTRACT=TOLERANCE-ONLY-NOT-ULP-CERTIFIED\n"
+            f"OP={op} NUMERIC_GATE=PASS ULP_ADMISSION=PASS "
+            "CONTRACT=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
+            "NOT-ABSOLUTE-ULP-CERTIFIED\n"
         )
 
 
@@ -116,6 +211,9 @@ def test_galaxy_combiner_refuses_nonpass() -> None:
         assert not passed and "numeric_gate=FAIL" in summary
         _write = out / "slice-1/op-CORRECTNESS-VERDICT.txt"
         _write.write_text("OP=op NUMERIC_GATE=PASS\n")
+        summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
+        assert not passed and "numeric_gate=FAIL" in summary
+        _write.write_text("OP=op NUMERIC_GATE=PASS ULP_ADMISSION=PASS\n")
         (out / "slice-1/op-VERDICT.txt").write_text(
             "OP=op VERDICT=DIVERGENT start=5 total=5 covered=5 witness_bands=[1]\n"
         )
@@ -266,11 +364,40 @@ def test_proof_cache_is_provenance_bound() -> None:
         assert prove_all.valid_cached(out, "legacy", key) is None
 
 
+def test_formal_refuses_identical_compiled_objects() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        out = Path(temporary)
+        identities = iter(
+            (
+                (out / "sem.trace", {"path": "sem.elf", "text_sha256": "a" * 64}, None),
+                (out / "hand.trace", {"path": "hand.elf", "text_sha256": "a" * 64}, None),
+            )
+        )
+        original = prove_all._run_leg
+        prove_all._run_leg = lambda *_args, **_kwargs: next(identities)
+        try:
+            result = prove_all.run_formal(
+                "op",
+                {"sem_node": "sem", "hand_node": "hand", "reason": "fixture"},
+                out,
+                "-mfixture",
+                1,
+            )
+        finally:
+            prove_all._run_leg = original
+        assert result["class"] == "UNSWEPT"
+        assert result["verdict"] == "REFUSED-IDENTITY"
+        assert result["sem_elf"]["text_sha256"] == result["hand_elf"]["text_sha256"]
+
+
 if __name__ == "__main__":
     test_resume_provenance()
     test_partial_tolerance_coverage_refuses()
+    test_per_class_ulp_admission()
+    test_correctness_sidecar_identity_and_class_data()
     test_galaxy_combiner_refuses_nonpass()
     test_identity_refusal_exits_nonzero()
     test_failed_dispatch_output_is_not_accepted()
     test_proof_cache_is_provenance_bound()
+    test_formal_refuses_identical_compiled_objects()
     print("SELFTEST: campaign fail-closed gates PASS")

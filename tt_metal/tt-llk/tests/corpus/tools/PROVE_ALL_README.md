@@ -57,9 +57,11 @@ On every run the driver verifies by sha256 and records into `RUN-MANIFEST.json`:
 * **bitexact pinned sim** — must be `1d162f0adf67…`;
 * both engines, the board, the manifest, both overlays, the harness venv.
 
-A missing or mismatched required instrument aborts with exit 3 (use `--no-gate`
-to record-without-enforce for diagnostics only). The ON flag set is imported
-from the canonical `sweep_2x2.ON_FLAGS` (pin-59 ON-39).
+A missing or mismatched required instrument aborts with exit 3. `--no-gate` is
+retained as a compatibility spelling but no longer bypasses provenance. Current
+compiler experiments use `formal_equiv_row.sh` and remain labeled
+`CURRENT-CANDIDATE-NOT-PIN59`; they do not inherit pin-59 overlays. The ON flag
+set is imported from the canonical `sweep_2x2.ON_FLAGS` (pin-59 ON-39).
 
 ## Re-run / resume / budget
 

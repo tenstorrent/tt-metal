@@ -63,6 +63,7 @@ def combine(out: Path, npar: int, space: int, op: str, golden: bool, shard_faile
             if (
                 correctness_tokens.get("OP") != op
                 or correctness_tokens.get("NUMERIC_GATE") != "PASS"
+                or correctness_tokens.get("ULP_ADMISSION") != "PASS"
             ):
                 numeric_ok = False
     invalid_list = sorted(invalid)
@@ -80,7 +81,8 @@ def combine(out: Path, npar: int, space: int, op: str, golden: bool, shard_faile
         f"OP={op} VERDICT={verdict} slices={npar} covered={covered} "
         f"(full {space}={covered == space}) invalid={invalid_list} witness={witness} "
         f"numeric_gate={numeric_status} "
-        "numeric_contract=TOLERANCE-ONLY-NOT-ULP-CERTIFIED"
+        "numeric_contract=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
+        "NOT-ABSOLUTE-ULP-CERTIFIED"
     )
     return summary, verdict == "BIT-EXACT-ALL-INPUTS" and numeric_ok
 

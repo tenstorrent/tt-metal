@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import stream_resume
+import ulp_admission
 
 TWO32 = 1 << 32
 _SHA_RE = re.compile(r"output_sha256=([0-9a-f]{64})")
@@ -44,6 +45,32 @@ def parse_corr(corr_file):
     return d
 
 
+def validate_corr(corr, args, leg, count):
+    if corr is None:
+        raise RuntimeError("golden run produced no parseable correctness sidecar")
+    if corr.get("op") != args.golden or corr.get("leg") != leg:
+        raise RuntimeError(
+            "golden sidecar identity mismatch: "
+            f"expected op={args.golden},leg={leg}; "
+            f"got op={corr.get('op')},leg={corr.get('leg')}"
+        )
+    try:
+        patterns = int(corr.get("patterns", ""))
+        classes = ulp_admission.parse_class_ulp(corr.get("class_ulp", ""))
+    except ValueError as error:
+        raise RuntimeError(f"invalid golden sidecar: {error}") from error
+    if patterns != count:
+        raise RuntimeError(
+            f"golden sidecar coverage mismatch: patterns={patterns}, expected={count}"
+        )
+    class_patterns = sum(class_count for class_count, _ in classes.values())
+    if class_patterns != count:
+        raise RuntimeError(
+            "golden sidecar class coverage mismatch: "
+            f"class_patterns={class_patterns}, expected={count}"
+        )
+
+
 def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
     """One pytest invocation: stream [start,start+count) for one leg.
 
@@ -63,6 +90,8 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
             raise RuntimeError(f"provenance-matched cache has no output SHA: {out_sha_file}")
         if args.golden and corr is None:
             raise RuntimeError(f"golden cache has no correctness sidecar: {corr_file}")
+        if args.golden:
+            validate_corr(corr, args, leg, count)
         return m.group(1), 0.0, 0, corr
     env = dict(os.environ)
     env.update(
@@ -78,8 +107,8 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         SFPU_STREAM=f"{start},{count},{out_sha_file}",
     )
     if args.golden and leg:
-        # Host-side TRUE-MATH tolerance leg rides along.  Its max-ULP value is
-        # diagnostic; no ULP budget is certified by this campaign.
+        # Host-side TRUE-MATH tolerance leg rides along.  Per-class max ULP is
+        # used for candidate<=hand admission; no absolute ULP budget is claimed.
         env["SFPU_GOLDEN"] = f"{args.golden},{leg}"
     inner = (
         # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
@@ -115,7 +144,9 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
     corr = parse_corr(corr_file)
     if args.golden and corr is None:
         raise RuntimeError(f"golden run produced no correctness sidecar: {corr_file}")
-    stream_resume.write_cache_record(metadata, cache_record)
+    if args.golden:
+        validate_corr(corr, args, leg, count)
+    stream_resume.write_cache_record(metadata, cache_record, out_sha_file)
     return m.group(1), dt, int(r.group(1)) if r else 0, corr
 
 
@@ -143,7 +174,7 @@ def main():
         "--golden",
         default="",
         help="op key for the host-side TRUE-MATH 3-way tolerance leg "
-        "(threeway_golden.REGISTRY); max ULP is diagnostic, not certified",
+        "(threeway_golden.REGISTRY); requires per-class candidate ULP <= hand",
     )
     args = ap.parse_args()
 
@@ -293,6 +324,7 @@ def _new_leg():
         "checked": False,
         "unchecked_reason": "",
         "max_ulp_true": -1.0,  # tanhderiv only
+        "class_ulp": {},
     }
 
 
@@ -313,6 +345,7 @@ def _fold_leg(acc, corr):
         mt = float(corr.get("max_ulp_true_sech2", 0))
         acc["max_ulp_true"] = max(acc["max_ulp_true"], mt)
     acc["n_out"] += int(corr.get("n_out_of_tol", 0))
+    ulp_admission.fold_class_ulp(acc["class_ulp"], corr.get("class_ulp", ""))
     fw = corr.get("first_witness", "0x00000000")
     try:
         fwi = int(fw, 0)
@@ -340,6 +373,10 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
     def leg_in(a):
         return leg_complete(a) and a["n_out"] == 0
 
+    ulp_ok, ulp_reason = ulp_admission.candidate_not_worse(
+        sem["class_ulp"], hand["class_ulp"]
+    )
+
     if not leg_complete(sem) or not leg_complete(hand):
         reason = sem["unchecked_reason"] or hand["unchecked_reason"] or "no golden"
         verdict = (
@@ -365,14 +402,16 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
     with open(p, "w") as fh:
         fh.write(
             "# three-way tolerance check: device vs sem/hand equivalence AND vs "
-            "torch TRUE-MATH golden. max_bf16_ulp is diagnostic only; "
-            "numeric_certification=tolerance-only-not-ulp-certified. "
+            "torch TRUE-MATH golden. Admission requires both tolerance gates and "
+            "candidate max_bf16_ulp <= hand for every same-oracle input class; "
+            "this is relative non-regression, not an absolute ULP certificate. "
             "covered=%d full_2^32=%s\n"
             % (covered, covered == TWO32)
         )
         fh.write(
             "op\tequiv\tsem_max_bf16_ulp\thand_max_bf16_ulp\tsem_in_contract\t"
-            "hand_in_contract\tsem_n_out\thand_n_out\tverdict\tfirst_witness\twitness_class\tnote\n"
+            "hand_in_contract\tsem_n_out\thand_n_out\tulp_nonregression\t"
+            "ulp_reason\tverdict\tfirst_witness\twitness_class\tnote\n"
         )
 
         def fw(a):
@@ -404,6 +443,8 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
                     leg_in(hand) if hand["checked"] else "n/a",
                     sem["n_out"] if sem["checked"] else "n/a",
                     hand["n_out"] if hand["checked"] else "n/a",
+                    ulp_ok,
+                    ulp_reason,
                     verdict,
                     witness,
                     wclass,
@@ -417,10 +458,12 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
         f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']}",
         flush=True,
     )
-    gate_ok = leg_in(sem) and leg_in(hand)
+    gate_ok = leg_in(sem) and leg_in(hand) and ulp_ok
     (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
         f"OP={op} NUMERIC_GATE={'PASS' if gate_ok else 'FAIL'} "
-        "CONTRACT=TOLERANCE-ONLY-NOT-ULP-CERTIFIED "
+        f"ULP_ADMISSION={'PASS' if ulp_ok else 'FAIL'} ULP_REASON={ulp_reason} "
+        "CONTRACT=TOLERANCE-PLUS-SAME-ORACLE-ULP-NONREGRESSION-"
+        "NOT-ABSOLUTE-ULP-CERTIFIED "
         f"sem_patterns={sem['patterns']} hand_patterns={hand['patterns']} covered={covered} "
         f"verdict={verdict}\n"
     )

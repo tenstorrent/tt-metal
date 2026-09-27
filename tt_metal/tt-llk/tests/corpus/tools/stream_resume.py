@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 
 
-SCHEMA = 1
+SCHEMA = 2
 
 
 def sha256_file(path: Path) -> str:
@@ -77,12 +77,31 @@ def require_matching_cache(output: Path, metadata: Path, expected: dict) -> bool
         actual = json.loads(metadata.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"invalid cache provenance {metadata}: {error}") from error
-    if actual != expected:
+    if not isinstance(actual, dict) or actual.get("request") != expected:
         raise RuntimeError(f"cache provenance mismatch: {output}")
+    artifacts = actual.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise RuntimeError(f"cache artifact custody is missing: {output}")
+    if artifacts.get("output_sha256") != sha256_file(output):
+        raise RuntimeError(f"cached output digest mismatch: {output}")
+    corr = Path(str(output) + ".corr")
+    if expected["golden"]:
+        if not corr.is_file() or artifacts.get("corr_sha256") != sha256_file(corr):
+            raise RuntimeError(f"cached correctness digest mismatch: {corr}")
+    elif artifacts.get("corr_sha256") is not None:
+        raise RuntimeError(f"unexpected cached correctness artifact: {corr}")
     return True
 
 
-def write_cache_record(metadata: Path, record: dict) -> None:
+def write_cache_record(metadata: Path, record: dict, output: Path) -> None:
+    corr = Path(str(output) + ".corr")
+    payload = {
+        "request": record,
+        "artifacts": {
+            "output_sha256": sha256_file(output),
+            "corr_sha256": sha256_file(corr) if corr.is_file() else None,
+        },
+    }
     temporary = metadata.with_suffix(metadata.suffix + ".tmp")
-    temporary.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     temporary.replace(metadata)

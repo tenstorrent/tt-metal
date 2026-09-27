@@ -37,6 +37,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -92,6 +93,7 @@ DOMAIN_OVERLAY = HERE / "prove_all_domain_overlay.tsv"
 FAST_OPS = HERE / "prove_all_fast_ops.tsv"
 FORMAL_ENGINE = HERE / "formal_equiv.py"
 BITEXACT_ENGINE = HERE / "bitexact_sweep.py"
+ELF_TEXT_SHA = HERE / "elf_text_sha.py"
 OPS_TSV = CORPUS / "sweep_2x2_ops.tsv"
 VENV_PY = TESTS / ".venv/bin/python"
 
@@ -278,6 +280,15 @@ def provenance_gate(strict=True):
             problems.append(f"required file missing: {req}")
     if not VENV_PY.exists():
         problems.append(f"harness venv python missing: {VENV_PY}")
+    else:
+        dependency_check = subprocess.run(
+            [str(VENV_PY), "-c", "import elftools, z3"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if dependency_check.returncode != 0:
+            problems.append("harness venv is missing pyelftools and/or z3")
 
     # provenance of the overlays (recorded, not re-run)
     prov["shas"]["silicon_overlay"] = (
@@ -346,10 +357,23 @@ def _run_leg(op, leg, node, out_dir, flags, timeout):
             timeout=timeout,
         )
     if r.returncode != 0:
-        return None, f"{leg}-leg pytest rc={r.returncode}"
-    if "SFPUJO I" not in trace.read_text(errors="ignore"):
-        return None, f"{leg}-leg produced no SFPU stream"
-    return trace, None
+        return None, None, f"{leg}-leg pytest rc={r.returncode}"
+    if not trace.is_file() or "SFPUJO I" not in trace.read_text(errors="ignore"):
+        return None, None, f"{leg}-leg produced no SFPU stream"
+    elfs = list(rt.glob("tt-llk-build/sources/**/elf/math.elf"))
+    if len(elfs) != 1:
+        return None, None, f"{leg}-leg expected one math.elf, found {len(elfs)}"
+    identity_run = subprocess.run(
+        [str(VENV_PY), str(ELF_TEXT_SHA), str(elfs[0])],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    text_sha = identity_run.stdout.strip()
+    if identity_run.returncode != 0 or not re.fullmatch(r"[0-9a-f]{64}", text_sha):
+        return None, None, f"{leg}-leg could not fingerprint math.elf .text"
+    identity = {"path": str(elfs[0]), "text_sha256": text_sha}
+    return trace, identity, None
 
 
 def run_formal(op, man_row, out_dir, flags, timeout):
@@ -364,7 +388,7 @@ def run_formal(op, man_row, out_dir, flags, timeout):
         }
     try:
         t0 = time.time()
-        tsem, e1 = _run_leg(op, "sem", sem, out_dir, flags, timeout)
+        tsem, sem_identity, e1 = _run_leg(op, "sem", sem, out_dir, flags, timeout)
         if e1:
             return {
                 "op": op,
@@ -374,7 +398,7 @@ def run_formal(op, man_row, out_dir, flags, timeout):
                 "reason": e1,
                 "wall_s": round(time.time() - t0, 1),
             }
-        thand, e2 = _run_leg(op, "hand", hand, out_dir, flags, timeout)
+        thand, hand_identity, e2 = _run_leg(op, "hand", hand, out_dir, flags, timeout)
         if e2:
             return {
                 "op": op,
@@ -384,11 +408,22 @@ def run_formal(op, man_row, out_dir, flags, timeout):
                 "reason": e2,
                 "wall_s": round(time.time() - t0, 1),
             }
+        if sem_identity["text_sha256"] == hand_identity["text_sha256"]:
+            return {
+                "op": op,
+                "engine": "formal_equiv",
+                "class": "UNSWEPT",
+                "verdict": "REFUSED-IDENTITY",
+                "reason": "semantic and hand math.elf .text hashes are identical",
+                "sem_elf": sem_identity,
+                "hand_elf": hand_identity,
+                "wall_s": round(time.time() - t0, 1),
+            }
         vj = out_dir / f"{op}-verdict.json"
         vj.unlink(missing_ok=True)
         r = subprocess.run(
             [
-                "python3",
+                str(VENV_PY),
                 str(FORMAL_ENGINE),
                 "--row",
                 op,
@@ -433,6 +468,8 @@ def run_formal(op, man_row, out_dir, flags, timeout):
             "unique_queries": det.get("unique_queries"),
             "witness": det.get("witness"),
             "validation": d.get("validation", {}).get("status"),
+            "sem_elf": sem_identity,
+            "hand_elf": hand_identity,
             "reason": man_row["reason"],
             "wall_s": round(time.time() - t0, 1),
         }
@@ -835,13 +872,18 @@ def main():
     ap.add_argument("--timeout", type=int, default=1800, help="per-op wall seconds")
     ap.add_argument("--force", action="store_true", help="ignore cached verdicts")
     ap.add_argument(
-        "--no-gate", action="store_true", help="record but do not enforce provenance"
+        "--no-gate",
+        action="store_true",
+        help="deprecated compatibility spelling; provenance is always enforced",
     )
     args = ap.parse_args()
 
     board = load_board()
     man = load_manifest(board)
-    prov = provenance_gate(strict=not args.no_gate)
+    # Never let a current compiler or different simulator inherit the pin-59
+    # label and overlays. Candidate experiments use formal_equiv_row.sh and a
+    # CURRENT-CANDIDATE-NOT-PIN59 evidence directory instead.
+    prov = provenance_gate(strict=True)
     flags = on_flags()
     cache_keys = {
         op: verdict_cache_key(prov, flags, op, man[op]) for op in man
