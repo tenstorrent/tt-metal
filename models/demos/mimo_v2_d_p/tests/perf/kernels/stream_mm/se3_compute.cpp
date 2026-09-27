@@ -23,6 +23,9 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/pack.h"
+#ifdef SE_GU_L1ACC
+#include "api/compute/tile_move_copy.h"
+#endif
 #include "api/compute/reconfig_data_format.h"
 // Gate/up activation (SE_ACT), on the PACK thread's SFPU over the raw gate / up accumulators in DST:
 //   0 SiLU-GLU silu(g) * u (default)          1 SwiGLU-OAI (clamp(u, +-7) + 1) * g' sigmoid(1.702 g'), g' = min(g, 7)
@@ -54,6 +57,7 @@ constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_all_cb = tt::CBIndex::c_2;
 constexpr uint32_t h_local_cb = tt::CBIndex::c_3;
 constexpr uint32_t out_cb = tt::CBIndex::c_16;
+constexpr uint32_t part_cb = tt::CBIndex::c_5;  // SE_GU_L1ACC: bf16 gate/up partials, MT x 2 NP tiles
 // SE_XMT: row tiles of an x block (all M-groups' rows; this core computes MT of them from row GROUP * MT, RT 0)
 #ifndef SE_XMT
 #define SE_XMT get_compile_time_arg_val(1)
@@ -161,8 +165,23 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
             cur_ct = gw;
             cur_rt = rows;
         }
+#ifdef SE_GU_L1ACC
+        // K in passes of SE_GU_L1ACC K-blocks: each pass accumulates in (bf16) DST, then is packed into the bf16
+        // partials CB with packer L1 accumulation (the first pass overwrites); a long bf16 DST accumulation over
+        // all of K biases the result upwards (ties-away rounding: ~1.085 norm gain at K 7168, ~1.009 with passes of
+        // 8 K tiles, test_dest_gain_probe.py). The sum returns to DST for the activation below.
+        constexpr uint32_t grp = SE_GU_L1ACC;
+        cb_reserve_back(part_cb, mt * gw);
+        pack_reconfig_data_format(out_cb, part_cb);
+#else
         tile_regs_acquire();
+#endif
         for (uint32_t b = 0; b < nk_gu; ++b) {
+#ifdef SE_GU_L1ACC
+            if (b % grp == 0) {
+                tile_regs_acquire();
+            }
+#endif
 #ifdef SE_WAITZ
             if (v == SE_WAITZ) {
                 {
@@ -195,8 +214,41 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
                 pop_used();
 #endif
             }
+#ifdef SE_GU_L1ACC
+            if (b % grp == grp - 1 || b + 1 == nk_gu) {
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_l1_acc(b >= grp ? 1 : 0);
+                for (uint32_t i = 0; i < rows * gw; ++i) {
+                    pack_tile<true>(i, part_cb, i);
+                }
+                // the next pass re-accumulates the same slots: its read-modify-write must see this pass's writes
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK));
+                tile_regs_release();
+            }
+#endif
         }
+#ifdef SE_GU_L1ACC
+        pack_reconfig_l1_acc(0);
+        cb_push_back(part_cb, mt * gw);
+        // the sum back into DST (unpack srcA: the weights' format -> the bf16 partials), then the matmul state again
+        reconfig_data_format_srca(in1_cb, part_cb);
+        copy_tile_to_dst_init_short(part_cb);
+        tile_regs_acquire();
+        cb_wait_front(part_cb, mt * gw);
+        for (uint32_t i = 0; i < rows * gw; ++i) {
+            copy_tile(part_cb, i, i);
+        }
+        cb_pop_front(part_cb, mt * gw);
         tile_regs_commit();
+        reconfig_data_format_srca(part_cb, in1_cb);
+        pack_reconfig_data_format(part_cb, out_cb);
+        matmul_block_init(x_cb, in1_cb, false, gw, rows, kblk);
+        cur_ct = gw;
+        cur_rt = rows;
+#else
+        tile_regs_commit();
+#endif
     }
 #ifndef SE_DYN
     if (last) {

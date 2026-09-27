@@ -305,3 +305,22 @@ norm ratio: bf16 DEST without packer L1 acc 1.0230 / 1.0845 at K 2048 / 7168, WI
 fp32 DEST 1.0000 either way. So packer L1 accumulation per K-block (8 bf16 DST tiles, 128-row sub-blocks kept) is a
 cheaper alternative to fp32 DEST for the flat gate/up (~1.01 per matmul instead of 1.00; the final sum then has to
 come back from L1 to DST for the SFPU activation, as the fused op does).
+
+### Packer-L1 gate/up accumulation (`MIMO_FL_GU_ACC=l1acc`, `MIMO_FL_GU_L1ACC_GRP` K-blocks per pass), A/B
+se3_compute `SE_GU_L1ACC`: K in passes of GRP K-blocks accumulated in bf16 DST, each pass packed into a bf16
+partials CB (arena, c_5) with packer L1 accumulation (first pass overwrites) + a packer drain before the next
+pass; the sum is copied back to DST (srcA reconfig to the partials) for the activation. Keeps the 8-tile DST half
+(no MT reduction). (First try used a static CB: clashed with the arena on the M3 layout; moved into the arena.)
+Same commit, 8 experts, us uni512 / rag, max norm ratio, min PCC (uni32 / uni128 within ~2% across modes):
+| shape | bf16 | fp32 DEST | l1acc 1 | l1acc 4 | l1acc 7 |
+|---|---|---|---|---|---|
+| K3 3584x3072 | 998 / 740, 1.13, .9966 | 1249 / 872, 1.05, .9979 | 1361 / 913, 1.06, .9978 | 1205 / 811, 1.08, .9976 | 1051 / 732, 1.10, .9973 |
+| K2 TP4 7168x512 | 794 / 560, 1.26, .9946 | 900 / 602, 1.02, .9983 | 962 / 656, 1.04, .9982 | 885 / 610, 1.07, .9980 | 814 / 576, 1.09, .9977 |
+| DSv4-F 4096x2048 | 717 / 570, 1.16, .9965 | 778 / 585, 1.04, .9981 | 716 / 590, 1.05, .9981 | 718 / 595, 1.08, .9978 | 711 / 584, 1.09, .9976 |
+| M3 6144x3072 | 1412 / 999, 1.16, .9937 | 1467 / 1060, 1.05, .9979 | 1741 / 1190, 1.06, .9978 | 1587 / 1090, 1.08, .9975 | 1455 / 1028, 1.09, .9971 |
+K2 7168x2048 E12 (K2.6 sets): l1acc 1 ~ fp32 (uni512 1524 vs 1521, p100 1641 vs 1612), norm 1.058 vs 1.042.
+Conclusion: at equal accuracy (1-K-block passes ~ the probe's 1.009 per matmul) L1 accumulation is SLOWER than fp32
+DEST on the NP-2 / per-core-heavy shapes (K3 +9%, M3 +19%, TP4 +7%), faster only on DSv4-F (-8%); longer passes
+buy speed back but the bias returns (1.09-1.10 at 7 K-blocks). Each pass packs 8 tiles with an L1 read-modify-write
+and a packer drain, comparable to the pass's matmul on these shapes. fp32 DEST stays the default; l1acc is kept as
+an option. Untried: ping-pong partial buffers (pass g into buffer g % 2) to drop the per-pass drain, summed once.

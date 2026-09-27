@@ -139,7 +139,8 @@ def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
     for np_ in (1, 2, 3, 4):
         for g in (1, 2, 4):
             ps = It // np_
-            dst = 4 if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else 8
+            fp32_ = os.environ.get("MIMO_FL_GU_ACC", "fp32" if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else "bf16")
+            dst = 4 if fp32_ == "fp32" else 8
             if It % np_ or ps % 16 or ps * g > 64 or min(dst // (2 * np_), MT_MAX // g) < 1:
                 continue
             mt_ = g * min(dst // (2 * np_), MT_MAX // g)
@@ -221,7 +222,12 @@ def test_stream_expert_flat(device, m, wdtype):
                 raise
     # fp32 DEST accumulation for gate/up (K = H is long: bf16 DEST ties-away rounding gives a norm gain ~1.085 at K
     # 7168, test_dest_gain_probe.py) halves the DST half to 4 tiles
-    GU_FP32 = bool(int(os.environ.get("MIMO_FL_GU_FP32", "1")))
+    # MIMO_FL_GU_ACC: fp32 (DEST), l1acc (bf16 DEST in passes of MIMO_FL_GU_L1ACC_GRP K-blocks, summed in L1 by the
+    # packer: keeps the 8-tile DST half), bf16 (all of K in bf16 DEST: the ~1.27 norm gain). MIMO_FL_GU_FP32=0 = bf16.
+    GU_ACC = os.environ.get("MIMO_FL_GU_ACC", "fp32" if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else "bf16")
+    assert GU_ACC in ("fp32", "l1acc", "bf16"), GU_ACC
+    GU_FP32 = GU_ACC == "fp32"
+    L1ACC_GRP = int(os.environ.get("MIMO_FL_GU_L1ACC_GRP", "1"))
     DST_T = 4 if GU_FP32 else 8
     MT_CAP = G * min(DST_T // (2 * NP), MT_MAX // G)  # a group's rows x 2 NP gate/up tiles fit DST
     MT = int(os.environ["MIMO_FL_MT"]) if os.environ.get("MIMO_FL_MT") else min(MT_CAP, max(G, m // 32 // G * G))
@@ -327,7 +333,8 @@ def test_stream_expert_flat(device, m, wdtype):
     # ---- arena (per-role layout, 2 KB aligned) ----
     al = lambda b: (b + 2047) // 2048 * 2048
     X_OFF = al(ring_g * slot * w_tile)
-    gu_bytes = X_OFF + al(X_SLOTS * x_bytes)
+    P_OFF = X_OFF + al(X_SLOTS * x_bytes)  # SE_GU_L1ACC partials (in the arena: static CBs clash with it)
+    gu_bytes = P_OFF + (al(MTG * 2 * NP * 2048) if GU_ACC == "l1acc" else 0)
     rd_slots = RD_SLOTS or 2 * READ_BATCH
     RD_OFF = al(rd_slots * RG * slot * w_tile)  # a down-computing reader's in1 ring follows its reader CB
     H_OFF = al(
@@ -1200,6 +1207,7 @@ def test_stream_expert_flat(device, m, wdtype):
                 compile_time_args=[KBLK, MTG, nk_gu, 0, 1, E, S, slot, 1, 1, NP, 0, ring_g],
                 runtime_args=gu_crt,
                 defines=[("SE_DST_TILES", str(DST_T))]
+                + ([("SE_GU_L1ACC", str(L1ACC_GRP))] if GU_ACC == "l1acc" else [])
                 + zones
                 + dyn_def
                 + [("SE_GU_ONLY", "1"), ("SE_ACT", str(ACTS[ACT])), ("SE_XMT", str(MT))]
@@ -1306,6 +1314,11 @@ def test_stream_expert_flat(device, m, wdtype):
                 format_descriptors=fmt(3, ttnn.bfloat8_b, H_TILE),
             ),
             ttnn.CBDescriptor(total_size=2048, core_ranges=gu_crs, format_descriptors=fmt(16, ttnn.bfloat16, 2048)),
+        ]
+        + (  # SE_GU_L1ACC: the gate/up partials (bf16, one sub-block of this core's rows)
+            [arena_cb(5, P_OFF, MTG * 2 * NP * 2048, gu_crs, ttnn.bfloat16, 2048)] if GU_ACC == "l1acc" else []
+        )
+        + [
             arena_cb(2, H_OFF, HBUF * h_tiles * H_TILE, dn_crs, ttnn.bfloat8_b, H_TILE),
         ]
         + [
@@ -1366,6 +1379,7 @@ def test_stream_expert_flat(device, m, wdtype):
             + (f"_pin{PIN}" if PIN else "")
             + (f"_xh{NH}" if NH != 1 else "")
             + (f"_hb{HBUF}" if HBUF != 3 else "")
+            + ((f"_acc{GU_ACC}" + (str(L1ACC_GRP) if GU_ACC == "l1acc" else "")) if GU_ACC != "fp32" else "")
             + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
             + ("_e2e" if E2E else "")
             + ("_pp" if PREPASS else "")
