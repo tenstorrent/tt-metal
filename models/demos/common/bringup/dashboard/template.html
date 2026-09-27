@@ -130,10 +130,20 @@ footer{color:var(--muted);font-size:12px}
 .opchain .ob i{display:block;height:100%;border-radius:4px}
 .opchain .om{font:12px var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .opchain .om small{display:block;color:var(--muted);font-size:11px}
+.omem{display:flex;flex-wrap:wrap;align-items:center;gap:3px 5px;margin-top:4px}
+.omem .ml{font:11px var(--f-mono);color:var(--muted)}
+.mc{font:11px/1.2 var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);background:var(--surface)}
+.mc-dram{background:var(--b-memory-soft);border-color:var(--b-memory);color:var(--ink)}
+.mc-l1{background:var(--b-compute-soft);border-color:var(--b-compute);color:var(--ink)}
 .opchain .ot{grid-column:2/-1;font:11.5px/1.3 var(--f-mono);color:var(--muted);margin-top:-2px}
 @media (max-width:640px){.opchain li{grid-template-columns:26px minmax(0,1fr) auto}
   .opchain .oi{grid-row:1/3;align-self:start}.opchain .ox{grid-column:2;grid-row:1}.opchain .om{grid-column:3;grid-row:1;align-self:start}
-  .opchain .ob{grid-column:2/4;grid-row:2}.opchain .ot{grid-column:2/4;grid-row:3;margin-top:0}}
+  .opchain .ob{grid-column:2/4;grid-row:2}.omem{display:flex;flex-wrap:wrap;align-items:center;gap:3px 5px;margin-top:4px}
+.omem .ml{font:11px var(--f-mono);color:var(--muted)}
+.mc{font:11px/1.2 var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);background:var(--surface)}
+.mc-dram{background:var(--b-memory-soft);border-color:var(--b-memory);color:var(--ink)}
+.mc-l1{background:var(--b-compute-soft);border-color:var(--b-compute);color:var(--ink)}
+.opchain .ot{grid-column:2/4;grid-row:3;margin-top:0}}
 .pgrp{font:500 11px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:10px 8px 4px}
 .pstep{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;cursor:pointer;color:var(--ink);font:inherit;font-size:13px}
 .pstep:hover{background:var(--surface2)}
@@ -258,6 +268,7 @@ footer{color:var(--muted);font-size:12px}
         </div>
         <div class="pops" id="pd-ops-wrap">
           <div class="pops-head"><h4>TTNN operations, in execution order</h4><span id="pd-ops-note"></span></div>
+          <p class="omem" id="pd-ops-leg" style="margin:6px 0 0"><span class="ml">tensor placement (per chip):</span><span class="mc mc-dram">DRAM …</span><span class="mc mc-l1">L1 …</span><span class="ml">interleaved or sharded (cores); RM = row-major, else tiled</span></p>
           <ol class="opchain" id="pd-ops"></ol>
         </div>
       </article>
@@ -618,17 +629,24 @@ function profile(){
     opsList(s);
   }
   function fmu(ms){ return ms >= 1 ? `${ms.toFixed(2)} ms` : `${(ms * 1e3).toFixed(ms * 1e3 >= 10 ? 0 : 1)} µs`; }
+  function memChip(m){ const t = m.trim(); if (!t || t === "?") return `<span class="mc">?</span>`;
+    const k = t.startsWith("L1") ? "l1" : t.startsWith("DRAM") ? "dram" : "oth";
+    return `<span class="mc mc-${k}">${esc(t)}</span>`; }
+  function memLine(m){ if (!m) return ""; const [a, b = ""] = m.split(" -> ");
+    const side = x => x ? x.split(" · ").map(memChip).join("") : `<span class="mc">none</span>`;
+    return `<span class="omem"><span class="ml">in</span>${side(a)}<span class="ml">→ out</span>${side(b)}</span>`; }
   function opsList(s){
     const O = s.ops || [], wrap = $("#pd-ops-wrap");
     wrap.hidden = !O.length;
     if (!O.length) return;
     const mx = Math.max(...O.map(o => o.ms), 1e-9), sum = O.reduce((a, o) => a + o.ms, 0);
     const hasTL = O.some(o => o.gap_ms != null), sg = O.reduce((a, o) => a + (o.gap_ms || 0), 0), sh = O.reduce((a, o) => a + (o.host_ms || 0), 0);
+    $("#pd-ops-leg").hidden = !O.some(o => o.mem);
     $("#pd-ops-note").textContent = `${O.length} distinct call${O.length > 1 ? "s" : ""} · device ${sum.toFixed(sum >= 10 ? 1 : 2)} ms` +
       (hasTL ? ` · idle gaps ${fmu(sg)} · host dispatch ${fmu(sh)}` : "") + ` · shapes are per chip` + (v.id === "all" ? " · summed over layers" : v.n > 1 ? " · per layer" : "");
     const fm = x => x >= 10 ? x.toFixed(1) : x >= 0.1 ? x.toFixed(2) : x.toFixed(3);
     $("#pd-ops").innerHTML = O.map((o, i) => { const c = o.calls, cs = Math.abs(c - 1) > 1e-6 ? ` ×${Number.isInteger(c) ? c : c.toFixed(1)}` : "";
-      return `<li><span class="oi">${i + 1}</span><span class="ox"><span class="on">ttnn.${esc(o.op).replace(/([._])/g, "$1<wbr>")}${cs}</span><span class="os">${esc(o.shape || "—")}</span></span>` +
+      return `<li><span class="oi">${i + 1}</span><span class="ox"><span class="on">ttnn.${esc(o.op).replace(/([._])/g, "$1<wbr>")}${cs}</span><span class="os">${esc(o.shape || "—")}</span>${memLine(o.mem)}</span>` +
         `<span class="ob" title="${fm(o.ms)} ms"><i style="width:${(100 * o.ms / mx).toFixed(1)}%;background:var(--b-${s.bound})"></i></span>` +
         `<span class="om">${fm(o.ms)} ms<small>${(100 * o.ms / (sum || 1)).toFixed(0)}%</small></span>` +
         (o.gap_ms != null ? `<span class="ot">device idle before it ${fmu(o.gap_ms)} · host dispatch ${fmu(o.host_ms)}</span>` : "") + `</li>`; }).join("");
