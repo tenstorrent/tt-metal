@@ -29,8 +29,9 @@ constexpr std::uint16_t hashString16(const char (&s)[N])
     return static_cast<std::uint16_t>(hash32 ^ (hash32 >> 16));
 }
 
+// The file name, not the path: the id is an immediate in the kernel code, so the checkout path must not change it.
 // clang-format off
-#define MARKER_FULL(marker) "LLK_PROFILER" ":" __FILE__ ":" ExpandStringize(__LINE__) ":" marker
+#define MARKER_FULL(marker) "LLK_PROFILER" ":" __FILE_NAME__ ":" ExpandStringize(__LINE__) ":" marker
 // clang-format on
 
 #define MARKER_ID(marker) hashString16(MARKER_FULL(marker))
