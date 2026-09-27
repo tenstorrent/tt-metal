@@ -13,6 +13,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -707,10 +708,10 @@ void kernel_main() {
                             sub_exp_first_col_blocks<false, scale_fp32>(
                                 src.max, merged.max, cb_exp_max_diff, group, qktv_h);
                             CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
-                            PACK((llk_pack_reconfig_l1_acc(side)));
+                            pack_reconfig_l1_acc(side);
                             salad_correct_fused<qktv_h, vDHt, dst_size>(
                                 src.out, src.sum, cb_exp_max_diff, merged.out, merged.sum, 0, group, group);
-                            PACK((llk_pack_reconfig_l1_acc(0)));
+                            pack_reconfig_l1_acc(0);
                             sdpa_cb_pop_front_out_of_line(cb_exp_max_diff, qktv_h);
                             sdpa_cb_pop_front_out_of_line(src.out, qktv_h * vDHt);
                         }
