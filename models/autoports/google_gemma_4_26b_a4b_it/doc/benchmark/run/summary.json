@@ -68,7 +68,7 @@
   },
   "accuracy_execution": "shared",
   "error": "Accuracy incomplete: interrupted after8/536responses at942.54s to reserve the original remaining budget for required serving measurements. No complete benchmark aggregate is available.",
-  "elapsed_seconds": 2703.4520078776404,
+  "elapsed_seconds": 2934.2977528031915,
   "performance_recovery": {
     "status": "measurements_collected_stage_still_failed",
     "original_started_monotonic": 5311679.6,
@@ -116,5 +116,6 @@
       "aggregate_score": null
     }
   },
-  "final_timing_basis": "Conservative original runner process start through final host verification and report; includes launch, verification, accuracy, interruption, warmups, measurements, reload, collection and reporting. No recovery clock reset."
+  "final_timing_basis": "Conservative original runner process start through final host verification and report; includes launch, verification, accuracy, interruption, warmups, measurements, reload, collection and reporting. No recovery clock reset.",
+  "first_final_report_elapsed_seconds": 2703.4520078776404
 }

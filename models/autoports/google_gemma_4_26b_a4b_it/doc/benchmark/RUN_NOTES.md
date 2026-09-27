@@ -170,3 +170,13 @@ pass; Python/docs-only changes need no C++ build.
 
 Final measurements, incomplete-accuracy evidence and report commit: `886fa4f8a9c706e13df289013684cee5018c7857`.
 The goal remains incomplete; neither an aggregate score nor a passing stage is claimed.
+
+Continuation audit 02 revalidated unchanged measurement/question hashes and
+context, eight responses, and no live serving/client process. The prior turn
+made concrete progress by completing both performance profiles and preserving
+evidence. A fresh AutoFix source-only audit found no verified integration bug;
+trace turnover and host-logit transfer remain unmeasured optimization hypotheses.
+No new inference, hardware access, clock reset or protocol change occurred.
+The goal stays active pending the remaining accuracy requirement; the owner was
+asked whether to retain the one-hour limit or explicitly allow extended accuracy.
+No response is assumed to authorize an exception.
