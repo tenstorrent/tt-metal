@@ -191,6 +191,11 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
             paths.append(rel(ledger.dir / extra))
     if ledger.breadcrumbs.exists():
         paths.append(rel(ledger.breadcrumbs))
+    # The task's other result files (<task>_profile.json, <task>_ops_profile.json, ...) and the record of the model's
+    # ttnn.bringup calls the derived-op test task writes.
+    paths += [rel(p) for p in sorted(ledger.results_dir.glob(f"{task['id']}_*.json"))]
+    if task.get("step") == "optests" and (ledger.results_dir / "fork_calls.json").exists():
+        paths.append(rel(ledger.results_dir / "fork_calls.json"))
     paths += [p for p in task.get("paths", []) if (repo / p).exists()]
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
