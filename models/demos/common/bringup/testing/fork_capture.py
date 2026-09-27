@@ -14,7 +14,8 @@ It records each distinct call signature once, with a count:
 - the op;
 - every tensor argument's per-device shape, dtype, layout, memory placement and mesh size;
 - every other argument's value (enums and compute-kernel configs as text).
-Tensor contents are never recorded: fork tests build their own inputs. Each signature has a short id ``sig``, which is
+It also records how the mesh was opened (``device``: the fabric config, and the test's ``device_params`` when the test
+has them). Tensor contents are never recorded: fork tests build their own inputs. Each signature has a short id ``sig``, which is
 how a fork's test cases say which captured call they cover (``models/demos/common/bringup/testing/fork_cases.py``
 checks that).
 """
@@ -29,6 +30,7 @@ from pathlib import Path
 ENV = "BRINGUP_CAPTURE_FORKS"
 PREFIX = "ttnn.bringup."
 _CALLS: dict[str, dict] = {}
+_DEVICE: dict = {}  # how the mesh was opened: the fabric config, and the test's device_params when it has them
 
 
 def _tensor(t) -> dict:
@@ -84,7 +86,18 @@ def _value(v):
     return str(v)
 
 
+def _device() -> None:
+    import ttnn
+
+    if "fabric_config" not in _DEVICE:
+        try:
+            _DEVICE["fabric_config"] = str(ttnn.get_fabric_config()).split(".")[-1]
+        except Exception:
+            pass
+
+
 def record(op: str, args, kwargs) -> None:
+    _device()
     call = {
         "op": op,
         "args": [_value(a) for a in args],
@@ -119,13 +132,19 @@ def write(path: str | Path) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     calls = sorted(_CALLS.values(), key=lambda c: (c["op"], c["sig"]))
-    p.write_text(json.dumps({"calls": calls}, indent=1) + "\n")
+    p.write_text(json.dumps({"device": _DEVICE, "calls": calls}, indent=1) + "\n")
     return p
 
 
 def pytest_configure(config):
     if os.environ.get(ENV):
         patch()
+
+
+def pytest_runtest_setup(item):
+    params = getattr(item, "callspec", None) and item.callspec.params.get("device_params")
+    if os.environ.get(ENV) and isinstance(params, dict) and "device_params" not in _DEVICE:
+        _DEVICE["device_params"] = {k: _value(v) for k, v in params.items()}
 
 
 def pytest_unconfigure(config):
