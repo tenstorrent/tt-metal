@@ -1942,6 +1942,22 @@ def _tt_poly_declared_hardtanh_bw(x):
     return result.astype(np.float64) * 1.0
 
 
+def _tt_poly_declared_log_sigmoid_bw(x):
+    def _declared_derivative(x):
+        exp = np.exp
+        return np.broadcast_to(np.asarray(1 / (1 + exp(x)), dtype=np.float64), x.shape)
+
+    return _declared_derivative(x)
+
+
+def _tt_poly_declared_softplus_bw(x):
+    def _declared_derivative(x):
+        exp = np.exp
+        return np.broadcast_to(np.asarray(1 / (1 + exp(-x)), dtype=np.float64), x.shape)
+
+    return _declared_derivative(x)
+
+
 def _tt_poly_declared_softshrink_bw(x):
     raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
     result = np.zeros(raw.shape, dtype=bool)
@@ -1965,6 +1981,8 @@ def _tt_poly_declared_softshrink_bw(x):
         ("hardsigmoid_bw", False, _tt_poly_declared_hardsigmoid_bw, ()),
         ("hardswish_bw", False, _tt_poly_declared_hardswish_bw, (-3.0, -1.5, 3.0)),
         ("hardtanh_bw", True, _tt_poly_declared_hardtanh_bw, ()),
+        ("log_sigmoid_bw", False, _tt_poly_declared_log_sigmoid_bw, ()),
+        ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
         ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),
     ],
 )
