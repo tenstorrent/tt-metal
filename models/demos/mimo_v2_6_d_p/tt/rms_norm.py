@@ -10,6 +10,8 @@ by the weight as given, so the checkpoint weight is used unchanged.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -39,8 +41,12 @@ class TtRMSNorm:
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x: replicated [1, 1, S, H] TILE on device. Returns the same shape, replicated."""
-        return ttnn.rms_norm(
+        """x: replicated [1, 1, S, H] TILE on device. Returns the same shape, replicated.
+
+        MIMO_NORM_IMPL=bringup (default) runs ttnn.bringup.rms_norm, the AI-generated perf-optimized drop-in
+        (ttnn/ttnn/bringup/rms_norm_ttnn); MIMO_NORM_IMPL=native runs ttnn.rms_norm."""
+        op = ttnn.rms_norm if os.environ.get("MIMO_NORM_IMPL", "bringup") == "native" else ttnn.bringup.rms_norm
+        return op(
             x,
             weight=self.weight,
             epsilon=self.eps,

@@ -19,7 +19,7 @@ Run under the profiler; the ratio is what is asserted, never an absolute
 nanosecond count (those are board- and clock-specific):
 
     scripts/run_safe_pytest.sh --profile \\
-        tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_perf.py
+        ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_perf.py
 
 Off the profiler these tests still run (they just check correctness of the
 shapes they touch), which is why they are safe to leave in the ordinary suite.
@@ -32,7 +32,7 @@ import torch
 
 import ttnn
 
-from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn
 
 # The seed is a generated Python package present only on the branch this op was
 # generated from. Seed-parity cases skip where it is absent; operand-cost cases
@@ -268,7 +268,7 @@ try:
     )
 except ModuleNotFoundError:
     seed_descriptor = None
-from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
+from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
     _PC_NONE,
     READER_CT_SCALARS,
     create_program_descriptor as ttnn_descriptor,
