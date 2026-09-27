@@ -1684,7 +1684,7 @@ def make_run_profiled(
     extra_env: dict[str, str] | None = None,  # e.g. TT_METAL_VISIBLE_DEVICES
     collect_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     retries: int = 2,
-    device_reset: Callable[[], bool] = _device_reset,
+    device_reset: Callable[..., bool] = _device_reset,  # called as device_reset(error_text=[, fault_is_certain=True])
 ) -> Callable[..., tuple[Path, float]]:
     """Factory for tracy_tool's stage-1 `run_profiled` (real hardware).
 
@@ -1771,7 +1771,21 @@ def make_run_profiled(
                 except TracyHangError:
                     if _attempt >= retries:
                         raise
-                    device_reset()
+                    # The hung run's process group was just SIGKILLed. Keep its log -- the retry
+                    # reopens log_path for writing, which is how the first failure of a night went
+                    # unrecorded -- as <name>.attemptN (no *_tracy.log reader matches it), and hand
+                    # both it and the kill to the reset: with neither, the temperature veto cancels
+                    # the reset on a multi-chip fabric and the retry opens the mesh still wedged.
+                    hung = log_path.read_text(errors="ignore") if log_path.is_file() else ""
+                    try:
+                        log_path.replace(log_path.with_name("%s.attempt%d" % (log_path.name, _attempt + 1)))
+                    except OSError:
+                        pass
+                    from . import device_recovery as _dr
+
+                    # fault_is_certain passed only when set, so a single-chip run resets as before
+                    _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
+                    device_reset(error_text=hung, **_kill)
             if code != 0:
                 tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
                 raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")

@@ -564,7 +564,13 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
             return rc, (log.read_text(errors="ignore") if log.exists() else "")
         except _pr.TracyHangError as exc:
             out = log.read_text(errors="ignore") if log.exists() else ""
-            ok = _pr._device_reset(error_text=out)
+            from . import device_recovery as _dr
+
+            # _execute killed the run's process group: on a multi-chip fabric that kill is the
+            # evidence the reset needs, whatever the telemetry says (device_recovery's own rule).
+            # Passed only when set, so every other call reaches the reset exactly as before.
+            _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
+            ok = _pr._device_reset(error_text=out, **_kill)
             return 124, out + "\n[perf_test_gen] WEDGE: %s; killed process group + tt-smi -r (reset_ok=%s)\n" % (
                 exc,
                 ok,

@@ -276,21 +276,9 @@ def make_mock_model_runner(model_root: str | Path) -> Callable[[str], str]:
     return runner
 
 
-def _requested_chip_count(devices: str):
-    """How many chips --devices asks for, or None when it does not narrow the host.
-
-    "all" (and anything unparseable) means the whole host and must NOT pin visibility. "single" is
-    one chip. An explicit list is its own length, so "0,1" is two.
-    """
-    text = str(devices or "").strip().lower()
-    if not text or text == "all":
-        return None
-    if text == "single":
-        return 1
-    ids = [part for part in re.split(r"[,\s]+", text) if part]
-    if ids and all(part.isdigit() for part in ids):
-        return len(ids)
-    return None
+# ONE parser for "how many chips does --devices ask for": device_recovery owns it, because the reset
+# layer needs the same answer at the moment a device dies (and must not open one to get it).
+from .device_recovery import requested_chip_count as _requested_chip_count  # noqa: E402
 
 
 def mock_run_profiled(pcc_path, batch_size, seq_len, profiles_dir, i):
