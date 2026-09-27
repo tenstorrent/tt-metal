@@ -38,8 +38,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    an option whose default keeps the fork's current behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`.
    Record every change in the fork's `CHANGELOG.md` (what, why, model and task, files), keep the `INDEX.md` row
    current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests.
-7. Precision (owner rule). Outside the perf role, run every matmul at HiFi4. Use bfp4 weights only where the HF
-   checkpoint itself stores them in 4 bits; otherwise never use bfp4 (the owner tries that, not an agent).
+7. Precision (owner rule). Run every matmul at HiFi4, in every role. Use bfp4 weights only where the HF checkpoint
+   itself stores them in 4 bits; otherwise never use bfp4 (the owner tries that, not an agent).
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
