@@ -78,6 +78,12 @@ inline IndexerScoreProgramConfig default_program_config(
     return {};
 }
 
+// Heads the blocked gate multiply sums in one DEST pass; the packer adds the passes in L1. A 64 head bf16 DEST sum
+// loses more than the multiply at HiFi2 and up; at LoFi the multiply's error dominates and one pass (0) is kept.
+inline uint32_t gate_mul_heads_per_pass(tt::tt_metal::MathFidelity math_fidelity) {
+    return math_fidelity == tt::tt_metal::MathFidelity::LoFi ? 0u : 8u;
+}
+
 // Head streaming q buffer depth: as many head blocks as fit in half the L1 budget, never fewer than before.
 inline uint32_t streaming_q_depth(uint64_t q_block_bytes, uint64_t l1_budget) {
     for (uint32_t depth : {8u, 4u}) {

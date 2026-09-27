@@ -344,6 +344,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(1u);                        // unused physical SP size
     compute_ct.push_back(0u);                        // trace-safe metadata off
     compute_ct.push_back(0u);                        // metadata CB unused
+    compute_ct.push_back(gate_mul_heads_per_pass(math_fidelity));
 
     const std::unordered_map<std::string, uint32_t> schedule_args{
         {"schedule_blocks", num_blocks},

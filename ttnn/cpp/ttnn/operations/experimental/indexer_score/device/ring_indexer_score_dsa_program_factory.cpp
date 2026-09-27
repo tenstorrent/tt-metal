@@ -468,6 +468,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // stripe count ahead of the physical SP size, so compute reads these at +11/+12 (was +10/+11).
     compute_ct.push_back(has_meta ? 1u : 0u);
     compute_ct.push_back(has_meta ? cb_meta_derived : 0u);
+    compute_ct.push_back(gate_mul_heads_per_pass(math_fidelity));
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};
