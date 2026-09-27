@@ -1,0 +1,23 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+    "--layer",
+    "5",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--trace",
+    "--check-cache",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/output_hifi2_bfp4_full.json",
+    "--attention-bfp4",
+    "both",
+    "--persistent-ccl",
+    "--output-fidelity",
+    "HiFi2"
+  ],
+  "exit_code": 0
+}

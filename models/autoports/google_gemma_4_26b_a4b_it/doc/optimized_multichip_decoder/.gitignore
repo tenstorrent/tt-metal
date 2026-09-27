@@ -1,0 +1,7 @@
+# Retain compact reports/provenance and compressed logs; raw captures stay local.
+profile_final_*/reports/
+profile_final_*/.logs/
+profile_final_*/*_table.txt
+profile_final_*/native_decode_policy_rows.json
+*.patch
+watcher_failure/*.txt

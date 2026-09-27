@@ -312,6 +312,81 @@ def test_matmul_in1_dram_sharded_worker_counts(
     )
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="Multiple DRAM readers per bank require Blackhole")
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["mesh1x4"], indirect=True)
+@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2, 3], ids=["one_worker", "two_workers", "three_workers"])
+def test_matmul_in1_dram_sharded_worker_counts_mesh(mesh_device, num_workers_per_dram_bank):
+    """Secondary reader placement must accept a multi-device mesh and preserve every replica's output."""
+    num_banks = mesh_device.dram_grid_size().x
+    if num_banks != 8:
+        pytest.skip("This mesh regression requires Blackhole devices with eight DRAM banks")
+
+    torch.manual_seed(0)
+    m, k, n = 32, 512, 1536
+    storage_cores = 4
+    # Six width tiles per bank divide all three reader counts without padding;
+    # four storage cores give four input tiles and twelve output tiles per core.
+    storage_grid = ttnn.CoreGrid(x=storage_cores, y=1)
+    input_memory, output_memory = (
+        ttnn.create_sharded_memory_config(
+            (m, width), storage_grid, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        for width in (k, n)
+    )
+    bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+    weight_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(bank_grid, (k, n // num_banks), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    in0 = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    in1 = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    in0_t = ttnn.from_torch(
+        in0,
+        device=mesh_device,
+        mesh_mapper=mapper,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        device=mesh_device,
+        mesh_mapper=mapper,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=weight_memory,
+    )
+    output_t = ttnn.matmul(
+        in0_t,
+        in1_t,
+        program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=1,
+            per_core_M=1,
+            per_core_N=n // (32 * storage_cores),
+            num_workers_per_dram_bank=num_workers_per_dram_bank,
+        ),
+        memory_config=output_memory,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+    )
+    output_t = ttnn.to_memory_config(output_t, ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.to_torch(output_t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert output.shape == (4, 1, m, n)
+    expected = in0.float() @ in1.float()
+    for replica in output.split(1, dim=0):
+        assert_numeric_metrics(
+            expected, replica.float(), check_allclose=False, frobenius_threshold=0.02, pcc_threshold=0.999
+        )
+
+
 @pytest.mark.parametrize(
     "num_workers_per_dram_bank,shard_width_tiles",
     [(2, 8), (3, 12)],

@@ -1,0 +1,18 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.doc.optimized_multichip_decoder.probe_stack_precision",
+    "--layers",
+    "0",
+    "1",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--probe-expert-gate-bf8",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/stack_control_expert_gate8.json"
+  ],
+  "exit_code": 1
+}

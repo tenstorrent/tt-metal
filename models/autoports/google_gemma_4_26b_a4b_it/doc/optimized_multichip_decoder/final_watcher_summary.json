@@ -1,0 +1,136 @@
+{
+  "passed": true,
+  "profiler_enabled": false,
+  "runs": [
+    {
+      "artifact": "final_watcher_sliding.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "0",
+        "--length",
+        "4096",
+        "--steps",
+        "128",
+        "--trace",
+        "--check-cache",
+        "--duplicate-replays",
+        "8",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_watcher_sliding.json"
+      ],
+      "environment": {
+        "TT_METAL_WATCHER": "10",
+        "TT_METAL_WATCHER_NOINLINE": "1"
+      },
+      "exit_code": 0,
+      "all_replicas_equal": true,
+      "minimum_output_pcc": 0.9976438866079221,
+      "source_sha256": {
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py": "a798215f8ca1d3565a09d09edc3834203fad4c2207b522bfe4a7611ea02dbaf9",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+        "ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.cpp": "c97504644b95b8ade64522597fb9f7c4405dcc6211fc53da5a10adcdadd805e1"
+      },
+      "log_sha256": "fa38dbcd71096cea6b1594780fe35031adbb71fdc561c054f1e037bc00fa16a8"
+    },
+    {
+      "artifact": "final_watcher_full.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+        "--layer",
+        "5",
+        "--length",
+        "4096",
+        "--steps",
+        "128",
+        "--trace",
+        "--check-cache",
+        "--duplicate-replays",
+        "8",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_watcher_full.json"
+      ],
+      "environment": {
+        "TT_METAL_WATCHER": "10",
+        "TT_METAL_WATCHER_NOINLINE": "1"
+      },
+      "exit_code": 0,
+      "all_replicas_equal": true,
+      "minimum_output_pcc": 0.9965429315304237,
+      "source_sha256": {
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py": "a798215f8ca1d3565a09d09edc3834203fad4c2207b522bfe4a7611ea02dbaf9",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+        "ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.cpp": "c97504644b95b8ade64522597fb9f7c4405dcc6211fc53da5a10adcdadd805e1"
+      },
+      "log_sha256": "40ac64bfccac2315d2630c83acdf56c0cf3bc49eba6f1606f55c09cbb7b024ae"
+    },
+    {
+      "artifact": "final_watcher_stack_samekind.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+        "--layers",
+        "0",
+        "1",
+        "--length",
+        "4096",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_watcher_stack_samekind.json"
+      ],
+      "environment": {
+        "TT_METAL_WATCHER": "10",
+        "TT_METAL_WATCHER_NOINLINE": "1"
+      },
+      "exit_code": 0,
+      "all_replicas_equal": true,
+      "minimum_output_pcc": 0.996538487033079,
+      "source_sha256": {
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py": "1e6ce4fca7b62fcb296c4a023f0cad3f93f8107c5f845829c7cd22bf601b34f6",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+        "ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.cpp": "c97504644b95b8ade64522597fb9f7c4405dcc6211fc53da5a10adcdadd805e1"
+      },
+      "log_sha256": "b03d95686d243ba2a61e2a8d0f6550cee6e95d364794a94352f518b6170e4cfe"
+    },
+    {
+      "artifact": "final_watcher_stack_mixed.json",
+      "command": [
+        "/workspace/tt-metal/python_env/bin/python",
+        "-m",
+        "models.autoports.google_gemma_4_26b_a4b_it.tests.test_multichip_stack",
+        "--layers",
+        "4",
+        "5",
+        "--length",
+        "4096",
+        "--steps",
+        "128",
+        "--output",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/final_watcher_stack_mixed.json"
+      ],
+      "environment": {
+        "TT_METAL_WATCHER": "10",
+        "TT_METAL_WATCHER_NOINLINE": "1"
+      },
+      "exit_code": 0,
+      "all_replicas_equal": true,
+      "minimum_output_pcc": 0.9955161286567175,
+      "source_sha256": {
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+        "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/test_multichip_stack.py": "1e6ce4fca7b62fcb296c4a023f0cad3f93f8107c5f845829c7cd22bf601b34f6",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+        "ttnn/cpp/ttnn/operations/matmul/device/utilities/matmul_utilities.cpp": "c97504644b95b8ade64522597fb9f7c4405dcc6211fc53da5a10adcdadd805e1"
+      },
+      "log_sha256": "82409b29ea43fff86c2f36cf6338a3cb08dbd7b1868b1d3805003e320e6725d9"
+    }
+  ]
+}

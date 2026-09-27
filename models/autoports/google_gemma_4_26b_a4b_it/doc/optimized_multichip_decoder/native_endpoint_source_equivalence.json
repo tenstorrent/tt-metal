@@ -1,0 +1,29 @@
+{
+  "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp",
+  "before_sha256": "23cba51e0a2cb18836cb349ef100d1053a09c89b4d2dd4751b9728bbb9d7decb",
+  "after_sha256": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+  "patch": "watcher_ag_endpoint.patch",
+  "assertion_site": "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp:119",
+  "basis": [
+    "Only non-mux connection lookup changes: zero-target outward Linear workers receive nullptr instead of taking an unused connection reference. Required routes still use asserted getters.",
+    "All fabric dereferences are direction-target guarded or have zero forwarding iterations at outward endpoints; local writes, CB consumption, semaphore sends, allocation sizes and loop counts are unchanged.",
+    "This changes no default numerical dataflow, cache geometry, capacity allocation or residual contract. Original capacity artifacts retain their original runtime hashes; Python fused-only source equivalence is separately recorded."
+  ],
+  "focused_watcher_evidence": [
+    "watcher_ag_attention.json",
+    "watcher_ag_moe.json"
+  ],
+  "reused_capacity_evidence": [
+    "final_max_262143_sliding.json",
+    "final_max_262144_sliding.json",
+    "final_max_262143_full.json",
+    "final_max_262144_full.json"
+  ],
+  "original_watcher_failure": "watcher_failure/run.log",
+  "required_model_watcher_evidence": [
+    "final_watcher_sliding.json",
+    "final_watcher_full.json",
+    "final_watcher_stack_samekind.json",
+    "final_watcher_stack_mixed.json"
+  ]
+}

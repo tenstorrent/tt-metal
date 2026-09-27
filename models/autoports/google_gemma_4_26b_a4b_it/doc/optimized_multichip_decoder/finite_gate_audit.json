@@ -1,0 +1,381 @@
+{
+  "passed": true,
+  "runner_sha256": "3ea427ba49605809a48bdcc0bebc5c65fb99eeefb60c34c7d7307449a24d8bec",
+  "actual_gate_source": "def _pcc_values_pass(values):\n    return bool(values) and all((math.isfinite(value) and value >= 0.995 for value in values))",
+  "regression": "A finite passing prefix followed by NaN or infinity is rejected.",
+  "historical_cache_nan_rejected": "historical_k44_failure.json",
+  "accepted_artifacts": [
+    {
+      "artifact": "final_contracts_full.json",
+      "sha256": "28ab944a5d83d4792cc4bf72d7bf05cf9e65052a3e3d18d0d63e502160ca4623",
+      "vector_counts": {
+        "prefill_pcc": 32,
+        "decode_pcc": 32
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_contracts_full_v2.json",
+      "sha256": "71716f2e7f4d687664f44aa3b3505d0a8ea4ec06501bca19eb22c19c868ab4dd",
+      "vector_counts": {
+        "prefill_pcc": 32,
+        "decode_pcc": 32
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_contracts_sliding.json",
+      "sha256": "62935cbbf88e787f2f7ec2a758cf3311468d4aa0e5fe8f9a57e0731045841c40",
+      "vector_counts": {
+        "prefill_pcc": 32,
+        "decode_pcc": 32
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_contracts_sliding_v1.json",
+      "sha256": "a5e18450090bdbc32d3478c1db99d0a7fa47b95e0af7cb60170f5e4d61aaa233",
+      "vector_counts": {
+        "prefill_pcc": 32,
+        "decode_pcc": 32
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_contracts_sliding_v2.json",
+      "sha256": "f60d28afa45f56074c0a9572a3dbea18e968640edea2d8f069bbe8ccf66d76d8",
+      "vector_counts": {
+        "prefill_pcc": 32,
+        "decode_pcc": 32
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_full.json",
+      "sha256": "a1c24eb7fb222bf4b95bf450ac63c1c7206b712d0e2d3e32479afb8eea0268b7",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_full_v1.json",
+      "sha256": "02f88699a286ac72fdd17a5c1ea393f6e12426fd686cb1c2b8e51ad676074874",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_full_v2.json",
+      "sha256": "ddafd35799f580f6904d09ffa6756ef1c339ff14c3907ee03d8a9666e087587a",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_max_262143_full.json",
+      "sha256": "0d7e5235c460427f0e8da94afbb3da4241d021a04eab560f74c1c5bc77302917",
+      "vector_counts": {
+        "pcc": 2,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_max_262143_sliding.json",
+      "sha256": "c763d3731b4885e0311bbd6f906d5a18bc29812a4bd4fdf1e73fcf50657f7595",
+      "vector_counts": {
+        "pcc": 2,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_max_262144_full.json",
+      "sha256": "6bb37735e4c19e699e3ffc098789da583368f7886078894f671c07b15d56a9d5",
+      "vector_counts": {
+        "pcc": 1,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_max_262144_sliding.json",
+      "sha256": "1ce06bf125067b0b4505f334af7204cd6acceb3dc94337e184a1f0c4251507be",
+      "vector_counts": {
+        "pcc": 1,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_nonaligned_full.json",
+      "sha256": "b14fe4d4143db507b4cb5737b3dfed281b94d5265a1fa4dfd30c5c17bc17606b",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_nonaligned_sliding.json",
+      "sha256": "ffc9e52e50ed2165bbe5d4eac94428a636c05bc1bee5794781bc5c5e25d800ea",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_nonaligned_sliding_v2.json",
+      "sha256": "ee915f687e748755ecacd235929968376d5fba1a36991150348192c0838d7d65",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_payload_attention8_sliding.json",
+      "sha256": "6e85938649f6d535542f98a7edd07b24d61cdaeaea27f237df8e9bcf99c88f1a",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_payload_moe8_full.json",
+      "sha256": "84e3df024665a2c67742da824b10c5f3f7ba0713222c80cad380fda9cbf90c1e",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_expert_hifi2.json",
+      "sha256": "59290cd3e3b8344f7d4476a3b97937c75e1494889bcd09dca4374f66eaa2636e",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_expert_n1_k88.json",
+      "sha256": "50e0bb76f176343e99a71179d2dabe0894ad36f8da46b1881b11376ee8619871",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_expert_n2_k44.json",
+      "sha256": "6d2b4b89b23d4dd9453a581102fafdfa8be5613e2ca7c7f26c3cf7577cee87bf",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_expert_n2_k88.json",
+      "sha256": "96f98df1d8af8c45bdc54e3459e9aadf424264ef78294acddad1dafccb8d8237",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_expert_separate.json",
+      "sha256": "7573b4da9922f8d5930fbec22666af2e962c82f22fb058b116755fa4d242f32d",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_precision_matched_baseline.json",
+      "sha256": "ca275b28ebfc81f0017d3f3154fd1bb514c2ff8059c2b2fa2714c333d152d8ed",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_qkv_dram_r2.json",
+      "sha256": "5e8ab85d41588677f327d700ed879605fb9c4813b2e8b52c8e684784958b3e36",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_qkv_k22.json",
+      "sha256": "d9f16bb6b5dc27514b530746c6a21cc502837ed7ce146d43d0e0bc24294c441d",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_qkv_k88.json",
+      "sha256": "78417778f76ca92296165c5e9dfd0d3b9ec48fc4979bad2b8f16e87263a31ec4",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_qkv_n1.json",
+      "sha256": "3fbb5c4cd0e5982275daefcec14da21e514ab6130188682163969b2c09eaf2fb",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_qkv_n4.json",
+      "sha256": "af87e39a60356ae3c93773e0091691973ecbc34a1fe3d654cd7391a0d57a990b",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_residual_l1.json",
+      "sha256": "24cebe92374f751ae1a9552381c986c71cb32db18688ccaad4953c51357f05e9",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_policy_selected_control.json",
+      "sha256": "bdc3924567aead32f6ffde2ff6ae3e2ac0bec4de40fc147d21871f30d3fe8b93",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_sliding.json",
+      "sha256": "aafe7a831f6ca28c9d05dc15fa86da0b5b061ffa72263af6a8df1bba8cddeb33",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_sliding_v1.json",
+      "sha256": "d0c58ed7343fdd39102b8efcdc6fccdcbde4e4e20bed5494ff29db70417bfc45",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_sliding_v2.json",
+      "sha256": "f99c2ae36fb3f0e6a1ba455d384a77390e4ade4b43b26a35fc0b9b055f4650f8",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_stack_mixed_33.json",
+      "sha256": "5f57164ce9a92c6e04fc2ac9e1d6bfd0057f2039ffd5c3b3a24cbf20f0c24a72",
+      "vector_counts": {
+        "comparisons": 258
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_stack_mixed_4096.json",
+      "sha256": "9539fc33476664552454d771bc9775cc07f5d5451b47bc0b3fb0a556824cb6fb",
+      "vector_counts": {
+        "comparisons": 258
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_stack_samekind_33.json",
+      "sha256": "1aa6caaeeb290b8a8ff65cff69a4f8344a903ab16dffa2ccb2549aeee40b8086",
+      "vector_counts": {
+        "comparisons": 258
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_stack_samekind_4096.json",
+      "sha256": "e429030cf7ff572d753050d22205fe3c04f273b1a9c55cbb3d823758826e8a80",
+      "vector_counts": {
+        "comparisons": 258
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_stack_v2.json",
+      "sha256": "6691a6d35394383ad3a78957ad08d8344ec6a40795d6ace2b63b3b6c8960b6e2",
+      "vector_counts": {
+        "comparisons": 6
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_watcher_full.json",
+      "sha256": "fe5ffe68b31a6c036a4c328c33eea407fa18e261619419401b94bb87f00f9e7c",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_watcher_sliding.json",
+      "sha256": "5229df82a16cc8674014d03b2c055de2920a62389384fa9b859a21ed8488033d",
+      "vector_counts": {
+        "pcc": 129,
+        "cache_pcc": 8
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_watcher_stack_mixed.json",
+      "sha256": "48119ebeb11b13cfa4af5adff086bcee8bbb7ced81dbf2ec87f1fdd5c4e48385",
+      "vector_counts": {
+        "comparisons": 258
+      },
+      "finite_and_passing": true
+    },
+    {
+      "artifact": "final_watcher_stack_samekind.json",
+      "sha256": "86ba86b6cb18b6680587895552d9a4ce90906cb7bca50c164524839067e305b9",
+      "vector_counts": {
+        "comparisons": 258
+      },
+      "finite_and_passing": true
+    }
+  ],
+  "scope": "Offline acceptance-gate repair only; no change to device execution or captured measurements."
+}

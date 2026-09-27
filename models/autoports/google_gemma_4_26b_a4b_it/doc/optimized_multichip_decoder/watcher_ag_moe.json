@@ -1,0 +1,90 @@
+{
+  "case": {
+    "workers": 1,
+    "dtype": "bfloat8_b",
+    "memory": "L1",
+    "persistent": true,
+    "rows": 1,
+    "channels": 2,
+    "trace_replays": 8,
+    "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_multichip_decoder/watcher_ag_moe.json"
+  },
+  "mesh": [
+    1,
+    4
+  ],
+  "local_input_shape": [
+    1,
+    2,
+    1,
+    704
+  ],
+  "output_shape": [
+    1,
+    2,
+    1,
+    2816
+  ],
+  "kernel_sha256": "14ca782e9b60777f75e3d5a8e3ed8700bc2508cc6af0b0efaac86941d35b490a",
+  "watcher_environment": {
+    "TT_METAL_WATCHER": "10",
+    "TT_METAL_WATCHER_NOINLINE": "1"
+  },
+  "eager_mismatches": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "replay_mismatches": [
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0
+    ]
+  ],
+  "passed": true
+}

@@ -1,0 +1,577 @@
+{
+  "shared_collective_pool": true,
+  "output_sha256": {
+    "1": {
+      "prefill": [
+        "2a7513e68fb362e6858e9d78695314b7ccfb58d24b892b52adef02dd65639384",
+        "22fd0749b0778bf45d2375908854fb6cb5b4a72686932b5c08cd36105f3935b0"
+      ],
+      "decode": [
+        [
+          "d279a30ae586fb266236b21d52ee18e15e9cef1dd1d57d1a91d727a76df548cf",
+          "2c5b580649795239917f631e3b33abe9d37a10de821e3d256b70ba180f8444e3"
+        ],
+        [
+          "5985f22e87a4404fc73737d045aedd7997edd1310f43f902f74491f5a738e523",
+          "91d278a7d55d22f7a8d3b7f9b56b937fe315dd87eaba153fb45a1e4e4c3fe7bb"
+        ],
+        [
+          "83949aa657aec395107e2e1bd9d611a5a9555641e09cfad37c9043cc1e1528d9",
+          "df25ad758d717e420750e3f6addd4b5375096da48c065be4280491826bc08502"
+        ],
+        [
+          "b476182037882a1667c2c11b0eb9811be32fb1b352e8109333ecc439a1e27982",
+          "0ef9510dca9b8e114a774c81bfef3579fb2bf58334e7575c3c2aee9440187edc"
+        ],
+        [
+          "acb7dd7c209682bb5d0c354349effa482936be2751b43c8873cf74229b52c311",
+          "5ace350f0da8db36feefbfb9daa358f792ce78ef0404ca39793831a6ec9744d1"
+        ],
+        [
+          "5423ba8e16ebbfccb46bb8723bc03e9d33ed005fc7d2a86c25003b5791b6a63c",
+          "0febf2c7eba8386018a53331545c48a8c6ecee3b95e1b679a5936511695fb92a"
+        ],
+        [
+          "3d3f199843a554f8153b3ec27abab4decdffee50a4a3c8ddd36f8b12d380bba8",
+          "02384eb4444ae707e7db4970c6ead6a0201df6263d67a70155bcf990007fbc0f"
+        ],
+        [
+          "cd777900c92e03d8f2517fa81248bf6b77cdeb4cc5460662305e0cb75d142e16",
+          "38f1f963df6c372ac855d16cd5059152311dd21088e687844d91488186c005f3"
+        ],
+        [
+          "0ed7b2bd117835cc049c98455b30a9d59c3e1d4dee2bc9e3eadcf02b318f6d74",
+          "336fcbcd9932a6d507152b051106a10f41d0e0eb0db7d48b4c50377edef48a5c"
+        ],
+        [
+          "92fe91be67ade641823dd72fc00d1063ccf1b56c839cfd9c0f3c4b7d7ceb8560",
+          "6bb2911e0ddd1758ab29051ceaa1489af5051a7bbd97965fa76a335fcf9711df"
+        ],
+        [
+          "4a7920ff5694594c7ca57c7c113c1c6fcee4b6adc62f467ab42da63b07d110cb",
+          "e72936cc88200872dec141d87a8ab780b7e510fd25bee94434e00ea46850e4db"
+        ],
+        [
+          "4b96ccf060387e128b8747a1b35b35d5d98b6992c297aadc18c9a9d5bd4cfb35",
+          "7811000baea8400b738a832ed35bc037d7449ab1393d1f0867ea51e45d235a5a"
+        ],
+        [
+          "467dd453efa73df8eb4779f23f67c1cfaa45c6983c7d866cfac77cfdf17f64e5",
+          "531b4bda60f8dfa336d904dc97002cf1981fcd965f9d49cbfce891cd33251194"
+        ],
+        [
+          "c149d489c6750e660c4888c3e5443b47c2e046b5cab1994a5a4e5f5497bf439a",
+          "d09e7b983b525dcb507ca350a13e5859cdac410ca94170d27bf91795a4197124"
+        ],
+        [
+          "a7b14f68841963317fb1825a6011f89cf3349cab1800ea908612f2587e487901",
+          "e7bf624be3115aea946e09c6bf6c4e95087095553b0e5c3144f6e1b04bf898fb"
+        ],
+        [
+          "0dc396adbbceec34457b943cbb086dafec775bb8752144237399a2a4ea515f81",
+          "ab93a46c8a8af418c23d6edb2d3fee1f61c6aae366d313722e9c33bb8bfdb214"
+        ],
+        [
+          "f564d1697f59ccb1fac56c5075de8592c911496fd3625fe22fef8dff3ffc86bf",
+          "30a1eb86c3e874632639e6e884f2da8ab1e694d61e3846e6b74c6874c3f1a4e2"
+        ],
+        [
+          "068caf3f7a693e86b37d758f7d75d4ce29ec534c1f3376bf854bdf2bfea1511a",
+          "521188d78bb7c6e37a291d4cd87d4642318188673ff47d62d3a544e771c631fe"
+        ],
+        [
+          "6d9940565b077b201a9b44795c4c149008d7db69960b052754e1d0ae76f15a0b",
+          "e2c5c2ab7dd72ac8e97828cdadff52c24506d9c9c9c5af14a3fdef77974ae8c6"
+        ],
+        [
+          "e5e97beda239f0fc92b101f1124bd0a5c9f87acbb5760989124965d44b541441",
+          "084a4ef1c342e4367ff9b81befa7ac52311b6c284edb7cc0c5769ef764c37ccb"
+        ],
+        [
+          "c1a288cfcd1f19ca71f7a3a72fbf8c06f1c2a6c90257aa9392d63713d91f406a",
+          "e2e014c0a2cf4b952a85f245b1303b98fbd7a51f570612b0bef8d66c4c083af5"
+        ],
+        [
+          "7b56b0e3dff231673ac063e8356b31106a57ed96fd0fe10ff1edeee2c1a5726d",
+          "bb5ea20b82f88c14757680c96a6abfbe32280bd234ac8a71a31c0110288394f8"
+        ]
+      ]
+    },
+    "4": {
+      "prefill": [
+        "e1b42947769676c1275b16abc41b3a143cbfdbaf3c33937e470c3663a1c3369c",
+        "62b1c39d4ba560a885ad6328173467272ea247d1b99e30ecd93d34b1813a87dd"
+      ],
+      "decode": [
+        [
+          "ef3eddd9643558a46d9777b4510fcdec60c0f9b455051c672bdf644b67f5e4d8",
+          "4b2890378ecc27fff8ef33546f6e6c02b674913f081cd2d6b620ef5c2811974a"
+        ],
+        [
+          "880d2c64f2dd0431cd677af4622101934e43443cebbd3268107fd18f4de9641f",
+          "faf56105c7ef6b7d1781620072f2e22c1cd8bbdb95dc08fae561003b5e3ff56d"
+        ],
+        [
+          "eddd48eb4046bcff89d00b75f7c9c1c805287ba33c54fc742e512e0fa161d342",
+          "84b2d0a0d959bb6df175dc2ae7133607853d93c496c847447fb6ce4c1a8090a0"
+        ],
+        [
+          "69127d24eda7dc822f0226154a734266522dfd18ece7e0e6740851aea0d8c764",
+          "770e74f18d978909b75c294962505922ea8f3246130122e487cf55a3f7cdb78a"
+        ],
+        [
+          "d43ae0cb7395ac07679d493919f0ccb4dd07a90c05d78eeab8cbf8944f3cb17d",
+          "c54fa9eaaef51d3eff2b231230c5e6f331b5afea64dab113f9db5cfdbf43d053"
+        ],
+        [
+          "eab6ba0025d15ee5fc2f0cb59cc89e8b16b7bcebc87f48eb3488621be2f43f3c",
+          "e5a545f6f003589eb39a4f486fa27570e3a7491e1ff387c72b04e31f84353054"
+        ],
+        [
+          "a283413ee4266896c5463dda5ede6e0d8ca1e06f10b22dc00bf22bd3428ad79f",
+          "1f9bbe03873c035f0530f6586bd498f269793b2aee75f72bf0ec7c889ef91989"
+        ],
+        [
+          "f09998dcbcd2f9c87126715de64e8a2387265297a5fe14bd4b6340e53129c062",
+          "673e3e612b56aa4296c7bec91516c91772b6d630f3faf7e02a2f6a14c8b0ede1"
+        ],
+        [
+          "325b8fff95ad2b8e0144358e08126e1b61237faaed1fa47de3da3d724c384e5e",
+          "077de9328523f04ec2d50217e4664d6d3ada449de9a9061f4ff100631fb879e4"
+        ],
+        [
+          "59cf6edf136b1fdae57f81548e14598abe98284103173285fb0fb96c9afb1068",
+          "989a6c877a4785b03a32b1996d348918fec4fefcb897eb9c8ffd66e9a9e39c7d"
+        ],
+        [
+          "3e45c9d78ace2e2b2b7c23c58b0f0086ef7bd16b5c94ca3e4cdb4368aa891a16",
+          "e41066f284b753e26c9c2496a2ac47d946556c30d4ad6931a4484049fe3304cd"
+        ],
+        [
+          "fa8155c53168a2b9701282bc49bef61c18fece7b566e9c16305363bb5a24436d",
+          "39741da58ead18033d8ecb340d415e3d68a6f379127819f21cb6de85dbc0d94b"
+        ],
+        [
+          "8b0750486bdf2931d584b85f88f3ecfe96eea36e46d89f9116cea0077ce705fa",
+          "0906874772f743a3d60938344aa0bd17b2dc65ad41e3abd1173f78d7235033db"
+        ],
+        [
+          "4c82053c98d9fc4b3a29bdbd178093893c8e5d177aefa7cc829820bbf3eadba4",
+          "bad56e15aebfae4c7f44fe45da2a149de7497a79c0e1731c9f895ebd63033725"
+        ],
+        [
+          "bab69439ee2021a9153315116d3efe5d52e0ce2e4d6f8a2026c8b4d3a4188396",
+          "6887c4efec2d844d862849af5fc8271d78a233b568da6a70c3cef7544911c69c"
+        ],
+        [
+          "a4452f03274739174522b4f36ad8f2525b5bd027155e842ac6091bed513209e4",
+          "13ea62d4a18d29b4d92b15c627951f70901f4651364432290359dbbed7267f19"
+        ],
+        [
+          "bf3a3c79f9d28e5264b89f6a15c6ebcd4d74fd0c3975db6108aa4964a168c3eb",
+          "2c89dd8ad5c3b35e5a0f195b6c55ad614e8c35b509fd184daaa57a9418cd0b58"
+        ],
+        [
+          "73271b2a193a197edfe4c11d7eea5b550a03373ae8ddedbfa4baa2e938f71edc",
+          "36db04033d3d703e1cbbbe687608fa1a6167f3bed0688c280b465df1bb60d031"
+        ],
+        [
+          "ea2b9384fa293faaf33c04ea11ff30512e08a49fd3bccdbea93607823a038165",
+          "64a1ef352322915555fee664d77a5ee132f382252a93951eb46ab95c79b0276b"
+        ],
+        [
+          "d5664d99a5f92a7e972aa58bee2ca38f710cfc64372fae6dbf80c2cdfa5a13d0",
+          "139ea976241e04039b650ae541464bce7189eaf4477425799a6d34c47ab47fcf"
+        ],
+        [
+          "1a4fa3a24de5ed5dc66684a37270592be0fe076a88684a86b4f14a4a2f6fc57b",
+          "4619240289eb7bb1e3bd16f9db461ec31ded45e82ef3af0f4ef48000fc6186f9"
+        ],
+        [
+          "44145d5b154fe8b1fad026c3220fa47203989957f4f4c253f6ef8f9ebcd18f21",
+          "303f205e660bc308a2dc12666bb0b6be7bf9f43d79b32a9c7703840ecd941928"
+        ]
+      ]
+    }
+  },
+  "layers": [
+    0,
+    1
+  ],
+  "layer_types": [
+    "sliding_attention",
+    "sliding_attention"
+  ],
+  "length": 4096,
+  "decode_positions": [
+    4096,
+    4097,
+    4098,
+    4099,
+    4100,
+    4101,
+    4102,
+    4103,
+    4104,
+    4105,
+    4106,
+    4107,
+    4108,
+    4109,
+    4110,
+    4111,
+    4112,
+    4113,
+    4114,
+    4115,
+    4116,
+    4117
+  ],
+  "expert_parallel": false,
+  "hybrid_experts": true,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "shared_geometry": null,
+  "grouped_moe_reduce": true,
+  "sliding_sharded_rope_override": null,
+  "qkv_fidelity": "LoFi",
+  "output_fidelity": "LoFi",
+  "attention_ccl_dtype": "bfloat8_b",
+  "full_attention_ccl_dtype_override": "bfloat8_b",
+  "sharded_residual": false,
+  "direct_interlayer_handoff": true,
+  "independent_layer_caches": true,
+  "trace_scope": "both layers in one trace",
+  "repeat_trace_equal": true,
+  "all_replicas_equal": true,
+  "runtime_audit": "clean",
+  "source_sha256": {
+    "tt/multichip_decoder.py": "dcee732efc1f6d61ace996a31662e880ffaf8c011d8396f5a2c081a2f9910f2b",
+    "tt/optimized_decoder.py": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+    "tests/test_multichip_stack.py": "23b66cd51f1ef1faeb02f7171a5cc88af9fb1851dcfc002f5697a3f65dc49506"
+  },
+  "comparisons": [
+    {
+      "phase": "prefill",
+      "layer": 0,
+      "pcc": 0.9998855247444187
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4096,
+      "pcc": 0.9995828024008306
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4097,
+      "pcc": 0.9993394108636474
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4098,
+      "pcc": 0.9990896208474597
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4099,
+      "pcc": 0.9989190075047271
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4100,
+      "pcc": 0.9991073512506318
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4101,
+      "pcc": 0.9991516273689764
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4102,
+      "pcc": 0.9994046356098704
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4103,
+      "pcc": 0.9985332568048534
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4104,
+      "pcc": 0.9985622112425324
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4105,
+      "pcc": 0.9987701523026298
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4106,
+      "pcc": 0.9988523073162736
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4107,
+      "pcc": 0.9987488067069499
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4108,
+      "pcc": 0.9995667547910354
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4109,
+      "pcc": 0.9995023714652047
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4110,
+      "pcc": 0.999057795235109
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4111,
+      "pcc": 0.9985694928665168
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4112,
+      "pcc": 0.9986892677224214
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4113,
+      "pcc": 0.9986022736738996
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4114,
+      "pcc": 0.9990568177398551
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4115,
+      "pcc": 0.9991428215247643
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4116,
+      "pcc": 0.9992778945376004
+    },
+    {
+      "phase": "decode",
+      "layer": 0,
+      "position": 4117,
+      "pcc": 0.9985283786367996
+    },
+    {
+      "phase": "prefill",
+      "layer": 1,
+      "pcc": 0.9997529898317054
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4096,
+      "pcc": 0.9992102307724086
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4097,
+      "pcc": 0.9990182078410682
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4098,
+      "pcc": 0.9974895699887979
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4099,
+      "pcc": 0.9988313131176976
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4100,
+      "pcc": 0.9989281213172975
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4101,
+      "pcc": 0.9985830276377635
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4102,
+      "pcc": 0.9982589565637874
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4103,
+      "pcc": 0.9866052423578386
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4104,
+      "pcc": 0.9975602360026907
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4105,
+      "pcc": 0.9980488780756581
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4106,
+      "pcc": 0.9950829531200959
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4107,
+      "pcc": 0.9980634635139872
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4108,
+      "pcc": 0.9992030137428279
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4109,
+      "pcc": 0.9990035806140629
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4110,
+      "pcc": 0.9987828957346159
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4111,
+      "pcc": 0.9964880799702706
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4112,
+      "pcc": 0.9969935314804278
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4113,
+      "pcc": 0.998785381101557
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4114,
+      "pcc": 0.9983392802533625
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4115,
+      "pcc": 0.9975701192683751
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4116,
+      "pcc": 0.9979944071945651
+    },
+    {
+      "phase": "decode",
+      "layer": 1,
+      "position": 4117,
+      "pcc": 0.9902116191004384
+    }
+  ],
+  "passed": false,
+  "precision_probe": {
+    "options": {
+      "probe_layers": null,
+      "probe_expert_gate_bf8": false,
+      "probe_expert_activation_bf16": false,
+      "probe_shared_gate_bf8": false,
+      "probe_output_hifi4": false,
+      "probe_attention_precision": null,
+      "probe_moe_bf16": false
+    },
+    "actual_tp4_policy": [
+      {
+        "layer": 0,
+        "controls_applied": true,
+        "expert_gate_dtype": "DataType.BFLOAT4_B",
+        "expert_down_dtype": "DataType.BFLOAT4_B",
+        "expert_activation_dtype": "DataType.BFLOAT8_B",
+        "expert_compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x748aa84ecd20>",
+        "shared_gate_dtype": "DataType.BFLOAT4_B",
+        "shared_down_dtype": "DataType.BFLOAT8_B",
+        "attention_precision": "qkv",
+        "attention_ccl_dtype": "DataType.BFLOAT8_B",
+        "moe_ccl_bfp8": true,
+        "qkv_fidelity": "MathFidelity.LoFi",
+        "output_fidelity": "MathFidelity.LoFi",
+        "cache_dtype": "DataType.BFLOAT8_B"
+      },
+      {
+        "layer": 1,
+        "controls_applied": true,
+        "expert_gate_dtype": "DataType.BFLOAT4_B",
+        "expert_down_dtype": "DataType.BFLOAT4_B",
+        "expert_activation_dtype": "DataType.BFLOAT8_B",
+        "expert_compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x748aa84ef330>",
+        "shared_gate_dtype": "DataType.BFLOAT4_B",
+        "shared_down_dtype": "DataType.BFLOAT8_B",
+        "attention_precision": "qkv",
+        "attention_ccl_dtype": "DataType.BFLOAT8_B",
+        "moe_ccl_bfp8": true,
+        "qkv_fidelity": "MathFidelity.LoFi",
+        "output_fidelity": "MathFidelity.LoFi",
+        "cache_dtype": "DataType.BFLOAT8_B"
+      }
+    ],
+    "source_sha256": "f07716de0b66da5626dede3928795f40f0506b7b4646e19497ddb7c537e575e7",
+    "original_stack_gate": 0.995
+  }
+}

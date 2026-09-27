@@ -271,5 +271,66 @@
     "candidate_memory_evidence_status": "Historical pre-final-policy candidate. Candidate weight/peak fields and per-layer reservations are preserved as measured/planned at that time; see memory_capacity_plan_before_final_policy.json.",
     "supported_context": 262144,
     "review": "multichip_decoder/stage_review_final.md"
+  },
+  "optimized_multichip_decoder": {
+    "status": "clean-pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_dtype": "bfloat8_b",
+    "local_kv_heads": {
+      "sliding_attention": 2,
+      "full_attention": 1
+    },
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "extra_dram_weight_bytes_per_device": 1754480640,
+    "persistent_ccl_memory": "L1_INTERLEAVED",
+    "persistent_ccl_payload_bytes_per_device": 2690688,
+    "conservative_dram_peak_bound_bytes_per_device": 29206137856,
+    "headroom_to_decimal_32gb_bytes_per_device": 2793862144,
+    "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+    "memory_accounting": "optimized_multichip_decoder/final_memory_plan.json",
+    "precision": "Sliding QKV BFP8, expert gate/up BFP8, attention CCL BF16; full QKV decode BFP4 with retained BFP8 prefill, expert gate/up BFP4, attention CCL BFP8. WO BFP8, expert down BFP4 and KV BFP8 for both kinds.",
+    "capacity_probe": "Reserve other-resident DRAM plus new weight copies, prime the actual shared CCL payload pool, and allocate30 private full11x10-grid CCL semaphore sets before prefill.",
+    "evidence": [
+      "optimized_multichip_decoder/final_max_262143_sliding.json",
+      "optimized_multichip_decoder/final_max_262144_sliding.json",
+      "optimized_multichip_decoder/final_max_262143_full.json",
+      "optimized_multichip_decoder/final_max_262144_full.json"
+    ],
+    "notes": [
+      "Batch32 short-context correctness is distinct from one maximum-length request.",
+      "No full-model execution or serving implementation is part of this stage.",
+      "Both layer kinds pass aligned262144 prefill and nonaligned262143 prefill plus final-position decode with revised resident reservations and actual pooled buffers/semaphore sets."
+    ],
+    "persistent_ccl_ownership": "One caller-owned role-separated CollectiveBufferPool per serial mesh/command queue; private full-worker-grid semaphores for each layer.",
+    "per_layer_type": {
+      "sliding_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 21474836480,
+        "runtime_sha256": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+        "minimum_tested_output_pcc": 0.9997701165855823
+      },
+      "full_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 21072183296,
+        "runtime_sha256": "2f240a9f5434efa370fed4cc6a3d6d72ec2dabc2bfae840ba9fbbc820919c797",
+        "minimum_tested_output_pcc": 0.9997186833575766
+      }
+    },
+    "source_equivalence": [
+      "optimized_multichip_decoder/fused_guard_source_equivalence.json",
+      "optimized_multichip_decoder/native_endpoint_source_equivalence.json"
+    ],
+    "current_runtime_sha256": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
+    "review": "optimized_multichip_decoder/stage_review.md"
   }
 }
