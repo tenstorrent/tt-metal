@@ -15,14 +15,17 @@
 # PYEOF
 #
 # Flags:
-#   --device N|auto  Which card to run on (default auto = lowest FREE card; N = wait for
-#                    that UMD card id; see scripts/lib/tt_device_pool.sh). The probe sees
-#                    its card as device 0. Logs / triage under generated/dev<N>/.
-#   --mesh           Take every card (multi-device probes). Logs under generated/mesh/.
+#   --device N|auto  Run on ONE card (auto = lowest FREE card; N = wait for that UMD card
+#                    id; see scripts/lib/tt_device_pool.sh). The probe sees its card as
+#                    device 0. Logs / triage under generated/dev<N>/; only it is reset.
+#   --mesh           Take every card. This is the DEFAULT with neither flag (override with
+#                    TTPOOL_DEFAULT_SELECTOR=auto|N); legacy layout under generated/, the
+#                    whole box is reset after the probe, as before the pool.
 #   --dev   Enables polling watcher (NoC sanitizer, waypoints, CB sanitization),
 #           lightweight ebreak asserts (ASSERT + LLK_ASSERT), and an llm-friendly triage report
-#           to generated/dev<N>/tt-triage/triage.txt (legacy generated/tt-triage/triage.txt is a
-#           symlink to the latest). Same semantics as run_safe_pytest.sh --dev.
+#           to generated/tt-triage/triage.txt (generated/dev<N>/tt-triage/triage.txt under
+#           --device, with the legacy path symlinked to it). Same semantics as
+#           run_safe_pytest.sh --dev.
 #
 # With DPRINT:
 #   TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=TR0 \
