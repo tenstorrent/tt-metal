@@ -1,7 +1,7 @@
 # shared_input_reuse — read once, share many (shared-input DRAM-read amortization via multicast)
 
 **Difficulty:** ⭐⭐⭐ T3  ·  **Concept(s):** redundant-DRAM-read elimination via NoC multicast (the `mcast_pipe` helper)
-**First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH · Blackhole · 2026-07-13
+**First profiled on:** `bh-qb-11-special-dnijemcevic-for-reservation-42432` · BH P150 · 2026-07-13
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -47,8 +47,12 @@ python -m ttnn.operations.examples.shared_input_reuse [--chunk-rows 16] [--d-col
 | `--trials` | int | 10 | profiled rounds; report shows median |
 
 ## Measured result
-*Illustrative — see the **First profiled on** stamp; re-run the CLI for your box.* Shared input = 19×16×4 = 1216
-tiles ≈ 2.4 MB bf16, streamed in 19 chunks, on 22 cores (2×11).
+*Illustrative — re-run the CLI for your box.* Shared input = 19×16×4 = 1216 tiles ≈ 2.4 MB bf16,
+streamed in 19 chunks, on 22 cores (2×11).
+
+### P150 reference
+
+The original run did not record busy AICLK, enabled GDDR count, or firmware.
 
 ```
 shared_input_reuse  box=bh-qb-11…  arch=Blackhole  cores=22 (2x11)  injector=top-left
@@ -57,9 +61,22 @@ shared_input_reuse  box=bh-qb-11…  arch=Blackhole  cores=22 (2x11)  injector=t
   mcast             78987     1.71x
 ```
 
+### P100a, seven enabled GDDR banks
+
+`bh-43-special-sjovic-for-reservation-97381` · 1350 MHz busy AICLK · firmware 19.12.0 · 2026-09-23
+
+```
+shared_input_reuse  box=bh-43-...  arch=Blackhole  cores=22 (2x11)  injector=top-left
+  variant          ns/op      vs per_core_dram
+  per_core_dram    161936     1.00x
+  mcast             88861     1.82x
+```
+
 **Reading of the result:** reading a shared stream from DRAM on every core is `N ×` redundant; reading
-each chunk once on the injector and NoC-broadcasting it wins **1.71×** here at the realistic ~2.4 MB / 22-
-core operating point. Note the device-time win is *smaller than the DRAM-read-count reduction* — reading
+each chunk once on the injector and NoC-broadcasting it wins **1.71× on P150 and 1.82× on this
+seven-bank P100a** at the realistic ~2.4 MB / 22-core operating point. The P100a's redundant-DRAM
+baseline is 19.6% slower than the P150 result, while the multicast path is 12.5% slower. Note the
+device-time win is *smaller than the DRAM-read-count reduction* — reading
 each chunk once on the injector instead of on every core cuts the per-tile DRAM read count by roughly the
 multicast fan-out (~11× on this 22-core grid), but the device time is capped because the single injector
 reads the whole stream serially and the bytes still cross the NoC (the mcast fan-out isn't free). It grows
