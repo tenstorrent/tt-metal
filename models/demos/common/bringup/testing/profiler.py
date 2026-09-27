@@ -112,22 +112,27 @@ def _book(per_dev: dict, n: int) -> None:
     p["programs"][cur] = p["programs"].get(cur, 0) + n
 
 
-def _book_op(op: str, shape: str, per_dev: dict, n: int) -> None:
+def _book_op(op: str, shape: str, per_dev: dict, n: int, mem: str = "") -> None:
     p = _P
-    if (
-        op != "(other)" or n
-    ):  # every real call is in the sequence (the timeline run sees them all), even with 0 programs
+    # every real call is in the sequence (the timeline run sees them all), even with 0 programs
+    if op != "(other)" or n:
         p["seq"].append(
-            {"key": p["current_full"], "op": op, "shape": shape, "n_dev": dict(p["last_n_dev"]) if n else {}}
+            {
+                "key": p["current_full"],
+                "op": op,
+                "shape": shape,
+                "mem": mem,
+                "n_dev": dict(p["last_n_dev"]) if n else {},
+            }
         )
-    if (
-        not n or p["current_full"] is None
-    ):  # before the first section (e.g. the embedding): in the sequence, not in a row
+    # before the first section (e.g. the embedding): in the sequence, not in a row
+    if not n or p["current_full"] is None:
         return
     rows = p["op_ns"].setdefault(p["current_full"], [])
-    row = rows[-1] if rows and rows[-1]["op"] == op and rows[-1]["shape"] == shape else None  # execution order
+    same = rows and rows[-1]["op"] == op and rows[-1]["shape"] == shape and rows[-1].get("mem", "") == mem
+    row = rows[-1] if same else None  # execution order: only back-to-back repeats merge
     if row is None:
-        row = {"op": op, "shape": shape, "calls": 0, "programs": 0, "ns": 0.0, "ns_dev": {}}
+        row = {"op": op, "shape": shape, "mem": mem, "calls": 0, "programs": 0, "ns": 0.0, "ns_dev": {}}
         rows.append(row)
     row["calls"] += 1
     row["programs"] += n
@@ -236,6 +241,8 @@ def align_timeline(op_seq: list[dict], tl_seq: list[dict], progs: dict, dev_to_c
                 "key": c["key"],
                 "op": c["op"],
                 "shape": c["shape"],
+                "mem": c.get("mem", ""),
+                "programs": sum(c["n_dev"].values()),
                 "kernel_ns": k_dev.get(crit, 0.0),
                 "gap_ns": g_crit,
                 "slot_ns": s_crit,
@@ -263,6 +270,54 @@ _DT = {
     "UINT16": "u16",
     "UINT8": "u8",
 }
+
+
+_ML = {
+    "INTERLEAVED": "interleaved",
+    "HEIGHT_SHARDED": "height-sharded",
+    "WIDTH_SHARDED": "width-sharded",
+    "BLOCK_SHARDED": "block-sharded",
+    "ND_SHARDED": "nd-sharded",
+}
+
+
+def _mem_of_tensor(t) -> str:
+    """'DRAM interleaved', 'L1 height-sharded 64 cores', '+ RM' for a row-major tensor."""
+    try:
+        mc = t.memory_config()
+        where = str(mc.buffer_type).split(".")[-1]
+        lay = str(mc.memory_layout).split(".")[-1]
+        txt = f"{where} {_ML.get(lay, lay.lower())}"
+        spec = mc.shard_spec if mc.is_sharded() else None
+        if spec is not None:
+            txt += f" {spec.grid.num_cores()} cores"
+        if "ROW_MAJOR" in str(t.layout):
+            txt += " RM"
+        return txt
+    except Exception:
+        return "?"
+
+
+def _tensors(x, limit=2) -> list:
+    import ttnn
+
+    out = []
+    for a in x if isinstance(x, (list, tuple)) else [x]:
+        if isinstance(a, ttnn.Tensor):
+            out.append(a)
+        elif isinstance(a, (list, tuple)):
+            out.extend(t for t in a if isinstance(t, ttnn.Tensor))
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def _mem_of(args, kwargs, out) -> str:
+    """Where the first two tensor inputs and the outputs live: 'DRAM interleaved · L1 height-sharded 64 cores ->
+    DRAM interleaved'."""
+    ins = _tensors(list(args) + list(kwargs.values()))
+    outs = _tensors(out)
+    return " · ".join(_mem_of_tensor(t) for t in ins) + " -> " + " · ".join(_mem_of_tensor(t) for t in outs)
 
 
 def _shape_of(args, kwargs) -> str:
@@ -336,7 +391,7 @@ def _patch_ops() -> None:
             p["depth"] = 0
         per_dev, n = _drain()
         _book(per_dev, n)
-        _book_op(name, _shape_of(args, kwargs), per_dev, n)
+        _book_op(name, _shape_of(args, kwargs), per_dev, n, _mem_of(args, kwargs, out))
         return out
 
     D.FastOperation._bringup_orig_call = orig
