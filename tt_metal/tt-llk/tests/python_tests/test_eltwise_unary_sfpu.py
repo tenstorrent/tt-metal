@@ -1248,6 +1248,7 @@ def eltwise_unary_sfpu(
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
+    extra_templates=(),
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1309,7 +1310,8 @@ def eltwise_unary_sfpu(
             APPROX_MODE(approx_mode),
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
+            *((MATH_OP(mathop=mathop),) if not extra_templates else ()),
+            *extra_templates,
             # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
             # unary test has to keep compiling without the macro.
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
@@ -1458,3 +1460,135 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+_TT_POLY_PACK_CONFIGS = {}
+_TT_POLY_NATIVE_CALLS = {}
+_TT_POLY_FP32_DEST = {"erf": (), "erfc": ()}
+_TT_POLY_COPY_REBASE = {}
+_TT_POLY_PRECISION_SPLIT = ()
+_TT_POLY_ADAPTER_OPERATIONS = {}
+_TT_POLY_NATIVE_ARCHITECTURES = {}
+
+
+from dataclasses import dataclass
+
+from helpers.test_variant_parameters import TemplateParameter
+
+
+@dataclass
+class _TTPolyGeneratedBF16(TemplateParameter):
+    generated_unary_op: str
+    initialize: bool
+    replace_init: bool
+    generated_unary_iterations: int
+    generated_unary_vector_mode: str
+    header: str
+    disabled: bool = False
+    native_enum: str = ""
+
+    def convert_to_cpp(self) -> str:
+        callback = _TT_POLY_ADAPTER_OPERATIONS.get(
+            self.generated_unary_op, self.generated_unary_op
+        )
+        native_enum, native_call = _TT_POLY_NATIVE_CALLS.get(
+            self.generated_unary_op, (self.native_enum or self.generated_unary_op, None)
+        )
+        result = f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{native_enum};\n"
+        native = (
+            self.generated_unary_op in _TT_POLY_NATIVE_ARCHITECTURES
+            and str(TestConfig.CHIP_ARCH)
+            in _TT_POLY_NATIVE_ARCHITECTURES[self.generated_unary_op]
+        )
+        if self.disabled or native:
+            if self.disabled:
+                result += "#define TT_POLY_LLK_DISABLE\n"
+            else:
+                result += f'#define TT_POLY_LLK_TEST_HEADER "llk_sfpu/{self.header}"\n'
+            if native_call:
+                result += f"#define TT_POLY_LLK_TEST_STOCK_CALL {native_call}\n"
+            return result
+        result += f'#define TT_POLY_LLK_TEST_HEADER "llk_sfpu/{self.header}"\n'
+        if native_enum == "unused":
+            result += "#define TT_POLY_LLK_TEST_NO_STOCK_INIT\n"
+        if self.generated_unary_op in _TT_POLY_PRECISION_SPLIT:
+            return result + (
+                "#define TT_POLY_LLK_TEST_PRECISION_SPLIT\n"
+                "#define TT_POLY_LLK_TEST_REPLACE_INIT\n"
+                f"#define TT_POLY_LLK_TEST_INIT {self.generated_unary_op}_init\n"
+                f"#define TT_POLY_LLK_TEST_CALC calculate_{self.generated_unary_op}\n"
+                "#define TT_POLY_LLK_TEST_ITERATIONS APPROX_MODE, true\n"
+                f"#define TT_POLY_LLK_TEST_VECTOR_MODE {self.generated_unary_vector_mode}\n"
+            )
+        if self.generated_unary_op in _TT_POLY_PACK_CONFIGS:
+            header, config = _TT_POLY_PACK_CONFIGS[self.generated_unary_op]
+            result += f'#define TT_POLY_LLK_TEST_PACK_HEADER "llk_sfpu/{header}"\n'
+            result += f"#define TT_POLY_LLK_TEST_PACK_CONFIG {config}\n"
+        if self.initialize:
+            result += f"#define TT_POLY_LLK_TEST_INIT init_{callback}_tt_poly_bf16\n"
+        if self.replace_init:
+            result += "#define TT_POLY_LLK_TEST_REPLACE_INIT\n"
+        if (
+            self.generated_unary_op in _TT_POLY_COPY_REBASE
+            and str(TestConfig.CHIP_ARCH)
+            in _TT_POLY_COPY_REBASE[self.generated_unary_op]
+        ):
+            result += "#define TT_POLY_LLK_TEST_COPY_REBASE\n"
+        return result + (
+            f"#define TT_POLY_LLK_TEST_CALC calculate_{callback}_tt_poly_bf16\n"
+            f"#define TT_POLY_LLK_TEST_ITERATIONS {self.generated_unary_iterations}\n"
+            f"#define TT_POLY_LLK_TEST_VECTOR_MODE {self.generated_unary_vector_mode}\n"
+        )
+
+
+@pytest.mark.memory_layout("debug")
+@pytest.mark.skipif(
+    str(TestConfig.CHIP_ARCH) not in ("blackhole", "wormhole"),
+    reason="Generated LLK tests cover Blackhole and Wormhole",
+)
+@pytest.mark.parametrize(
+    "mathop,op,initialize,replace_init,iterations,vector_mode,header",
+    [
+        (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
+        (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
+    ],
+)
+def test_tt_poly_generated_bf16_llk(
+    mathop,
+    op,
+    initialize,
+    replace_init,
+    iterations,
+    vector_mode,
+    header,
+    disabled=False,
+):
+    # Native targets retain the public route's stock primitive and traversal.
+    native = str(TestConfig.CHIP_ARCH) in _TT_POLY_NATIVE_ARCHITECTURES.get(op, ())
+    dest_acc = (
+        DestAccumulation.Yes
+        if not (disabled or native)
+        and str(TestConfig.CHIP_ARCH) in _TT_POLY_FP32_DEST.get(op, ())
+        else DestAccumulation.No
+    )
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [32, 32],
+        extra_templates=(
+            _TTPolyGeneratedBF16(
+                op,
+                initialize,
+                replace_init,
+                iterations,
+                vector_mode,
+                header,
+                disabled,
+                mathop.cpp_enum_value if mathop is not None else "unused",
+            ),
+        ),
+    )
