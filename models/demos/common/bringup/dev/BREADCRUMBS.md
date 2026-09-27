@@ -463,3 +463,7 @@ Drive this ledger with
 - Dashboard: a pipeline line under "Where the time goes" and, per op, "device idle before it · host dispatch".
 - MiMo 50k->55k: device timeline 225.6 ms = kernels 225.4 + gaps 0.2 ms; host dispatch 27.8 ms for 611 calls, hidden
   behind device work (host wall 226.6 ms): device-bound.
+- Layout fix: the profile section is a grid; its children kept min-width auto, so the phase-label row under the bar
+  (nine nowrap labels) widened the section to 1427 px inside a 1140 px frame and pushed the bar, notes and op bars past
+  it. `#prof-sec>*{min-width:0}`; labels truncate with a tooltip; op names break after "." and "_"; op rows pin their
+  cells on narrow screens. Checked with headless Chrome at 1400 / 1000 / 390 px (no horizontal overflow).
