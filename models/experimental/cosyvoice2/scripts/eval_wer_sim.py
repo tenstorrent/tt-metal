@@ -44,7 +44,7 @@ import reference_env  # noqa: E402
 
 ASR_MODEL = "large-v3"
 SIM_MODEL = "microsoft/wavlm-base-plus-sv"
-# pinned: reproducible scores, and docs/security.md (transformers advisories)
+# pinned, so scores are reproducible and the loaded config is the one checked
 SIM_REVISION = "feb593a6c23c1cc3d9510425c29b0a14d2b07b1e"
 CER_LANGS = {"zh", "yue", "ja", "ko"}
 

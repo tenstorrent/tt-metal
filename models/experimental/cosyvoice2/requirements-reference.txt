@@ -29,11 +29,12 @@
 #   5. Versions: CosyVoice1's advisory-cleared pins where it had them (diffusers, hydra-core, lightning,
 #      modelscope, pyarrow); onnxruntime is held at 1.18.0 on purpose -- CosyVoice1 measured a different
 #      speech-token sequence from a newer onnxruntime for the same audio, and speech tokens reroute everything
-#      downstream. transformers is upstream's own pin, 4.51.3 (with the tokenizers / huggingface-hub it needs), not
-#      python_env's 5.12.1: under 5.x, upstream's LLM loads in bf16 and its decode loop's length-1 attention mask
-#      is right-padded with zeros, so generation runs to max_len. scripts/reference_env.py refuses any other
-#      transformers version. The pin brings transformers advisories that 5.x fixes; docs/security.md dispositions
-#      them (none is on a code path the reference venv runs).
+#      downstream. transformers is python_env's 5.12.1, not upstream's 4.51.3; scripts/reference_env.py refuses any
+#      other version. Under 5.x, upstream's LLM loads in bf16, and its decode loop's length-1 attention mask is
+#      right-padded with zeros (generation then runs to max_len). Two shims in reference_env.py restore 4.51.3's
+#      behaviour, and they are exact: 4.51.3 with no shims gave bit-identical reference output on all seven corpus
+#      cases (2026-09-27), and tests/reference/test_reference_env.py keeps checking the shimmed decode. 4.51.3 itself
+#      carries 18 transformers CVEs, 3 of them HIGH (docs/security.md).
 #   6. setuptools 81.0.0: torch 2.11.0 requires setuptools<82, so CVE-2026-59890 (fixed from 83.0.0) cannot be
 #      cleared while torch is pinned to python_env's; 81.0.0 is the newest release torch accepts and clears the
 #      older setuptools advisories the torch step's copy (78.1.0) carries. Disposition in docs/security.md.
@@ -47,9 +48,9 @@ torchaudio==2.11.0
 numpy==1.26.4
 openai-whisper==20250625
 onnxruntime==1.18.0
-transformers==4.51.3
-tokenizers==0.21.4
-huggingface-hub==0.36.2
+transformers==5.12.1
+tokenizers==0.22.2
+huggingface-hub==1.33.0
 inflect==7.5.0
 librosa==0.10.2
 soundfile==0.12.1

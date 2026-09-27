@@ -1,18 +1,14 @@
 # Dependencies, environments and advisories
 
-Every advisory below is in the **reference venv**, the host-only environment that runs upstream's PyTorch
-CosyVoice2, its frontend and the scorer. Nothing in it is part of the on-device model: the model, the demo and
-every test run in tt-metal's `python_env`, which this package extends only with `inflect`.
-- **torch and setuptools:** one advisory each. Neither is closed by any upgrade that keeps the pins compatible.
-- **transformers:** 18 distinct CVEs, 30 OSV records. They come from pinning upstream's own transformers 4.51.3
-  (see "Deltas").
+Two advisories are open against the pinned dependencies after every available upgrade. Neither is closed by a
+version bump that keeps the pins compatible. The next section asks for a disposition and gives the evidence. Both
+are in the **reference venv**, the host-only environment that runs upstream's PyTorch CosyVoice2, its frontend and
+the scorer. Nothing in that venv is part of the on-device model: the model, the demo and every test run in
+tt-metal's `python_env`, which this package extends only with `inflect`. A later section explains why the venv runs
+transformers 5.12.1 with two shims rather than upstream's own 4.51.3. The rest of this file describes the
+environments, the pins and how the audit was run.
 
-None is on a code path the reference venv runs. The next section gives the evidence and asks for a disposition.
-The rest of this file describes the environments, the pins, and how the audit was run.
-
-## Disposition requested
-
-### torch and setuptools
+## Disposition requested: two open advisories
 
 | Advisory | Package (pinned) | Affected function / scenario | Fixed in | Why it stays open | Reachable here? |
 |---|---|---|---|---|---|
@@ -28,41 +24,31 @@ grep -rnE "torch\.jit" models/experimental/cosyvoice2 --include=*.py
 #    scripts/reference_env.py loads with load_jit=False)
 ```
 
-### transformers 4.51.3 (upstream's own pin)
+## Why transformers 5.12.1 with two shims, not upstream's 4.51.3
 
-Everything the reference venv does with transformers:
-1. **Upstream's LLM backbone:** `Qwen2ForCausalLM.from_pretrained(<snapshot>/CosyVoice-BlankEN)`, from the
-   `FunAudioLLM/CosyVoice2-0.5B` snapshot `eec1ae6c79877dbd9379285cf8789c9e0879293d`.
-2. **Upstream's frontend tokenizer:** `AutoTokenizer.from_pretrained` on the same directory, plus
-   `add_special_tokens`.
-3. **The scorer's speaker model:** `WavLMForXVector` and `AutoFeatureExtractor.from_pretrained` on
-   `microsoft/wavlm-base-plus-sv`, pinned to revision `feb593a6c23c1cc3d9510425c29b0a14d2b07b1e`
-   (`scripts/eval_wer_sim.py`).
-
-Nothing else: no `Trainer`, no `save_pretrained`, no checkpoint-conversion scripts, and no other model class.
-
-| Advisory | Where the flaw is | Fixed in | Reachable here? |
-|---|---|---|---|
-| [CVE-2026-4372](https://osv.dev/vulnerability/GHSA-29pf-2h5f-8g72) (HIGH) | `from_pretrained` reading a crafted `config.json` whose `_attn_implementation_internal` names a Hub repo; that repo's code is fetched and run | 5.3.0 | **No, with these inputs.** `from_pretrained` reads only the two configs above, both at pinned revisions, and neither has `_attn_implementation_internal`, `auto_map` or `trust_remote_code` (grep below). |
-| [CVE-2026-5241](https://osv.dev/vulnerability/GHSA-fgcw-684q-jj6r) (HIGH) | LightGlue model loading overrides `trust_remote_code` | 5.5.0 | No: LightGlue is never loaded. |
-| [CVE-2026-9856](https://osv.dev/vulnerability/GHSA-xrqw-3rrv-vx5w) (HIGH) | `save_pretrained` path traversal through chat-template names | 5.10.0 | No: nothing calls `save_pretrained`. |
-| [CVE-2026-1839](https://osv.dev/vulnerability/GHSA-69w3-r845-3855) (MODERATE) | `Trainer._load_rng_state` calls `torch.load` unguarded (torch < 2.6) | 5.0.0 | No: no `Trainer`, and torch is 2.11. |
-| CVE-2025-14920, -14921, -14924, -14926, -14927, -14928, -14929, -14930 (PYSEC-2025-211…218; no fixed release listed) | Deserialization or code injection in Perceiver, Transformer-XL, megatron_gpt2, SEW / SEW-D / HuBERT `convert_config`, X-CLIP checkpoint conversion and GLM4 weight parsing | none listed | No: none of these models or conversion scripts is used. |
-| CVE-2025-3933, CVE-2025-5197, CVE-2025-6051, CVE-2025-6638, CVE-2025-6921 (MODERATE, ReDoS) | `DonutProcessor`; `convert_tf_weight_name_to_pt_weight_name`; `normalize_numbers`; `MarianTokenizer`; `AdamWeightDecay` | 4.52.1–4.53.0 | No: the path uses the Qwen2 tokenizer and the WavLM feature extractor only. |
-| CVE-2025-3777 (LOW) | URL validation in `image_utils` | 4.52.1 | No: no image processing. |
-
-```bash
-# CVE-2026-4372: neither config the reference venv loads names remote code or an attention implementation.
-grep -l "_attn_implementation_internal\|auto_map\|trust_remote_code" \
-    $HF_HOME/hub/models--FunAudioLLM--CosyVoice2-0.5B/snapshots/eec1ae6c79877dbd9379285cf8789c9e0879293d/CosyVoice-BlankEN/config.json \
-    $HF_HOME/hub/models--microsoft--wavlm-base-plus-sv/snapshots/feb593a6c23c1cc3d9510425c29b0a14d2b07b1e/config.json
-#   (no matches, exit 1)
-```
-
-**The alternative the pin replaced.** transformers 5.12.1 (python_env's version) carries none of these advisories.
-But upstream misbehaves under it: the LLM loads in bf16, and its decode mask attends to position 0 only. It needed
-two behaviour shims in `scripts/reference_env.py` (commit `0d687d840e`). The pin runs upstream unmodified, at the
-version it was written for.
+Upstream CosyVoice2 pins transformers 4.51.3. The reference venv runs 5.12.1, python_env's version, and
+`scripts/reference_env.py` refuses any other.
+- **Why not 4.51.3:** it carries 18 distinct transformers CVEs (30 OSV records, 2026-09-27), 3 of them HIGH. The
+  HIGH ones are fixed only in 5.3.0 (CVE-2026-4372, remote code via a crafted `config.json`), 5.5.0 (CVE-2026-5241)
+  and 5.10.0 (CVE-2026-9856). None is on a code path the reference venv runs. Even so, carrying them would mean 18
+  dispositions for a host-only tool, and a security bot flag on every scan. 5.12.1 carries none.
+- **What 5.12.1 changes under upstream, and how it is shimmed:** the shims live in `scripts/reference_env.py`,
+  `install_transformers_shims`.
+  - `from_pretrained` loads the config's dtype (bf16) where 4.51.3 loaded fp32. The shim passes
+    `dtype=torch.float32`.
+  - Upstream's non-streaming decode loop passes a length-1 attention mask at each decode step. 4.51.3 dropped it;
+    5.x right-pads it with zeros, so every step attends to position 0 alone and generation runs to `max_len`. The
+    shim sizes the mask over cache plus input, as upstream's own `inference_bistream` does.
+- **Evidence that the shims are exact:**
+  - On 2026-09-27, upstream under 4.51.3 with no shims gave **bit-identical** reference output to upstream under
+    5.12.1 with the shims: every speech token and every audio sample (max |diff| 0), on all seven corpus cases.
+  - `prepare_inputs.py` wrote identical arrays under both.
+  - `tests/reference/test_reference_env.py` keeps checking both shims on upstream's own `Qwen2Encoder` with the real
+    BlankEN weights, each against a negative control. That file runs as a plain script in the reference venv, which
+    has no pytest.
+    - fp32 load: the unshimmed load is bf16.
+    - The shimmed decode matches a no-cache forward within 1e-4 of the hidden-state scale (measured 2–8e-6); the
+      unshimmed decode is off by 1.8.
 
 ## Two environments
 
@@ -101,19 +87,16 @@ uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio            
   `tensorrt-cu12*`, `fastapi*`, `uvicorn`, `gradio`, `grpcio*`, `tensorboard`.
 - **Only packages the reference path imports are listed.** The import closure was established by loading
   `CosyVoice2` on the real checkpoint and adding each missing module in turn.
-- **transformers is upstream's own pin, 4.51.3**, with `tokenizers` 0.21.4 and `huggingface-hub` 0.36.2, not
-  python_env's 5.12.1. `scripts/reference_env.py` refuses any other version.
-- **Two shims live in `scripts/reference_env.py`:**
+- **transformers is python_env's 5.12.1** (with `tokenizers` 0.22.2 and `huggingface-hub` 1.33.0), not upstream's
+  4.51.3; see the section above.
+- **Four shims live in `scripts/reference_env.py`:**
   - `load_wav`: torchaudio ≥ 2.9 needs TorchCodec and system FFmpeg for `torchaudio.load`. The shim reads the
     same files with soundfile (the libsndfile decode upstream's old backend used), then applies upstream's own
     channel mean and `Resample`.
   - `pyworld`: imported only by the training data pipeline, which HyperPyYAML imports eagerly. It is replaced by
     a module that raises on any use, because every pyworld release that installs on Python 3.10 needs
     `pkg_resources`.
-  - Under the 4.51.3 pin, the two transformers-5 shims that `0d687d840e` added (fp32 load, decode mask) are
-    unnecessary. They were removed after these checks, with no shims: every Qwen2 parameter is fp32 and equals
-    `llm.pt`; upstream's own decode matches a no-cache forward within 3.1e-5 over 40 greedy steps; and
-    `prepare_inputs.py` writes arrays identical to the 5.12.1 run's.
+  - fp32 Qwen2 backbone and the decode-step attention mask: the two transformers-5 shims (see the section above).
 - **`wetext` is deliberately absent.** Upstream then skips it, exactly as the device-side normalizer does, so
   text normalization matches on both sides.
 - **`onnxruntime` is held at 1.18.0.** The speech-token sequence depends on the onnxruntime version (CosyVoice1
@@ -123,6 +106,6 @@ uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio            
 
 The resolved set (`uv pip freeze`, 109 packages) was queried against the [OSV](https://osv.dev) database
 (`https://api.osv.dev/v1/querybatch`, PyPI ecosystem, local version labels stripped), then each advisory's
-record (`/v1/vulns/<id>`) was read. The query was re-run after each change on 2026-09-27; the tables above are
-the final result, with transformers 4.51.3. Before the pin, with transformers 5.12.1, only the torch and
-setuptools advisories were open.
+record (`/v1/vulns/<id>`) was read. The query was re-run after each change on 2026-09-27; the table above is the
+final result. Briefly pinning upstream's transformers 4.51.3 raised the count by 30 OSV records (18 CVEs), which is
+why 5.12.1 stays.

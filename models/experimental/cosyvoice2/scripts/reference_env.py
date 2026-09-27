@@ -12,7 +12,7 @@ Never imported by the on-device model or its tests. It makes upstream CosyVoice 
   Hugging Face cache (populate it with huggingface_hub.snapshot_download first; nothing is downloaded here).
 * `LIBRISPEECH_ROOT` -- the directory holding LibriSpeech/test-clean (see corpus.py).
 
-Two compatibility shims (both also listed in requirements-reference.txt and docs/security.md):
+Four compatibility shims (all four also listed in requirements-reference.txt and docs/security.md):
 
 * `load_wav`: upstream reads audio with `torchaudio.load(..., backend='soundfile')`. torchaudio >= 2.9 ignores
   `backend` and requires TorchCodec (plus system FFmpeg). The replacement reads with soundfile -- the same
@@ -24,17 +24,17 @@ Two compatibility shims (both also listed in requirements-reference.txt and docs
   no longer ships, and the setuptools advisory CVE-2026-59890 is fixed only from 83.0.0. So pyworld is not
   installed; a stand-in module raises on any attribute access, so a call on the reference path would fail loudly
   rather than silently.
+* fp32 Qwen2 backbone and the decode-step attention mask (`install_transformers_shims`). The venv runs python_env's
+  transformers 5.12.1 (`setup_upstream` refuses any other version). Upstream was written for 4.51.3, and 5.x
+  changes two things under it:
+  * `from_pretrained` loads the checkpoint config's dtype (bf16 for CosyVoice-BlankEN);
+  * upstream's non-streaming decode loop passes a length-1 attention mask, which 5.x right-pads with zeros, so each
+    decode step attends to position 0 alone and generation runs to max_len.
 
-transformers is pinned to upstream's own 4.51.3, and `setup_upstream` refuses any other version. Under 5.x, upstream
-misbehaves in two ways that 4.51.3 does not.
-* `Qwen2ForCausalLM.from_pretrained` loads the checkpoint config's dtype (bf16) where 4.51.3 loads fp32.
-* Upstream's non-streaming decode loop passes a length-1 attention mask. 5.x right-pads it with zeros, so each
-  decode step attends to position 0 alone and generation runs to max_len.
-
-Both were shimmed here once (commit 0d687d840e); the pin made the shims unnecessary. Under 4.51.3 with no shims,
-checked on 2026-09-27:
-* every Qwen2 parameter is fp32 and equals llm.pt;
-* upstream's own decode matches a no-cache forward within 3.1e-5 over 40 greedy steps.
+  The two shims restore 4.51.3's behaviour, and they are exact. On 2026-09-27, upstream under 4.51.3 with no shims
+  and upstream under 5.12.1 with these shims gave bit-identical reference output (tokens and audio, all seven
+  corpus cases). tests/reference/test_reference_env.py keeps checking that the shimmed decode matches a no-cache
+  forward. 5.12.1 is kept over upstream's own 4.51.3 because 4.51.3 carries 18 transformers CVEs (docs/security.md).
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ import types
 
 UPSTREAM_COMMIT = "074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
 MODEL_REPO_ID = "FunAudioLLM/CosyVoice2-0.5B"
-TRANSFORMERS_VERSION = "4.51.3"  # upstream's requirements.txt pin; see the module docstring
+TRANSFORMERS_VERSION = "5.12.1"  # python_env's; upstream pins 4.51.3, see the module docstring
 
 
 def _require_env(name: str) -> str:
@@ -97,13 +97,13 @@ def _load_wav(wav, target_sr, min_sr=16000):
 
 
 def setup_upstream() -> None:
-    """Put upstream on sys.path and install the two shims. Idempotent; call before importing `cosyvoice`."""
+    """Put upstream on sys.path and install the four shims. Idempotent; call before importing `cosyvoice`."""
     import transformers
 
     if transformers.__version__ != TRANSFORMERS_VERSION:
         raise SystemExit(
-            f"transformers {transformers.__version__} in the reference venv; upstream needs {TRANSFORMERS_VERSION} "
-            "(5.x breaks its LLM decode, see scripts/reference_env.py). "
+            f"transformers {transformers.__version__} in the reference venv; it must be {TRANSFORMERS_VERSION}, the "
+            "version the shims in scripts/reference_env.py are written and checked for. "
             "Rebuild the venv from requirements-reference.txt."
         )
     repo = upstream_repo()
@@ -118,6 +118,45 @@ def setup_upstream() -> None:
 
     file_utils.load_wav = _load_wav
     frontend.load_wav = _load_wav
+    install_transformers_shims()
+
+
+def install_transformers_shims() -> None:
+    """The two transformers-5 shims on `cosyvoice.llm.llm` (see the module docstring). Idempotent. The originals stay
+    reachable as `__wrapped__`, which tests/reference/test_reference_env.py uses for its negative control."""
+    import cosyvoice.llm.llm as llm
+    import torch
+
+    # Qwen2Encoder builds its backbone with `Qwen2ForCausalLM.from_pretrained(pretrain_path)` and no dtype. 4.51.3
+    # loaded fp32; 5.x loads the config's bf16, so llm.pt's fp32 weights would be copied into bf16 parameters and the
+    # fp32 speech embedding would fail the first matmul.
+    if not hasattr(llm.Qwen2ForCausalLM.from_pretrained, "__wrapped__"):
+        from_pretrained = llm.Qwen2ForCausalLM.from_pretrained
+
+        def fp32_from_pretrained(*args, **kwargs):
+            kwargs.setdefault("dtype", torch.float32)
+            return from_pretrained(*args, **kwargs)
+
+        fp32_from_pretrained.__wrapped__ = from_pretrained
+        llm.Qwen2ForCausalLM.from_pretrained = staticmethod(fp32_from_pretrained)
+
+    # Qwen2Encoder.forward_one_step passes `masks[:, -1, :]`, the last row of a causal mask (all ones), sized by
+    # `inference_wrapper` to the step's new input only: a length-1 mask at each decode step. 4.51.3 dropped an
+    # all-ones mask; 5.x right-pads a short mask with zeros (masking_utils.prepare_padding_mask), so each step
+    # attends to position 0 alone. The shim sizes the mask over cache + input, as upstream's own
+    # `inference_bistream` does.
+    if not hasattr(llm.Qwen2Encoder.forward_one_step, "__wrapped__"):
+        forward_one_step = llm.Qwen2Encoder.forward_one_step
+
+        def full_mask_forward_one_step(self, xs, masks, cache=None):
+            kv_len = (0 if cache is None else cache.get_seq_length()) + xs.shape[1]
+            if masks.shape[-1] != kv_len:
+                assert bool(masks[:, -1, :].all()), "upstream passes causal masks only; the last row is all ones"
+                masks = torch.ones((1, 1, kv_len), dtype=torch.bool, device=xs.device)
+            return forward_one_step(self, xs, masks, cache)
+
+        full_mask_forward_one_step.__wrapped__ = forward_one_step
+        llm.Qwen2Encoder.forward_one_step = full_mask_forward_one_step
 
 
 def check_upstream_commit() -> str:
