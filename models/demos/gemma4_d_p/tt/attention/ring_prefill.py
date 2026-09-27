@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import ttnn
 
-from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_DIM
+from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM
 
 TILE_HEIGHT = 32
 
@@ -184,37 +184,34 @@ def global_ring_prefill_attention(
     layer_idx=0,
     num_layers=1,
 ):
-    """Attend from two transient logical views of the single packed cache."""
-    cache_shape = tuple(cache_kv.shape)
-    cache_k = ttnn.slice(
-        cache_kv, (0, 0, 0, 0), cache_shape[:-1] + (GLOBAL_HEAD_DIM,), memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    cache_v = ttnn.slice(
-        cache_kv,
-        (0, 0, 0, GLOBAL_ROTARY_DIM),
-        cache_shape[:-1] + (GLOBAL_PACKED_DIM,),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    out = _ring_prefill_attention(
+    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
+    program_config, gather_seq, ccl_args = _ring_prefill_setup(
         tt_q,
-        cache_k,
-        cache_v,
         mesh_config,
         ccl_manager,
         prefill_metadata,
-        num_local_kv_heads,
         GLOBAL_HEAD_DIM,
         max_seq_len,
-        logical_n,
-        kv_actual_global,
+        None,
+        program_config,
+        layer_idx,
+        num_layers,
+    )
+    # The fused gather's bank-owned schedule needs an interleaved output; the packed cache itself is ND-sharded.
+    buffer_kv = ccl_manager.get_ring_gather_buffer(
+        "ring_kv", num_local_kv_heads, gather_seq, GLOBAL_PACKED_DIM, cache_kv.dtype, ttnn.DRAM_MEMORY_CONFIG
+    )
+    out, _ = ttnn.transformer.ring_mla(
+        tt_q,
+        cache_kv,
+        persistent_output_buffer_kv=buffer_kv,
+        head_dim_v=GLOBAL_HEAD_DIM,
+        logical_n=logical_n,
+        program_config=program_config,
         scale=scale,
         compute_kernel_config=compute_kernel_config,
-        program_config=program_config,
-        layer_idx=layer_idx,
-        num_layers=num_layers,
+        **ccl_args,
     )
-    cache_k.deallocate(True)
-    cache_v.deallocate(True)
     return out
 
 
@@ -344,35 +341,19 @@ def sliding_ring_prefill_attention(
     )
 
 
-def _ring_prefill_attention(
+def _ring_prefill_setup(
     tt_q,
-    cache_k,
-    cache_v,
     mesh_config,
     ccl_manager,
     prefill_metadata,
-    num_local_kv_heads,
     head_dim,
     max_seq_len,
-    logical_n,
-    kv_actual_global,
-    sliding_window_size=None,
-    scale=1.0,
-    compute_kernel_config=None,
-    program_config=None,
-    layer_idx=0,
-    num_layers=1,
-    slot_idx=0,
+    sliding_window_size,
+    program_config,
+    layer_idx,
+    num_layers,
 ):
-    """Attend this rank's Q shard over the whole cached prefix, via the CP ring.
-
-    ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
-    the valid prefix on each replay; ``kv_actual_global`` is the prefix before
-    this chunk when metadata is updated here.
-
-    Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
-    the output stays CP-sharded exactly like the input.
-    """
+    """Program config, gather length and CCL arguments shared by the global and sliding ring calls."""
     mesh_device = mesh_config.device
     if program_config is None:
         _q_chunk, _k_chunk, _k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size))
@@ -403,6 +384,65 @@ def _ring_prefill_attention(
         gather_seq = max(halo_tokens, TILE_HEIGHT)
     else:
         gather_seq = cache_seq * cp
+    ccl_args = dict(
+        dim=2,
+        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
+        num_links=ccl_manager.num_links,
+        cluster_axis=mesh_config.cp_axis,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+        ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
+        use_column_major_ccl=True,
+        is_balanced=False,
+        slot_id=prefill_metadata.slot_idx,
+        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
+    )
+    return program_config, gather_seq, ccl_args
+
+
+def _ring_prefill_attention(
+    tt_q,
+    cache_k,
+    cache_v,
+    mesh_config,
+    ccl_manager,
+    prefill_metadata,
+    num_local_kv_heads,
+    head_dim,
+    max_seq_len,
+    logical_n,
+    kv_actual_global,
+    sliding_window_size=None,
+    scale=1.0,
+    compute_kernel_config=None,
+    program_config=None,
+    layer_idx=0,
+    num_layers=1,
+    slot_idx=0,
+):
+    """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
+
+    ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
+    the valid prefix on each replay; ``kv_actual_global`` is the prefix before
+    this chunk when metadata is updated here.
+
+    Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
+    the output stays CP-sharded exactly like the input.
+    """
+    program_config, gather_seq, ccl_args = _ring_prefill_setup(
+        tt_q,
+        mesh_config,
+        ccl_manager,
+        prefill_metadata,
+        head_dim,
+        max_seq_len,
+        sliding_window_size,
+        program_config,
+        layer_idx,
+        num_layers,
+    )
     buffer_k = ccl_manager.get_ring_gather_buffer(
         "ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )
@@ -424,20 +464,8 @@ def _ring_prefill_attention(
         program_config=program_config,
         scale=scale,
         compute_kernel_config=compute_kernel_config,
-        dim=2,
-        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
-        num_links=ccl_manager.num_links,
-        cluster_axis=mesh_config.cp_axis,
-        mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
-        ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
-        use_column_major_ccl=True,
         is_causal=True,
-        is_balanced=False,
-        slot_id=prefill_metadata.slot_idx,
-        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
-        kv_cache_num_layers=num_layers,
-        kv_cache_layer_idx=layer_idx,
         sliding_window_size=sliding_window_size,
+        **ccl_args,
     )
     return out
