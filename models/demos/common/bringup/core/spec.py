@@ -11,6 +11,11 @@ Paths:
     bringup_dir     ledger dir in the repo: tasks.yaml, state.json, results/, BREADCRUMBS.md (default <model_dir>/bringup)
     art             artifact root outside git (default /localdev/$USER/bringup/<model>)
       hf/ golden/ tt_cache/<mesh>/<version>/ profiles/ runs/<run>/
+
+Prior bring-up: ``prior: models/demos/<slug>`` names an earlier bring-up of the same checkpoint (another mesh or
+configuration). This spec then shares its checkpoint download and goldens (hf/ and golden/ resolve to the prior's
+unless paths.hf / paths.golden say otherwise), its hooks reuse the prior's CPU reference, and every step's brief lists
+the prior's matching files to start from (orchestrator PRIOR_READS).
 """
 
 from __future__ import annotations
@@ -121,13 +126,29 @@ class Spec:
         v = self.get(f"paths.{key}")
         return Path(_expand(v)) if v else self.art / default
 
+    # ---- prior bring-up (same checkpoint, another mesh or configuration)
+    @property
+    def prior(self) -> Path | None:
+        """The prior bring-up's model dir (spec key ``prior``), or None."""
+        p = self.data.get("prior")
+        return (self.repo / p) if p else None
+
+    def prior_spec(self) -> "Spec | None":
+        return Spec.load(self.prior / "bringup" / "spec.yaml") if self.prior else None
+
+    def _shared(self, key: str, default: str) -> Path:
+        """hf/ and golden/ are the prior's (same checkpoint, same CPU reference) unless this spec sets paths.<key>."""
+        if self.get(f"paths.{key}") or not self.prior:
+            return self._art_sub(key, default)
+        return self.prior_spec()._shared(key, default)
+
     @property
     def hf_dir(self) -> Path:
-        return self._art_sub("hf", "hf")
+        return self._shared("hf", "hf")
 
     @property
     def golden_root(self) -> Path:
-        return self._art_sub("golden", "golden")
+        return self._shared("golden", "golden")
 
     @property
     def profiles_dir(self) -> Path:
@@ -181,6 +202,22 @@ class Spec:
     def hooks(self):
         return importlib.import_module(self.data["hooks"])
 
+    def _validate_prior(self) -> list[str]:
+        if not self.data.get("prior"):
+            return []
+        f = self.prior / "bringup" / "spec.yaml"
+        if not f.is_file():
+            return [f"prior: {self.data['prior']} has no bringup/spec.yaml"]
+        p = Spec.load(f)
+        errs = []
+        if p.data.get("hf_id") != self.data.get("hf_id"):
+            errs.append(f"prior: hf_id {p.data.get('hf_id')!r} differs from {self.data.get('hf_id')!r}")
+        if p.model == self.model:
+            errs.append("prior: names this bring-up itself")
+        if p.layers() != self.layers():
+            errs.append("prior: a different layer subset (its goldens cover other layers); set paths.golden")
+        return errs
+
     # ---- validation
     def validate(self) -> list[str]:
         """Schema errors for a model spec (empty list = valid)."""
@@ -198,6 +235,7 @@ class Spec:
         mesh = self.get("box.mesh")
         if not (isinstance(mesh, list) and len(mesh) == 2 and all(isinstance(x, int) and x > 0 for x in mesh)):
             errs.append("box.mesh must be [rows, cols]")
+        errs += self._validate_prior()
         for k in ("seq", "chunk"):
             if not isinstance(self.get(f"target.{k}"), int):
                 errs.append(f"target.{k} must be an int")

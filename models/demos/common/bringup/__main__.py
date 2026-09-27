@@ -209,8 +209,10 @@ def cmd_new(a):
 
     from models.demos.common.bringup.core.spec import CODE_ROOT
 
+    if a.prior:
+        return _new_from_prior(a)
     if not a.model or not a.hf_id:
-        sys.exit("new needs --model <slug> and --hf-id <org/name>")
+        sys.exit("new needs --model <slug> and --hf-id <org/name> (or --prior <slug> of an earlier bring-up)")
     here = Path(__file__).resolve().parent / "templates"
     d = CODE_ROOT / "models" / "demos" / a.model
     b = d / "bringup"
@@ -236,6 +238,79 @@ def cmd_new(a):
     return 0
 
 
+PRIOR_HOOKS = '''# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Bring-up hooks for {model}: the same checkpoint as the prior bring-up {prior} (spec ``prior``), on another mesh.
+
+CPU side: the prior's hooks (same reference, goldens and HF loader); change them there only for a bug.
+Device side (implement role): device_component, device_model, written for this bring-up's plan.
+"""
+
+from models.demos.{prior}.bringup import hooks as _prior
+
+reference = _prior.reference
+for _name in ("tokenizer", "hf_model", "hf_layers"):
+    if hasattr(_prior, _name):
+        globals()[_name] = getattr(_prior, _name)
+
+
+def device_component(mesh, spec, layer, step):
+    raise NotImplementedError(f"implement step: no device module for {{step}} yet")
+
+
+def device_model(mesh, spec, layers, lm_head=True):
+    raise NotImplementedError("implement step: no device model yet")
+'''
+
+
+def _new_from_prior(a):
+    """new --prior <slug> [--model <new slug>] [--mesh R,C]: a spec copied from the prior's, with ``prior`` set, the
+    new mesh, and hooks that reuse the prior's CPU side. The person still reviews and approves the spec."""
+    import copy
+
+    import yaml
+
+    from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
+
+    prior = Spec.load(CODE_ROOT / "models" / "demos" / a.prior / "bringup" / "spec.yaml")
+    mesh = [int(x) for x in a.mesh.split(",")] if a.mesh else prior.mesh
+    model = a.model or f"{a.prior}_{mesh[0]}x{mesh[1]}"
+    if model == a.prior:
+        sys.exit("--model must differ from --prior")
+    d = CODE_ROOT / "models" / "demos" / model
+    b = d / "bringup"
+    if (b / "spec.yaml").exists():
+        sys.exit(f"{b / 'spec.yaml'} exists")
+    b.mkdir(parents=True, exist_ok=True)
+    header = "# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC\n#\n# SPDX-License-Identifier: Apache-2.0\n"
+    for p in (d / "__init__.py", b / "__init__.py"):
+        if not p.exists():
+            p.write_text(header)
+    data = copy.deepcopy(prior.data)
+    data.update(model=model, model_dir=f"models/demos/{model}", hooks=f"models.demos.{model}.bringup.hooks")
+    data["prior"] = f"models/demos/{a.prior}"
+    data.setdefault("box", {})["mesh"] = mesh
+    data["box"]["name"] = f"{data['box'].get('name', 'box').split(', mesh')[0]}, mesh {mesh[0]}x{mesh[1]}"
+    if isinstance(data.get("contract"), dict):
+        data["contract"]["adapter"] = model
+    for k in ("bringup_dir", "art"):
+        data.get("paths", {}).pop(k, None)
+    (b / "spec.yaml").write_text(
+        f"# {model}: {data['hf_id']} on mesh {mesh[0]}x{mesh[1]}, from the prior bring-up {a.prior} "
+        f"(mesh {prior.mesh[0]}x{prior.mesh[1]}). Written by `new --prior`; review, then approve intake.\n"
+        + yaml.safe_dump(data, sort_keys=False, width=120)
+    )
+    (b / "hooks.py").write_text(PRIOR_HOOKS.format(model=model, prior=a.prior))
+    (b / "BREADCRUMBS.md").write_text(
+        f"# {data['hf_id']} bring-up on mesh {mesh[0]}x{mesh[1]}: breadcrumbs\n\nPrior bring-up: {a.prior} "
+        f"(mesh {prior.mesh[0]}x{prior.mesh[1]}); goldens and CPU reference shared. Append-only log, one section per task "
+        "attempt: what was done, decisions and why, gotchas, the re-run command, the verdict.\n"
+    )
+    print(f"wrote {b.relative_to(CODE_ROOT)}/{{spec.yaml,hooks.py,BREADCRUMBS.md}} (prior {a.prior}, mesh {mesh})")
+    return 0
+
+
 def build_parser(extra=None) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="python -m models.demos.common.bringup")
     ap.add_argument("command", choices=sorted(COMMANDS))
@@ -253,6 +328,8 @@ def build_parser(extra=None) -> argparse.ArgumentParser:
     ap.add_argument("--note", help="approve: note stored with the approval")
     ap.add_argument("--model", help="new: model slug (package name under models/demos)")
     ap.add_argument("--hf-id", help="new: Hugging Face id")
+    ap.add_argument("--prior", help="new: slug of an earlier bring-up of the same checkpoint to start from")
+    ap.add_argument("--mesh", help="new --prior: the new mesh as R,C (default: the prior's)")
     for fn in extra or []:
         fn(ap)
     return ap
