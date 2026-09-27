@@ -32,7 +32,6 @@ NotImplementedError rather than silently falling back to the interleaved path.
 from pathlib import Path
 
 import ttnn
-from ttnn.mcast_spec import McastFamily
 
 from .toy_variance_program_artifacts import fp32_bits
 
@@ -278,15 +277,14 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
 
     # The mean broadcast: root -> the whole shard row. sender_index=0 makes cores[0] the sender,
     # which is the same core the gathers reduce onto.
-    mcast = McastFamily(
+    mcast = ttnn.Mcast1D(
         device,
         grid,
-        MCAST_PREFIX,
-        shape=ttnn.Mcast1DShape.PerRow,
-        sender_index=0,
+        ttnn.Mcast1DShape.PerRow,
+        ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
         config=ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
     )
-    mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
+    mcast.attach(spec, run_args, MCAST_PREFIX, kernels=[K_READER])
 
     tensor_indices = {TP_IN: 0, TP_OUT: 1}
     return spec, run_args, tensor_indices
