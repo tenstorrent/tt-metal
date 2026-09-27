@@ -156,9 +156,10 @@ constexpr uint32_t runtime_words(uint32_t rotating_span, uint32_t rectangle_capa
     return roles_offset(rotating_span, rectangle_capacity, transfer_mode) + ROLE_WORDS;
 }
 constexpr SenderMcastMode classify(uint32_t remote_count, bool includes_sender) {
-    return remote_count == 0 ? SenderMcastMode::LocalCopy
-           : includes_sender ? SenderMcastMode::MulticastIncludeSource
-                             : SenderMcastMode::MulticastExcludeSource;
+    if (remote_count == 0) {
+        return SenderMcastMode::LocalCopy;
+    }
+    return includes_sender ? SenderMcastMode::MulticastIncludeSource : SenderMcastMode::MulticastExcludeSource;
 }
 constexpr bool concrete(SenderMcastMode sender_mcast_mode) {
     return sender_mcast_mode == SenderMcastMode::LocalCopy ||
