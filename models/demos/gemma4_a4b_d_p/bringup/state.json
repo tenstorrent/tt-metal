@@ -3316,6 +3316,186 @@
   "started": "2026-09-26T06:40:20",
   "status": "PASS"
  },
+ "O.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "ea5d71e22314ecef77d0ba70e7262cc3830fb9a1",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "4b2608fea6e5788622a08d4405dd1bbbf566d63a",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "52db357a-06ed-47c4-b337-9faa629872a7"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "ea5d71e22314ecef77d0ba70e7262cc3830fb9a1",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "4b2608fea6e5788622a08d4405dd1bbbf566d63a",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 548.3,
+    "session_id": "52db357a-06ed-47c4-b337-9faa629872a7",
+    "t": "2026-09-27T21:09:38"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 310.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-27T21:00:30"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-27T21:14:56"
+   }
+  ],
+  "last_run": "2026-09-27T21:14:56",
+  "log": "/localdev/dnijemcevic/bringup/gemma4_a4b_d_p/runs/run1/logs/O.1.log",
+  "metrics": {
+   "chunk_seconds_c10": 1.331,
+   "covered_layers": 30,
+   "device_model_hybrid": 0,
+   "fork_calls": 4,
+   "fork_calls_uncovered": 0,
+   "fork_tests_failed": 0,
+   "forks_used": 4,
+   "model_load_s": 49.1,
+   "pcc_final_hidden": 0.997793373040532,
+   "pcc_layer_L00": 0.9998567636148772,
+   "pcc_layer_L01": 0.9998003359594271,
+   "pcc_layer_L02": 0.9998709815307818,
+   "pcc_layer_L03": 0.9998403145662597,
+   "pcc_layer_L04": 0.9997905838977786,
+   "pcc_layer_L05": 0.9996686101751118,
+   "pcc_layer_L06": 0.9995595592372397,
+   "pcc_layer_L07": 0.9993838123883787,
+   "pcc_layer_L08": 0.9989501606893484,
+   "pcc_layer_L09": 0.9985513605133584,
+   "pcc_layer_L10": 0.9979991109971166,
+   "pcc_layer_L11": 0.9976815932842176,
+   "pcc_layer_L12": 0.9969941278964256,
+   "pcc_layer_L13": 0.9949909426510601,
+   "pcc_layer_L14": 0.992265035482637,
+   "pcc_layer_L15": 0.991300506547754,
+   "pcc_layer_L16": 0.9937949706925396,
+   "pcc_layer_L17": 0.9914321213042336,
+   "pcc_layer_L18": 0.9888288255417292,
+   "pcc_layer_L19": 0.9914769949904119,
+   "pcc_layer_L20": 0.9931284580203577,
+   "pcc_layer_L21": 0.9938624863036154,
+   "pcc_layer_L22": 0.9952595684598594,
+   "pcc_layer_L23": 0.9941753902747825,
+   "pcc_layer_L24": 0.9946535628245147,
+   "pcc_layer_L25": 0.9951963824175166,
+   "pcc_layer_L26": 0.9951050237990042,
+   "pcc_layer_L27": 0.9959872283367527,
+   "pcc_layer_L28": 0.9957828130455562,
+   "pcc_layer_L29": 0.998557503244455,
+   "pcc_logits_tail": 0.9977140722038838,
+   "pcc_state_key_L00": 0.9992415755993741,
+   "pcc_state_key_L01": 0.9991116109384295,
+   "pcc_state_key_L02": 0.9991727461653013,
+   "pcc_state_key_L03": 0.9990729667073375,
+   "pcc_state_key_L04": 0.9991476014301776,
+   "pcc_state_key_L05": 0.9999385093299964,
+   "pcc_state_key_L06": 0.9990921607238673,
+   "pcc_state_key_L07": 0.9990546831391429,
+   "pcc_state_key_L08": 0.9990685848473871,
+   "pcc_state_key_L09": 0.9989970124114095,
+   "pcc_state_key_L10": 0.9989372899820507,
+   "pcc_state_key_L11": 0.999497345485519,
+   "pcc_state_key_L12": 0.998765354008917,
+   "pcc_state_key_L13": 0.9986472138596891,
+   "pcc_state_key_L14": 0.9985753174773759,
+   "pcc_state_key_L15": 0.9985301291722162,
+   "pcc_state_key_L16": 0.9985237330609249,
+   "pcc_state_key_L17": 0.9990462046812832,
+   "pcc_state_key_L18": 0.9986195158746755,
+   "pcc_state_key_L19": 0.9985930906498425,
+   "pcc_state_key_L20": 0.9986229112279172,
+   "pcc_state_key_L21": 0.9987281751774248,
+   "pcc_state_key_L22": 0.9987969957065828,
+   "pcc_state_key_L23": 0.9994247195672643,
+   "pcc_state_key_L24": 0.9987510671233099,
+   "pcc_state_key_L25": 0.9987704218439752,
+   "pcc_state_key_L26": 0.9987853940702766,
+   "pcc_state_key_L27": 0.9987240207751714,
+   "pcc_state_key_L28": 0.9988686106463078,
+   "pcc_state_key_L29": 0.9997259493385208,
+   "pcc_state_min": 0.9979582593557336,
+   "pcc_state_value_L00": 0.9992880938813393,
+   "pcc_state_value_L01": 0.9991660753608812,
+   "pcc_state_value_L02": 0.9991082654438148,
+   "pcc_state_value_L03": 0.9991583599695358,
+   "pcc_state_value_L04": 0.9992064810726883,
+   "pcc_state_value_L05": 0.9999386255196601,
+   "pcc_state_value_L06": 0.9991860853330321,
+   "pcc_state_value_L07": 0.9991524697397418,
+   "pcc_state_value_L08": 0.9990226897968352,
+   "pcc_state_value_L09": 0.9988332266341367,
+   "pcc_state_value_L10": 0.9987886400472494,
+   "pcc_state_value_L11": 0.9994971770809719,
+   "pcc_state_value_L12": 0.9985996789375415,
+   "pcc_state_value_L13": 0.9983581964403784,
+   "pcc_state_value_L14": 0.9980957191487942,
+   "pcc_state_value_L15": 0.9979582593557336,
+   "pcc_state_value_L16": 0.9981508815475509,
+   "pcc_state_value_L17": 0.9990461807647049,
+   "pcc_state_value_L18": 0.9984086465233879,
+   "pcc_state_value_L19": 0.9984241536836134,
+   "pcc_state_value_L20": 0.9984743405722035,
+   "pcc_state_value_L21": 0.99850404509052,
+   "pcc_state_value_L22": 0.9986292000895907,
+   "pcc_state_value_L23": 0.9994244475979785,
+   "pcc_state_value_L24": 0.9987380224538126,
+   "pcc_state_value_L25": 0.9987990360380115,
+   "pcc_state_value_L26": 0.9987997148303425,
+   "pcc_state_value_L27": 0.9987149540081146,
+   "pcc_state_value_L28": 0.9988536608717915,
+   "pcc_state_value_L29": 0.999725748033169,
+   "prefill_seconds": 1.331,
+   "rung_chunk": 5120,
+   "rung_seq": 56320,
+   "rung_start": 51200,
+   "subset": 0,
+   "top1_match": 0.9514285922050476,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "optests",
+  "started": "2026-09-27T21:09:45",
+  "status": "PASS",
+  "waiting": null
+ },
  "P.1": {
   "agent": {
    "defs": {
