@@ -14,6 +14,7 @@ def test_every_fork_op_maps_to_its_folder():
     m = fork_cases.op_to_fork()
     assert m["ttnn.bringup.unified_routed_expert_moe"] == "unified_routed_expert_ffn"
     assert m["ttnn.bringup.dispatch"] == "dispatch" and m["ttnn.bringup.offset_cumsum"] == "offset_cumsum"
+    assert m["ttnn.bringup.rms_norm"] == "rms_norm_ttnn"  # a Python fork, from PYTHON_OPS
 
 
 def test_uncovered_calls_are_listed_per_fork(tmp_path, monkeypatch):

@@ -44,7 +44,7 @@ import torch
 import ttnn
 
 from eval.sharding import auto_shard_config, shard_config
-from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
 
 _ML = ttnn.TensorMemoryLayout
 PLACEMENTS = [_ML.INTERLEAVED, _ML.HEIGHT_SHARDED, _ML.WIDTH_SHARDED, _ML.BLOCK_SHARDED]

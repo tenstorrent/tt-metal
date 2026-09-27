@@ -70,7 +70,7 @@ Three defects, in ascending order of consequence:
 2. **The first three fail sanity rule 1 (single-tensor coupling).** They cross the *activation*'s `layout` and `memory_layout` with the *weight*'s `gamma_layout`. Those axes describe different tensors and there is no documented kernel-level coupling between them: the activation's placement selects the BAND / native-shard reader, while the per-channel operand's layout selects an entirely separate reader branch. This is the canonical authoring mistake the registry model names explicitly.
 3. **All five hide capability the op already claims and already delivers.** `SUPPORTED` lists every one of those axis values, `validate()` accepts them, and `eval/prompts/rms_norm_ttnn.txt`'s Phase-0 list *requires* them ("dtype: float32, bfloat16, bfloat8_b"; "alignment: tile_aligned, w_non_aligned, h_non_aligned"; "layout: TILE and ROW_MAJOR, both native ... at every memory placement the op accepts"). Because `INVALID` cells are `skip`ped, the golden suite never calls the op for any of them, so the claim goes completely untested.
 
-**Verified directly.** `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_invalid_audit.py` runs all five regions and PCC-gates them: **16/16 pass**, including RM-activation x each of the three sharded schemes with a TILE weight, and bf8b at `(1,1,32,50)`, `(1,1,64,17)`, `(1,1,47,64)`, `(1,1,17,128)`, `(1,1,47,50)` with and without a weight. The bf8b cases compare against the *read-back* input so the input quantization is not charged to the op, and they pin the RMS denominator to the **logical** width.
+**Verified directly.** `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_invalid_audit.py` runs all five regions and PCC-gates them: **16/16 pass**, including RM-activation x each of the three sharded schemes with a TILE weight, and bf8b at `(1,1,32,50)`, `(1,1,64,17)`, `(1,1,47,64)`, `(1,1,17,128)`, `(1,1,47,50)` with and without a weight. The bf8b cases compare against the *read-back* input so the input quantization is not charged to the op, and they pin the RMS denominator to the **logical** width.
 
 **Requested `feature_spec.py` edit (not made by the verifier — please apply via `/golden-tests` or directly):** delete all five "author-scoped" entries. They are supported, they pass, and removing them adds real coverage. If any is later found genuinely unwanted, its home is `EXCLUSIONS` in the op file, where XPASS-strict keeps it honest.
 
@@ -117,7 +117,7 @@ Checked against `op_design.md`'s Blocking Model, which is unusually complete (ev
 
 ## Precision Baseline
 
-`tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_precision_baseline.py` — 32 cells, all passing. Relative RMS is `||got - true||_2 / ||true||_2`; the ratio columns are `r = got/true` over finite, non-negligible reference elements (the scale-bug detector).
+`ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_precision_baseline.py` — 32 cells, all passing. Relative RMS is `||got - true||_2 / ||true||_2`; the ratio columns are `r = got/true` over finite, non-negligible reference elements (the scale-bug detector).
 
 ### No operands, `randn` input, HiFi4 / `math_approx_mode=True`
 
@@ -178,7 +178,7 @@ tool call, see "Harness findings" below. Merged into **121 438 unique tests =
 the complete collected set**.
 
 ```
-python3 -m eval.verify_supported generated/verifier_results ttnn.operations.rms_norm_ttnn
+python3 -m eval.verify_supported generated/verifier_results ttnn.bringup.rms_norm_ttnn
 ```
 
 | Category | Count | |
@@ -272,7 +272,7 @@ No `LOOSE_CASES` entry carries an `attention` note, so
 branch: rank the `perf` group by measured device-ns / the case's own clock-scaled
 `achievable_ns`. `device_kernel_ns` is captured per test by the golden runner, so
 this comes straight out of the run above via
-`ttnn/ttnn/operations/rms_norm_ttnn/perf_target_ranking.py`. **Clock-scale factor
+`ttnn/ttnn/bringup/rms_norm_ttnn/perf_target_ranking.py`. **Clock-scale factor
 1.0000** (measured 1350 MHz == the reference clock).
 
 **16 of 19 targets met. 3 missed, and all three are the same regime.**

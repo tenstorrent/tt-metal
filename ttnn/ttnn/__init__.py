@@ -464,6 +464,8 @@ def auto_register_ttnn_cpp_operations(module):
             auto_register_ttnn_cpp_operations(attribute)
 
 
+import ttnn.bringup  # the derived-op package (ttnn/ttnn/bringup), so its C++ ops attach to it below
+
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
 # Derived ops of model bring-ups (ttnn/ttnn/bringup/INDEX.md): the ops were registered as ttnn.bringup.* above;
