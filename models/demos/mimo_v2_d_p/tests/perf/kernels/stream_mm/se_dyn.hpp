@@ -150,6 +150,87 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
 }
 #endif
 
+#ifdef SE_SG
+// Disjoint subgrids (SE_SG = number of subgrids): each subgrid is a complete copy of the pipeline on its own cores
+// and serves its own experts. The active experts are assigned to subgrids deterministically (every core computes
+// the same assignment from the same counts): largest first, each onto the currently least-loaded subgrid, cost
+// = sub-blocks + SE_SG_WCOST (the weight streaming an expert costs whatever its rows). The subgrid id is the
+// runtime arg after the NUM_E global ids. Keeps only this subgrid's experts (in their original order).
+#ifndef SE_SG_WCOST
+#define SE_SG_WCOST 2
+#endif
+inline void se_dyn_subgrid(SeDyn& d, uint32_t sg) {
+    // An expert costing more than a subgrid's fair share (total / SE_SG) is cut by token range into SE_SG pieces
+    // (whole sub-blocks), each streaming its own copy of the weights: its rows then run on every subgrid at once.
+    {
+        uint32_t total = 0;
+        for (uint32_t a = 0; a < d.n_act; ++a) {
+            total += d.subs[a] + SE_SG_WCOST;
+        }
+        const uint32_t n0 = d.n_act, rps = d.rps;
+        for (uint32_t a = 0; a < n0; ++a) {
+            if ((d.subs[a] + SE_SG_WCOST) * SE_SG <= total || d.subs[a] < SE_SG || d.n_act + SE_SG - 1 > SE_MAX_E) {
+                continue;
+            }
+            const uint32_t sb = d.subs[a], cnt = d.cnt[a], off = d.off[a];
+            uint32_t s0 = 0;
+            for (uint32_t k = 0; k < SE_SG; ++k) {
+                const uint32_t ns = sb / SE_SG + (k < sb % SE_SG ? 1 : 0);
+                const uint32_t idx = k == 0 ? a : d.n_act++;
+                d.eid[idx] = d.eid[a];
+                d.off[idx] = off + s0 * rps;
+                d.cnt[idx] = cnt - s0 * rps < ns * rps ? cnt - s0 * rps : ns * rps;
+                d.subs[idx] = ns;
+                s0 += ns;
+            }
+        }
+    }
+    uint32_t load[SE_SG], owner[SE_MAX_E], done = 0;
+    for (uint32_t k = 0; k < SE_SG; ++k) {
+        load[k] = 0;
+    }
+    bool taken[SE_MAX_E];
+    for (uint32_t a = 0; a < d.n_act; ++a) {
+        taken[a] = false;
+    }
+    for (; done < d.n_act; ++done) {
+        uint32_t best = 0xFFFF;
+        for (uint32_t a = 0; a < d.n_act; ++a) {  // the largest unassigned (ties: lowest index)
+            if (!taken[a] && (best == 0xFFFF || d.subs[a] > d.subs[best])) {
+                best = a;
+            }
+        }
+        uint32_t k_min = 0;
+        for (uint32_t k = 1; k < SE_SG; ++k) {
+            k_min = load[k] < load[k_min] ? k : k_min;
+        }
+        taken[best] = true;
+        owner[best] = k_min;
+        load[k_min] += d.subs[best] + SE_SG_WCOST;
+    }
+    uint32_t v = 0;
+    d.num_v = 0;
+    d.max_cnt = 0;
+    for (uint32_t a = 0; a < d.n_act; ++a) {
+        if (owner[a] != sg) {
+            continue;
+        }
+        d.eid[v] = d.eid[a];
+        d.cnt[v] = d.cnt[a];
+        d.off[v] = d.off[a];
+        d.subs[v] = d.subs[a];
+        d.ld[v] = v;
+        d.last[v] = 1;
+        d.load_eid[v] = d.eid[a];
+        d.num_v += d.subs[a];
+        d.max_cnt = d.cnt[a] > d.max_cnt ? d.cnt[a] : d.max_cnt;
+        ++v;
+    }
+    d.n_act = v;
+    d.n_load = v;
+}
+#endif
+
 // Reads the counts / regions rows into SCRATCH (two SE_DYN_HALF halves of L1 this RISC owns) and fills d. The
 // sub-block size is SE_RPS rows when defined (every kernel must build the same schedule), else ROWS_PER_SUB.
 template <uint32_t num_e>
@@ -190,6 +271,9 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
         d.max_cnt = c > d.max_cnt ? c : d.max_cnt;
     }
     d.n_load = d.n_act;
+#ifdef SE_SG
+    se_dyn_subgrid(d, get_arg_val<uint32_t>(dyn0 + 5 + num_e));
+#endif
 #ifdef SE_SMALL_T
     d.small = d.max_cnt <= SE_SMALL_T;
 #endif

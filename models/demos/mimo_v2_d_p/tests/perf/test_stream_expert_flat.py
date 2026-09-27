@@ -98,6 +98,20 @@ XCOL_ENV = os.environ.get(
 )  # e2e: n relays in column 1, each tilizing 1/n of x for both rectangles  # two x relays per rectangle (auto: e2e with reader-down)
 FWD_DIR = int(os.environ.get("MIMO_FL_FWD_DIR", "0"))  # per-reader forwarding NoC by direction (else all NOC1)
 XNOC = int(os.environ.get("MIMO_FL_XNOC", "0"))
+# disjoint subgrids: NSG complete copies of the pipeline, each on its own cores, each serving its own experts (the
+# kernels' schedule assigns experts to subgrids, se_dyn.hpp SE_SG); gate/up rectangles MIMO_FL_SG_RECTS
+# auto: 2 for low-I shapes (I <= 1024: TP-sharded experts) with dynamic counts at helper-relay capacity (K2 TP4 us/expert
+# M 32 / 512 / 2048: 1 subgrid 24.4 / 85.5 / 309.4, 2 subgrids 22.0 / 63.5 / 224.6; TP2 34.5 / 115.5 / 438.0 ->
+# 39.0 / 112.0 / 396.9)
+_SG_ENV = os.environ.get("MIMO_FL_SG", "auto")
+NSG = (
+    int(_SG_ENV)
+    if _SG_ENV != "auto"
+    else (2 if DYN and int(os.environ.get("MIMO_FL_I", "2048")) <= 1024 and max(MS) >= 256 else 1)
+)
+SG_RECTS = [
+    tuple(int(v) for v in r.split(":")) for r in os.environ.get("MIMO_FL_SG_RECTS", "2:5:0:3,8:9:0:7").split(",")
+]
 ACT = os.environ.get("MIMO_FL_ACT", "silu")  # gate/up activation (se3_compute.cpp SE_ACT)
 ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3, "gelu_tanh": 4, "gate_only": 0}
 W_STD = float(os.environ.get("MIMO_FL_WSTD", "0.02"))  # weight init std (larger: the clamping activations clamp)
@@ -125,7 +139,7 @@ def act_ref(g, u):
 GU_L1_BUDGET = int(os.environ.get("MIMO_FL_GU_L1", str(1400 * 1024)))  # gate/up core: weight ring + x ring
 
 
-def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
+def _gu_split(It, Ht=None, w_tile=576, x_slots=24, n_readers=16, max_cores=64):
     """Gate/up work split for It intermediate tile columns: (NP pairs per core, G M-groups). The It / NP pair-sets
     go round the 16 readers (a multiple of 16), and each is computed by G cores, one per M-group (a group owns
     MT / G row tiles of every sub-block). Fewest M-groups first (a group re-forwards every weight block: G > 1
@@ -140,7 +154,7 @@ def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
         for g in (1, 2, 4):
             ps = It // np_
             dst, _ = _gu_dst(np_, Ht, x_slots)
-            if It % np_ or ps % 16 or ps * g > 64 or min(dst // (2 * np_), MT_MAX // g) < 1:
+            if It % np_ or ps % n_readers or ps * g > max_cores or min(dst // (2 * np_), MT_MAX // g) < 1:
                 continue
             mt_ = g * min(dst // (2 * np_), MT_MAX // g)
             if Ht and 2 * Ht * 2 * np_ * w_tile + x_slots * mt_ * KBLK * BF8_TILE > GU_L1_BUDGET:
@@ -151,7 +165,7 @@ def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
     assert best, f"no gate/up split for {It} tile columns"
     # fewer than 32 gate/up cores (TP4-like splits): 2 M-groups on twice the cores (K2 TP4, us/expert M 32 / 512 /
     # 2048: G1 16 cores 20.9 / 112.5 / 435.0, G2 + 2 relay helpers 24.7 / 85.2 / 309.1)
-    if best[0][1] < 32:
+    if best[0][1] < 32 and max_cores == 64:
         g2 = [c for c in cands if c[2] == 2 and c[1] == best[1] and c[0] >= 2 * best[0][1]]
         if g2:
             return g2[0][1], 2
@@ -190,7 +204,8 @@ def _layout(device, x2=False, xcol=0, nh=1):
     readers = opt + [ttnn.CoreCoord(c.x + 1, c.y) for c in opt]
     rcols = sorted({c.x for c in readers})
     assert rcols == [0, 1, 6, 7] and (grid.x, grid.y) == (11, 10), (rcols, grid)
-    rects = [(2, 5, 0, 9), (8, 10, 0, 7)]  # gate/up rectangles (x0, x1, y0, y1): no reader inside
+    # gate/up rectangles (x0, x1, y0, y1): no reader inside (subgrids: rectangle k = subgrid k's gate/up cores)
+    rects = [(2, 5, 0, 9), (8, 10, 0, 7)] if NSG == 1 else SG_RECTS
     gu = [ttnn.CoreCoord(x, y) for x0, x1, y0, y1 in rects for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
     taken = {(c.x, c.y) for c in readers + gu}
     # relays just east / south of their rectangle (NOC1 multicasts run -x / -y)
@@ -233,7 +248,18 @@ def test_stream_expert_flat(device, m, wdtype):
         if X_SLOTS > X_SLOTS_DEF:
             continue
         try:
-            NP, G = _gu_split(I // 32, H // 32, w_tile, X_SLOTS)
+            NP, G = (
+                _gu_split(I // 32, H // 32, w_tile, X_SLOTS)
+                if NSG == 1
+                else _gu_split(
+                    I // 32,
+                    H // 32,
+                    w_tile,
+                    X_SLOTS,
+                    16 // NSG,
+                    min((x1 - x0 + 1) * (y1 - y0 + 1) for x0, x1, y0, y1 in SG_RECTS),
+                )
+            )
             break
         except AssertionError:
             if X_SLOTS == 12:
@@ -270,7 +296,19 @@ def test_stream_expert_flat(device, m, wdtype):
     NH = int(os.environ.get("MIMO_FL_XHELP_N", "2" if G > 1 else "1")) if XHELP else 1
     LAND_SLOTS = int(LAND_SLOTS_ENV) if LAND_SLOTS_ENV else (2 if NH > 1 else 3)  # (landing ring per helper: L1)
     grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL, NH)
+    if NSG > 1:  # subgrid k: rectangle k, the 8 readers west of it, primary relay k + its helpers, half the down cores
+        assert NSG == 2 and DYN and XHELP and not SMALL_T, "subgrids: dynamic counts, e2e with helper relays"
+        readers = [c for c in readers if c.x in (0, 1)] + [c for c in readers if c.x in (6, 7)]
+        assert len(readers) == 16, readers
+        ctr = [((x0 + x1) / 2, (y0 + y1) / 2) for x0, x1, y0, y1 in rects]
+        dist = lambda c, k: abs(c.x - ctr[k][0]) + abs(c.y - ctr[k][1])
+        order_d = sorted(down, key=lambda c: (dist(c, 0) - dist(c, 1), c.y, c.x))
+        half = len(order_d) // 2
+        down = order_d[:half] + order_d[half : 2 * half]  # (odd count: the last core idles)
     ND = len(down)
+    ND_SG = ND // NSG  # down cores per subgrid; down core d is subgrid d // ND_SG's local core d % ND_SG
+    sg_dn = lambda d: d // ND_SG
+    dl = lambda d: d % ND_SG
     nrl = len(relays)
     if os.environ.get("MIMO_FL_SHOW"):
         logger.info(f"readers logical->phys {[((c.x, c.y), (phys(c).x, phys(c).y)) for c in readers]}")
@@ -278,22 +316,25 @@ def test_stream_expert_flat(device, m, wdtype):
         for nm, lst in (("readers", readers), ("gu", gu), ("relays", relays), ("down", down)):
             logger.info(f"{nm}: " + " ".join(f"{c.x},{c.y}->{phys(c).x}-{phys(c).y}" for c in lst))
     n_rd, ngu = len(readers), len(gu)
+    n_rd_sg = n_rd // NSG  # readers per subgrid (reader r: subgrid r // n_rd_sg)
+    sg_rd = lambda r: r // n_rd_sg
     Ht, It, E = H // 32, I // 32, EXPERTS
     S = m_pad // (MT * 32)
     V = E * S
     nk_gu = Ht // KBLK
     slot = KBLK * 2 * NP  # one gate/up core's block: [KBLK x (gate, up) x NP]
-    RG = (It // NP) // n_rd  # pair-sets per reader (its chunk: RG blocks), each forwarded to G cores
+    RG = (It // NP) // n_rd_sg  # pair-sets per reader (its chunk: RG blocks), each forwarded to G cores
     R_ = RG * G  # gate/up cores per reader
-    assert (It // NP) % n_rd == 0 and R_ <= 4, (It, NP, n_rd, R_)
+    assert (It // NP) % n_rd_sg == 0 and R_ <= 4, (It, NP, n_rd_sg, R_)
     logger.info(f"gate/up split: {It} columns, NP {NP} x G {G} (MT {MT}, {MTG} per group), {R_ * n_rd} cores")
     ring_g = int(round(float(os.environ.get("MIMO_FL_GU_RING", "2")) * nk_gu))  # gate/up weight ring, in experts
     n_rdn = D_CHAINS if RDOWN else 0  # readers that also compute down columns: one per down chain, as its tail
+    # (per subgrid: each subgrid has D_CHAINS chains and computes all H columns for its own experts)
     pcd_r = (int(RDOWN_PCD_ENV) if RDOWN_PCD_ENV else 6 if (X2 or XCOL == 4) else 4) if RDOWN else 0
     rem_cols = Ht - n_rdn * pcd_r  # the down cores' columns; uneven when they do not divide: two widths
-    base_p, extra = divmod(rem_cols, ND)
-    pcds = [base_p + (1 if d < extra else 0) for d in range(ND)]
-    col0s = [sum(pcds[:d]) for d in range(ND)]
+    base_p, extra = divmod(rem_cols, ND_SG)
+    pcds = [base_p + (1 if dl(d) < extra else 0) for d in range(ND)]
+    col0s = [sum(pcds[sg_dn(d) * ND_SG : d]) for d in range(ND)]
     assert max(pcds) <= 8 and min(pcds) >= 1, pcds
     kd_of = lambda p_: max(k for k in (8, 4, 2, 1) if k * p_ <= 16 and It % k == 0)
 
@@ -349,7 +390,11 @@ def test_stream_expert_flat(device, m, wdtype):
         for j_ in range(R_):
             for r, c in enumerate(readers):
                 # GROUP_RECT: M-group g's cores all in rectangle g (its relay then multicasts only that group's rows)
-                cand = [ci for ci in left if not GROUP_RECT or rect_of0(gu[ci]) == j_ % G] or left
+                cand = [
+                    ci
+                    for ci in left
+                    if (not GROUP_RECT or rect_of0(gu[ci]) == j_ % G) and (NSG == 1 or rect_of0(gu[ci]) == sg_rd(r))
+                ] or left
                 best = min(cand, key=lambda ci: noc_hops(phys(c), phys(gu[ci]), 1))
                 per_reader[r].append(best)
                 left.remove(best)
@@ -454,7 +499,7 @@ def test_stream_expert_flat(device, m, wdtype):
             for c in range(nk_gu):
                 ks = slice(c * KBLK, (c + 1) * KBLK)
                 for pl in range(RG):
-                    cols = [(r * RG + pl) * NP + p_ for p_ in range(NP)]
+                    cols = [((r % n_rd_sg) * RG + pl) * NP + p_ for p_ in range(NP)]
                     blocks.append(
                         torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
                     )
@@ -482,14 +527,15 @@ def test_stream_expert_flat(device, m, wdtype):
         rregs = [
             torch.cat(
                 [
-                    Wd_t[c * kd_r : (c + 1) * kd_r, rem_cols + i * pcd_r : rem_cols + (i + 1) * pcd_r].reshape(
-                        -1, 32, 32
-                    )
+                    Wd_t[
+                        c * kd_r : (c + 1) * kd_r,
+                        rem_cols + (i % n_rdn) * pcd_r : rem_cols + (i % n_rdn + 1) * pcd_r,
+                    ].reshape(-1, 32, 32)
                     for _, _, Wd_t in T_l
                     for c in range(nblk_r)
                 ]
             )
-            for i in range(n_rdn)
+            for i in range(n_rdn * NSG)
         ]
         wr_dev = _bank_sharded(rregs, banks, w_dtype, device)
         wr_region = rregs[0].shape[0] * w_tile
@@ -719,20 +765,26 @@ def test_stream_expert_flat(device, m, wdtype):
     ]
     d_pred, d_succ, d_heads = {}, {}, []
     rdn = []  # (reader index, chain tail down index)
-    for seg in _chains([(d, down[d]) for d in range(ND)], D_CHAINS, phys, DN_NOC):
-        d_heads.append(seg[0][0])
-        if RDOWN:
-            tail = seg[-1][0]
-            used = {r for r, _ in rdn}
-            r = min(
-                (r for r in range(n_rd) if r not in used),
-                key=lambda r: noc_hops(phys(down[tail]), phys(readers[r]), DN_NOC),
-            )
-            rdn.append((r, tail))
-        for a, b in zip(seg, seg[1:]):
-            d_succ[a[0]], d_pred[b[0]] = b[0], a[0]
+    for k_ in range(NSG):  # each subgrid's down cores in D_CHAINS chains, tails = its readers
+        for seg in _chains([(d, down[d]) for d in range(ND) if sg_dn(d) == k_], D_CHAINS, phys, DN_NOC):
+            d_heads.append(seg[0][0])
+            if RDOWN:
+                tail = seg[-1][0]
+                used = {r for r, _ in rdn}
+                r = min(
+                    (r for r in range(n_rd) if r not in used and sg_rd(r) == k_),
+                    key=lambda r: noc_hops(phys(down[tail]), phys(readers[r]), DN_NOC),
+                )
+                rdn.append((r, tail))
+            for a, b in zip(seg, seg[1:]):
+                d_succ[a[0]], d_pred[b[0]] = b[0], a[0]
     xy_or0 = lambda lst, i: pk(lst[i]) if i is not None else 0
-    head_xy = [pk(down[d]) for d in d_heads]
+    head_xy_sg = [[pk(down[d]) for d in d_heads if sg_dn(d) == k_] for k_ in range(NSG)]
+    head_xy = head_xy_sg[0]
+    coord_sg = [pk(down[k_ * ND_SG]) for k_ in range(NSG)]  # each subgrid's coordinator (its first down core)
+    ngu_sg = ngu // NSG
+    gu_xy_sg = [[pk(c) for c in gu[k_ * ngu_sg : (k_ + 1) * ngu_sg]] for k_ in range(NSG)]
+    sgx = lambda k_: [k_] if NSG > 1 else []  # the subgrid id after the se_dyn.hpp args
 
     def _walk(h_):
         out_ = [h_]
@@ -763,8 +815,12 @@ def test_stream_expert_flat(device, m, wdtype):
     qW = {}  # expert -> quantized (gate, up, down) for the reference
     rd_vals, fw_vals, gu_rt, gu_grp = {}, {}, ttnn.RuntimeArgs(), {}
     for r, c in enumerate(readers):
-        rd_vals[(c.x, c.y)] = [w_dev.buffer_address(), r % banks, (r // banks) * region_bytes, 0] + dyn_args
-        fw_vals[(c.x, c.y)] = [land_addr] + [pk(gu[r * R_ + j]) for j in range(R_)] + (dyn_args if DYN else [0] * R_)
+        rd_vals[(c.x, c.y)] = (
+            [w_dev.buffer_address(), r % banks, (r // banks) * region_bytes, 0] + dyn_args + sgx(sg_rd(r))
+        )
+        fw_vals[(c.x, c.y)] = (
+            [land_addr] + [pk(gu[r * R_ + j]) for j in range(R_)] + (dyn_args + sgx(sg_rd(r)) if DYN else [0] * R_)
+        )
         for j in range(R_):
             ci = r * R_ + j
             g = gu[ci]
@@ -773,10 +829,10 @@ def test_stream_expert_flat(device, m, wdtype):
                 [
                     pk(c),
                     j,
-                    r * RG + j // G,  # pair-set (its h K-tiles)
-                    len(head_xy),
+                    (r % n_rd_sg) * RG + j // G,  # pair-set (its h K-tiles)
+                    len(head_xy_sg[sg_rd(r)]),
                     0,
-                    pk(down[0]),
+                    coord_sg[sg_rd(r)],
                     GATH,
                     x_ring_addr,
                     0,
@@ -796,8 +852,9 @@ def test_stream_expert_flat(device, m, wdtype):
                     SFREE,
                     WORD,
                 ]
-                + head_xy
+                + head_xy_sg[sg_rd(r)]
                 + dyn_args
+                + sgx(sg_rd(r))
             )
     gu_crt = ttnn.RuntimeArgs()
     for g in gu:
@@ -814,21 +871,23 @@ def test_stream_expert_flat(device, m, wdtype):
                 h_all_addr,
                 xy_or0(down, d_pred.get(d)),
                 tail_succ.get(d, xy_or0(down, d_succ.get(d))),
-                pk(down[0]),
-                int(d == 0),
-                ngu,
+                coord_sg[sg_dn(d)],
+                int(dl(d) == 0),
+                ngu_sg,
                 y_dram.buffer_address(),
                 col0s[d],
                 base + D_OFF,
-                d,
+                dl(d),
             ]
-            + gu_xy
+            + gu_xy_sg[sg_dn(d)]
             + e2e_rt
+            + sgx(sg_dn(d))
             + ([rem_cols + d * pcx, int(d < n_x), int(d in tail_succ), ND] if SMALL else [])
         )
         dw_rt[dc.x][dc.y] = (
             [wd_dev.buffer_address(), d % banks, (d // banks) * wd_region]
             + dyn_args
+            + sgx(sg_dn(d))
             + ([wx_dev.buffer_address(), d % banks, (d // banks) * wx_region, int(d < n_x)] if SMALL else [])
         )
         dc_rts[pcds[d]][dc.x][dc.y] = [int(SMALL and d < n_x)]
@@ -843,7 +902,7 @@ def test_stream_expert_flat(device, m, wdtype):
         lo, hi = ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)
         xr_rt[rl.x][rl.y] = (
             [x_dev.buffer_address(), vstride, rl_off(idx)]
-            + (dyn_args or [v_ for e in range(E) for v_ in (e * tok_pad, m)])
+            + ((dyn_args + sgx(idx % 2)) if dyn_args else [v_ for e in range(E) for v_ in (e * tok_pad, m)])
             if E2E
             else [x_dev.buffer_address(), x_region, 0]
         )
@@ -886,15 +945,19 @@ def test_stream_expert_flat(device, m, wdtype):
         if XHELP and idx >= 2:
             j_ = (idx - 2) // 2  # its ring follows the primary's rings of helpers 0..j - 1
             sbb = MT * SBT * BF8_TILE
-            hl_rt[j_][rl.x][rl.y] = [
-                pk(relays[idx % 2]),
-                base + LAND_OFF + j_ * LAND_SLOTS * sbb,
-                rl_sb(idx),
-                1 + NH,
-                j_ + 1,
-            ] + dyn_args
+            hl_rt[j_][rl.x][rl.y] = (
+                [
+                    pk(relays[idx % 2]),
+                    base + LAND_OFF + j_ * LAND_SLOTS * sbb,
+                    rl_sb(idx),
+                    1 + NH,
+                    j_ + 1,
+                ]
+                + dyn_args
+                + sgx(idx % 2)
+            )
             continue
-        xm_rt[rl.x][rl.y] = xm_l + dyn_args
+        xm_rt[rl.x][rl.y] = xm_l + dyn_args + (sgx(idx % 2) if dyn_args else [])
 
     dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
     FP = ttnn.KernelDescriptor.SourceType.FILE_PATH
@@ -915,6 +978,7 @@ def test_stream_expert_flat(device, m, wdtype):
     dyn_def = (
         (
             [("SE_DYN", "1"), ("SE_DYN_HALF", str(DYN_HALF)), ("SE_RPS", str(MT * 32))]
+            + ([("SE_SG", str(NSG))] if NSG > 1 else [])
             + [("SE_MAX_E", str(SE_MAX_E)), ("SE_META_BYTES", str(META_BYTES))]
             + [("SE_GU_NREG", str(ring_g // nk_gu))]
             + ([("SE_PIN_MIN", str(PIN)), ("SE_PIN_SMALL", os.environ.get("MIMO_FL_PIN_SMALL", "2"))] if PIN else [])
@@ -955,20 +1019,24 @@ def test_stream_expert_flat(device, m, wdtype):
             g_rn = ttnn.RuntimeArgs()
             for i, r, t in mine:
                 c = readers[r]
-                g_rn[c.x][c.y] = [
-                    w_dev.buffer_address(),
-                    r % banks,
-                    (r // banks) * region_bytes,
-                    wr_dev.buffer_address(),
-                    i % banks,
-                    (i // banks) * wr_region,
-                    pk(down[t]),
-                    pk(down[0]),
-                    base + D_OFF,
-                    ND + i,
-                    y_dram.buffer_address(),
-                    rem_cols + i * pcd_r,
-                ] + e2e_rt
+                g_rn[c.x][c.y] = (
+                    [
+                        w_dev.buffer_address(),
+                        r % banks,
+                        (r // banks) * region_bytes,
+                        wr_dev.buffer_address(),
+                        i % banks,
+                        (i // banks) * wr_region,
+                        pk(down[t]),
+                        coord_sg[sg_rd(r)],
+                        base + D_OFF,
+                        ND_SG + i % n_rdn,  # its done word on the subgrid's coordinator
+                        y_dram.buffer_address(),
+                        rem_cols + (i % n_rdn) * pcd_r,
+                    ]
+                    + e2e_rt
+                    + sgx(sg_rd(r))
+                )
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/se9_rdown.cpp",
@@ -1192,7 +1260,7 @@ def test_stream_expert_flat(device, m, wdtype):
                     2,
                     MTG,
                     H_TILE,
-                    ngu,
+                    ngu_sg,
                     DATA,
                     HARR,
                     GO,
@@ -1267,8 +1335,8 @@ def test_stream_expert_flat(device, m, wdtype):
                     g_["out"],
                     V,
                     S,
-                    ngu,
-                    ND + n_rdn,
+                    ngu_sg,
+                    ND_SG + n_rdn,
                     HARR,
                     HSFREE,
                     GATH,

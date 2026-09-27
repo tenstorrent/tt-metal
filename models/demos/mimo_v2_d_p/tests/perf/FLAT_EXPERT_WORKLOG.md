@@ -365,3 +365,35 @@ Consequences: "relay tilize paces TP4 / K2 at large M" is UNSUPPORTED (it also f
 helper); the ~5 us per sub-block gate/up stall on TP4 at M 2048 is unattributed again; the "tilize to bf16"
 idea has no support (bf8 is not slower in the LLK data). Next: a tilize microbenchmark (pre-filled row-major CB,
 idle core vs relay under load) and a per-sub-block critical-path trace across readers, relays, gate/up, down.
+
+### TP2 vs existing (it was never compared at large M)
+K2 TP2 7168x1024, us/expert M 32 / 512 / 2048: flat 34.4 / 115.4 / 438.0; unified 73.9 / 107.9 / 346.2; fused
+48.3 / 133.7 / 458.1 -> flat LOST at 512 (0.93x) and 2048 (0.79x).
+
+### Disjoint subgrids (`MIMO_FL_SG`, auto 2 for I <= 1024 with dynamic counts at helper-relay capacity)
+Each subgrid is a complete copy of the pipeline on its own cores serving its own experts: gate/up rectangle k
+(`MIMO_FL_SG_RECTS`, default 4x4 at cols 2-5 rows 0-3 and 2x8 at cols 8-9 rows 0-7: exactly the used cores, so
+the freed cells become down cores), the 8 readers west of it, primary relay k + its helpers, half of the remaining
+cores as down cores (split by distance to the rectangles), its own D_CHAINS chains / reader tails / coordinator /
+go-done counts. Kernels unchanged except se_dyn.hpp `SE_SG`: every core assigns the active experts to subgrids
+from the same counts (largest first onto the least-loaded subgrid, cost = sub-blocks + SE_SG_WCOST 2) and keeps its
+own; an expert costing more than total / SE_SG is first cut by token range into SE_SG pieces (each streams its own
+copy of the weights: cheap at low I). Host: subgrid-local indices (down core done slots, reader-tail columns / done
+slots, pair-set of each reader), the subgrid id after the se_dyn args on every core, per-subgrid CT counts.
+Result (us/expert, 8 experts; rag8 = [2000,40,90,60,30,300,20,50], spike8 = [3000 + 7 x 100], real8 =
+[1196,88,715,300,64,40,500,20]):
+| | uni32 | uni512 | uni2048 | rag8 | spike8 | real8 |
+|---|---|---|---|---|---|---|
+| TP4 1 subgrid | 24.4 | 85.5 | 309.4 | 59.9 | 78.8 | 65.2 |
+| TP4 2 subgrids, no expert split | 21.8 | 63.4 | 225.0 | 61.4 | 87.1 | 53.1 |
+| TP4 2 subgrids + split | 22.0 | 63.5 | 224.6 | 48.6 | 59.7 | 52.4 |
+| TP4 best existing | 36.4 | 90.1 | 286.3 | | | |
+| TP2 1 subgrid | 34.5 | 115.5 | 438.0 | 78.7 | 109.1 | 88.2 |
+| TP2 2 subgrids + split | 39.0 | 112.0 | 396.9 | 80.9 | 111.7 | 89.3 |
+| TP2 best existing | 48.3 | 107.9 | 346.2 | | | |
+TP4 now beats the existing ops at every M (1.64x / 1.42x / 1.27x) and on ragged loads. TP2 still trails at large
+M (0.87x at 2048, 0.96x at 512): a bf16 probe (MT 2: 392 us) shows it is not the sub-block size but gate/up compute,
+32 gate/up cores in both modes (16 per subgrid x NP 2: 2 x 2 x 4 x 224 tile-matmuls per core per 128 rows, ~47 us
+per subgrid, ~23.5 us overall). Needs 64 gate/up cores (32 per subgrid at NP 1): the second subgrid's reader-free
+region is 3 x 10 = 30 cells, so that means two multicast rectangles per subgrid or 4 subgrids of 16 (NP 2, 4
+readers each). Not done.
