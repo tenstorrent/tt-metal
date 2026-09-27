@@ -1,0 +1,54 @@
+[
+  {
+    "force_argmax": false,
+    "expected": 65540,
+    "actual": [
+      65540,
+      65540,
+      65540,
+      65540
+    ],
+    "passed": true
+  },
+  {
+    "force_argmax": false,
+    "expected": 196633,
+    "actual": [
+      196633,
+      196633,
+      196633,
+      196633
+    ],
+    "passed": true
+  },
+  {
+    "force_argmax": false,
+    "host_wall_replay_us": 74389.49718140066
+  },
+  {
+    "force_argmax": true,
+    "expected": 65540,
+    "actual": [
+      65540,
+      65540,
+      65540,
+      65540
+    ],
+    "passed": true
+  },
+  {
+    "force_argmax": true,
+    "expected": 196633,
+    "actual": [
+      196633,
+      196633,
+      196633,
+      196633
+    ],
+    "passed": true
+  },
+  {
+    "force_argmax": true,
+    "host_wall_replay_us": 76071.7792622745
+  }
+]

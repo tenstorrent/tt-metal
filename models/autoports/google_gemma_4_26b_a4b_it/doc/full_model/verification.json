@@ -1,0 +1,20 @@
+{
+  "host_tests": {
+    "command": "python -m pytest -q models/common/readiness_check/test_generate.py",
+    "passed": 10,
+    "log": "reference_host_tests_final.log"
+  },
+  "formatting": {
+    "command": "pre-commit run --files <stage-owned .py/.hpp/.json/.md files>",
+    "status": "passed",
+    "log": "precommit_final.log"
+  },
+  "native_build": {
+    "command": ".github/scripts/copilot-build.sh --build-ttnn-tests",
+    "exit_code": 1,
+    "status": "unverified",
+    "reason": "Docker unavailable on this host",
+    "log": "native_build.log",
+    "hardware_validation": "Affected kernels JIT-compiled; 2048/4096-byte linear/ring eager+trace controls and reduced model Watcher regression passed."
+  }
+}

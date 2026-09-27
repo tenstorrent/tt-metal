@@ -1,0 +1,111 @@
+{
+  "traced_replay_has_no_host_tensor_operations": true,
+  "prefill_has_no_host_tensor_fallback": true,
+  "model_and_common_sampler_have_no_host_fallback": true,
+  "omitted_seed_uses_fresh_request_entropy": true,
+  "alternating_greedy_seeded_sampling_repeatable": true,
+  "sampled_seed_advance_and_token_feedback": true,
+  "sampled_counters": {
+    "model_replays": 7,
+    "sampling_replays": 7,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "cache_position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 7,
+    "full_logits_readbacks": 0,
+    "teacher_forcing_token_refreshes": 0
+  },
+  "host_mode_rejects_unsupported_sampled_policy": true,
+  "host_tokens": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "device_tokens": [
+    366,
+    269,
+    264,
+    267,
+    4,
+    269,
+    266,
+    4
+  ],
+  "prefill_host_device_greedy_maximum": 30.0,
+  "host_device_common_prefix_greedy_oracle": [
+    {
+      "step": 1,
+      "predicted": 47,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 68885
+    },
+    {
+      "step": 2,
+      "predicted": 29,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 59898
+    },
+    {
+      "step": 3,
+      "predicted": 29,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 55357
+    },
+    {
+      "step": 4,
+      "predicted": 29,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 50436
+    },
+    {
+      "step": 5,
+      "predicted": 29,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 48928
+    },
+    {
+      "step": 6,
+      "predicted": 26,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 45201
+    },
+    {
+      "step": 7,
+      "predicted": 26,
+      "host_token": 1,
+      "predicted_value": 30.0,
+      "host_value": 30.0,
+      "maximum": 30.0,
+      "tied_maxima": 44080
+    }
+  ],
+  "explicit_host_sampling_is_semantically_greedy": true,
+  "traced_penalty_counts": true,
+  "unsupported_tp4_logprobs_rejected_before_request_mutation": true,
+  "single_token_callback": true
+}

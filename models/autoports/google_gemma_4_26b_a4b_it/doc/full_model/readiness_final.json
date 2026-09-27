@@ -1,0 +1,44 @@
+{
+  "prefill": [
+    {
+      "top1": 0.96,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 96,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  ],
+  "decode": [
+    {
+      "top1": 0.94,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 94,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 2.8736170157790184,
+      "e2e_t/s/u": 34.79934850430675,
+      "ttft_ms": 887.1865449473262,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 1.9864130280911922,
+      "decode_t/s/u": 49.83857767743915
+    }
+  ],
+  "decode_counters": {
+    "model_replays": 99,
+    "sampling_replays": 99,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "cache_position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 99,
+    "full_logits_readbacks": 0,
+    "teacher_forcing_token_refreshes": 99
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "feedback_and_positions": true,
+  "changed_and_unchanged_page_table": true,
+  "reset_and_repeated_generation": true,
+  "layer_count": 2,
+  "counters": {
+    "model_replays": 3,
+    "sampling_replays": 3,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "cache_position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 3,
+    "full_logits_readbacks": 0,
+    "teacher_forcing_token_refreshes": 0
+  }
+}

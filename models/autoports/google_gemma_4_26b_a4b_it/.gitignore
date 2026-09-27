@@ -4,3 +4,9 @@ doc/functional_decoder/watcher/*/generated/
 doc/functional_decoder/tracy/*/*_all_replays_perf_report.txt
 # Pytest's absolute-path aliases are machine-local; keep the result JSONs.
 doc/functional_decoder/pytest*/*current
+readiness*.refpt
+# Full-model raw captures remain local; compact perf reports are committed.
+doc/full_model/profile_terminal/reports/
+doc/full_model/profile_terminal/.logs/
+doc/full_model/profile_terminal/.tracy/
+!doc/full_model/profile_terminal/decode_perf_report*.csv

@@ -1,0 +1,30 @@
+{
+  "tokens": [
+    11634,
+    2915,
+    1156,
+    563,
+    5213,
+    236812,
+    84750,
+    106
+  ],
+  "completion": "Two plus two is **4**.<turn|>",
+  "prompt_tokens": 19,
+  "elapsed_seconds": 136.26871173642576,
+  "metrics": {
+    "ttft_ms": 6520.506166853011,
+    "decode_tps": 50.34293043504808,
+    "input_tokens": 19,
+    "output_tokens": 8,
+    "batch": 1,
+    "source": "autoregressive",
+    "reduced_probe": false,
+    "host_sampling": false,
+    "counters": {
+      "model_replays": 7,
+      "sampling_replays": 7,
+      "token_readbacks": 7
+    }
+  }
+}
