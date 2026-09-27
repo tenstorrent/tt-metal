@@ -21,6 +21,11 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import (
     OptimizedExperts,
 )
 from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import assert_precision_matches
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import dtype as policy_dtype
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import dtype_name
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import fidelity as policy_fidelity
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import fidelity_name
 from models.autoports.google_gemma_4_26b_a4b_it.tt.routing_precision import Router
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.experts.weights import ExpertWeights
@@ -315,7 +320,7 @@ class _SharedMLP:
         self.reduce = reduce
         self.decode_weights = None
 
-    def configure_decode(self, state, mesh, sliding, geometry=0):
+    def configure_decode(self, state, mesh, sliding, geometry=0, precision=None):
         import torch
 
         gate = state["mlp.gate_proj.weight"].transpose(-2, -1)
@@ -327,6 +332,12 @@ class _SharedMLP:
         gate_parts, up_parts = gate.chunk(4, dim=-1), up.chunk(4, dim=-1)
         packed = torch.cat([torch.cat((u, g), dim=-1) for u, g in zip(up_parts, gate_parts)], dim=-1)
         down_dtype = ttnn.bfloat8_b if sliding else ttnn.bfloat4_b
+        gate_dtype = ttnn.bfloat4_b
+        fidelity = ttnn.MathFidelity.LoFi
+        if precision is not None:
+            gate_dtype = policy_dtype(precision["shared_gate_dtype"])
+            down_dtype = policy_dtype(precision["shared_down_dtype"])
+            fidelity = policy_fidelity(precision["shared_fidelity"])
         self.decode_weights = tuple(
             ttnn.from_torch(
                 t[None, None],
@@ -336,11 +347,11 @@ class _SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=axis),
             )
-            for t, axis, dtype in ((packed, -1, ttnn.bfloat4_b), (down, -2, down_dtype))
+            for t, axis, dtype in ((packed, -1, gate_dtype), (down, -2, down_dtype))
         )
         self.decode_compute = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -680,6 +691,7 @@ class MultichipDecoder(OptimizedDecoder):
         attention_precision=None,
         expert_gate_dtype=None,
         collective_buffer_pool=None,
+        precision_config=None,
     ):
         import torch
 
@@ -703,14 +715,27 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("Shared DRAM decode requires shared_geometry=0")
         config = getattr(hf_config, "text_config", hf_config)
         sliding = config.layer_types[layer_idx] == "sliding_attention"
+        if precision_config is not None:
+            if not (optimized_decode and optimized_shared and hybrid_experts and grouped_moe_reduce and fused_tail):
+                raise ValueError("Precision policy requires the accepted optimized hybrid TP4/EP4 path")
+            if expert_parallel or sharded_residual or shared_dram or attention_dram or fused_agmm:
+                raise ValueError("Precision policy does not support alternate projection or parallel backends")
+            if topology != ttnn.Topology.Linear:
+                raise ValueError("Precision policy requires Linear collectives")
+            qkv_fidelity = policy_fidelity(precision_config["qkv_fidelity"])
+            output_fidelity = policy_fidelity(precision_config["output_fidelity"])
+            expert_gate_dtype = policy_dtype(precision_config["expert_gate_dtype"])
+            attention_ccl_dtype = policy_dtype(precision_config["attention_ccl_dtype"])
+            full_attention_ccl_dtype = attention_ccl_dtype
+            moe_ccl_bfp8 = precision_config["moe_ccl_dtype"] == "bfloat8_b"
         if attention_precision is None:
             attention_precision = "qkv" if optimized_decode and not sliding else "baseline"
         if attention_precision not in ("baseline", "qkv", "output", "both"):
             raise ValueError("Unknown attention precision policy")
         if expert_gate_dtype is None:
             expert_gate_dtype = ttnn.bfloat8_b if optimized_decode and sliding else ttnn.bfloat4_b
-        if expert_gate_dtype not in (ttnn.bfloat4_b, ttnn.bfloat8_b):
-            raise ValueError("Expert gate weights must use BFP4 or BFP8")
+        if expert_gate_dtype not in (ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16):
+            raise ValueError("Expert gate weights must use BFP4, BFP8 or BF16")
         if shared_geometry is None:
             shared_geometry = 2 if sliding else 1
         if chunk_size != 1024:
@@ -722,6 +747,7 @@ class MultichipDecoder(OptimizedDecoder):
         self = cls()
         self.config, self.layer_idx, self.chunk_size = config, layer_idx, chunk_size
         self.mesh_device = mesh_device
+        self.selected_precision = precision_config
         self.attention_dram_extra_weight_bytes = 0
         self.mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=4))
         if fused_agmm and (not sharded_residual or topology != ttnn.Topology.Ring):
@@ -786,7 +812,9 @@ class MultichipDecoder(OptimizedDecoder):
         self.use_sharded_norms = True
         self.sharded_norm_site = "all"
         self.prefill_qkv_input_l1 = False
-        self.kv_cache_dtype = ttnn.bfloat8_b
+        self.kv_cache_dtype = (
+            ttnn.bfloat8_b if precision_config is None else policy_dtype(precision_config["kv_cache_dtype"])
+        )
         for name in ("post_feedforward_layernorm_1", "post_feedforward_layernorm_2", "post_feedforward_layernorm"):
             norm = getattr(self.layer, name)
             norm._sharded_cfg = norm._build_sharded_cfg(config.hidden_size)
@@ -814,7 +842,16 @@ class MultichipDecoder(OptimizedDecoder):
         projection = _Projection(
             ttnn.typecast(source.weights.wqkv, ttnn.bfloat8_b), compute, mesh_device, sliding, qkv_fidelity
         )
-        if attention_precision in ("qkv", "both"):
+        if precision_config is not None:
+            qkv_dtype = policy_dtype(precision_config["qkv_weight_dtype"])
+            # Keep the baseline BFP8 -> BFP4 quantization path. BF16 recovery
+            # must use the original checkpoint upload, never widened BFP4.
+            if qkv_dtype == ttnn.bfloat16:
+                projection.weight = source.weights.wqkv
+            elif projection.weight.dtype != qkv_dtype:
+                projection.weight = ttnn.typecast(projection.weight, qkv_dtype)
+            projection.input_bfp8 = precision_config["qkv_input_dtype"] == "bfloat8_b"
+        elif attention_precision in ("qkv", "both"):
             projection.weight = ttnn.typecast(projection.weight, ttnn.bfloat4_b)
         if optimized_decode and not fused_agmm:
             projection.program.in0_block_w = 44
@@ -823,6 +860,7 @@ class MultichipDecoder(OptimizedDecoder):
             self.attention_dram_extra_weight_bytes = projection.decode_dram.extra_weight_bytes
         if fused_agmm:
             projection = _GatherProjection(projection, mesh_device)
+        original_output_weight = source.weights.o_proj
         source.weights = replace(
             source.weights,
             wqkv=projection,
@@ -854,7 +892,16 @@ class MultichipDecoder(OptimizedDecoder):
         attention.configure_prefill_output(
             mesh_device, 1024, minimal=True, minimal_block_w=8, fidelity=ttnn.MathFidelity.LoFi
         )
-        if attention_precision in ("output", "both"):
+        if precision_config is not None:
+            output_dtype = policy_dtype(precision_config["output_weight_dtype"])
+            output_weight = attention.source.weights.o_proj
+            if output_dtype == ttnn.bfloat16:
+                output_weight = original_output_weight
+            elif output_weight.dtype != output_dtype:
+                output_weight = ttnn.typecast(output_weight, output_dtype)
+            attention.source.weights = replace(attention.source.weights, o_proj=output_weight)
+            attention.output_input_bfp8 = precision_config["output_input_dtype"] == "bfloat8_b"
+        elif attention_precision in ("output", "both"):
             # Prefill owns its original BFP8 weight through configure_prefill_output.
             attention.source.weights = replace(
                 attention.source.weights,
@@ -897,10 +944,14 @@ class MultichipDecoder(OptimizedDecoder):
         experts = OptimizedExperts(
             packed,
             gate_dtype=expert_gate_dtype,
-            down_dtype=ttnn.bfloat4_b,
+            down_dtype=ttnn.bfloat4_b
+            if precision_config is None
+            else policy_dtype(precision_config["expert_down_dtype"]),
             block_w=6,
             gate_block_w=44,
-            fidelity=ttnn.MathFidelity.LoFi,
+            fidelity=ttnn.MathFidelity.LoFi
+            if precision_config is None
+            else policy_fidelity(precision_config["expert_fidelity"]),
             mesh_device=mesh_device,
             active_prefill=True,
             prefill_tokens=32,
@@ -908,7 +959,9 @@ class MultichipDecoder(OptimizedDecoder):
             prefill_down_dtype=ttnn.bfloat4_b,
             prefill_fidelity=ttnn.MathFidelity.LoFi,
             expert_fused_gelu=True,
-            activation_dtype=ttnn.bfloat8_b,
+            activation_dtype=ttnn.bfloat8_b
+            if precision_config is None
+            else policy_dtype(precision_config["expert_input_dtype"]),
         )
 
         if sliding:
@@ -977,7 +1030,10 @@ class MultichipDecoder(OptimizedDecoder):
         shared_class = _DramSharedMLP if shared_dram else _SharedMLP
         self.layer.shared_mlp = shared_class(self.layer.shared_mlp, compute, self.allreduce)
         if optimized_shared:
-            self.layer.shared_mlp.configure_decode(state_dict, mesh_device, sliding, shared_geometry)
+            shared_kwargs = {} if precision_config is None else {"precision": precision_config}
+            self.layer.shared_mlp.configure_decode(state_dict, mesh_device, sliding, shared_geometry, **shared_kwargs)
+        if precision_config is not None:
+            self.layer.shared_mlp.input_bfp8 = precision_config["shared_input_dtype"] == "bfloat8_b"
         positions = torch.arange(config.max_position_embeddings, dtype=torch.int32)[None]
         mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         self.positions_u32 = ttnn.from_torch(
@@ -987,6 +1043,86 @@ class MultichipDecoder(OptimizedDecoder):
             positions, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper
         )
         return self
+
+    def _validate_kv_cache(self, kv_cache):
+        super()._validate_kv_cache(kv_cache)
+        if self.selected_precision is not None and any(cache.dtype != self.kv_cache_dtype for cache in kv_cache):
+            raise ValueError("KV cache dtype does not match the constructed precision policy")
+
+    def precision_summary(self):
+        """Read the tensors and compute configs actually bound to each mode."""
+        if self.selected_precision is None:
+            raise ValueError("A resolved precision policy is required for the construction audit")
+        attention = self.layer.self_attn
+        qkv = attention.source.weights.wqkv
+        experts = self.layer.moe.experts
+        decode, prefill = experts.decode, experts.prefill
+        shared = self.layer.shared_mlp
+        router = self.layer.moe.router
+
+        def closure_weight(project):
+            if hasattr(project, "weight"):
+                return project.weight
+            weights = [
+                cell.cell_contents for cell in project.__closure__ if isinstance(cell.cell_contents, ttnn.Tensor)
+            ]
+            if len(weights) != 1:
+                raise ValueError("Cannot audit shared prefill projection weight")
+            return weights[0]
+
+        shared_prefill = [dtype_name(closure_weight(project).dtype) for project in (shared.gate_up, shared.down)]
+        if shared_prefill[0] != shared_prefill[1]:
+            raise ValueError("Shared prefill projection dtypes disagree")
+        compute_groups = {
+            "qkv": qkv.decode_compute,
+            "output": attention.output_compute,
+            "expert": decode.decode_compute,
+            "shared": shared.decode_compute,
+        }
+        fixed = {
+            "prefill_qkv_weight_dtype": dtype_name(qkv.prefill.weight.dtype),
+            "prefill_qkv_fidelity": fidelity_name(qkv.prefill.compute.math_fidelity),
+            "prefill_output_weight_dtype": dtype_name(attention.prefill_minimal_output.weight.dtype),
+            "prefill_output_fidelity": fidelity_name(attention.prefill_output_compute.math_fidelity),
+            "prefill_expert_gate_dtype": dtype_name(prefill.prefill_gate.dtype),
+            "prefill_expert_down_dtype": dtype_name(prefill.prefill_down.dtype),
+            "prefill_expert_fidelity": fidelity_name(prefill.prefill_compute.math_fidelity),
+            "prefill_shared_weight_dtype": shared_prefill[0],
+            "prefill_shared_fidelity": "library_default",
+            "router_weight_dtype": dtype_name(router.projection_weight.dtype),
+            "router_fidelity": fidelity_name(router.projection_compute.math_fidelity),
+            "norm_weight_dtype": dtype_name(self.input_norm_weight.dtype),
+            "norm_fidelity": fidelity_name(attention.compute.math_fidelity),
+            "decode_sdpa_fidelity": fidelity_name(attention.decode_sdpa.compute.math_fidelity),
+            "prefill_sdpa_fidelity": fidelity_name(attention.prefill_attention_compute.math_fidelity),
+            "expert_mix_fidelity": fidelity_name(decode.mix_compute.math_fidelity),
+            "expert_mix_fp32_dest_acc_en": decode.mix_compute.fp32_dest_acc_en,
+            **{f"{key}_fp32_dest_acc_en": cfg.fp32_dest_acc_en for key, cfg in compute_groups.items()},
+            **{f"{key}_packer_l1_acc": cfg.packer_l1_acc for key, cfg in compute_groups.items()},
+            "math_approx_mode": any(cfg.math_approx_mode for cfg in compute_groups.values()),
+        }
+        summary = {
+            "qkv_weight_dtype": dtype_name(qkv.weight.dtype),
+            "qkv_fidelity": fidelity_name(qkv.decode_compute.math_fidelity),
+            "output_weight_dtype": dtype_name(attention.source.weights.o_proj.dtype),
+            "output_fidelity": fidelity_name(attention.output_compute.math_fidelity),
+            "expert_gate_dtype": dtype_name(decode.gate_up.dtype),
+            "expert_down_dtype": dtype_name(decode.down.dtype),
+            "expert_fidelity": fidelity_name(decode.decode_compute.math_fidelity),
+            "shared_gate_dtype": dtype_name(shared.decode_weights[0].dtype),
+            "shared_down_dtype": dtype_name(shared.decode_weights[1].dtype),
+            "shared_fidelity": fidelity_name(shared.decode_compute.math_fidelity),
+            "qkv_input_dtype": "bfloat8_b" if qkv.input_bfp8 else "float32",
+            "output_input_dtype": "bfloat8_b" if attention.output_input_bfp8 else "bfloat16",
+            "expert_input_dtype": dtype_name(decode.decode_activation_dtype),
+            "shared_input_dtype": "bfloat8_b" if shared.input_bfp8 else "bfloat16",
+            "attention_ccl_dtype": dtype_name(self.attention_ccl_dtype),
+            "moe_ccl_dtype": "bfloat8_b" if self.moe_ccl_bfp8 else "bfloat16",
+            "kv_cache_dtype": dtype_name(self.kv_cache_dtype),
+            "fixed": fixed,
+        }
+        assert_precision_matches(summary, self.selected_precision, f"layer.{self.layer_idx}")
+        return summary
 
     def _prefill_continuation(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id, start_pos):
         """Preserve per-token cache updates while bounding retained output tiles."""

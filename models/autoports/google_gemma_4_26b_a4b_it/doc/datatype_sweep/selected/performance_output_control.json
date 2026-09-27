@@ -1,0 +1,13 @@
+{
+  "observed_anomaly": "Synthetic throughput workload repeats a nine-token phrase throughout generation.",
+  "affected_path": "4096/128 token-out performance prompt, not chat qualitative suite",
+  "prompt_source": "run_optimized_full_model.py: repeated document sentence sliced to4096 tokens",
+  "baseline_evidence": "../baseline/performance.json",
+  "selected_evidence": "performance.json",
+  "identical_all_128_tokens_to_refreshed_baseline": true,
+  "period_tokens": 9,
+  "period_match_fraction": 1.0,
+  "likely_subsystem": "Expected continuation of repetitive synthetic input",
+  "investigation": "Exact token control comparison, independent six-prompt chat suite and nonrepetitive sky explanation",
+  "resolution": "controlled; benchmark is throughput evidence only, not quality evidence"
+}

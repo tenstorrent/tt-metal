@@ -1,0 +1,41 @@
+{
+  "mode": "chat",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain why the sky is blue to a curious ten-year-old."
+    }
+  ],
+  "prompt_tokens": [
+    2,
+    105,
+    2364,
+    107,
+    155122,
+    3217,
+    506,
+    7217,
+    563,
+    3730,
+    531,
+    496,
+    23210,
+    3595,
+    236772,
+    3704,
+    236772,
+    947,
+    236761,
+    106,
+    107,
+    105,
+    4368,
+    107,
+    100,
+    45518,
+    107,
+    101
+  ],
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "rendering": "HF apply_chat_template in shared autoregressive runner"
+}

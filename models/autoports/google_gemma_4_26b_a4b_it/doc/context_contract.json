@@ -6,7 +6,7 @@
   "largest_tested_prefill_context": 262144,
   "largest_tested_decode_context": 262144,
   "capability_reduction": false,
-  "status": "functional_fused_and_optimized_validated_review_pending",
+  "status": "datatype_sweep_validated_clean_pass",
   "layer_types": [
     "full_attention",
     "sliding_attention"
@@ -386,5 +386,43 @@
     "inherited_full_model_max_context_evidence": "full_model/capacity.json",
     "review": "optimized_full_model/stage_review.md",
     "implementation_commit": "9473a2e1b18be1dc9e5fe0add73a0f62ffcc115f"
+  },
+  "datatype_sweep": {
+    "status": "clean-pass",
+    "config_id": "head4_inner_all4_shared_down4",
+    "precision_config": "datatype_sweep/selected_precision_config.json",
+    "mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "kv_cache_dtype": "bfloat8_b",
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "decoder_weight_bytes_per_device": 9435749376,
+    "lm_head_bytes_per_device": 103809024,
+    "conservative_peak_bound_bytes_per_device": 26652351488,
+    "headroom_to_decimal_32gb_bytes_per_device": 5347648512,
+    "memory_accounting": "datatype_sweep/memory_candidates.json",
+    "memory_basis": "Source-derived tensor payloads plus inherited 2GiB reserve; not measured allocator peak",
+    "default_construction": "build_generator -> Generator -> Model loads selected_precision_config.json; model max_seq_len defaults to HF max_position_embeddings=262144",
+    "limits": [
+      "B1 maximum context; B32 short requests is a separate supported shape.",
+      "BF16-cache candidate is unselected; its conservative upper bound is not evidence of physical impossibility."
+    ],
+    "largest_tested_prefill_context": 262144,
+    "largest_tested_decode_context": 262144,
+    "nonaligned_prompt_validated": 262143,
+    "final_supported_position_decode_validated": 262143,
+    "batch32_short_context_validated": true,
+    "evidence": [
+      "datatype_sweep/selected_capacity/capacity.json",
+      "datatype_sweep/selected_capacity/capacity_precision_runtime.json",
+      "datatype_sweep/selected_nonaligned.json",
+      "datatype_sweep/selected_trace_batch32.json",
+      "datatype_sweep/selected/source_manifest.json"
+    ],
+    "review": "datatype_sweep/stage_review.md"
   }
 }

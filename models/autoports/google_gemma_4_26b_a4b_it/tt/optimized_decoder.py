@@ -1093,6 +1093,9 @@ class ConfiguredChunkedPrefillAttention:
             length = min(self.chunk_size, q.shape[-2] - start)
             query = ttnn.slice(q, [0, 0, start, 0], [1, q.shape[1], start + length, head_dim])
             program = self.program
+            if head_dim >= 512 and k_cache.dtype == ttnn.bfloat16:
+                # BF16 K/V double buffers need smaller blocks to fit wide heads in L1.
+                program = self.boundary_program
             query_end = base_offset + start + length + (-length) % program.q_chunk_size
             read_end = query_end + (-query_end) % program.k_chunk_size
             capacity = page_table.shape[-1] * k_cache.shape[-2]
