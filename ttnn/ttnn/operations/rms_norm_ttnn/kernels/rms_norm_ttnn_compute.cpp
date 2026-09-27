@@ -51,7 +51,7 @@
 //   ROW_RESIDENT  X_RESIDENT, NUM_W_CHUNKS >  1.  One whole tile-row of x and the
 //                 whole row of gamma are held while the DERIVED CBs stay chunked,
 //                 so x is STILL read once: each helper call indexes the held CBs
-//                 at a TILE OFFSET (TileOffset::Set, base = c * WT_CHUNK) and they
+//                 at a TILE OFFSET (TileAddressing::Offset, base = c * WT_CHUNK) and they
 //                 are popped once per row-block rather than per chunk.
 //   STREAM        !X_RESIDENT.  Each pass pops its chunk and the reader re-reads x
 //                 (and gamma) for pass B -- the L1 fallback, ~2x the DRAM bytes.
@@ -224,7 +224,7 @@ ALWI void transform_in_place(uint32_t cb, Transform t) {
 //   vectors nobody reads.  Do NOT "restore" this to helper calls without re-measuring.
 //
 // SAFETY IS MEASURED, NOT ASSUMED.  An isolated bench ran pass B's exact consumer
-// (BinaryFpu<x, stat, Mul, BroadcastDim::Col>, OperandKind::Col) on a stat tile whose
+// (BinaryFpu<x, stat, Mul, BroadcastDim::Col>, InputTileMapping::Col) on a stat tile whose
 // columns 1..31 were seeded five orders of magnitude wrong, and got pcc 0.999992 /
 // rel-RMS 0.00403: the column broadcast reads COLUMN 0 ONLY.  The skipped lanes hold the
 // raw, finite reduce result -- the same kind of defined-but-meaningless datum the
@@ -631,7 +631,7 @@ void kernel_main() {
     static_assert(NUM_W_CHUNKS > 1 || X_RESIDENT, "rms_norm_ttnn: a one-chunk width is resident by definition");
     // Lamp L5's regime: resident x/gamma, chunked derived CBs.  The two held CBs
     // then span the WHOLE tile-row while every helper call still works on one
-    // WT_CHUNK, so each call indexes them at a TILE OFFSET (TileOffset::Set) and
+    // WT_CHUNK, so each call indexes them at a TILE OFFSET (TileAddressing::Offset) and
     // neither is popped until the row-block is done.
     constexpr bool ROW_RESIDENT = X_RESIDENT && (NUM_W_CHUNKS > 1);
     constexpr bool PC_CHUNKED = (PC_CHUNK_CT != 0);
@@ -644,7 +644,7 @@ void kernel_main() {
     // Width tiles the HELD CBs (cb_input_tiles, cb_gamma_tiles) span.  Equals
     // WT_CHUNK in both Phase-0 regimes, so this is byte-identical off the L5 path.
     constexpr uint32_t X_HOLD_WT = X_RESIDENT ? (WT_CHUNK * NUM_W_CHUNKS) : WT_CHUNK;
-    constexpr auto XOFF = ROW_RESIDENT ? ckl::TileOffset::Set : ckl::TileOffset::Unset;
+    constexpr auto XOFF = ROW_RESIDENT ? ckl::TileAddressing::Offset : ckl::TileAddressing::Direct;
 
     // Perf 2 (descriptor D25) -- THE COMBINE PIPELINE.  Run block blk+1's pass A BEFORE
     // block blk's cross-core combine, so the root's gather wait and its whole fold +
@@ -698,7 +698,7 @@ void kernel_main() {
     constexpr bool PIPE_A = (NATIVE_IN != 0) && (COMBINE != 0) && !HAS_R;
     // Pass A's x operand needs a RUNTIME tile base once it can run ahead of the front.
     // Compile-time-elided (hence byte-identical to Refinement 4) when PIPE_A is off.
-    constexpr auto AOFF = PIPE_A ? ckl::TileOffset::Set : XOFF;
+    constexpr auto AOFF = PIPE_A ? ckl::TileAddressing::Offset : XOFF;
 
     // srcA at boot is whichever CB the first helper unpacks from.
     constexpr uint32_t CB_A = RM ? cb_input_sticks : cb_input_tiles;
@@ -832,9 +832,10 @@ void kernel_main() {
         ckl::ReservePolicy::PerOuter,
         ckl::PushPolicy::PerOuter,
         DFR,
-        ckl::PackRelu::Disabled,
+        ckl::TileAddressing::Direct,
+        ckl::DestAccumulation::PerRow,
         ckl::L1Accumulation::Disabled,
-        ckl::DestAccumulation::PerRow);
+        ckl::PackRelu::Disabled);
     // A5: the caller's `subblock_w` when they supplied one -- HONOURED, never
     // clamped and never absorbed.  Every way it could be illegal (< 1, not a
     // divisor of block_w, above the DEST capacity their own fp32_dest_acc_en
@@ -894,7 +895,8 @@ void kernel_main() {
     // (compile-time-elided) `+ base` on the tile index -- there is no second
     // code path.  base is 0 whenever XOFF is Unset, and `tile_base_value<Unset>`
     // folds the whole term away.
-    constexpr auto X_IN_A = ckl::input(CB_T, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::OperandKind::Block, DFR, AOFF);
+    constexpr auto X_IN_A =
+        ckl::input(CB_T, ckl::WaitPolicy::Upfront, PASS_A_POP, ckl::InputTileMapping::Block, DFR, AOFF);
     // ---- A1: `residual_add_block`'s two operands, and its output ------------
     // BOTH activation streams are consumed and POPPED here, whatever the regime:
     // the held role has moved to cb_x_sum, so nothing downstream indexes back
@@ -902,9 +904,9 @@ void kernel_main() {
     // already resident, published once by the reader -- and this pop is what
     // advances their front from one row-block to the next.
     constexpr auto R_X_IN =
-        ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, DFR);
-    constexpr auto R_R_IN =
-        ckl::input(cb_residual_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, DFR);
+        ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block, DFR);
+    constexpr auto R_R_IN = ckl::input(
+        cb_residual_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block, DFR);
     // ONE reserve and ONE push for the whole chunk -- `Upfront`/`AtEnd`, NOT the
     // `PerBlockSize` pair pass B's stages use.
     //
@@ -944,15 +946,15 @@ void kernel_main() {
     // that a chunk's `AtEnd` cannot pop the base tiles the next chunk still needs.
     constexpr auto PASS_B_X_POP = ROW_RESIDENT ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd;
     constexpr auto X_IN_B =
-        ckl::input(CB_T, ckl::WaitPolicy::Upfront, PASS_B_X_POP, ckl::OperandKind::Block, DFR, XOFF);
-    constexpr auto G_IN =
-        ckl::input(cb_gamma_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row, DFR, XOFF);
+        ckl::input(CB_T, ckl::WaitPolicy::Upfront, PASS_B_X_POP, ckl::InputTileMapping::Block, DFR, XOFF);
+    constexpr auto G_IN = ckl::input(
+        cb_gamma_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::InputTileMapping::Row, DFR, XOFF);
     // A2: the bias CB mirrors gamma's spec exactly -- same Row broadcast, same
     // held lifetime -- at its OWN data format.  The chain's reconfig fold must NOT
     // elide the second format switch: `weight` and `bias` may be at different
     // dtypes, so the packer/unpacker really does change twice per chunk.
-    constexpr auto B_IN =
-        ckl::input(cb_bias_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row, DFR, XOFF);
+    constexpr auto B_IN = ckl::input(
+        cb_bias_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::InputTileMapping::Row, DFR, XOFF);
     // Pass-B output routing, stated ONCE.  Let S = [scale] if HAS_G + [bias] if
     // HAS_B.  `normalize_block` writes cb_output_tiles when S is empty, else
     // cb_normalized; each stage in S except the LAST writes cb_normalized IN
@@ -1273,7 +1275,7 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_square");
                 // D43: the fold's grid is (rows * X_SQUARED_WT) rows of SQ_GROUP tiles,
                 // so `DestAccumulation::PerRow` acquires / packs / clears DEST once per
-                // GROUP instead of once per chunk.  `OperandKind::Block` indexes
+                // GROUP instead of once per chunk.  `InputTileMapping::Block` indexes
                 // `base + r * Wt + c`, so the walk over the (rows x WT_CHUNK) block is
                 // the flat shape's walk, tile for tile -- the reshape is the WHOLE
                 // mechanism and no helper is bypassed.  The PACKED branch keeps
@@ -1906,7 +1908,7 @@ void kernel_main() {
                 // ---- the shipped order: scale, then gamma ----
                 // x * (1/rms). The stat is a REDUCE_ROW result: column-shaped, so it
                 // broadcasts back ACROSS columns (BroadcastDim::Col) and must be
-                // operand B. OperandKind::Col indexes it by row only, and it is not
+                // operand B. InputTileMapping::Col indexes it by row only, and it is not
                 // popped -- every width chunk of this block re-reads it.
                 {
                     MaybeDeviceZoneScope("compute_scale");
@@ -1926,14 +1928,14 @@ void kernel_main() {
                                 ckl::BroadcastDim::Col,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::None,
-                                ckl::OperandKind::Col)>{hold_base},
+                                ckl::InputTileMapping::Col)>{hold_base},
                         ckl::PackTile<PASS_B_OUT_NORM>{});
 #endif
                 }
 
                 if constexpr (HAS_G) {
                     // gamma is row-shaped (1 x W, valid in row 0) -> broadcasts DOWN
-                    // rows (BroadcastDim::Row), indexed by column (OperandKind::Row).
+                    // rows (BroadcastDim::Row), indexed by column (InputTileMapping::Row).
                     MaybeDeviceZoneScope("compute_gamma_mul");
                     if constexpr (HAS_B) {
                         // A2: a bias FOLLOWS the scale, so the scale is not the last
@@ -1967,7 +1969,7 @@ void kernel_main() {
                                     cb_normalized,
                                     ckl::WaitPolicy::PerBlockSize,
                                     ckl::PopPolicy::PerBlockSize,
-                                    ckl::OperandKind::Block),
+                                    ckl::InputTileMapping::Block),
                                 ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
                             ckl::PackTile<ckl::output(
                                 cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
@@ -1980,7 +1982,7 @@ void kernel_main() {
                                     cb_normalized,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::AtEnd,
-                                    ckl::OperandKind::Block),
+                                    ckl::InputTileMapping::Block),
                                 ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
                             ckl::PackTile<PASS_B_OUT_GAMMA>{});
                     }
@@ -2012,7 +2014,7 @@ void kernel_main() {
                                 cb_normalized,
                                 ckl::WaitPolicy::PerBlockSize,
                                 ckl::PopPolicy::PerBlockSize,
-                                ckl::OperandKind::Block)>{0u},
+                                ckl::InputTileMapping::Block)>{0u},
 #else
                             ckl::BinaryFpu<
                                 ckl::BinaryFpuOp::Mul,
@@ -2020,13 +2022,13 @@ void kernel_main() {
                                     cb_normalized,
                                     ckl::WaitPolicy::PerBlockSize,
                                     ckl::PopPolicy::PerBlockSize,
-                                    ckl::OperandKind::Block),
+                                    ckl::InputTileMapping::Block),
                                 ckl::input(
                                     CB_STAT_B,
                                     ckl::BroadcastDim::Col,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Col)>{0u, 0u},
+                                    ckl::InputTileMapping::Col)>{0u, 0u},
 #endif
                             ckl::PackTile<ckl::output(
                                 cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
@@ -2038,7 +2040,7 @@ void kernel_main() {
                                 cb_normalized,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::AtEnd,
-                                ckl::OperandKind::Block)>{0u},
+                                ckl::InputTileMapping::Block)>{0u},
 #else
                             ckl::BinaryFpu<
                                 ckl::BinaryFpuOp::Mul,
@@ -2046,13 +2048,13 @@ void kernel_main() {
                                     cb_normalized,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::AtEnd,
-                                    ckl::OperandKind::Block),
+                                    ckl::InputTileMapping::Block),
                                 ckl::input(
                                     CB_STAT_B,
                                     ckl::BroadcastDim::Col,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Col)>{0u, 0u},
+                                    ckl::InputTileMapping::Col)>{0u, 0u},
 #endif
                             ckl::PackTile<PASS_B_OUT_GAMMA>{});
                     }
@@ -2077,7 +2079,10 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Add,
                         ckl::input(
-                            cb_normalized, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                            cb_normalized,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block),
                         ckl::input(B_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
                     ckl::PackTile<PASS_B_OUT_GAMMA>{});
             }
