@@ -62,6 +62,7 @@ void reset_state(std::uint32_t& counter)
     // move to the other slot, and zero the new slot to prevent retriggering.
     ckernel::store_blocking(brisc_command_buffer + (counter & 1), static_cast<std::uint32_t>(BriscCommandState::IDLE_STATE));
     commit_store(brisc_counter, counter);
+    host_signal::write(host_signal::BRISC_COUNTER_SLOT, counter);
 }
 
 int main()
@@ -79,6 +80,7 @@ int main()
     // the firmware is in the polling loop before it issues any command. Uses
     // commit_store (store + spin-readback) for a hard visibility guarantee.
     commit_store(brisc_counter, BRISC_BOOT_READY_SENTINEL);
+    host_signal::write(host_signal::BRISC_COUNTER_SLOT, BRISC_BOOT_READY_SENTINEL);
 
 #ifdef ARCH_WORMHOLE
     // Array for keeping last known addresses of _start symbol in kernel ELF, for T[0-2]
@@ -120,6 +122,10 @@ int main()
                 commit_store(mailbox_math, ckernel::RESET_VAL);
                 commit_store(mailbox_unpack, ckernel::RESET_VAL);
                 commit_store(mailbox_pack, ckernel::RESET_VAL);
+                for (std::uint32_t slot = 0; slot < 3; ++slot)
+                {
+                    host_signal::write(slot, ckernel::RESET_VAL);
+                }
 
                 commit_store(profiler_barrier, 0U);
                 commit_store(profiler_barrier + 1, 0U);
