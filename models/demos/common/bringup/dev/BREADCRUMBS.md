@@ -467,3 +467,13 @@ Drive this ledger with
   (nine nowrap labels) widened the section to 1427 px inside a 1140 px frame and pushed the bar, notes and op bars past
   it. `#prof-sec>*{min-width:0}`; labels truncate with a tooltip; op names break after "." and "_"; op rows pin their
   cells on narrow screens. Checked with headless Chrome at 1400 / 1000 / 390 px (no horizontal overflow).
+
+## F45 (2026-09-27): where each op's tensors live
+- Owner: per op, where its inputs and outputs are (DRAM interleaved, L1 sharded). Op mode and the timeline run record
+  `mem` per call: the first two tensor inputs and the outputs as "DRAM interleaved", "L1 height-sharded 64 cores",
+  "+ RM" for row-major (else tiled). It is part of the row key (a placement change is a new row). Dashboard: in / out
+  chips per op row (DRAM green, L1 blue) with a legend.
+- `timeline_ok` now also requires every op row to have its timeline columns: a black reformat had silently dropped a
+  field and left 0 of 247 rows with timeline data while the alignment itself passed.
+- MiMo finding: every tensor of every op is DRAM interleaved (nothing in L1), a perf lead for the matmuls, norms and
+  residual adds.
