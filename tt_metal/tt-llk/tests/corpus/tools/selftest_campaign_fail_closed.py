@@ -109,6 +109,16 @@ def test_per_class_ulp_admission() -> None:
     regressed = {"ordinary": (100, 6.0), "special": (2, 5.0)}
     ok, reason = ulp_admission.candidate_not_worse(regressed, hand)
     assert not ok and reason == "candidate-ulp-regression-ordinary"
+    special_regression = {
+        "in_domain_finite_normal": (100, 5.0),
+        "pos_zero_input": (1, 1.0),
+    }
+    special_hand = {
+        "in_domain_finite_normal": (100, 5.0),
+        "pos_zero_input": (1, 0.0),
+    }
+    ok, reason = ulp_admission.candidate_not_worse(special_regression, special_hand)
+    assert not ok and reason == "candidate-ulp-regression-pos_zero_input"
     assert not ulp_admission.candidate_not_worse(
         candidate, {"ordinary": (99, 5.0), "special": (2, 100.0)}
     )[0]

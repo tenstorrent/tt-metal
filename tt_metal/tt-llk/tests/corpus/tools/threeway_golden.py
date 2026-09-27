@@ -9,6 +9,8 @@ the same device pass with NO 16GB retention: per chunk we fold a per-leg running
 per-input-class max ULP, an out-of-tolerance counter, and the FIRST
 out-of-tolerance witness.  Admission compares the candidate to the hand leg on
 the same oracle and class population; it does not claim an absolute ULP budget.
+This relative numeric gate is not a proof that a compiler transformation
+preserves C++/LLK semantics; ordinary semantic equivalence is a separate gate.
 
 Design (faithful reuse, NOT a reinvention):
   * The op->true-math map and every dispatch constant are lifted verbatim from the
@@ -29,10 +31,14 @@ Honesty: an out-of-tolerance witness at an out-of-DOMAIN input (erfinv |x|>=1, o
 non-finite input) is NOT a bug -- the witness record carries the input's classification
 so the report can say "licensed vs bug" precisely. Ops with no honest torch reference
 are marked checkable=False with a reason rather than faked.
+
+Input classes describe the bf16 value the SFPU receives *after* truncating the
+raw fp32 stream input. They are disjoint and exhaustive. The tolerance/ULP
+metric intentionally treats +0 and -0 as equal; that policy is not a bit-exact
+certificate and the input partition still keeps the signed zeros separate.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -95,6 +101,93 @@ def _fold_class_ulps(
         maximum = float(np.max(finite)) if finite.size else 0.0
         old_count, old_maximum = aggregate.get(name, (0, 0.0))
         aggregate[name] = (old_count + count, max(old_maximum, maximum))
+
+
+def _ieee_bf16_masks(values: np.ndarray) -> tuple[dict[str, np.ndarray], np.ndarray]:
+    """Return disjoint IEEE bf16-special masks and the remaining normal values."""
+    bits = np.asarray(values, dtype=np.float32).view(np.uint32) >> np.uint32(16)
+    sign = (bits & np.uint32(0x8000)) != 0
+    exponent = bits & np.uint32(0x7F80)
+    fraction = bits & np.uint32(0x007F)
+    exp_all_ones = exponent == np.uint32(0x7F80)
+    exp_zero = exponent == 0
+    zero = exp_zero & (fraction == 0)
+    subnormal = exp_zero & (fraction != 0)
+    masks = {
+        "nan": exp_all_ones & (fraction != 0),
+        "pos_inf": exp_all_ones & (fraction == 0) & ~sign,
+        "neg_inf": exp_all_ones & (fraction == 0) & sign,
+        "pos_zero": zero & ~sign,
+        "neg_zero": zero & sign,
+        "pos_subnormal": subnormal & ~sign,
+        "neg_subnormal": subnormal & sign,
+    }
+    special = np.zeros(bits.shape, dtype=bool)
+    for mask in masks.values():
+        special |= mask
+    return masks, ~special
+
+
+def unary_input_classes(
+    values: np.ndarray, domain: Optional[tuple]
+) -> dict[str, np.ndarray]:
+    """Partition post-truncation unary inputs into exhaustive semantic classes."""
+    x = np.asarray(values, dtype=np.float32)
+    ieee, normal = _ieee_bf16_masks(x)
+    classes = {f"{name}_input": mask for name, mask in ieee.items()}
+    if domain is None:
+        classes["in_domain_finite_normal"] = normal
+    else:
+        lo, hi = domain
+        lower_boundary = normal & (x == lo)
+        upper_boundary = normal & (x == hi)
+        boundary = lower_boundary | upper_boundary
+        in_domain = normal & (x > lo) & (x < hi)
+        classes["domain_lower_boundary"] = lower_boundary
+        classes["domain_upper_boundary"] = upper_boundary
+        classes["in_domain_finite_normal"] = in_domain
+        classes["out_of_domain_finite_normal"] = normal & ~boundary & ~in_domain
+    membership = sum(
+        (mask.astype(np.uint8) for mask in classes.values()),
+        np.zeros(x.shape, dtype=np.uint8),
+    )
+    if np.any(membership != 1):
+        raise AssertionError("unary IEEE/domain classes are not disjoint and exhaustive")
+    return classes
+
+
+def binary_input_classes(
+    base: np.ndarray, exponent: np.ndarray
+) -> dict[str, np.ndarray]:
+    """Partition pow pairs without a Cartesian explosion.
+
+    Base IEEE specials take precedence. For a normal base, exponent specials
+    are split next; pairs with two normals are finally split by base sign.
+    """
+    b = np.asarray(base, dtype=np.float32)
+    e = np.asarray(exponent, dtype=np.float32)
+    base_ieee, base_normal = _ieee_bf16_masks(b)
+    exp_ieee, exp_normal = _ieee_bf16_masks(e)
+    classes = {f"base_{name}": mask for name, mask in base_ieee.items()}
+    classes.update(
+        {
+            f"normal_base_exp_{name}": base_normal & mask
+            for name, mask in exp_ieee.items()
+        }
+    )
+    classes["pos_normal_base_normal_exp"] = (
+        base_normal & exp_normal & ~np.signbit(b)
+    )
+    classes["neg_normal_base_normal_exp"] = (
+        base_normal & exp_normal & np.signbit(b)
+    )
+    membership = sum(
+        (mask.astype(np.uint8) for mask in classes.values()),
+        np.zeros(b.shape, dtype=np.uint8),
+    )
+    if np.any(membership != 1):
+        raise AssertionError("binary IEEE classes are not disjoint and exhaustive")
+    return classes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -412,13 +505,13 @@ class CorrectnessAccumulator:
     class_ulp: dict[str, tuple[int, float]] = field(default_factory=dict)
 
     def _classify(self, u32: int, xf: float) -> str:
-        if not math.isfinite(xf):
-            return "nonfinite-input"
-        if self.spec.domain is not None:
-            lo, hi = self.spec.domain
-            if not (lo < xf < hi):
-                return "out-of-domain"
-        return "in-domain"
+        del u32  # class semantics are explicitly post-bf16-truncation
+        one = np.array([xf], dtype=np.float32)
+        return next(
+            name
+            for name, mask in unary_input_classes(one, self.spec.domain).items()
+            if bool(mask[0])
+        )
 
     def update(self, chunk_start: int, valid_count: int, dev_bytes: bytes) -> None:
         """Fold one chunk: dev_bytes = valid_count fp32 little-endian device outputs."""
@@ -437,22 +530,10 @@ class CorrectnessAccumulator:
         )
 
         ulp = bf16_bitdistance(golden, dev)
-        finite_input = np.isfinite(xin)
-        if self.spec.domain is None:
-            in_domain = finite_input
-            out_of_domain = np.zeros_like(finite_input)
-        else:
-            lo, hi = self.spec.domain
-            in_domain = finite_input & (xin > lo) & (xin < hi)
-            out_of_domain = finite_input & ~in_domain
         _fold_class_ulps(
             self.class_ulp,
             ulp,
-            {
-                "in_domain": in_domain,
-                "out_of_domain": out_of_domain,
-                "nonfinite_input": ~finite_input,
-            },
+            unary_input_classes(xin, self.spec.domain),
         )
         # tolerance check on the (bf16) values, matching passed_test isclose + equal_nan.
         g = golden.astype(np.float64)
@@ -510,6 +591,7 @@ class CorrectnessAccumulator:
             f"first_witness=0x{max(w,0):08x},first_witness_class={self.first_witness_class or '-'},"
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
             f"atol={self.spec.atol},rtol={self.spec.rtol},"
+            "zero_sign_policy=tolerance_equal_not_bitexact,"
             f"class_ulp={format_class_ulp(self.class_ulp)}{extra}"
         )
 
@@ -586,15 +668,10 @@ class BinaryPowAccumulator:
             ulp = bf16_bitdistance(golden, dev)
             base_values = _bf16_bits_to_f32(base_arr)
             exp_values = _bf16_bits_to_f32(exp16.astype(np.uint32))
-            finite_inputs = np.isfinite(base_values) & np.isfinite(exp_values)
             _fold_class_ulps(
                 self.class_ulp,
                 ulp,
-                {
-                    "base_positive": finite_inputs & (base_values > 0),
-                    "base_nonpositive": finite_inputs & (base_values <= 0),
-                    "nonfinite_input": ~finite_inputs,
-                },
+                binary_input_classes(base_values, exp_values),
             )
             g = golden.astype(np.float64)
             d = dev.astype(np.float64)
@@ -614,11 +691,12 @@ class BinaryPowAccumulator:
                 if self.first_witness_joint < 0:
                     j = int(np.argmax(out))
                     self.first_witness_joint = joint0 + j
-                    b_f = float(_bf16_bits_to_f32(base_arr[j : j + 1])[0])
-                    self.first_witness_class = (
-                        "base<=0 (pow via exp(b*log a) -> nan/inf, expected)"
-                        if b_f <= 0.0
-                        else ("nonfinite-base" if not math.isfinite(b_f) else "base>0")
+                    one_base = base_values[j : j + 1]
+                    one_exp = exp_values[j : j + 1]
+                    self.first_witness_class = next(
+                        name
+                        for name, mask in binary_input_classes(one_base, one_exp).items()
+                        if bool(mask[0])
                     )
                     self.first_witness_dev = float(dev[j])
                     self.first_witness_golden = float(golden[j])
@@ -633,5 +711,6 @@ class BinaryPowAccumulator:
             f"first_witness=0x{w:08x},first_witness_class={self.first_witness_class or '-'},"
             f"witness_dev={self.first_witness_dev!r},witness_golden={self.first_witness_golden!r},"
             f"atol={self.atol},rtol={self.rtol},"
+            "zero_sign_policy=tolerance_equal_not_bitexact,"
             f"class_ulp={format_class_ulp(self.class_ulp)}"
         )

@@ -13,8 +13,9 @@ Cases:
   3. KNOWN-CORRECT: feeding the device the golden bytes -> 0 max ULP, within_contract=True.
   4. SEEDED BUG: a single perturbed output element -> flagged out-of-tolerance with the
      correct first witness (input + dev/golden), while the rest stay clean.
-  5. DOMAIN honesty: an erfinv |x|>=1 witness classifies as 'out-of-domain', a finite
-     in-(-1,1) input as 'in-domain'.
+  5. CLASS honesty: post-bf16 inputs have a disjoint/exhaustive partition covering
+     NaN, signed infinities, signed zeros, signed subnormals, exact domain boundaries,
+     and remaining in/out-of-domain normal values.
 
 Run from tests/: python corpus/tools/selftest_threeway_golden.py
 """
@@ -182,9 +183,6 @@ def case_known_correct():
     print("case 3: golden bytes fed back -> 0 ULP, within contract")
     for op in ("erf-fresh", "add1", "hardtanh-fresh"):
         spec = tg.get_spec(op)
-        u = _edge_tile()
-        golden = tg.format_golden_f32_noacc(spec.math(tg.bf16_truncate(u)))
-        dev_bytes = golden.astype("<f4").tobytes()
         acc = tg.CorrectnessAccumulator(spec)
         acc.update(0, 0, b"")  # empty chunk is a no-op
         # stream the tile as one chunk starting at input 0 with the golden as device output
@@ -223,14 +221,80 @@ def case_seeded_bug():
 
 # ── case 5: domain classification ────────────────────────────────────────────
 def case_domain():
-    print("case 5: erfinv out-of-domain vs in-domain classification")
+    print("case 5: exhaustive post-bf16 IEEE/domain classification")
     spec = tg.get_spec("erfinv-fresh")
     acc = tg.CorrectnessAccumulator(spec)
     # x=2.0 (bf16 0x40000000) is |x|>=1 -> out of erfinv domain
-    check("class-out-of-domain", acc._classify(0x40000000, 2.0) == "out-of-domain")
-    check("class-in-domain", acc._classify(0x3F000000, 0.5) == "in-domain")
     check(
-        "class-nonfinite", acc._classify(0x7F800000, float("inf")) == "nonfinite-input"
+        "class-out-of-domain",
+        acc._classify(0x40000000, 2.0) == "out_of_domain_finite_normal",
+    )
+    check(
+        "class-in-domain",
+        acc._classify(0x3F000000, 0.5) == "in_domain_finite_normal",
+    )
+    check(
+        "class-pos-inf", acc._classify(0x7F800000, float("inf")) == "pos_inf_input"
+    )
+    raw = np.array(
+        [
+            0x7FC00000,
+            0x7F800000,
+            0xFF800000,
+            0x00000000,
+            0x80000000,
+            0x00010000,
+            0x80010000,
+            0x3F800000,
+            0xBF800000,
+            0x3F000000,
+            0x40000000,
+            0xC0000000,
+        ],
+        dtype=np.uint32,
+    )
+    classes = tg.unary_input_classes(tg.bf16_truncate(raw), spec.domain)
+    membership = sum(mask.astype(np.uint8) for mask in classes.values())
+    check("unary-class-exhaustive", np.all(membership == 1), str(classes))
+    expected_counts = {
+        "nan_input": 1,
+        "pos_inf_input": 1,
+        "neg_inf_input": 1,
+        "pos_zero_input": 1,
+        "neg_zero_input": 1,
+        "pos_subnormal_input": 1,
+        "neg_subnormal_input": 1,
+        "domain_lower_boundary": 1,
+        "domain_upper_boundary": 1,
+        "in_domain_finite_normal": 1,
+        "out_of_domain_finite_normal": 2,
+    }
+    got_counts = {name: int(np.count_nonzero(mask)) for name, mask in classes.items()}
+    check("unary-class-populations", got_counts == expected_counts, str(got_counts))
+
+    # Binary classification is hierarchical rather than a 17x17 Cartesian product:
+    # base specials, then exponent specials for normal bases, then normal-pair sign.
+    specials = raw[:7] >> np.uint32(16)
+    one = np.uint32(0x3F80)
+    neg_one = np.uint32(0xBF80)
+    base_bits = np.concatenate(
+        [specials, np.full(7, one, dtype=np.uint32), np.array([one, neg_one])]
+    )
+    exp_bits = np.concatenate(
+        [np.full(7, one, dtype=np.uint32), specials, np.array([one, one])]
+    )
+    base = tg._bf16_bits_to_f32(base_bits)
+    exp = tg._bf16_bits_to_f32(exp_bits)
+    pair_classes = tg.binary_input_classes(base, exp)
+    pair_membership = sum(mask.astype(np.uint8) for mask in pair_classes.values())
+    check("binary-class-exhaustive", np.all(pair_membership == 1), str(pair_classes))
+    pair_counts = {
+        name: int(np.count_nonzero(mask)) for name, mask in pair_classes.items()
+    }
+    check(
+        "binary-class-populations",
+        all(count == 1 for count in pair_counts.values()),
+        str(pair_counts),
     )
 
 
