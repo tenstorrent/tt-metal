@@ -46,7 +46,9 @@ BLOCK_SIZE = 32  # paged KV cache page size (tile height)
 # (128 blocks -> 4 MB / 2048 tiles per cache -> minutes just to upload). cur_pos=64 needs only ~3 pages;
 # 8 blocks (256 positions) reproduces the SDPA geometry (kv_heads/head_dim/block_size/grid) ~16x faster.
 MAX_NUM_BLOCKS = 8
-GRID_X, GRID_Y = 8, 4  # model's decode SDPA grid
+GRID_X, GRID_Y = 8, 4  # the model's decode SDPA grid -- used ONLY as _skip_if_small's minimum (the tree
+# reduction needs num_cores_per_head>1, i.e. >= a full 8x4). The program config itself now uses the DEVICE
+# grid (see _prog_cfg), never a hardcoded 8x4, so it never exceeds the device.
 SCALE = HEAD_DIM**-0.5
 
 
@@ -91,8 +93,16 @@ def _q_height_sharded(t_bf16, mesh_device, batch):
     return (qi2s or ttnn.interleaved_to_sharded)(qt, memcfg)
 
 
-def _prog_cfg(max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None):
-    gx, gy = grid_xy if grid_xy is not None else (GRID_X, GRID_Y)
+def _prog_cfg(mesh_device, max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None):
+    # The decode-SDPA factory uses program_config.compute_with_storage_grid_size DIRECTLY (it builds the core
+    # grid from it and FATALs if it exceeds the device -- sdpa_decode_program_factory.cpp:174/191/195). It does
+    # NOT clamp to the device. So pass a grid <= device: an explicit grid_xy, else the DEVICE grid (never a
+    # hardcoded 8x4, which would FATAL on a smaller device or silently run the full 8x4 tree on a larger one).
+    if grid_xy is not None:
+        gx, gy = grid_xy
+    else:
+        dg = mesh_device.compute_with_storage_grid_size()
+        gx, gy = int(dg.x), int(dg.y)
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         exp_approx_mode=True,
@@ -144,11 +154,15 @@ def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0
     pt_t = _int32_rm_dram(page_table, mesh_device)
     cp_t = _int32_rm_dram(cur_pos_t, mesh_device)
 
-    gx, gy = grid_xy if grid_xy is not None else (GRID_X, GRID_Y)
+    if grid_xy is not None:
+        gx, gy = grid_xy
+    else:
+        _dg = mesh_device.compute_with_storage_grid_size()
+        gx, gy = int(_dg.x), int(_dg.y)
     logger.info(
         f"[sdpa-repro] paged decode cur_pos={cur_pos} max_cores_per_head_batch={max_cores_per_head_batch} "
-        f"k_chunk_size={k_chunk_size} grid {gx}x{gy} "
-        f"-> {'NO tree' if max_cores_per_head_batch == 1 else 'TREE reduction'}"
+        f"k_chunk_size={k_chunk_size} grid {gx}x{gy} (config grid = device grid unless grid_xy given) "
+        f"-> {'NO tree' if max_cores_per_head_batch == 1 else 'TREE reduction (if cores/head > 1)'}"
     )
     out = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
         q_t,
@@ -158,7 +172,7 @@ def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0
         cur_pos_tensor=cp_t,
         scale=SCALE,
         program_config=_prog_cfg(
-            max_cores_per_head_batch=max_cores_per_head_batch, k_chunk_size=k_chunk_size, grid_xy=grid_xy
+            mesh_device, max_cores_per_head_batch=max_cores_per_head_batch, k_chunk_size=k_chunk_size, grid_xy=grid_xy
         ),
         compute_kernel_config=_compute_cfg(),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -220,8 +234,10 @@ def test_non_paged_sdpa_decode(mesh_device):
     v_t = _tile_bf16_dram(values, mesh_device)
     cp_t = _int32_rm_dram(cur_pos_t, mesh_device)
 
+    _dg = mesh_device.compute_with_storage_grid_size()
     logger.info(
-        f"[sdpa-repro] non-paged decode: q[1,{batch},{N_Q_HEADS},{HEAD_DIM}] kv[{batch},{N_KV_HEADS},{max_seq},{HEAD_DIM}] grid {GRID_X}x{GRID_Y}"
+        f"[sdpa-repro] non-paged decode: q[1,{batch},{N_Q_HEADS},{HEAD_DIM}] "
+        f"kv[{batch},{N_KV_HEADS},{max_seq},{HEAD_DIM}] grid {int(_dg.x)}x{int(_dg.y)} (device grid)"
     )
     out = ttnn.experimental.quasar.transformer.scaled_dot_product_attention_decode(
         q_t,
@@ -229,7 +245,7 @@ def test_non_paged_sdpa_decode(mesh_device):
         v_t,
         cur_pos_tensor=cp_t,
         scale=SCALE,
-        program_config=_prog_cfg(),
+        program_config=_prog_cfg(mesh_device),
         compute_kernel_config=_compute_cfg(),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
