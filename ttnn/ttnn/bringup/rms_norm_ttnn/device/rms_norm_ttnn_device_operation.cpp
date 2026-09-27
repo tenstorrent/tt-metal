@@ -62,8 +62,9 @@ ttsl::hash::hash_t RmsNormDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // Everything create_program_descriptor reads except buffer addresses: the tensors' specs (shape,
     // dtype, layout, memory config incl. shard spec), which optional operands are present, epsilon,
-    // the resolved compute config, subblock_w, inplace, the requested output placement, and the
-    // two kernel-define env switches.  The device (grid, L1 size, core coordinates) is fixed per
+    // the resolved compute config, subblock_w, inplace, the requested output placement, the
+    // residual-sum output's spec (`return_residual_sum`: absent when off), and the two
+    // kernel-define env switches.  The device (grid, L1 size, core coordinates) is fixed per
     // program cache.
     static const std::string env_key = env_or_empty("RMS_STAGE_ZONES") + "|" + env_or_empty("RMS_ABLATE");
     const auto& cc = attrs.compute_config;
@@ -95,6 +96,7 @@ ttsl::hash::hash_t RmsNormDeviceOperation::compute_program_hash(
         spec_of(tensor_args.bias),
         spec_of(tensor_args.residual),
         residual_aliases_input(tensor_args),
+        spec_of(tensor_args.residual_sum),
         env_key);
 }
 
@@ -111,7 +113,8 @@ ttnn::Tensor rms_norm_ttnn(
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
     uint32_t subblock_w,
     bool inplace,
-    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::Tensor>& residual_sum) {
     using OperationType = ttnn::operations::bringup::rms_norm_ttnn::RmsNormDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .epsilon = epsilon,
@@ -119,7 +122,8 @@ ttnn::Tensor rms_norm_ttnn(
         .subblock_w = subblock_w,
         .inplace = inplace,
         .output_mem_config = output_mem_config};
-    auto args = OperationType::tensor_args_t{.input = input, .weight = weight, .bias = bias, .residual = residual};
+    auto args = OperationType::tensor_args_t{
+        .input = input, .weight = weight, .bias = bias, .residual = residual, .residual_sum = residual_sum};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

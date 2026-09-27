@@ -114,6 +114,8 @@ constexpr uint32_t COMBINE_MCAST_FACES = 3;
 constexpr NOC COMBINE_NOC_RESIDENT = NOC::NOC_0;
 constexpr NOC COMBINE_NOC_STREAMED = NOC::NOC_1;
 constexpr int64_t ROW_RESIDENT_MIN_ROWS_PER_CORE = 2;
+// `return_residual_sum`: cb_residual_sum's depth, in compute's pass-B DEST blocks.
+constexpr int64_t T_SUM_RING_BLOCKS = 2;
 
 // D40: the per-channel broadcast.  PC_MCAST_MODE is "row" (the shipped choice); the other modes
 // of the Python module are sweep-only and are not ported.
@@ -153,6 +155,8 @@ constexpr uint8_t CB_BIAS_STICKS = 22;
 constexpr uint8_t CB_BIAS_TILES = 23;
 constexpr uint8_t CB_GAMMA_COMPACT = 24;
 constexpr uint8_t CB_BIAS_COMPACT = 25;
+// `return_residual_sum`: pass A's t = x + r, at the input's dtype, for the writer to store.
+constexpr uint8_t CB_RESIDUAL_SUM = 26;
 
 constexpr size_t READER_CT_SCALARS = 33;
 constexpr size_t COMPUTE_CT_SCALARS = 27;
@@ -284,6 +288,38 @@ uint32_t pack_txn_rows(int64_t block_rows, int64_t txn_rows) {
         txn_rows,
         block_rows);
     return static_cast<uint32_t>(block_rows | ((txn_rows - 1) << 16));
+}
+
+// dest_helpers.hpp get_dest_limit(), host mirror (DEST_AUTO_LIMIT).
+int64_t dest_tile_limit(const ComputeConfigDescriptor& cfg) {
+    if (cfg.dst_full_sync_en) {
+        return cfg.fp32_dest_acc_en ? 8 : 16;
+    }
+    return cfg.fp32_dest_acc_en ? 4 : 8;
+}
+
+// The compute kernel's PASS_B_BLK (pass_b_blk / pass_b_blk_small / PASS_B_AUTO), host mirror: the DEST block the
+// residual add packs t in, hence cb_residual_sum's push unit.
+int64_t pass_b_block(int64_t wt_chunk, int64_t block_rows, int64_t subblock_ct, int64_t cap) {
+    if (subblock_ct != 0) {
+        return subblock_ct;
+    }
+    auto largest = [&](int64_t wt) {
+        int64_t b = std::min(cap, wt);
+        while (b > 1 && wt % b != 0) {
+            --b;
+        }
+        return b;
+    };
+    if (block_rows > 1) {
+        return largest(wt_chunk);
+    }
+    for (int64_t b = 2; b <= cap && b <= wt_chunk; ++b) {
+        if (wt_chunk % b == 0) {
+            return b;
+        }
+    }
+    return largest(wt_chunk);
 }
 
 int64_t residual_depth(int64_t depth_x) { return CB_R_DEPTH ? CB_R_DEPTH : depth_x; }
@@ -1136,7 +1172,8 @@ ProgramDescriptor create_program_descriptor(
     const std::optional<Tensor>& residual,
     double epsilon,
     const ComputeConfigDescriptor& compute_config,
-    uint32_t subblock_w) {
+    uint32_t subblock_w,
+    const std::optional<Tensor>& residual_sum) {
     auto* device = input.device();
     const auto shape = shape_of(input);
     const size_t rank = shape.size();
@@ -1145,6 +1182,13 @@ ProgramDescriptor create_program_descriptor(
     const bool has_gamma = weight.has_value();
     const bool has_bias = bias.has_value();
     const bool has_residual = residual.has_value();
+    // `return_residual_sum`: the op's second output, t = x + r (validated host-side: a residual is present and
+    // the layout is TILE).  Everything it adds below is guarded by this flag, so an option-off build is the
+    // program it was before the option existed.
+    const bool has_t_out = residual_sum.has_value();
+    TT_FATAL(
+        !has_t_out || (has_residual && is_tile),
+        "rms_norm_ttnn: return_residual_sum needs a residual_input_tensor and a TILE input");
     const Tensor* per_channel = has_gamma ? &*weight : (has_bias ? &*bias : nullptr);
     const bool per_channel_is_rm = per_channel != nullptr && per_channel->layout() == Layout::ROW_MAJOR;
 
@@ -1209,7 +1253,8 @@ ProgramDescriptor create_program_descriptor(
         // Python dedupes by object identity: under `inplace` the output IS the input).
         std::vector<const tt::tt_metal::Buffer*> seen;
         int64_t reserved = 0;
-        for (const Tensor* t : {&input, &output, has_residual ? &*residual : nullptr}) {
+        for (const Tensor* t :
+             {&input, &output, has_residual ? &*residual : nullptr, has_t_out ? &*residual_sum : nullptr}) {
             if (t == nullptr) {
                 continue;
             }
@@ -1231,6 +1276,12 @@ ProgramDescriptor create_program_descriptor(
     const DataType scaler_dtype = kernel_partial_w ? interm_dtype : DataType::BFLOAT16;
     const int64_t scaler_tile_bytes = tile_bytes(scaler_dtype);
     const int64_t scaler_bytes = scaler_tile_bytes * scaler_pages;
+    // `return_residual_sum`: cb_residual_sum is T_SUM_RING_BLOCKS of compute's pass-B DEST blocks -- at most
+    // T_SUM_RING_BLOCKS * DEST_AUTO_LIMIT tiles (16-64 kB).  It is charged to the L1 the blocking solve leaves
+    // unbudgeted (the 1 - L1_SAFETY_FRACTION margin, ~200 kB), NOT to the solve itself, so the ring never moves a
+    // blocking decision and y is bit-identical with the option on or off.  (An L1-SHARDED t is different: its shard
+    // really occupies L1 and is charged like any resident shard, above.)  Checked below once the plan is final.
+    const int64_t t_ring_bytes = has_t_out ? T_SUM_RING_BLOCKS * dest_tile_limit(compute_config) * bt : 0;
     const int64_t rm_stage_rings = 2 + (has_residual ? 1 : 0);
 
     auto solve_blocking = [&](const Plan& plan) -> std::optional<Solved> {
@@ -1653,6 +1704,27 @@ ProgramDescriptor create_program_descriptor(
             cbs.push_back(make_cb(CB_BANK, st, block_rows, DataType::BFLOAT16, all_cores));
         }
     }
+    // `return_residual_sum`: compute pushes t in PASS_B_BLK-tile DEST blocks; the ring is a whole number of them, so
+    // no push straddles its end, and the writer drains it one block at a time.
+    const int64_t t_blk =
+        has_t_out ? pass_b_block(wt_chunk, block_rows, pass_b_blk_ct, dest_tile_limit(compute_config)) : 0;
+    if (has_t_out) {
+        TT_FATAL(t_blk >= 1 && wt_chunk % t_blk == 0, "rms_norm_ttnn: the t block must divide WT_CHUNK");
+        TT_FATAL(
+            T_SUM_RING_BLOCKS * t_blk * bt <= t_ring_bytes, "rms_norm_ttnn: cb_residual_sum exceeds its L1 charge");
+        int64_t avail = static_cast<int64_t>(tt::tt_metal::hal::get_max_worker_l1_unreserved_size());
+        if (plan.l1_reserved) {
+            avail -= plan.l1_reserved + L1_CB_ARENA_BASE_RESERVE;
+        }
+        avail = std::max<int64_t>(0, avail);
+        const int64_t margin = avail - static_cast<int64_t>(static_cast<double>(avail) * L1_SAFETY_FRACTION);
+        TT_FATAL(
+            t_ring_bytes <= margin,
+            "rms_norm_ttnn: return_residual_sum's {} B ring does not fit the {} B of L1 the blocking leaves unbudgeted",
+            t_ring_bytes,
+            margin);
+        cbs.push_back(make_cb(CB_RESIDUAL_SUM, bt, T_SUM_RING_BLOCKS * t_blk, residual_sum->dtype(), all_cores));
+    }
 
     // ---- ROW_MAJOR staging-ring zero --------------------------------------------------------------
     const int64_t stage_pad_bytes = wt_chunk * TILE_DIM * elem_bytes;
@@ -1839,6 +1911,11 @@ ProgramDescriptor create_program_descriptor(
         const auto a = tt::tt_metal::TensorAccessorArgs(*output.buffer()).get_compile_time_args();
         writer_ct.insert(writer_ct.end(), a.begin(), a.end());
     }
+    if (has_t_out) {
+        writer_ct.push_back(static_cast<uint32_t>(t_blk));
+        const auto a = tt::tt_metal::TensorAccessorArgs(*residual_sum->buffer()).get_compile_time_args();
+        writer_ct.insert(writer_ct.end(), a.begin(), a.end());
+    }
 
     // ---- compute ----------------------------------------------------------------------------------
     std::vector<uint32_t> compute_ct = {
@@ -1979,17 +2056,30 @@ ProgramDescriptor create_program_descriptor(
         std::move(reader_ct),
         std::move(reader_rt),
         reader_dm_config(plan)));
+    auto writer_defines = kernel_defines();
+    auto compute_defines = kernel_defines();
+    if (has_t_out) {
+        writer_defines.emplace_back("RMS_RESIDUAL_OUT", "1");
+        // Its value is the host's PASS_B_BLK, which the kernel static_asserts against its own.
+        compute_defines.emplace_back("RMS_RESIDUAL_OUT", std::to_string(t_blk));
+    }
     desc.kernels.push_back(make_kernel(
         "rms_norm_ttnn_writer.cpp",
         all_cores,
-        kernel_defines(),
+        std::move(writer_defines),
         std::move(writer_ct),
         std::move(writer_rt),
         writer_dm_config(plan)));
+    if (has_t_out) {
+        // t's address: the writer's one common runtime arg, patched on a cache hit by override_runtime_arguments
+        // (which this factory defines, so the adapter uses no buffer bindings), like every other address here.
+        const uint32_t t_addr = residual_sum->buffer()->address();
+        desc.kernels.back().common_runtime_args = {t_addr};  // smuggled-rta-ok: patched in override_runtime_arguments
+    }
     desc.kernels.push_back(make_kernel(
         "rms_norm_ttnn_compute.cpp",
         all_cores,
-        kernel_defines(),
+        std::move(compute_defines),
         std::move(compute_ct),
         std::move(compute_rt),
         compute_config));
@@ -2025,7 +2115,8 @@ tt::tt_metal::ProgramDescriptor RmsNormProgramFactory::create_descriptor(
         tensor_args.residual,
         operation_attributes.epsilon,
         operation_attributes.compute_config,
-        operation_attributes.subblock_w);
+        operation_attributes.subblock_w,
+        tensor_args.residual_sum);
 }
 
 void RmsNormProgramFactory::override_runtime_arguments(
@@ -2070,6 +2161,9 @@ void RmsNormProgramFactory::override_runtime_arguments(
             }
             args[WRITER_RT_OUT] = out_addr;
         }
+    }
+    if (tensor_args.residual_sum.has_value()) {
+        tt::tt_metal::GetCommonRuntimeArgs(program, WRITER_KERNEL)[0] = tensor_args.residual_sum->buffer()->address();
     }
     // The zero-copy CBs alias a resident shard: x (slot 1), the residual (slot 20), the output (slot 8).
     for (const auto& cb : program.circular_buffers()) {
