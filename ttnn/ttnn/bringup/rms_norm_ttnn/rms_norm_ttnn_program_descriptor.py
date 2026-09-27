@@ -3,6 +3,11 @@
 
 """ProgramDescriptor for rms_norm_ttnn.
 
+The shipped op (`ttnn.bringup.rms_norm`) builds this same program in C++
+(device/rms_norm_ttnn_program_factory.cpp, a line-for-line port with the knobs at
+their shipped values); this module is the documented reference it is checked
+against (tests/unit/test_rms_norm_ttnn_cpp_parity.py).  Change both together.
+
 THIS FILE IS THE SINGLE SOURCE OF TRUTH FOR EVERY BLOCK / DEPTH / GRID KNOB
 (op_design.md section 1.4).  Kernels receive the knobs as compile-time /
 runtime args and never re-derive them; no block or chunk count is restated as a
