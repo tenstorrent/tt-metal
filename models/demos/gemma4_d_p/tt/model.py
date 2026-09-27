@@ -9,6 +9,7 @@ import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
+from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
@@ -311,6 +312,9 @@ class Gemma4Model:
                     ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
                 )
 
+        # The layers carry this TP device's 1/TP of the rows.
+        hidden_states = ccl_partition_rows(hidden_states, self.mesh_config)
+
         packed_rope_by_type = {}
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
@@ -341,6 +345,7 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
+        hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
         return hidden_states
 
     def embed_tokens(self, tokens):

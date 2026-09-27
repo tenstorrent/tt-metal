@@ -219,24 +219,21 @@ def global_ring_prefill_attention(
 
 
 def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
-    """(q_chunk_size, k_chunk_size) for the ring SDPA, chosen by the per-rank Q slab (prefill chunk / CP).
+    """(q_chunk_size, k_chunk_size, max_k_splits) for the ring SDPA, chosen by the per-rank Q slab (chunk / CP).
 
     Sliding layers use q 128 / k 128; the sliding path accepts q in {64, 128} and k == 128, and k also sets
-    the halo granularity. Global layers use k 256 with a Q chunk that grows with the slab. Measured over a
-    256k prefill at CP8: q 32 at chunk 2048 (21.7 s, against 24.0 s at q 64 and 28.7 s at q 96), q 64 at
-    chunk 4096 (14.1 s, against 17.4 s at q 32 and 16.2 s at q 96), and q 96 at chunk 8192 (11.1 s,
-    against 12.8 s at q 64).
+    the halo granularity. Global layers use k 256. Slabs up to 512 tokens take q = slab / 4, giving 8 local
+    heads x 4 Q chunks = 32 units, too few to fill the grid, so the K split spreads them over three bands.
+    Larger slabs fill the grid unsplit at q 96.
     """
     if sliding:
-        return 128, 128
-    if q_slab_tokens <= 256:
-        return 32, 256
+        return 128, 128, 1
     if q_slab_tokens <= 512:
-        return 64, 256
-    return 96, 256
+        return q_slab_tokens // 4, 256, 3
+    return 96, 256, 1
 
 
-def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size):
+def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size, max_k_splits=1):
     """SDPA program config for the ring path.
 
     The compute grid must exclude the CCL column that ``ccl_core_grid_offset``
@@ -252,6 +249,7 @@ def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        max_k_splits=max_k_splits,
     )
 
 
@@ -380,13 +378,14 @@ def _ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     if program_config is None:
-        _q_chunk, _k_chunk = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size))
+        _q_chunk, _k_chunk, _k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size))
         program_config = ring_prefill_program_config(
             mesh_device,
             ccl_manager,
             head_dim,
             q_chunk_size=_q_chunk,
             k_chunk_size=_k_chunk,
+            max_k_splits=_k_splits,
         )
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
