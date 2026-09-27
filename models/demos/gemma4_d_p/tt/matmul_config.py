@@ -34,7 +34,7 @@ def prefill_matmul_program_config(
     max_subblock_tiles = 4 if fp32_dest_acc else 8
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0),
+        in0_block_w=_in0_block_w(k_tiles),
         out_subblock_h=next(h for h in (4, 3, 2, 1) if per_core_m % h == 0 and h * subblock_w <= max_subblock_tiles),
         out_subblock_w=subblock_w,
         per_core_M=per_core_m,
@@ -42,3 +42,35 @@ def prefill_matmul_program_config(
         transpose_mcast=False,
         fused_activation=fused_activation,
     )
+
+
+def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activation=None):
+    """1D in0-multicast config for short-M prefill projections, or None when it does not apply.
+
+    With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
+    block through one core. Here every core reads its own two weight columns from DRAM while the activations
+    are multicast, which keeps more DRAM readers busy.
+    """
+    tile = ttnn.TILE_SIZE
+    m_tiles = hidden_states.padded_shape[-2] // tile
+    k_tiles = hidden_states.padded_shape[-1] // tile
+    n_tiles = weight.padded_shape[-1] // tile
+    per_core_n = 2
+    if m_tiles > 8 or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=_in0_block_w(k_tiles),
+        # 2 x 2 subblocks fill the fp32 dest.
+        out_subblock_h=2 if m_tiles % 2 == 0 else 1,
+        out_subblock_w=per_core_n,
+        per_core_M=m_tiles,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
+def _in0_block_w(k_tiles):
+    return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
