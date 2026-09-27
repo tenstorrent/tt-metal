@@ -254,7 +254,7 @@ def test_collect_feature_mask_projection(mesh_device, device_params):
     from models.tt_dit.encoders.gemma.feature_extractor import GemmaFeatureExtractor
     from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
-    from models.tt_dit.utils.tracing import Tracer
+    from models.tt_dit.utils.tracing import Tracer, set_kernel_prewarm_capturing
 
     directory, result = Path(os.environ["C13_INPUTS"]), Path(os.environ["C13_RESULTS"])
     assert not result.exists(), "use a fresh result path"
@@ -356,6 +356,7 @@ def test_collect_feature_mask_projection(mesh_device, device_params):
         if os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY"):
             replace("a")
             model(stable_states, stable_mask)
+            set_kernel_prewarm_capturing(True)
             tracer(stable_states, stable_mask)
             pytest.skip("kernel recipes only; no correctness or timing artifact")
         for case in CASES:
@@ -403,6 +404,7 @@ def test_collect_feature_mask_projection(mesh_device, device_params):
         torch.save(record, result)
         print(f"C13_EQUIVALENCE_PENDING {result} trace_device_ms={samples}", flush=True)
     finally:
+        set_kernel_prewarm_capturing(False)
         tracer.release_trace()
 
 
