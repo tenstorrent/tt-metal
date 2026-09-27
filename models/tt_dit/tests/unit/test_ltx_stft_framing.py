@@ -46,8 +46,14 @@ class DeviceCopies:
 
     def __init__(self):
         self.reshape_scratch = []
+        self.gather_scratch = []
         self.gathers = 0
         self.uploads = 0
+
+    @staticmethod
+    def num_cores_to_corerangeset(count, grid, row_wise):
+        assert row_wise and count <= grid.x * grid.y
+        return count
 
     def from_torch(self, value, **kwargs):
         self.uploads += 1
@@ -68,6 +74,18 @@ class DeviceCopies:
 
     def gather(self, tensor, dimension, indices, **kwargs):
         self.gathers += 1
+        width = indices.shape[-1]
+        # Native selects column-distributed RM gather above 60*32 indices.
+        # Its raw per-core DRAM offset and CB page must be64B aligned on BH.
+        if width > 60 * 32:
+            cores = kwargs["sub_core_grids"]
+            assert width % cores == 0
+            slice_bytes = width // cores * 4
+            if slice_bytes % 64:
+                raise RuntimeError("RM gather per-core index slice is not64B aligned")
+            scratch = 2 * tensor.shape[-1] * 4 + 2 * slice_bytes
+            self.gather_scratch.append(scratch)
+            assert scratch < 1_572_864 - 128 * 1024
         return Tensor(torch.gather(tensor.value, dimension, indices.value.long()))
 
     def slice(self, tensor, starts, ends):
@@ -98,9 +116,9 @@ def _stft():
         left_pad=432,
         win_length=512,
         hop_length=80,
-        mesh_device=object(),
+        mesh_device=SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=12, y=10)),
         _window_indices={},
-        _gather_grid="64 workers",
+        _gather_grid=None,
     )
 
 
@@ -134,6 +152,23 @@ class STFTFramingTest(unittest.TestCase):
                     self.assertEqual(adapter.uploads, uploads, "framing must not upload waveform values")
                     self.assertEqual(adapter.gathers, gathers + 1, "gather the waveform only once")
         self.assertLessEqual(max(adapter.reshape_scratch), 530 * 1024)
+        self.assertLessEqual(max(adapter.gather_scratch), 931328)
+        self.assertEqual(stft._gather_grid, 32)
+
+    def test_odd_frame_native_gather_alignment(self):
+        # Reproduce the failed63/65-frame partitions. The original64-worker
+        # route starts alternate cores32B into a64B block; the selected32-worker
+        # route is aligned for every frame count in the supported clip range.
+        adapter = DeviceCopies()
+        methods = _production_methods(adapter)
+        for length in (5119, 5200):
+            stft = _stft()
+            methods["prepare_device_windows"](stft, 2, length)
+            stft._gather_grid = 64
+            with self.assertRaisesRegex(RuntimeError, "not64B aligned"):
+                methods["_frame_device"](stft, Tensor(torch.zeros(2, length, 1)))
+        for frames in range(1, 96640 // 80 + 1):
+            self.assertEqual((frames * 512 // 32 * 4) % 64, 0)
 
     def test_changed_input_reuses_indices_without_stale_values(self):
         adapter = DeviceCopies()

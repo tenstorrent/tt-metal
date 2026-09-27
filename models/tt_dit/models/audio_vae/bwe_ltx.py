@@ -91,12 +91,14 @@ class _STFTFn(Module):
             raise ValueError("device STFT framing requires win512/hop80 and 80..96640 waveform samples")
         if self._gather_grid is None:
             grid = self.mesh_device.compute_with_storage_grid_size()
-            if grid.x * grid.y < 64:
-                raise ValueError("device STFT framing requires at least 64 workers")
-            # The native RM factory uses unrounded CB page sizes. A 512-wide
-            # window split across 64 workers gives 32B-aligned index/output
-            # slices; splitting across all 120 BH workers need not do so.
-            self._gather_grid = ttnn.num_cores_to_corerangeset(64, grid, row_wise=True)
+            if grid.x * grid.y < 32:
+                raise ValueError("device STFT framing requires at least 32 workers")
+            # Native RM gather uses raw per-core index offsets/CB page sizes.
+            # BH DRAM reads need 64B alignment: 64 workers give 32B-offset
+            # slices for odd frame counts (63/65 frames corrupt alternate
+            # slices). With 32 workers every slice is frames*16 FP32 values,
+            # so all index/output offsets and pages are multiples of 64B.
+            self._gather_grid = ttnn.num_cores_to_corerangeset(32, grid, row_wise=True)
         key = (batch, length)
         if key in self._window_indices:
             return
