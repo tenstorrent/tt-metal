@@ -15,7 +15,7 @@ a fixed ~3 minutes -- but nothing outside the list executes.
     open("/tmp/ids.txt", "w").write("\n".join(ids) + "\n")
     EOF
 
-    PYTHONPATH=tests/ttnn/unit_tests/operations/rms_norm_ttnn \
+    PYTHONPATH=ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit \
     NODEID_SUBSET_FILE=/tmp/ids.txt \
     scripts/run_safe_pytest.sh --run-all -p nodeid_subset_plugin \
         eval/golden_tests/rms_norm_ttnn/test_golden.py

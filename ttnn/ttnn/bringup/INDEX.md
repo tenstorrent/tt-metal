@@ -7,6 +7,10 @@ Before forking, check this table. If the op is already here, reuse the fork, and
 whose default keeps the fork's current behaviour. Each fork's `CHANGELOG.md` lists its source path and SHA, and every
 change made to it (what, why, which model and task).
 
+Python ops (a ProgramDescriptor op in a subfolder, no C++ build) are listed in `PYTHON_OPS` in `__init__.py`;
+`ttnn.bringup.<name>` loads and registers them on first use. Their own unit suite lives in `<fork>/tests/unit/`; the
+model cases (bring-up task O.1) are the top-level `tests/test_*.py`.
+
 How to fork: `models/demos/common/bringup/skill/bringup-fork-op/SKILL.md`. In short: `python
 ttnn/ttnn/bringup/fork_op.py <source op folder> --model <model> --task <task>`, then make the change, fill the
 changelog, `./build_metal.sh`, and run the fork's tests (`<fork>/tests/`). Every model that calls a fork adds a
@@ -22,3 +26,4 @@ users are switched back.
 | `dispatch` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch` @ `67ca5f3af48` | 1-device dispatch axis (no fabric) | ernie45_d_p, gemma4_a4b_d_p, mimo_v2_6_d_p |
 | `combine` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine` @ `67ca5f3af48` | 1-device dispatch axis (no fabric) | ernie45_d_p, gemma4_a4b_d_p, mimo_v2_6_d_p |
 | `offset_cumsum` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum` @ `67ca5f3af48` | 1-device dispatch axis (no all_gather) | ernie45_d_p, gemma4_a4b_d_p, mimo_v2_6_d_p |
+| `rms_norm_ttnn` (`ttnn.bringup.rms_norm`) | ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1cbc98`); drop-in for `ttnn.rms_norm` | ai-generated perf optimized version | mimo_v2_6_d_p |

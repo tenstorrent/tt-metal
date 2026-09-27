@@ -36,7 +36,7 @@
       return y.to(input_tensor.dtype)
   ```
 
-- **Import Path**: `from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn`
+- **Import Path**: `from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn`
 
 - **Function Signature**:
 
@@ -128,7 +128,7 @@ both in full:
 > 1. **Re-rank the targets.** No `LOOSE_CASES` entry carries an `attention` note, so
 >    `eval/prompts/perf_refinement_prompt.txt` step 1 falls through to "rank the `perf` group by
 >    measured device-ns divided by each case's own `achievable_ns` and take the worst".
->    `ttnn/ttnn/operations/rms_norm_ttnn/perf_target_ranking.py <results_dir> --aiclk <MHz>`
+>    `ttnn/ttnn/bringup/rms_norm_ttnn/perf_target_ranking.py <results_dir> --aiclk <MHz>`
 >    computes exactly that from a golden run's own sidecars (`eval_test_runner.sh` captures
 >    `device_kernel_ns` per test by default). The ordering below is the Phase-0 ranking, not a
 >    permanent assignment — it moves as phases land.

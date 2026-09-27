@@ -39,8 +39,8 @@ import torch
 
 import ttnn
 
-import ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor as PD
-from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
+import ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor as PD
+from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
     COMPUTE_CT_SCALARS,
     READER_CT_SCALARS,
     TRIM_DERIVED,
