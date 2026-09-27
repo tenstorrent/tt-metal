@@ -420,3 +420,11 @@ Drive this ledger with
   non-contiguous one is refused); `run_contract_test`, `engine_env` and `gqa_independent_pcc` use it. Selftest.
 - Same class as F40: every framework path that counts layers must use `spec.layers()`, not `num_layers`. Remaining
   `num_layers` uses were checked: ladder, profile and positions compare against it only to detect a full stack.
+
+## F42 (2026-09-27): the full prefill times a prefix subset
+- MiMo X.3 (layers 0-5 of 48): every accuracy and position metric passed but `prefill_ms_full` was MISSING, because
+  `testing/profile.py:full_prefill` returned None unless the stack was all 48 layers. The fix agent diagnosed it
+  (framework, outside its paths); the overseer stopped it. Now any stack starting at layer 0 without gaps is timed
+  (final norm only when it ends at the last layer), and `prefill_layers` records the layer count. Selftest.
+- Third subset bug in a row (F40 goldens/parity, F41 contract): a sweep of `num_layers` uses in `testing/` found no
+  other; ladder, profile and positions use it only to detect a full stack.
