@@ -327,6 +327,12 @@ llk:
   ttnop:
     wh_n150_civ2: 21600
     bh_p150b_civ2: 21600
+  # Measured on blackhole: a full catalog sweep (301 ops, ~90k pair trials, single shard) took
+  # 8h40m end to end. wormhole is unmeasured -- using the same figure with headroom until a real
+  # run gives its own number.
+  cfg_pollution:
+    wh_n150_civ2: 36000
+    bh_p150b_civ2: 36000
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70

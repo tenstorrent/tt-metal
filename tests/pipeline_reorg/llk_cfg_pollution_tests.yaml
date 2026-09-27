@@ -1,0 +1,33 @@
+# Config-pollution weekly job: one shard per architecture (v1). No pytest-collection sharding
+# here -- the driver is a custom Python sweep (snapshot_build.py + pair_sweep.py), not a pytest
+# suite, so there is nothing for prepare-test-matrix to split by node id. Shard count and the
+# per-shard timeout below are first estimates (see .github/time_budget.yaml); recalibrate both
+# once real per-op timing from a full weekly run is available.
+
+- name: cfg_pollution_wormhole
+  split_group: 1
+  team: llk
+  budget_type: cfg_pollution
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/cfg_pollution
+    ./ci.sh --arch wormhole --report-dir reports/wormhole
+  skus:
+    wh_n150_civ2:
+      timeout: 240
+  owner_id: U09UC143684
+
+- name: cfg_pollution_blackhole
+  split_group: 1
+  team: llk
+  budget_type: cfg_pollution
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/cfg_pollution
+    ./ci.sh --arch blackhole --report-dir reports/blackhole
+  skus:
+    bh_p150b_civ2:
+      timeout: 240
+  owner_id: U09UC143684

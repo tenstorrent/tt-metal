@@ -1,0 +1,160 @@
+name: "Config Pollution implementation"
+# Entry points: workflow_call only. Schedule / workflow_dispatch live in cfg-pollution.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        description: "Architecture to run: wormhole or blackhole"
+        required: true
+        type: string
+      docker-image:
+        description: "LLK CI container image"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_cfg_pollution_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Resolve enabled SKUs
+        id: resolve-skus
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
+        run: |
+          set -euo pipefail
+          case "$ARCHITECTURE" in
+            wormhole) ENABLED_SKUS="wh_n150_civ2" ;;
+            blackhole) ENABLED_SKUS="bh_p150b_civ2" ;;
+            *)
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              exit 1
+              ;;
+          esac
+          echo "enabled-skus=$ENABLED_SKUS" >> "$GITHUB_OUTPUT"
+      - name: Build test matrix
+        id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
+          sku-config: ./.github/sku_config.yaml
+
+  cfg-pollution-exec:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    env:
+      CHIP_ARCH: ${{ inputs.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ inputs.docker-image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Reset the card
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          python3 - <<'PY'
+          from helpers.hardware_controller import HardwareController
+
+          HardwareController().reset_card()
+          print("card reset OK")
+          PY
+
+      - name: Run config-pollution sweep
+        id: sweep
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          set -euo pipefail
+          status=0
+          (
+          ${{ matrix.test-group.cmd }}
+          ) || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "config-pollution sweep exited $status"
+
+      - name: Fail if the sweep found a config-pollution escape
+        if: steps.sweep.outputs.status == '1'
+        shell: bash
+        run: |
+          echo "::error::A real op left CFG-register residue that broke a real victim op's" \
+               "own correctness check. See the report artifact for the (polluter, victim)" \
+               "pair and the pair-sweep junit artifact for every trial."
+          exit 1
+
+      - name: Fail if the sweep did not complete
+        if: >-
+          steps.sweep.outputs.status != '0' &&
+          steps.sweep.outputs.status != '1'
+        shell: bash
+        run: |
+          echo "::error::The config-pollution sweep did not complete (exit" \
+               "${{ steps.sweep.outputs.status }}). No results were produced, so nothing" \
+               "was actually tested. See the sweep step's log."
+          exit 1
+
+      - name: Upload config-pollution report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: cfg-pollution-report-${{ env.CHIP_ARCH }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/manifest.json
+            ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/findings.jsonl
+          if-no-files-found: warn
+
+      - name: Upload config-pollution junit results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: cfg-pollution-junit-${{ env.CHIP_ARCH }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/junit.xml
+          if-no-files-found: warn
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/cfg_pollution/reports/**/junit.xml
+          include_passed: true
+          annotate_only: true
