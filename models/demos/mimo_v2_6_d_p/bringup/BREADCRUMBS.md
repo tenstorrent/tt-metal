@@ -1238,3 +1238,15 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   passed in 204 s (unified case ~130 s of host weight generation / bfp8 rounding, plus the precompile collect pass).
 - Re-run: the brief's gate command with `PYTHONPATH=$PWD`; fork tests alone:
   `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/{dispatch,combine,offset_cumsum,unified_routed_expert_ffn}/tests`.
+
+## O.1 optests (attempt 1)
+- The only uncovered call was ttnn.bringup.rms_norm sig 8d29c1ff0f (x12). The fork `rms_norm_ttnn` had only its
+  unit suite (`tests/unit/`), with no top-level `tests/test_*.py`, so the gate also counted it as a failed fork test.
+- Added `ttnn/ttnn/bringup/rms_norm_ttnn/tests/{cases.py,reference.py,test_rms_norm_ttnn.py}`, following the
+  dispatch fork's layout (it loads cases.py and reference.py by file path). The input is randn per device, sharded
+  over the 1x4 mesh. The weight is 1 + 0.5*randn, replicated. The reference is float64.
+- Tolerance: measured pcc 0.9999972 and max rel err 0.0092. At atol 0.02 / rtol 0.02 a 1.01 scale of the output
+  still passed, so the limits are pcc >= 0.9999 plus atol 0.005 + rtol 0.008. The 1.01-scaled output fails at those
+  limits (checked by hand, then reverted).
+- Gate: forks_used 5, fork_calls_uncovered 0, fork_tests_failed 0 (12 fork tests passed).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/rms_norm_ttnn/tests/test_rms_norm_ttnn.py`
