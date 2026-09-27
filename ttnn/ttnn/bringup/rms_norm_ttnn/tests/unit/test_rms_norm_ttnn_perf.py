@@ -32,7 +32,9 @@ import torch
 
 import ttnn
 
-from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn
+# The op under test is the C++ binding; the Python builder is its parity reference
+# (test_rms_norm_ttnn_cpp_parity.py).
+rms_norm_ttnn = ttnn.bringup.rms_norm
 
 # The seed is a generated Python package present only on the branch this op was
 # generated from. Seed-parity cases skip where it is absent; operand-cost cases

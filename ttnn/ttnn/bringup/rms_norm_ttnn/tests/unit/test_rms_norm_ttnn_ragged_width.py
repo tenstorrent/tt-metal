@@ -37,13 +37,18 @@ import torch
 import ttnn
 
 import ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor as PD
-from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import torch_rms_norm_ttnn
+
+# The op under test is the C++ binding; the Python builder is its parity reference
+# (test_rms_norm_ttnn_cpp_parity.py).
+rms_norm_ttnn = ttnn.bringup.rms_norm
 from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
     READER_CT_SCALARS,
     _largest_divisor_at_most,
     _width_chunk,
     create_program_descriptor,
 )
+from ttnn.bringup.rms_norm_ttnn.tests.unit.builders import BUILDER_IDS, BUILDERS
 
 # Where the two halves of the pad count land.  Indices, not slices: an off-by-one
 # here is exactly the drift this file exists to catch.
@@ -67,8 +72,9 @@ def _config():
     return c
 
 
-def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    """Build the descriptor for one configuration.  No dispatch."""
+def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, builder="python"):
+    """Build the descriptor for one configuration.  No dispatch.  `builder` picks the Python builder or the
+    C++ host side (the op ttnn.bringup.rms_norm runs); knob-flipping tests can only reach the Python one."""
     torch.manual_seed(0)
     W = shape[-1]
     mc = ttnn.DRAM_MEMORY_CONFIG
@@ -83,9 +89,8 @@ def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE
         else None
     )
     out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, mc)
-    return create_program_descriptor(
-        x, out, weight=w, bias=b, residual=r, epsilon=1e-12, compute_kernel_config=_config()
-    )
+    build = create_program_descriptor if builder == "python" else BUILDERS[builder]
+    return build(x, out, weight=w, bias=b, residual=r, epsilon=1e-12, compute_kernel_config=_config())
 
 
 def _blocking(descriptor):
@@ -155,10 +160,11 @@ def test_width_chunk_prefers_the_divisor_when_it_is_no_coarser():
 @pytest.mark.parametrize("W", PRIME_W)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
 @pytest.mark.parametrize("mode", ["no_gamma", "gamma", "gamma_bias_residual"])
-def test_prime_width_is_off_the_granularity_cliff(device, W, layout, mode):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_prime_width_is_off_the_granularity_cliff(device, W, layout, mode, builder):
     """The whole point of the refinement: no chunked build on a prime Wt may sit at
     one tile per chunk."""
-    wt_chunk, num_chunks, wt_pad = _blocking(_build(device, (1, 1, 3104, W), mode=mode, layout=layout))
+    wt_chunk, num_chunks, wt_pad = _blocking(_build(device, (1, 1, 3104, W), mode=mode, layout=layout, builder=builder))
     wt = W // 32
     assert wt_chunk > 1, f"Wt={wt} still collapses to a one-tile chunk ({num_chunks} chunks)"
     assert num_chunks * wt_chunk == wt + wt_pad
@@ -211,10 +217,11 @@ def test_the_l5_chunk_floor_is_still_live(device):
 
 @pytest.mark.parametrize("W", [4063, 2847, 4033])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "rm"])
-def test_a_partial_last_tile_refuses_the_pad(device, W, layout):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_a_partial_last_tile_refuses_the_pad(device, W, layout, builder):
     """PARTIAL_W != 0 aims the reduce's partial scaler / 0-1 mask at the LAST tile of
     the block; padding would make that a pad tile and silently drop the mask."""
-    _, _, wt_pad = _blocking(_build(device, (1, 1, 3104, W), mode="gamma", layout=layout))
+    _, _, wt_pad = _blocking(_build(device, (1, 1, 3104, W), mode="gamma", layout=layout, builder=builder))
     assert wt_pad == 0
 
 
