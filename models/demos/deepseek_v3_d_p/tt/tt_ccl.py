@@ -164,6 +164,7 @@ class TT_CCL:
         # Stable reduce-scatter staging/output buffers for the serial MLA and indexer calls. Keep
         # separate entries by call site: their outputs can be live at the same time within a layer.
         self.mla_reduce_scatter_buffers: dict[tuple, list["ttnn.Tensor"]] = {}
+        self.mla_reduce_scatter_fast_buffers: dict[str, tuple] = {}
 
         # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
         # keyed by shape signature. See get_indexer_ring_k_buffer.
@@ -444,6 +445,19 @@ class TT_CCL:
         configuration on the existing allocation path. The epilogue result is caller-owned and
         explicitly deallocated, so keep_output=False supplies only the stable intermediate.
         """
+        # Warm forwards revisit the same named call site with a fresh input allocation. A single
+        # TensorSpec comparison avoids rebuilding the full Python key from several tensor getters.
+        # Check liveness so an explicitly deallocated buffer still takes the allocation path below.
+        fast_entry = self.mla_reduce_scatter_fast_buffers.get(name)
+        if fast_entry is not None:
+            spec, device_id, options, buffers = fast_entry
+            if (
+                options == (dim, topology, cluster_axis, str(compute_kernel_config), keep_output)
+                and device_id == input_tensor.device().id()
+                and spec == input_tensor.spec
+                and all(buffer.is_allocated() for buffer in buffers)
+            ):
+                return buffers
         device = input_tensor.device()
         ring_size = device.shape[cluster_axis]
         normalized_dim = dim % len(input_tensor.shape)
@@ -493,6 +507,12 @@ class TT_CCL:
             else:
                 buffers = [intermediate]
             self.mla_reduce_scatter_buffers[key] = buffers
+        self.mla_reduce_scatter_fast_buffers[name] = (
+            input_tensor.spec,
+            device.id(),
+            (dim, topology, cluster_axis, str(compute_kernel_config), keep_output),
+            buffers,
+        )
         return buffers
 
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
