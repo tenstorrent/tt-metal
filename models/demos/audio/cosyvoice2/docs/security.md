@@ -57,13 +57,21 @@ uv pip show --python $COSYVOICE2_REF_ENV/bin/python torch torchaudio            
   `tensorrt-cu12*`, `fastapi*`, `uvicorn`, `gradio`, `grpcio*`, `tensorboard`.
 - **Only packages the reference path imports are listed.** The import closure was established by loading
   `CosyVoice2` on the real checkpoint and adding each missing module in turn.
-- **Two shims live in `scripts/reference_env.py`:**
+- **Four shims live in `scripts/reference_env.py`:**
   - `load_wav`: torchaudio ≥ 2.9 needs TorchCodec and system FFmpeg for `torchaudio.load`. The shim reads the
     same files with soundfile (the libsndfile decode upstream's old backend used), then applies upstream's own
     channel mean and `Resample`.
   - `pyworld`: imported only by the training data pipeline, which HyperPyYAML imports eagerly. It is replaced by
     a module that raises on any use, because every pyworld release that installs on Python 3.10 needs
     `pkg_resources`.
+  - fp32 Qwen2 backbone: transformers ≥ 5 loads `from_pretrained` in the checkpoint config's dtype (bfloat16
+    for CosyVoice-BlankEN), where upstream's pinned 4.51 loaded fp32. The shim passes `dtype=torch.float32`, so
+    `llm.pt`'s fp32 weights load unrounded (checked: every parameter equals the checkpoint exactly).
+  - Decode-step attention mask: upstream's non-streaming LLM loop passes a length-1 all-ones mask at each decode
+    step. transformers 4.51 dropped it; transformers ≥ 5 right-pads it with zeros, so each step attended to
+    position 0 alone and generation ran to `max_len`. The shim sizes the mask over cache plus input, as upstream's
+    own `inference_bistream` does. Checked against a full no-cache forward: log-probs differ by up to 16.4 as
+    upstream stands and by at most 3.1e-5 with the shim (40 greedy steps, corpus case 1).
 - **`wetext` is deliberately absent.** Upstream then skips it, exactly as the device-side normalizer does, so
   text normalization matches on both sides.
 - **`onnxruntime` is held at 1.18.0.** The speech-token sequence depends on the onnxruntime version (CosyVoice1
