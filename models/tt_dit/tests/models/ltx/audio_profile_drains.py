@@ -31,13 +31,18 @@ def walk_named(roots):
 class ProfileDrains:
     """Drain after selected forwards and record actual device-operation gaps.
 
-    Ancestor hooks drain their remaining tail operations; zero-gap hooks avoid
-    repeated mesh reads. Counts are observed operation IDs, not kernel or marker
+    Hooks accumulate small operations until the requested gap is reached; the
+    segment stop always drains its tail. A single leaf may overshoot the threshold.
+    Counts are observed operation IDs, not kernel or marker
     counts, and cannot on their own prove that no profiler markers were dropped.
     The caller must also validate the device log and emitted profiler data.
     """
 
-    def __init__(self, roots, types, read_profiler, operation_id, directory, stop_module=None):
+    def __init__(
+        self, roots, types, read_profiler, operation_id, directory, stop_module=None, minimum_operation_gap=32
+    ):
+        assert isinstance(minimum_operation_gap, int) and 1 <= minimum_operation_gap <= 64
+        self.minimum_operation_gap = minimum_operation_gap
         self.roots = tuple(roots)
         self.nodes = tuple(walk_named(self.roots))
         self.read_profiler = read_profiler
@@ -76,7 +81,7 @@ class ProfileDrains:
 
         def wrapped(*args, **kwargs):
             result = original(*args, **kwargs)
-            self.drain(path)
+            self.drain(path, force=module is self.stop_module)
             if module is self.stop_module:
                 self.completed_segment = path
                 raise ProfileSegmentComplete(path)
@@ -95,7 +100,7 @@ class ProfileDrains:
         end = int(self.operation_id())
         assert end >= self.last_id, "device operation ID moved backwards"
         gap = end - self.last_id
-        if not force and not gap:
+        if not force and gap < self.minimum_operation_gap:
             return
         start = time.perf_counter()
         self.read_profiler()
@@ -116,6 +121,7 @@ class ProfileDrains:
     def summary(self):
         return {
             "drain_count": len(self.events),
+            "minimum_operation_gap": self.minimum_operation_gap,
             "max_operation_gap": max((row["operation_gap"] for row in self.events), default=0),
             "completed_segment": self.completed_segment,
             "note": "operation gaps are not marker counts; independently reject dropped-marker logs",

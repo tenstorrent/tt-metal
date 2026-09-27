@@ -44,7 +44,7 @@ class ProfileDrainContracts(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.clock, self.reads = [0], []
 
-    def controller(self, roots, types=(Module,), stop=None, read=None):
+    def controller(self, roots, types=(Module,), stop=None, read=None, minimum_gap=1):
         drains = ProfileDrains(
             roots,
             types,
@@ -52,6 +52,7 @@ class ProfileDrainContracts(unittest.TestCase):
             lambda: self.clock[0],
             Path(self.directory.name),
             stop_module=stop,
+            minimum_operation_gap=minimum_gap,
         )
         self.addCleanup(drains.close)
         return drains
@@ -131,6 +132,35 @@ class ProfileDrainContracts(unittest.TestCase):
         drains.events_path.unlink()
         with self.assertRaisesRegex(AssertionError, "no audio profile hooks"):
             self.controller((("audio", root),), types=(Leaf,))
+        self.assertNotIn("forward", vars(root))
+
+    def test_accumulates_small_leaf_ops_and_forces_segment_tail(self):
+        # Job092's23 tiny intervals covered only79 ops;32-chip reads cost~6s.
+        # Keep those same operations while batching the expensive native reads.
+        costs = [3] * 22 + [13]
+        root = Module(self.clock, children=[(str(i), Leaf(self.clock, n)) for i, n in enumerate(costs)])
+        drains = self.controller((("audio", root),), stop=root, minimum_gap=32)
+        with self.assertRaises(ProfileSegmentComplete):
+            root(0)
+        self.assertEqual(self.clock[0], 79)
+        self.assertEqual(self.reads, [33, 66, 79])
+        self.assertEqual([row["operation_gap"] for row in drains.events], [33, 33, 13])
+        self.assertEqual(sum(row["operation_gap"] for row in drains.events), 79)
+        self.assertEqual(drains.summary()["minimum_operation_gap"], 32)
+
+    def test_large_leaf_overshoot_is_observed_not_hidden(self):
+        root = Module(self.clock, 2, [("small", Leaf(self.clock, 5)), ("large", Leaf(self.clock, 70))])
+        drains = self.controller((("audio", root),), stop=root, minimum_gap=32)
+        with self.assertRaises(ProfileSegmentComplete):
+            root(0)
+        self.assertEqual(self.reads, [75, 77])
+        self.assertEqual(drains.summary()["max_operation_gap"], 75)
+
+    def test_invalid_batching_threshold_fails_before_hooks(self):
+        root = Module(self.clock)
+        for gap in (0, 65, 1.5):
+            with self.assertRaises(AssertionError):
+                self.controller((("audio", root),), minimum_gap=gap)
         self.assertNotIn("forward", vars(root))
 
 

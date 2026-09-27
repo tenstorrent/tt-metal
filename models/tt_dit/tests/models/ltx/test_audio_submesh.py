@@ -347,6 +347,7 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
                 ttnn._ttnn.get_device_operation_id,
                 output_path.parent,
                 stop_module=first_amp if profile_segment == "first_amp" else None,
+                minimum_operation_gap=int(os.environ.get("C03_PROFILE_MIN_OP_GAP", "32")),
             )
             pipeline._prepare_audio_decoder()
             drains.assert_same_modules(audio_roots())
@@ -366,7 +367,9 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
                 else:
                     raise AssertionError("first-AMP segment did not stop at the selected module")
                 finally:
-                    drains.drain("segment_end", force=True)
+                    # Successful stop already forced its tail read. Avoid a
+                    # second empty32-chip read (~6s); failures still flush.
+                    drains.drain("segment_end", force=drains.completed_segment is None)
                     signpost("stop")
                 op1 = ttnn._ttnn.get_device_operation_id()
                 assert op1 > op0 and not outputs and not times
