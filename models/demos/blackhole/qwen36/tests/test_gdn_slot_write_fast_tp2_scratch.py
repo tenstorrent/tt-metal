@@ -98,12 +98,18 @@ def test_gdn_slot_write_fast_tp2(mesh_device, reset_seeds, ensure_gc):
         from models.tt_transformers.tt.common import copy_host_to_device
 
         model.sync_gdn_decode_state()
-        for w in sorted({min(8, B), B}):
+        widths = sorted({min(8, B), B})
+        # Compile EVERY width before capturing any trace (generator_interface.warmup_decode_buckets: a compile after a
+        # trace is parked clobbers it -- compiling width B after parking width 8 hung the first width-B replay).
+        for w in widths:
             tokens = torch.full((w, 1), 100, dtype=torch.int32)
             pos = torch.full((w,), -1, dtype=torch.int32)
             dev0 = model.prepare_inputs_decode(tokens, pos, page_table=pt_full[:w])
             model.ttnn_decode_forward(dev0[0], dev0[1], rot_mat_idxs=dev0[2], page_table=dev0[3])  # compile
-            ttnn.synchronize_device(mesh_device)
+        ttnn.synchronize_device(mesh_device)
+        for w in widths:
+            tokens = torch.full((w, 1), 100, dtype=torch.int32)
+            pos = torch.full((w,), -1, dtype=torch.int32)
             host = model.prepare_decode_inputs_host(tokens, pos, page_table=pt_full[:w])
             dev = copy_host_to_device(host, mesh_device=mesh_device)
             tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
