@@ -419,3 +419,202 @@ def test_device_cfm_traces_pass_allocation_tracker():
     summary = [l for l in out.splitlines() if " passed" in l or " failed" in l or " error" in l][-1:]
     print(f"\n  tracker subprocess: {summary}")
     assert proc.returncode == 0, out[-6000:] + err[-3000:]
+
+
+# --------------------------------------------------------------------------
+# streaming (chunk-causal) mode
+# --------------------------------------------------------------------------
+
+
+def _streaming_inputs(t_len: int, valid: int, seed: int, pad_scale: float = 10.0):
+    """Batch-1 CFM conditioning at bucket size `t_len` with the first `valid` positions real and
+    the rest bucket padding. The padding is deliberately large garbage (not zeros) so any attention
+    leak into padded keys moves the valid outputs visibly."""
+    g = torch.Generator().manual_seed(seed)
+    mu = torch.randn(1, t_len, 80, generator=g) * 0.1
+    cond = torch.randn(1, t_len, 80, generator=g) * 0.1
+    mu[:, valid:] = torch.randn(1, t_len - valid, 80, generator=g) * pad_scale
+    cond[:, valid:] = torch.randn(1, t_len - valid, 80, generator=g) * pad_scale
+    spks = torch.randn(1, 80, generator=g) * 0.1
+    mask = torch.zeros(1, t_len, 1)
+    mask[:, :valid] = 1.0
+    return mu, cond, spks, mask
+
+
+def test_streaming_reference_is_chunk_causal():
+    """The property upstream's streaming mask exists for, checked on the torch reference: with
+    `static_chunk_size=50`, an output in chunk k must be invariant to any change in a LATER chunk
+    (what makes recomputing the growing prefix every chunk valid), but -- unlike strict causality --
+    must see later positions inside its OWN chunk. The non-streaming reference is checked to be
+    sensitive to the same perturbation, so the invariance is the mask's doing, not a dead test."""
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import CausalConditionalDecoderRef
+
+    torch.manual_seed(0)
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    t_len = 150  # three 50-frame chunks
+    x, mu, cond = (torch.randn(1, t_len, 80) * 0.1 for _ in range(3))
+    spks = torch.randn(1, 80) * 0.1
+    mask = torch.ones(1, t_len, 1)
+    t = torch.rand(1)
+
+    def run(x_in, streaming):
+        with torch.no_grad():
+            return dec(x_in, mask, mu, t, spks, cond, streaming=streaming)
+
+    base = run(x, True)
+    x_late = x.clone()
+    x_late[:, 100:] += 5.0  # third chunk only
+    assert torch.allclose(run(x_late, True)[:, :100], base[:, :100], atol=1e-6, rtol=0)
+    assert not torch.allclose(run(x_late, False)[:, :100], run(x, False)[:, :100], atol=1e-3)
+
+    x_same_chunk = x.clone()
+    x_same_chunk[:, 60] += 5.0  # chunk [50, 100): position 50 must see it, chunk [0, 50) must not
+    out = run(x_same_chunk, True)
+    assert not torch.allclose(out[:, 50], base[:, 50], atol=1e-3), "chunk-causal, not strictly causal"
+    assert torch.allclose(out[:, :50], base[:, :50], atol=1e-6, rtol=0)
+
+
+def test_cfm_partial_mask_guard(expect_error):
+    """The one combination that must refuse a partial mask is non-streaming + fused SDPA: its
+    attention runs with `attn_mask=None`. Streaming hands SDPA the full padding + chunk-causal bias,
+    and the explicit chain adds the padding row, so neither is refused. Host-only: the guard runs
+    before anything touches a device; getting past it is detected at the first upload."""
+    import os
+    from unittest import mock
+
+    from models.demos.audio.cosyvoice2.tt.flow import decoder as decoder_mod
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import CausalConditionalCFMRef, TtCausalConditionalCFM
+
+    class PastGuard(Exception):
+        pass
+
+    def upload(*args, **kwargs):
+        raise PastGuard("past the guard")
+
+    cfm_ref = CausalConditionalCFMRef.__new__(CausalConditionalCFMRef)
+    cfm_ref.t_scheduler, cfm_ref.inference_cfg_rate = "cosine", 0.7
+    tt_cfm = TtCausalConditionalCFM(None, None, torch.zeros(1, 64, 80), cfm_ref, use_trace=False)
+    mu, cond, spks, mask = _streaming_inputs(64, 40, seed=0)
+    with mock.patch.object(decoder_mod.ttnn, "from_torch", upload):
+        with mock.patch.dict(os.environ, {"COSYVOICE2_FLOW_SDPA": "1"}):
+            with expect_error(ValueError, "silently ignored"):
+                tt_cfm.forward(mu, mask, 2, spks, cond, streaming=False)
+        for env, streaming in (("1", True), ("0", False)):
+            with mock.patch.dict(os.environ, {"COSYVOICE2_FLOW_SDPA": env}):
+                with expect_error(PastGuard, "past the guard"):
+                    tt_cfm.forward(mu, mask, 2, spks, cond, streaming=streaming)
+
+
+@needs_l1_small
+@pytest.mark.parametrize("t_len, valid", [(128, 100), (128, 70)])
+def test_device_streaming_decoder_bucketed_matches_exact_length(device, t_len, valid):
+    """One estimator call in streaming mode on a padded bucket (`t_len`) vs. the torch reference at
+    the EXACT valid length (no padding at all) -- the property bucketing relies on. `valid=100` is
+    chunk-aligned; `valid=70` is not: queries 50..69 have a chunk window reaching key 99, so only the
+    padding term keeps them off keys 70..99. The padding content is large garbage, and a negative
+    control runs the same bucket with an all-ones mask (chunk term only, padding visible): at the
+    non-aligned length it must be clearly worse than the real mask, proving the padding term reaches
+    the attention actually used (fused SDPA's `attn_mask`, by default)."""
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import CausalConditionalDecoderRef, TtCausalConditionalDecoder
+
+    torch.manual_seed(11)
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    mu, cond, spks, mask = _streaming_inputs(t_len, valid, seed=12)
+    x = torch.randn(1, t_len, 80) * 0.1
+    t = torch.rand(1)
+    with torch.no_grad():
+        want = dec(x[:, :valid], mask[:, :valid], mu[:, :valid], t, spks, cond[:, :valid], streaming=True)
+
+    tt_dec = TtCausalConditionalDecoder(device, dec)
+
+    def up(v):
+        return ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(m):
+        out = tt_dec(up(x), up(m), up(mu), t, up(spks.unsqueeze(1)), up(cond), t_len, 1, streaming=True)
+        return ttnn.to_torch(out).float()[:, :valid]
+
+    got = run(mask)
+    passed, pcc = comp_pcc(want, got, GATE_BF16)
+    err = (got - want).abs().max().item()
+    print(f"\n  streaming decoder bucket={t_len} valid={valid}: PCC {pcc}, max|diff| {err:.4g}")
+    assert passed, pcc
+
+    if valid % 50:
+        leaked = run(torch.ones_like(mask))
+        _, pcc_leak = comp_pcc(want, leaked, GATE_BF16)
+        err_leak = (leaked - want).abs().max().item()
+        print(f"  negative control (chunk term only): PCC {pcc_leak}, max|diff| {err_leak:.4g}")
+        assert err_leak > 5 * err, (err_leak, err)
+
+
+@needs_l1_small_trace
+def test_device_cfm_streaming_traced_reuse_refreshes_padding(device):
+    """The traced streaming solve at one bucket, reused across two DIFFERENT valid lengths (aligned
+    100, then non-aligned 110, both in the 128 bucket -- the second solve replays the first solve's
+    trace). Each is compared against the torch reference solved at its EXACT valid length. The padding
+    term must follow each solve's own mask: frozen at the first capture (valid=100), the second solve
+    would hide valid keys 100..109 from every query; missing entirely, queries 100..109 (chunk window
+    [0, 150)) would attend padded keys 110..127, which hold large garbage. Either way this is the case
+    that proves the padding term follows the per-solve mask on reuse. Also checks the eager streaming
+    path against the same reference."""
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import (
+        CausalConditionalCFMRef,
+        CausalConditionalDecoderRef,
+        TtCausalConditionalCFM,
+        TtCausalConditionalDecoder,
+    )
+
+    torch.manual_seed(21)
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    cfm = CausalConditionalCFMRef(dec)
+    tt_dec = TtCausalConditionalDecoder(device, dec)
+    tt_cfm = TtCausalConditionalCFM(device, tt_dec, cfm.rand_noise, cfm, trace_cache_capacity=1)
+    t_len, n_steps = 128, 4
+    try:
+        slots = []
+        for i, valid in enumerate((100, 110)):
+            mu, cond, spks, mask = _streaming_inputs(t_len, valid, seed=30 + i)
+            with torch.no_grad():
+                want = cfm.forward(
+                    mu[:, :valid], mask[:, :valid], n_steps, spks=spks, cond=cond[:, :valid], streaming=True
+                )
+            got = tt_cfm.forward(mu, mask, n_steps, spks, cond, use_trace=True, streaming=True)[:, :valid]
+            slots.append(tt_cfm._traces[(t_len, 80, True)])
+            passed, pcc = comp_pcc(want, got, GATE_BF16)
+            print(f"\n  traced streaming CFM bucket={t_len} valid={valid}: PCC {pcc}")
+            assert passed, (valid, pcc)
+            got_eager = tt_cfm.forward(mu, mask, n_steps, spks, cond, use_trace=False, streaming=True)[:, :valid]
+            passed, pcc = comp_pcc(want, got_eager, GATE_BF16)
+            print(f"  eager streaming CFM bucket={t_len} valid={valid}: PCC {pcc}")
+            assert passed, (valid, pcc)
+        assert slots[0] is slots[1], "the second valid length must REUSE the first capture"
+    finally:
+        tt_cfm.release_cfm_trace()
+
+
+def test_cfm_trace_cache_capacity_other_than_one_is_refused(expect_error):
+    """Only one resident CFM trace is allowed. A lazy multi-slot cache captures while other traces are
+    live, which `TT_METAL_TRACE_ALLOC_TRACKING=1` refused on 2026-09-25 (see `TtCausalConditionalCFM`'s
+    docstring), so capacity != 1 must fail loudly at construction -- via the argument or the env var --
+    rather than warn. Host-only: the check runs before anything touches a device. Single-slot recapture on
+    a key switch is covered on device by `test_device_cfm_trace_cache_across_utterances_and_replays`."""
+    import os
+    from unittest import mock
+
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import CausalConditionalCFMRef, TtCausalConditionalCFM
+
+    cfm_ref = CausalConditionalCFMRef.__new__(CausalConditionalCFMRef)
+    cfm_ref.t_scheduler, cfm_ref.inference_cfg_rate = "cosine", 0.7
+    noise = torch.zeros(1, 64, 80)
+    for capacity in (2, 0):
+        with expect_error(ValueError, "capacity must be 1"):
+            TtCausalConditionalCFM(None, None, noise, cfm_ref, trace_cache_capacity=capacity)
+    with mock.patch.dict(os.environ, {"COSYVOICE2_CFM_TRACE_CACHE_CAPACITY": "2"}):
+        with expect_error(ValueError, "capacity must be 1"):
+            TtCausalConditionalCFM(None, None, noise, cfm_ref)
+    assert TtCausalConditionalCFM(None, None, noise, cfm_ref)._trace_capacity == 1
