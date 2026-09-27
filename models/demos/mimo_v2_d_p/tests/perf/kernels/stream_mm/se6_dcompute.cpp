@@ -38,7 +38,10 @@ constexpr uint32_t hk = 8;
 constexpr uint32_t group_tiles = kt_d * mtg;
 constexpr uint32_t h_all_tiles = groups * group_tiles;
 constexpr uint32_t mt = groups * mtg;
-static_assert(pcd <= 8 && kt_d % kblk_d == 0 && kt_d % hk == 0 && ring >= nblk);
+// PCD > 8 output columns (small-I subgrids have few down cores): column passes of <= 8 (DST), each re-running the
+// row's K loop over the same h and resident weights
+constexpr uint32_t cpw = pcd < 8 ? pcd : 8;
+static_assert(pcd <= 16 && kt_d % kblk_d == 0 && kt_d % hk == 0 && ring >= nblk);
 
 uint32_t popped = 0;
 
@@ -79,7 +82,7 @@ FORCE_INLINE uint32_t wblock(uint32_t a) {
 
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_all_cb, in1_cb, out_cb);
-    matmul_block_init(h_all_cb, in1_cb, false, pcd, 1, hk);
+    matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
 #ifdef SE_DYN
     // Dynamic counts: CB 6 holds [n_act, num_v, subs of each active expert] (from the down core's data movement); the
     // in1 ring holds only the active experts, so an active expert's index is its place in the stream.
@@ -121,32 +124,39 @@ void kernel_main() {
         cb_reserve_back(out_cb, mt * pcd);
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
-            tile_regs_acquire();
-            uint32_t w = 0;
-            for (uint32_t kk = 0; kk < kt_d; ++kk) {
-                if (kk % kblk_d == 0) {
+            for (uint32_t c0 = 0; c0 < pcd; c0 += cpw) {
+                const uint32_t cw = pcd - c0 < cpw ? pcd - c0 : cpw;
+                const bool final_pass = c0 + cw == pcd;
+                if constexpr (pcd > cpw) {
+                    matmul_block_init(h_all_cb, in1_cb, false, cw, 1, hk);
+                }
+                tile_regs_acquire();
+                uint32_t w = 0;
+                for (uint32_t kk = 0; kk < kt_d; ++kk) {
+                    if (kk % kblk_d == 0) {
 #ifdef SE_DN_REG
-                    w = wblock_dyn(ld * nblk + kk / kblk_d, ph0 + kk / kblk_d);
+                        w = wblock_dyn(ld * nblk + kk / kblk_d, ph0 + kk / kblk_d);
 #else
-                    w = wblock(e * nblk + kk / kblk_d);
+                        w = wblock(e * nblk + kk / kblk_d);
 #endif
-                }
-                matmul_block(h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd, 0, false, pcd, 1, hk);
+                    }
+                    matmul_block(h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd + c0, 0, false, cw, 1, hk);
 #ifdef SE_EARLY_POP
-                // The expert's last row: each weight block goes as soon as it is used, so the next expert's blocks
-                // stream into the ring while this row still runs.
-                if (last_sub && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
-                    cb_pop_front(in1_cb, slot);
-                    ++popped;
-                }
+                    // The expert's last row (final column pass): each weight block goes as soon as it is used, so
+                    // the next expert's blocks stream into the ring while this row still runs.
+                    if (last_sub && final_pass && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
+                        cb_pop_front(in1_cb, slot);
+                        ++popped;
+                    }
 #endif
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < cw; ++i) {
+                    pack_tile<true>(i, out_cb, r * pcd + c0 + i);  // row-major [MT x PCD]
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < pcd; ++i) {
-                pack_tile<true>(i, out_cb, r * pcd + i);  // row-major [MT x PCD]
-            }
-            tile_regs_release();
         }
 #ifdef SE_SMALL_T
         if (xs) {
@@ -174,7 +184,7 @@ void kernel_main() {
                 cb_pop_front(x_cb, nblk_x * slot_x);
                 popped_x += nblk_x;
             }
-            matmul_block_init(h_all_cb, in1_cb, false, pcd, 1, hk);
+            matmul_block_init(h_all_cb, in1_cb, false, cpw, 1, hk);
         }
 #endif
         cb_pop_front(h_all_cb, h_all_tiles);

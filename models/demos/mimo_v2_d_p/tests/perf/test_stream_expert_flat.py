@@ -104,14 +104,29 @@ XNOC = int(os.environ.get("MIMO_FL_XNOC", "0"))
 # M 32 / 512 / 2048: 1 subgrid 24.4 / 85.5 / 309.4, 2 subgrids 22.0 / 63.5 / 224.6; TP2 34.5 / 115.5 / 438.0 ->
 # 39.0 / 112.0 / 396.9)
 _SG_ENV = os.environ.get("MIMO_FL_SG", "auto")
+_It_env = int(os.environ.get("MIMO_FL_I", "2048")) // 32
 NSG = (
     int(_SG_ENV)
     if _SG_ENV != "auto"
-    else (2 if DYN and int(os.environ.get("MIMO_FL_I", "2048")) <= 1024 and max(MS) >= 256 else 1)
+    else ((2 if _It_env <= 16 else 3) if DYN and _It_env <= 32 and max(MS) >= 256 else 1)
 )
+N_RD_SG = 1 << ((16 // max(1, NSG)).bit_length() - 1) if NSG > 1 else 16  # readers per subgrid (a power of 2)
 SG_RECTS = [
-    tuple(int(v) for v in r.split(":")) for r in os.environ.get("MIMO_FL_SG_RECTS", "2:5:0:3,8:9:0:7").split(",")
+    tuple(int(v) for v in r.split(":"))
+    for r in os.environ.get("MIMO_FL_SG_RECTS", {3: "2:5:0:3,2:5:4:7,8:9:0:7"}.get(NSG, "2:5:0:3,8:9:0:7")).split(",")
 ]
+
+
+def _gu_acc():
+    """Gate/up accumulation: MIMO_FL_GU_ACC, default fp32 DEST, but l1acc with 3 subgrids (TP2-like: NP 2 on 16-core
+    rectangles, where fp32's 4-tile DST would force 32-row sub-blocks); MIMO_FL_GU_FP32=0: bf16."""
+    if os.environ.get("MIMO_FL_GU_ACC"):
+        return os.environ["MIMO_FL_GU_ACC"]
+    if not int(os.environ.get("MIMO_FL_GU_FP32", "1")):
+        return "bf16"
+    return "l1acc" if NSG == 3 else "fp32"
+
+
 ACT = os.environ.get("MIMO_FL_ACT", "silu")  # gate/up activation (se3_compute.cpp SE_ACT)
 ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3, "gelu_tanh": 4, "gate_only": 0}
 W_STD = float(os.environ.get("MIMO_FL_WSTD", "0.02"))  # weight init std (larger: the clamping activations clamp)
@@ -176,7 +191,7 @@ def _gu_dst(np_, Ht, x_slots):
     """(DST tiles the gate/up sub-block may use, gate/up row passes?). fp32 DEST (half sync) holds 4 tiles; with row
     passes (MIMO_FL_GU_RP, auto: dynamic counts, NP <= 2, the x ring holds a whole sub-block's K-blocks) the
     sub-block keeps the 8-tile (bf16-sized) rows and gate/up runs its K loop once per 4 / (2 NP) row tiles."""
-    acc = os.environ.get("MIMO_FL_GU_ACC", "fp32" if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else "bf16")
+    acc = _gu_acc()
     if acc != "fp32" or os.environ.get("MIMO_FL_GU_DST", "half") == "full":
         return 8, False
     rp_env = os.environ.get("MIMO_FL_GU_RP", "auto")
@@ -209,6 +224,22 @@ def _layout(device, x2=False, xcol=0, nh=1):
     gu = [ttnn.CoreCoord(x, y) for x0, x1, y0, y1 in rects for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
     taken = {(c.x, c.y) for c in readers + gu}
     # relays just east / south of their rectangle (NOC1 multicasts run -x / -y)
+    if NSG > 2:  # subgrids: per rectangle, the free cells of the column just west of it nearest its middle row
+        assert XNOC == 0 and not xcol
+
+        def west(r_):
+            x0, x1, y0, y1 = r_
+            yc = (y0 + y1) / 2
+            ys = sorted(range(grid.y), key=lambda y: (abs(y - yc), y))
+            return next(ttnn.CoreCoord(x0 - 1, y) for y in ys if (x0 - 1, y) not in taken)
+
+        relays = []
+        for _ in range(1 + (nh if x2 else 0)):  # primaries, then each helper round
+            for r_ in rects:
+                relays.append(west(r_))
+                taken.add((relays[-1].x, relays[-1].y))
+        down = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
+        return grid, phys, readers, gu, rects, relays, down
     if xcol:  # all relays west of both rectangles (NOC0 multicasts run +x): each feeds both
         assert XNOC == 0
         relays = [ttnn.CoreCoord(1, y) for y in (4, 5, 3, 6, 2, 7, 1, 8) if (1, y) not in taken][:xcol]
@@ -256,7 +287,7 @@ def test_stream_expert_flat(device, m, wdtype):
                     H // 32,
                     w_tile,
                     X_SLOTS,
-                    16 // NSG,
+                    N_RD_SG,
                     min((x1 - x0 + 1) * (y1 - y0 + 1) for x0, x1, y0, y1 in SG_RECTS),
                 )
             )
@@ -268,7 +299,7 @@ def test_stream_expert_flat(device, m, wdtype):
     # 7168, test_dest_gain_probe.py) halves the DST half to 4 tiles
     # MIMO_FL_GU_ACC: fp32 (DEST), l1acc (bf16 DEST in passes of MIMO_FL_GU_L1ACC_GRP K-blocks, summed in L1 by the
     # packer: keeps the 8-tile DST half), bf16 (all of K in bf16 DEST: the ~1.27 norm gain). MIMO_FL_GU_FP32=0 = bf16.
-    GU_ACC = os.environ.get("MIMO_FL_GU_ACC", "fp32" if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else "bf16")
+    GU_ACC = _gu_acc()
     assert GU_ACC in ("fp32", "l1acc", "bf16"), GU_ACC
     GU_FP32 = GU_ACC == "fp32"
     L1ACC_GRP = int(os.environ.get("MIMO_FL_GU_L1ACC_GRP", "1"))
@@ -296,15 +327,32 @@ def test_stream_expert_flat(device, m, wdtype):
     NH = int(os.environ.get("MIMO_FL_XHELP_N", "2" if G > 1 else "1")) if XHELP else 1
     LAND_SLOTS = int(LAND_SLOTS_ENV) if LAND_SLOTS_ENV else (2 if NH > 1 else 3)  # (landing ring per helper: L1)
     grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL, NH)
-    if NSG > 1:  # subgrid k: rectangle k, the 8 readers west of it, primary relay k + its helpers, half the down cores
-        assert NSG == 2 and DYN and XHELP and not SMALL_T, "subgrids: dynamic counts, e2e with helper relays"
-        readers = [c for c in readers if c.x in (0, 1)] + [c for c in readers if c.x in (6, 7)]
-        assert len(readers) == 16, readers
+    if NSG > 1:  # subgrid k: rectangle k, its nearest readers, primary relay k + its helpers, a share of the down cores
+        assert len(rects) == NSG and DYN and XHELP and not SMALL_T, "subgrids: dynamic counts, e2e with helper relays"
         ctr = [((x0 + x1) / 2, (y0 + y1) / 2) for x0, x1, y0, y1 in rects]
         dist = lambda c, k: abs(c.x - ctr[k][0]) + abs(c.y - ctr[k][1])
-        order_d = sorted(down, key=lambda c: (dist(c, 0) - dist(c, 1), c.y, c.x))
-        half = len(order_d) // 2
-        down = order_d[:half] + order_d[half : 2 * half]  # (odd count: the last core idles)
+        if NSG == 2:  # (the measured 2-subgrid layout: west / east reader columns, down split by relative distance)
+            readers = [c for c in readers if c.x in (0, 1)] + [c for c in readers if c.x in (6, 7)]
+            order_d = sorted(down, key=lambda c: (dist(c, 0) - dist(c, 1), c.y, c.x))
+            half = len(order_d) // 2
+            down = order_d[:half] + order_d[half : 2 * half]  # (odd count: the last core idles)
+        else:
+            pool, by_sg = list(readers), [[] for _ in range(NSG)]
+            for _ in range(N_RD_SG):  # round robin, each subgrid its nearest free reader
+                for k_ in range(NSG):
+                    c_ = min(pool, key=lambda c: (dist(c, k_), c.y, c.x))
+                    by_sg[k_].append(c_)
+                    pool.remove(c_)
+            readers = [c for lst in by_sg for c in lst]
+            down = down + pool  # readers no subgrid uses do down work
+            nd_sg = len(down) // NSG
+            left_d, parts = list(down), [[] for _ in range(NSG)]
+            for _ in range(nd_sg):  # round robin, each subgrid its nearest free down core
+                for k_ in range(NSG):
+                    c_ = min(left_d, key=lambda c: (dist(c, k_), c.y, c.x))
+                    parts[k_].append(c_)
+                    left_d.remove(c_)
+            down = [c for lst in parts for c in lst]  # (the rest idle)
     ND = len(down)
     ND_SG = ND // NSG  # down cores per subgrid; down core d is subgrid d // ND_SG's local core d % ND_SG
     sg_dn = lambda d: d // ND_SG
@@ -328,14 +376,15 @@ def test_stream_expert_flat(device, m, wdtype):
     assert (It // NP) % n_rd_sg == 0 and R_ <= 4, (It, NP, n_rd_sg, R_)
     logger.info(f"gate/up split: {It} columns, NP {NP} x G {G} (MT {MT}, {MTG} per group), {R_ * n_rd} cores")
     ring_g = int(round(float(os.environ.get("MIMO_FL_GU_RING", "2")) * nk_gu))  # gate/up weight ring, in experts
-    n_rdn = D_CHAINS if RDOWN else 0  # readers that also compute down columns: one per down chain, as its tail
+    D_CH = min(D_CHAINS, n_rd_sg) if RDOWN else D_CHAINS  # down chains per subgrid (a reader tail each)
+    n_rdn = D_CH if RDOWN else 0  # readers that also compute down columns: one per down chain, as its tail
     # (per subgrid: each subgrid has D_CHAINS chains and computes all H columns for its own experts)
     pcd_r = (int(RDOWN_PCD_ENV) if RDOWN_PCD_ENV else 6 if (X2 or XCOL == 4) else 4) if RDOWN else 0
     rem_cols = Ht - n_rdn * pcd_r  # the down cores' columns; uneven when they do not divide: two widths
     base_p, extra = divmod(rem_cols, ND_SG)
     pcds = [base_p + (1 if dl(d) < extra else 0) for d in range(ND)]
     col0s = [sum(pcds[sg_dn(d) * ND_SG : d]) for d in range(ND)]
-    assert max(pcds) <= 8 and min(pcds) >= 1, pcds
+    assert max(pcds) <= 16 and min(pcds) >= 1, pcds  # (> 8: the down compute runs column passes of <= 8)
     kd_of = lambda p_: max(k for k in (8, 4, 2, 1) if k * p_ <= 16 and It % k == 0)
 
     def dgrp(p_):
@@ -766,7 +815,7 @@ def test_stream_expert_flat(device, m, wdtype):
     d_pred, d_succ, d_heads = {}, {}, []
     rdn = []  # (reader index, chain tail down index)
     for k_ in range(NSG):  # each subgrid's down cores in D_CHAINS chains, tails = its readers
-        for seg in _chains([(d, down[d]) for d in range(ND) if sg_dn(d) == k_], D_CHAINS, phys, DN_NOC):
+        for seg in _chains([(d, down[d]) for d in range(ND) if sg_dn(d) == k_], D_CH, phys, DN_NOC):
             d_heads.append(seg[0][0])
             if RDOWN:
                 tail = seg[-1][0]
@@ -894,15 +943,16 @@ def test_stream_expert_flat(device, m, wdtype):
     xr_rt, xm_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     hl_rt = [ttnn.RuntimeArgs() for _ in range(NH)]
     vstride = XCOL or ((1 + NH) if XHELP else 2 if X2 else 1)
-    rl_off = lambda idx: idx if XCOL else ((0 if idx < 2 else (idx - 2) // 2 + 1) if XHELP else idx // 2)
+    NR = len(rects)  # rectangles: primary relay k = relays[k], rectangle k's helper j = relays[NR + NR * j + k]
+    rl_off = lambda idx: idx if XCOL else ((0 if idx < NR else (idx - NR) // NR + 1) if XHELP else idx // 2)
     rl_sb = lambda idx: len([g for g in range(V * nsb) if g % vstride == rl_off(idx)])  # super-blocks relay idx sends
     for idx, rl in enumerate(relays):
-        k = idx % 2  # its rectangle
+        k = idx % NR  # its rectangle
         x0, x1, y0, y1 = rects[k]
         lo, hi = ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)
         xr_rt[rl.x][rl.y] = (
             [x_dev.buffer_address(), vstride, rl_off(idx)]
-            + ((dyn_args + sgx(idx % 2)) if dyn_args else [v_ for e in range(E) for v_ in (e * tok_pad, m)])
+            + ((dyn_args + sgx(idx % NR)) if dyn_args else [v_ for e in range(E) for v_ in (e * tok_pad, m)])
             if E2E
             else [x_dev.buffer_address(), x_region, 0]
         )
@@ -914,7 +964,7 @@ def test_stream_expert_flat(device, m, wdtype):
             (x1 - x0 + 1) * (y1 - y0 + 1),
             words.buffer_address(),
             len(rect_cores[k]),
-        ] + ([rl_sb(idx), XARR if idx < 2 else 3, vstride, idx // 2, 0, 0, 0, 0] if E2E else [])
+        ] + ([rl_sb(idx), XARR if idx < NR else 3, vstride, idx // 2, 0, 0, 0, 0] if E2E else [])
         if XCOL:  # both rectangles, every gate/up core's freed word
             (ax0, ax1, ay0, ay1), (bx0, bx1, by0, by1) = rects
             xm_l = [
@@ -933,31 +983,31 @@ def test_stream_expert_flat(device, m, wdtype):
                 pk(ttnn.CoreCoord(bx0, by0)),
                 pk(ttnn.CoreCoord(bx1, by1)),
             ]
-        if XHELP and idx < 2:  # the rectangle's one sender: all its super-blocks, the helper's via the landing ring
-            hp = relays[idx + 2]
+        if XHELP and idx < NR:  # the rectangle's one sender: all its super-blocks, the helper's via the landing ring
+            hp = relays[idx + NR]
             xm_l = (
                 xm_l[:6]
                 # RT 10: the row tiles this rectangle's cores read (GROUP_RECT: its group's), m0 | m1 << 8 (0: all)
                 + [V * nsb, XARR, 1, 0, (idx * MTG) | ((idx + 1) * MTG << 8) if GROUP_RECT else 0, 0, 0, 0]
                 + [pk(hp), base + LAND_OFF, LAND_SLOTS]
-                + [pk(relays[2 + 2 * j_ + idx]) for j_ in range(1, NH)]
+                + [pk(relays[NR + NR * j_ + idx]) for j_ in range(1, NH)]
             )
-        if XHELP and idx >= 2:
-            j_ = (idx - 2) // 2  # its ring follows the primary's rings of helpers 0..j - 1
+        if XHELP and idx >= NR:
+            j_ = (idx - NR) // NR  # its ring follows the primary's rings of helpers 0..j - 1
             sbb = MT * SBT * BF8_TILE
             hl_rt[j_][rl.x][rl.y] = (
                 [
-                    pk(relays[idx % 2]),
+                    pk(relays[idx % NR]),
                     base + LAND_OFF + j_ * LAND_SLOTS * sbb,
                     rl_sb(idx),
                     1 + NH,
                     j_ + 1,
                 ]
                 + dyn_args
-                + sgx(idx % 2)
+                + sgx(idx % NR)
             )
             continue
-        xm_rt[rl.x][rl.y] = xm_l + dyn_args + (sgx(idx % 2) if dyn_args else [])
+        xm_rt[rl.x][rl.y] = xm_l + dyn_args + (sgx(idx % NR) if dyn_args else [])
 
     dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
     FP = ttnn.KernelDescriptor.SourceType.FILE_PATH
@@ -1193,7 +1243,7 @@ def test_stream_expert_flat(device, m, wdtype):
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/se11_xmc.cpp",
                     source_type=FP,
-                    core_ranges=_crs(relays[:2]) if XHELP else rl_crs,
+                    core_ranges=_crs(relays[:NR]) if XHELP else rl_crs,
                     compile_time_args=[1, MT, BF8_TILE, X_SLOTS, XARR, WORD, KBLK, E, nsb],
                     runtime_args=xm_rt,
                     defines=[("SE_SBT", str(SBT))]
@@ -1209,7 +1259,7 @@ def test_stream_expert_flat(device, m, wdtype):
                     ttnn.KernelDescriptor(
                         kernel_source=f"{KDIR}/se13_xhelp.cpp",
                         source_type=FP,
-                        core_ranges=_crs(relays[2 + 2 * j_ : 4 + 2 * j_]),
+                        core_ranges=_crs(relays[NR + NR * j_ : NR + NR * (j_ + 1)]),
                         compile_time_args=[1, MT, BF8_TILE, LAND_SLOTS, (4, 7, 8, 10)[j_], 5, E, nsb],
                         runtime_args=hl_rt[j_],
                         defines=[("SE_SBT", str(SBT))] + dyn_def,

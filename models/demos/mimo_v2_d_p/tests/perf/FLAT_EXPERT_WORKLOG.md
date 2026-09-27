@@ -397,3 +397,22 @@ M (0.87x at 2048, 0.96x at 512): a bf16 probe (MT 2: 392 us) shows it is not the
 per subgrid, ~23.5 us overall). Needs 64 gate/up cores (32 per subgrid at NP 1): the second subgrid's reader-free
 region is 3 x 10 = 30 cells, so that means two multicast rectangles per subgrid or 4 subgrids of 16 (NP 2, 4
 readers each). Not done.
+- Generalized to NSG rectangles (relay indexing: primary k = relays[k], rectangle k's helper j = relays[NR + NR j + k];
+  generic placement for NSG >= 3: relays in the column west of each rectangle nearest its middle row, readers by
+  nearest-rectangle round robin, readers no subgrid uses become down cores; down cores with > 8 columns run column
+  passes of <= 8 in se6_dcompute (early pops only in the final pass)). The generic placement cost TP4 5-10% vs the
+  measured 2-subgrid one (63.5 -> 68.4 at 512), so NSG 2 keeps the column-based reader split / old relay slots.
+- TP2 options (us/expert M 32 / 512 / 2048, rag8 / spike8 / real8):
+  | TP2 7168x1024 | 32 | 512 | 2048 | rag8 | spike8 | real8 | norm |
+  |---|---|---|---|---|---|---|---|
+  | 1 subgrid fp32 | 34.5 | 115.5 | 438.0 | 78.7 | 109.1 | 88.2 | 1.030 |
+  | 2 subgrids fp32 (MT 1) | 39.0 | 112.0 | 396.9 | 80.9 | 111.7 | 89.3 | 1.030 |
+  | 2 subgrids l1acc (MT 2) | 39.1 | 130.1 | 477.9 | 97.2 | 124.8 | 107.4 | 1.045 |
+  | 3 subgrids fp32 (MT 1, 14 down x 15 cols) | 41.8 | 132.1 | 450.9 | 88.5 | 117.8 | 96.6 | 1.030 |
+  | 3 subgrids bf16 (probe) | 41.8 | 106.2 | 369.9 | 74.5 | 102.2 | 90.5 | 1.259 |
+  | **3 subgrids l1acc (auto)** | 42.1 | 108.3 | 373.2 | 81.1 | 104.1 | 90.5 | 1.045 |
+  | best existing | 48.3 | 107.9 | 346.2 | | | | |
+  Auto: I / 32 <= 16 -> 2 subgrids (fp32), <= 32 -> 3 subgrids (l1acc, rectangles 2:5:0:3, 2:5:4:7, 8:9:0:7).
+  TP2 is now 1.15x at 32, ~1.0x at 512, still 0.93x at 2048 (was 0.79x). Remaining limit: 16 gate/up cores per
+  subgrid at NP 2 (the grid's second reader-free region is 3 x 10, so 32-core rectangles for NP 1 do not fit twice).
+  Regression K2 / K3 (1 subgrid) unchanged: 61.9 / 130.0 / 452.5 and 50.5 / 126.9 / 421.4.
