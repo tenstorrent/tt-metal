@@ -146,7 +146,12 @@ def test_ledger_generator(fx):
     assert [t["id"] for t in generate(s, early=True)["tasks"]] == ids[:7]
     assert [i for i in ids if i.startswith("C.")] == [f"C.blk.{st.name}" for st in Reference().block_graph(0)]
     assert [i for i in ids if i.startswith("S.")] == [f"S.blk.{n:02d}" for n in range(1, 7)]
-    assert ids[-7:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2", "X.3"]
+    assert ids[-8:] == ["L.s256", "L.s512", "L.last", "K.1", "X.1", "X.2", "X.3", "O.1"]
+    o1 = next(t for t in out["tasks"] if t["id"] == "O.1")
+    assert o1["role"] == "optests" and o1["deps"] == ["X.3"] and o1["paths"] == ["ttnn/ttnn/bringup"]
+    rung = next(r for r in s.data["ladder"] if r["chunk"] == s.data["target"]["chunk"])  # the target-size chunk
+    assert f"BRINGUP_RUNG={rung['name']} " in o1["gate"]["cmd"] and "fork_capture" in o1["gate"]["cmd"]
+    assert o1["gate"]["metrics"]["fork_calls_uncovered"] == "== 0"
     t = {x["id"]: x for x in out["tasks"]}
     assert t["S.blk.03"]["deps"] == ["C.blk.attn_residual", "S.blk.02"]
     assert t["L.last"]["deps"] == ["L.s512", "G.s512"]

@@ -75,6 +75,7 @@ DEFAULT_POLICY = {
     "test": {"attempts": 3, "escalate": "stop"},
     "perf": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
     "assemble": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
+    "optests": {"attempts": 3, "escalate": "stop"},
 }
 ROLE_OF_STEP = {
     "reference": "reference",
