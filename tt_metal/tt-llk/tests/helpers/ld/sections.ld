@@ -53,15 +53,24 @@ SECTIONS
    * Rest of the sections are standard sections
    */
   PROVIDE (__executable_start = __firmware_start);
+  /* The harness code goes ahead of the kernel, so it cannot move it (zone helpers in fixed slots, then main). The
+     loader writes only .init and .text (ElfLoader.SECTIONS_TO_LOAD), so this stays in .init. */
   .init __firmware_start :
   {
     KEEP (*(SORT_NONE(.init)))
-  } > REGION_CODE
-  .text :
-  {
+    . = ALIGN(256);
+    *(.text.llk_zone.reserve)
+    . = ALIGN(128);
+    *(.text.llk_zone.record)
+    . = ALIGN(128);
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
+  } > REGION_CODE
+  .text :
+  {
+    /* run_kernel on a 2 KiB boundary (kernel_placement.h), then its out of line callees. */
+    *(.text.run_kernel)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
     *(.gnu.warning)
