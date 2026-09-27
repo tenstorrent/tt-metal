@@ -8,7 +8,8 @@ Real parameters, not assumed (see this round's research + tt/flow/encoder.py):
     upsample_scale=480 at sampling_rate=24000 -> 50 Hz mel; scripts' `token_len =
     prompt_feat.shape[1] // 2` confirms token rate is half that, 25 Hz).
   - streaming hop: 25 new tokens per chunk, first chunk = 25 + prompt padding
-    (BRINGUP_STATUS.md's streaming design note).
+    (BRINGUP_STATUS.md's streaming design note). SUPERSEDED 2026-09-25: the real hop grows
+    25 -> 50 -> 100 -> 100 ...; see `real_hop_schedule_lengths` and PART 3.
   - pre-lookahead: 3 tokens (`tt/flow/encoder.py`'s `PRE_LOOKAHEAD_LEN`).
   - chunking is over the WHOLE GROWING PREFIX (not a sliding window) -- so the flow
     encoder's geometry at chunk n is `prompt_len + n * hop` tokens, growing without bound
@@ -20,9 +21,10 @@ bucket-access trace derived from the real parameters above, so the hit/eviction 
 reported are the actual cache's real behavior against this access pattern, not a
 hand-wavy estimate.
 
-Run: /opt/venv/bin/python bucket_sizing_simulation.py   (no device, no PYTHONPATH needed
+Run: /home/user/tt-metal/python_env/bin/python bucket_sizing_simulation.py   (no device, no PYTHONPATH needed
      beyond making tt/geometry_cache.py importable -- see sys.path insert below)
 """
+
 import sys
 
 sys.path.insert(0, "/home/user/tt-metal")
@@ -73,6 +75,54 @@ def geometric_bucket(length: int, growth: float = 1.25, floor: int = 64) -> int:
     while b < length:
         b *= growth
     return int(round(b))
+
+
+# Real upstream streaming hop schedule (`cosyvoice/cli/model.py`, `CosyVoice2Model.__init__`/`tts`, re-read
+# 2026-09-25 from the fetched source): `token_hop_len` starts at 25, the FIRST chunk adds
+# `prompt_token_pad = ceil(prompt / hop) * hop - prompt` (so prompt + first hop is a multiple of hop), and after
+# every mid-stream chunk `token_hop_len = min(token_max_hop_len=100, token_hop_len * stream_scale_factor=2)`.
+# A mid-stream chunk needs `hop + pre_lookahead_len` tokens buffered and feeds the flow
+# `prompt + tokens[:offset + hop + 3]`, the last 3 being lookahead CONTEXT (not attention-visible) -- so its
+# attention-visible length is `prompt + offset + hop`, always a multiple of 25. The final `finalize=True` call
+# takes every remaining token: `prompt + total`, arbitrary (NOT chunk-aligned in general).
+#
+# The flat 25-tokens-per-chunk schedule PART 1/2 below use is superseded by this (kept for the record).
+#
+# Upstream quirk, recorded not fixed: `tts()` never resets `self.token_hop_len`, so on a long-lived model object
+# the SECOND and later streaming utterances start at hop 100 (and compute prompt_token_pad against 100).
+# `persist_hop` models that literally; the default (reset per utterance) is the evident intent.
+START_HOP, MAX_HOP, HOP_SCALE = 25, 100, 2
+
+
+def real_hop_schedule_lengths(
+    total_new_tokens: int, prompt_tokens: int = PROMPT_TOKENS, start_hop: int = START_HOP
+) -> tuple[list[int], int]:
+    """Attention-visible token-rate lengths of every flow call in one real streaming utterance, in order
+    (mid-stream chunks, then the finalize call), plus the hop the model is left at afterwards."""
+    hop = start_hop
+    pad = -(-prompt_tokens // hop) * hop - prompt_tokens
+    offset, lengths = 0, []
+    while True:
+        this_hop = hop + pad if offset == 0 else hop
+        if total_new_tokens - offset < this_hop + PRE_LOOKAHEAD:
+            break
+        lengths.append(prompt_tokens + offset + this_hop)
+        offset += this_hop
+        hop = min(MAX_HOP, hop * HOP_SCALE)
+    lengths.append(prompt_tokens + total_new_tokens)  # finalize=True: every remaining token
+    return lengths, hop
+
+
+def session_lengths(n_utterances: int, seconds: int, persist_hop: bool = False) -> list[list[int]]:
+    """Per-utterance flow-call lengths for `n_utterances` back-to-back utterances on one model object."""
+    out, hop = [], START_HOP
+    for _ in range(n_utterances):
+        lengths, end_hop = real_hop_schedule_lengths(
+            seconds * TOKEN_RATE_HZ, start_hop=hop if persist_hop else START_HOP
+        )
+        out.append(lengths)
+        hop = end_hop
+    return out
 
 
 def simulate(total_seconds: int, bucket_fn, label: str):
@@ -212,5 +262,26 @@ if __name__ == "__main__":
                 DEFAULT_THRESHOLD_MB,
                 mb_per_bucket,
                 f"{scheme_name}, {N_UTTERANCES}x 30s utterances, {est_name} ({mb_per_bucket:.2f} MB/bucket)",
+            )
+        find_breaking_point(buckets_by_utterance, DEFAULT_THRESHOLD_MB)
+
+    print("\n" + "=" * 78)
+    print("PART 3: the REAL growing hop schedule (25 -> 50 -> 100 ... + finalize), linear step=64")
+    print("=" * 78)
+    for persist, label in ((False, "hop reset per utterance (intended)"), (True, "hop persists (upstream literal)")):
+        session = session_lengths(N_UTTERANCES, 30, persist_hop=persist)
+        buckets_by_utterance = [[linear_bucket(l, 64) for l in lengths] for lengths in session]
+        print(f"\n--- {label}, {N_UTTERANCES}x 30s utterances ---")
+        for i, (lengths, buckets) in enumerate(zip(session, buckets_by_utterance)):
+            print(
+                f"utt {i}: {len(lengths)} flow calls, lengths {lengths}, buckets {buckets} "
+                f"({len(set(buckets))} distinct), finalize length chunk-aligned: {lengths[-1] % 25 == 0}"
+            )
+        for est_name, mb_per_bucket in MB_PER_BUCKET_ESTIMATES.items():
+            simulate_cache(
+                buckets_by_utterance,
+                DEFAULT_THRESHOLD_MB,
+                mb_per_bucket,
+                f"real schedule, {label}, {est_name} ({mb_per_bucket:.2f} MB/bucket)",
             )
         find_breaking_point(buckets_by_utterance, DEFAULT_THRESHOLD_MB)
