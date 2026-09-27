@@ -1,0 +1,9 @@
+test_drift_rejected (__main__.ServerConfigurationTests) ... ok
+test_effective_configuration_route_enabled_for_both_profiles (__main__.ServerConfigurationTests) ... ok
+test_profiles_preserve_context_and_pin_revisions (__main__.ServerConfigurationTests) ... ok
+test_wrong_trace_rejected (__main__.ServerConfigurationTests) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.004s
+
+OK

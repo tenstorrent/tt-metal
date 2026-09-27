@@ -73,7 +73,7 @@ def stop_owned():
 
 
 def get_json(url):
-    with urlopen(url, timeout=10) as response:
+    with urlopen(url, timeout=30) as response:
         return json.load(response)
 
 
@@ -144,6 +144,7 @@ def main():
                     "TT_METAL_WATCHER",
                     "TT_METAL_LOGS_PATH",
                     "VLLM_CACHE_ROOT",
+                    "VLLM_SERVER_DEV_MODE",
                 )
             },
         }
@@ -188,7 +189,23 @@ def main():
         evidence,
         {"observed_configuration": observed, "raw_server_info": info, "phase_observer": actual, "launch": state},
     )
+    # Inspect the wheel using the same interpreter as the actual launch; the
+    # nested vLLM checkout is not the imported core and cannot supply its SHA.
+    core_probe = """import ast, hashlib, importlib.metadata, importlib.util, json
+from pathlib import Path
+root = Path(importlib.util.find_spec('vllm').origin).parent
+version_tree = ast.parse((root / '_version.py').read_text())
+commit = next((ast.literal_eval(node.value) for node in version_tree.body
+ if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'commit_id'
+ for target in node.targets)), None)
+print(json.dumps({'version': importlib.metadata.version('vllm'), 'module_path': str(root),
+ 'commit_id': commit,
+ 'source_sha256': {name: hashlib.sha256((root/name).read_bytes()).hexdigest()
+ for name in ('entrypoints/openai/api_server.py', 'benchmarks/serve.py')}}))
+"""
+    core = json.loads(subprocess.check_output([state["command"][0], "-c", core_probe], text=True))
     identity = {
+        "installed_core": core,
         "model": MODEL,
         "implementation": str(MODEL_DIR.relative_to(REPO)),
         "generator_module": actual["generator_module"],
@@ -200,7 +217,10 @@ def main():
         "configured_layer_count": 30,
         "source_commits": {
             "tt-metal": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
-            "vllm": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO / "vllm", text=True).strip(),
+            "tt-plugin-checkout": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO / "vllm/plugins/vllm-tt-plugin", text=True
+            ).strip(),
+            "vllm-core": core["commit_id"],
         },
         "hardware": "P300x2; four Blackhole ASICs; TP4/DP1; mesh1x4",
         "server_command": state["command"],

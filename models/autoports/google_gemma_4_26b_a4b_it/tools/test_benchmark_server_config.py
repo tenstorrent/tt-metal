@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Direct host tests for profile planning and observed configuration rejection."""
 
+import ast
 import copy
 import json
+import types
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from benchmark_server_config import MODEL, REVISION, profile_plan, validate_observed_config
 
@@ -40,6 +44,53 @@ class ServerConfigurationTests(unittest.TestCase):
                 self.assertEqual(args[args.index(name) + 1], value)
             self.assertIn("--no-enable-prefix-caching", args)
             self.assertEqual(validate_observed_config(observed(slots), slots)["max_num_seqs"], slots)
+
+    def test_effective_configuration_route_enabled_for_both_profiles(self):
+        installed = Path("/home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/vllm")
+        source = installed / "entrypoints/openai/api_server.py"
+        tree = ast.parse(source.read_text())
+        gate = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "envs.VLLM_SERVER_DEV_MODE"
+        )
+        registration = installed / "entrypoints/serve/__init__.py"
+        dev_tree = ast.parse(registration.read_text())
+        function = next(
+            node
+            for node in dev_tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "register_vllm_dev_api_routers"
+        )
+        package = "vllm.entrypoints.serve"
+        names = ("cache", "rlhf", "rpc", "server_info", "sleep")
+        modules = {}
+        routes = []
+        for name in names:
+            stub = types.ModuleType(f"{package}.dev.{name}.api_router")
+            stub.attach_router = lambda app, name=name: routes.append(name)
+            modules[stub.__name__] = stub
+        namespace = {
+            "__package__": package,
+            "FastAPI": object,
+            "logger": types.SimpleNamespace(warning=lambda *args: None),
+        }
+        exec(compile(ast.Module(body=[function], type_ignores=[]), str(registration), "exec"), namespace)
+        serve = types.ModuleType(package)
+        serve.register_vllm_dev_api_routers = namespace[function.name]
+        modules[package] = serve
+        for enabled in (False, True):
+            routes.clear()
+            with patch.dict("sys.modules", modules):
+                exec(
+                    compile(ast.Module(body=[gate], type_ignores=[]), str(source), "exec"),
+                    {"envs": types.SimpleNamespace(VLLM_SERVER_DEV_MODE=enabled), "app": object()},
+                )
+            self.assertEqual("server_info" in routes, enabled)
+        for slots in (1, 32):
+            plan = profile_plan(slots)
+            self.assertEqual(plan["environment_overrides"].get("VLLM_SERVER_DEV_MODE"), "1")
+            args = plan["command"]
+            self.assertEqual(args[args.index("--host") + 1], "127.0.0.1")
 
     def test_drift_rejected(self):
         cases = [
