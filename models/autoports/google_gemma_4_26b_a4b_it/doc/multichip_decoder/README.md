@@ -7,7 +7,8 @@ advertised context remains262144 tokens. The baseline is the unchanged
 `OptimizedDecoder` (SHA256 `5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898`,
 baseline commit `a9259624f2`). No full-model or vLLM work is included.
 
-Current acceptance status: final checks and independent review are in progress.
+Acceptance: all final gates pass and [independent stage review](stage_review_final.md)
+returns **clean-pass**. Local stage checkpoint: `ab2892308b8960b8652546bbaf070ad8b120996d`; never pushed.
 The runtime used by the final-policy artifacts is
 `a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255`.
 
@@ -116,7 +117,8 @@ Per-kind `profile_final_sliding/` and `profile_final_full/` contain whole_layer.
 window CSV, capture integrity, tt-perf-report human tables (`*_table.txt.gz`),
 report CSV (`*_perf_report.csv.gz`), commands and SHA256 provenance. Native
 captures remain local; compact evidence is committed. Generic tool op subtotals
-omit gaps and are not roofline denominators. Profiler overhead can inflate
+omit gaps and are not roofline denominators. Final tables use explicit phase
+end signposts and exact native row counts (final_signpost_filter_check.json). Profiler overhead can inflate
 prefill elapsed device windows; ordinary warmed host timings are separately
 reported above, never substituted into device fields.
 
@@ -164,4 +166,4 @@ serial. Full-model generation quality and allocation order belong to the next
 stage; this stage validates the decoder stack baseline only.
 
 The sliding prefill CSV is committed as `profile_final_sliding/prefill_perf_report.csv.xz`
-to meet the repository500KiB file limit; its byte-identical raw CSV and gzip copy remain local.
+as a compact lossless copy; its byte-identical raw CSV and gzip copy remain local.

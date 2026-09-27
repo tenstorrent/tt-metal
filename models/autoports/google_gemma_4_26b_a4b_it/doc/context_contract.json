@@ -168,7 +168,7 @@
     "native_profile_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
   },
   "multichip_decoder": {
-    "status": "final_policy_validated_independent_review_pending",
+    "status": "validated_clean_pass",
     "target_mesh": [
       1,
       4
@@ -269,6 +269,7 @@
       "scope": "Selected hybrid policy's TP-decode base for additive accounting; not actual TP-only prefill memory. Excludes EP-prefill expert weights and additional shared decode weights."
     },
     "candidate_memory_evidence_status": "Historical pre-final-policy candidate. Candidate weight/peak fields and per-layer reservations are preserved as measured/planned at that time; see memory_capacity_plan_before_final_policy.json.",
-    "supported_context": 262144
+    "supported_context": 262144,
+    "review": "multichip_decoder/stage_review_final.md"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "status": "all required runtime checks pass; independent review pending",
+  "status": "all required runtime checks pass; independent clean-pass",
   "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
   "results": {
     "sliding_final_batch32": {
@@ -74,5 +74,6 @@
       "passed": true,
       "evidence": "stack_final_policy.json"
     }
-  }
+  },
+  "review": "stage_review_final.md"
 }
