@@ -95,8 +95,11 @@ set(TTNNCPP_SRCS
     # Keep these two at the end: TTNNCPP_SRCS order drives the unity-build batching,
     # and inserting higher up reshuffles the blobs, which collides same-named
     # anonymous-namespace helpers in unrelated files (e.g. the dit_fused factories).
-    cpp/ttnn/kernel_lib/host/mcast_host.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_host.cpp
     cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_descriptor.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_spec.cpp
 )
 
 ####################################################################################################
