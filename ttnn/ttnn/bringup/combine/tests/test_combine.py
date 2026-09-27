@@ -4,7 +4,8 @@
 """ttnn.bringup.combine against its torch semantics (reference.py), one random-input case per captured call
 (cases.py). Pure data movement with init_zeros: the whole output [1, 1, S, K, H] is compared exactly, the routed
 (token, slot) pairs against their buffer rows and every other pair against 0. The input buffer is random everywhere,
-padding rows included, so a read from a wrong row shows."""
+padding rows included, so a read from a wrong row shows. A BFLOAT8_B buffer is compared against its own rounded
+values (read back from the device)."""
 
 import importlib.util
 from pathlib import Path
@@ -85,6 +86,12 @@ def test_combine(mesh_device, device_params, case):
         regions.append(reg.reshape(1, E))
         routed.append((t, k, row))
     tt_buf = _to_mesh(mesh_device, buf, c["buffer"])
+    if c["buffer"]["dtype"] != "BFLOAT16":
+        # A block-float buffer (BFLOAT8_B): the device holds the rounded values, and combine unpacks them to bf16
+        # losslessly (a bfp8 mantissa fits bf16), so the exact reference is the buffer as the device stores it.
+        buf = torch.stack([ttnn.to_torch(t).reshape(1, N, H) for t in ttnn.get_device_tensors(tt_buf)]).to(
+            torch.bfloat16
+        )
     tt_meta = _to_mesh(mesh_device, torch.stack(metas), c["metadata"])
     tt_cnt = _to_mesh(mesh_device, torch.cat(counts).to(torch.int32), c["counts"])
     tt_reg = _to_mesh(mesh_device, torch.cat(regions).to(torch.int32), c["regions"])

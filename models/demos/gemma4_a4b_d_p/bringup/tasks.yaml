@@ -5,13 +5,11 @@ target:
   dtype: bf16
 tasks:
 - id: R.1
-  title: Checkpoint has every tensor the spec expects; intake approved; canonical
-    prompt built
+  title: Checkpoint has every tensor the spec expects; intake approved; canonical prompt built
   step: intake
   deps: []
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m
-      models.demos.common.bringup.reference.prompt
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
     metrics:
       intake_approved: == 1
       prompt_hash_ok: == 1
@@ -43,8 +41,7 @@ tasks:
   deps:
   - R.2
   gate:
-    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096
-      --chunk 2048
+    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
     metrics:
       pcc_hidden: '>= 0.99999'
       pcc_state_min: '>= 0.99999'
@@ -96,8 +93,7 @@ tasks:
       all_gather_maxabs: == 0
   device: true
 - id: PL.0
-  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the
-    block graphs'
+  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs'
   step: ledger
   deps:
   - R.3
@@ -109,8 +105,7 @@ tasks:
   paths:
   - models/demos/gemma4_a4b_d_p/bringup/tasks.yaml
 - id: PL.1
-  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger
-    valid, approved'
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
   step: plan
   deps:
   - PL.0
@@ -1922,8 +1917,7 @@ tasks:
   device: true
   paths: *id003
 - id: K.1
-  title: Serving contract through the prefill engine API (layout, table, acks, engine
-    input, read-back)
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
   step: contract
   deps:
   - L.s4096
@@ -1938,8 +1932,7 @@ tasks:
   - models/demos/gemma4_a4b_d_p/tt
   - models/demos/common/prefill/adapter.py
 - id: P.1
-  title: Assemble the all-device model (hidden state on the device; no host work per
-    step)
+  title: Assemble the all-device model (hidden state on the device; no host work per step)
   step: perf
   role: assemble
   deps:
@@ -1947,19 +1940,16 @@ tasks:
   device: true
   paths: *id003
   brief:
-    details: 'tt/model.py (TtGemma4Model, written for K.1) already keeps the hidden
-      state on the device and builds RoPE once at load. Make the ladder/profile `device_model`
-      hook in bringup/hooks.py an adapter over it (new_state, embed, from_host, to_host,
-      layer, final_norm, logits, free, sync) instead of HybridDeviceModel, so both
-      paths share one model. Each block''s forward goes through run_block(block_graph,
-      ...) with the device modules, so the profiler sees one section per step. Remove
-      the per-chunk host uploads: RoPE tables and the global layers'' page-table slices
-      come from device tensors built once at load. Keep HybridDeviceModel behind BRINGUP_HYBRID=1.
-      Only the LM head may stay on the host (ladder logits only).'
+    details: 'tt/model.py (TtGemma4Model, written for K.1) already keeps the hidden state on the device and builds RoPE once
+      at load. Make the ladder/profile `device_model` hook in bringup/hooks.py an adapter over it (new_state, embed, from_host,
+      to_host, layer, final_norm, logits, free, sync) instead of HybridDeviceModel, so both paths share one model. Each block''s
+      forward goes through run_block(block_graph, ...) with the device modules, so the profiler sees one section per step.
+      Remove the per-chunk host uploads: RoPE tables and the global layers'' page-table slices come from device tensors built
+      once at load. Keep HybridDeviceModel behind BRINGUP_HYBRID=1. Only the LM head may stay on the host (ladder logits only).'
   gate:
-    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py &&
+      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
@@ -1970,14 +1960,13 @@ tasks:
       chunk_wall_ms: < 5000
       device_ms_total: '> 0'
 - id: X.1
-  title: Warm per-section, per-chip profile of the all-device model (last chunk on
-    the golden prefix)
+  title: Warm per-section, per-chip profile of the all-device model (last chunk on the golden prefix)
   step: perf
   deps:
   - P.1
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
@@ -1995,8 +1984,7 @@ tasks:
   paths:
   - models/demos/gemma4_a4b_d_p/bringup/opportunities.md
 - id: P.2
-  title: SDPA config A (HiFi2, fp32 dest acc off -> streaming kernel, approx exp)
-    for sliding and global attention
+  title: SDPA config A (HiFi2, fp32 dest acc off -> streaming kernel, approx exp) for sliding and global attention
   step: perf
   role: perf
   deps:
@@ -2004,20 +1992,17 @@ tasks:
   device: true
   paths: *id003
   brief:
-    details: 'Baseline (X.1): 742.8 ms for the last 5120-token chunk on the 51200-token
-      golden prefix; attention 381 ms (51%). Apply the SDPA settings that took ERNIE''s
-      50k->55k SDPA from 1328 to 203 ms (commit e35159e2651, models/demos/ernie45_d_p/tt/attention.py:
-      sdpa_settings): compute kernel config math_fidelity=HiFi2, fp32_dest_acc_en=False
-      (fp32 dest acc disables SDPA''s streaming kernel on Blackhole, sdpa_program_factory.cpp:75),
-      packer_l1_acc=False, math_approx_mode=False; SDPAProgramConfig exp_approx_mode=True,
-      q_chunk_size=256, k_chunk_size=512, full compute grid. Apply it to both the
-      sliding (head_dim 256) and the global (head_dim 512) SDPA; if a chunk size does
-      not fit L1 for head_dim 512, use the largest that does and say so. Keep the
-      bring-up config selectable (env GEMMA4_SDPA_CFG=base) and record the active
-      preset in the model''s perf_settings(). Leave the other matmuls as they are.'
+    details: 'Baseline (X.1): 742.8 ms for the last 5120-token chunk on the 51200-token golden prefix; attention 381 ms (51%).
+      Apply the SDPA settings that took ERNIE''s 50k->55k SDPA from 1328 to 203 ms (commit e35159e2651, models/demos/ernie45_d_p/tt/attention.py:
+      sdpa_settings): compute kernel config math_fidelity=HiFi2, fp32_dest_acc_en=False (fp32 dest acc disables SDPA''s streaming
+      kernel on Blackhole, sdpa_program_factory.cpp:75), packer_l1_acc=False, math_approx_mode=False; SDPAProgramConfig exp_approx_mode=True,
+      q_chunk_size=256, k_chunk_size=512, full compute grid. Apply it to both the sliding (head_dim 256) and the global (head_dim
+      512) SDPA; if a chunk size does not fit L1 for head_dim 512, use the largest that does and say so. Keep the bring-up
+      config selectable (env GEMMA4_SDPA_CFG=base) and record the active preset in the model''s perf_settings(). Leave the
+      other matmuls as they are.'
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_chunk_out: '>= 0.97'
       host_transfers_per_layer: == 0
@@ -2025,8 +2010,7 @@ tasks:
       chunk_wall_ms: < 620
       device_ms_total: '> 0'
 - id: P.3
-  title: Profile sub-sections inside attention (qkv, head norms, rope, kv write, sdpa,
-    o_proj)
+  title: Profile sub-sections inside attention (qkv, head norms, rope, kv write, sdpa, o_proj)
   step: perf
   role: perf
   deps:
@@ -2034,17 +2018,15 @@ tasks:
   device: true
   paths: *id003
   brief:
-    details: After P.2 attention is 248 ms of the 609 ms chunk (last 5120 tokens on
-      the 51200 golden prefix), but the profile shows it as one section, so SDPA cannot
-      be told apart from the projections. In tt/attention.py (sliding and global),
-      call models.demos.common.bringup.testing.profiler.signpost(name) before each
-      sub-step, with names attention.qkv, attention.head_norm, attention.rope, attention.kv_write,
-      attention.sdpa, attention.o_proj (plus attention.ccl if the output all-reduce
-      is separate). signpost is a no-op unless the profiler is on, so timing and serving
-      are unchanged. Change nothing else; the numbers must stay as P.2's.
+    details: After P.2 attention is 248 ms of the 609 ms chunk (last 5120 tokens on the 51200 golden prefix), but the profile
+      shows it as one section, so SDPA cannot be told apart from the projections. In tt/attention.py (sliding and global),
+      call models.demos.common.bringup.testing.profiler.signpost(name) before each sub-step, with names attention.qkv, attention.head_norm,
+      attention.rope, attention.kv_write, attention.sdpa, attention.o_proj (plus attention.ccl if the output all-reduce is
+      separate). signpost is a no-op unless the profiler is on, so timing and serving are unchanged. Change nothing else;
+      the numbers must stay as P.2's.
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_chunk_out: '>= 0.97'
       host_transfers_per_layer: == 0
@@ -2053,17 +2035,15 @@ tasks:
       device_ms_attention_o_proj: '> 0'
       chunk_wall_ms: < 640
 - id: X.3
-  title: 'Final: full 56k accuracy and warm full-prefill time (no readback) on the
-    tuned model'
+  title: 'Final: full 56k accuracy and warm full-prefill time (no readback) on the tuned model'
   step: perf
   deps:
   - P.3
   device: true
   gate:
-    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && BRINGUP_FULL_PREFILL=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
-      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile
-      --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py &&
+      BRINGUP_FULL_PREFILL=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
@@ -2082,3 +2062,21 @@ tasks:
     metrics:
       pos_chunk: '>= 1'
       pos_ms_204800: '> 0'
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/gemma4_a4b_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/gemma4_a4b_d_p/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true
