@@ -218,11 +218,12 @@ class Gemma4Model:
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens)
-        for layer, cache, index in zip(self.layers, kv_cache, self.layer_indices):
+        for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
+            layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
             hidden = layer.prefill_forward(
                 hidden,
                 rope_mats=self.rope_prefill[self.config.layer_types[index]],
-                page_table=page_table,
+                page_table=layer_table,
                 kv_cache=cache,
                 user_id=user_id,
             )
@@ -237,7 +238,8 @@ class Gemma4Model:
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens[..., :batch])
         active = tuple(range(batch)) if active_slots is None else tuple(active_slots)
-        for layer, cache, index in zip(self.layers, kv_cache, self.layer_indices):
+        for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
+            layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
             rope = self.rope_decode[self.config.layer_types[index]]
             if len(active) == batch:
                 hidden = layer.decode_forward(
@@ -245,7 +247,7 @@ class Gemma4Model:
                     rope_mats=rope,
                     current_pos=current_pos,
                     cache_pos=cache_pos,
-                    page_table=page_table,
+                    page_table=layer_table,
                     kv_cache=cache,
                 )
             else:
@@ -258,7 +260,7 @@ class Gemma4Model:
                                 rope_mats=rope,
                                 current_pos=current_pos[:, slot : slot + 1],
                                 cache_pos=cache_pos[slot : slot + 1],
-                                page_table=page_table[slot : slot + 1, :],
+                                page_table=layer_table[slot : slot + 1, :],
                                 kv_cache=cache,
                             )
                         )

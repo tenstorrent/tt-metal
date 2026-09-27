@@ -1,0 +1,42 @@
+{
+  "control": "doc/datatype_sweep/selected/qualitative_tt.json",
+  "control_output_tokens": 128,
+  "serving_max_output_tokens": 256,
+  "prompts": [
+    {
+      "id": "shared_0",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_1",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_2",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_3",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_4",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    },
+    {
+      "id": "shared_5",
+      "greedy_matches_selected_control_prefix": true,
+      "rendered_prompt_matches": true
+    }
+  ],
+  "final_serving_sha256": "508928954b84fb5e82a9a6152dfccab8fc34d57f6498a1ce1100d9ab1c46b904",
+  "extended_256_token_greedy_matches": {
+    "shared_2": true,
+    "shared_3": true
+  }
+}

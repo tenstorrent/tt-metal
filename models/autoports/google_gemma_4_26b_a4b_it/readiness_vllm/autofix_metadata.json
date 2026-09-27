@@ -1,0 +1,46 @@
+[
+  {
+    "argv": [
+      "/workspace/tt-metal/python_env/bin/python",
+      "-B",
+      "-c",
+      "import importlib.util as u, importlib.metadata as m, json, sys\nout={\"python\":sys.executable,\"modules\":{},\"entry_points\":{}}\nfor module,distribution in [(\"openai\",\"openai\"),(\"uvloop\",\"uvloop\"),(\"vllm\",\"vllm\"),(\"vllm_tt_plugin\",\"vllm-tt-plugin\")]:\n s=u.find_spec(module)\n try: version=m.version(distribution)\n except m.PackageNotFoundError: version=None\n out[\"modules\"][module]={\"found\":s is not None,\"origin\":None if s is None else s.origin,\"distribution_version\":version}\nfor group in [\"vllm.general_plugins\",\"vllm.platform_plugins\"]:\n out[\"entry_points\"][group]=[(p.name,p.value) for p in m.entry_points(group=group)]\nprint(json.dumps(out,indent=2))\n"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"python\": \"/workspace/tt-metal/python_env/bin/python\",\n  \"modules\": {\n    \"openai\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"uvloop\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm\": {\n      \"found\": true,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm_tt_plugin\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    }\n  },\n  \"entry_points\": {\n    \"vllm.general_plugins\": [],\n    \"vllm.platform_plugins\": []\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "/opt/venv/bin/python",
+      "-B",
+      "-c",
+      "import importlib.util as u, importlib.metadata as m, json, sys\nout={\"python\":sys.executable,\"modules\":{},\"entry_points\":{}}\nfor module,distribution in [(\"openai\",\"openai\"),(\"uvloop\",\"uvloop\"),(\"vllm\",\"vllm\"),(\"vllm_tt_plugin\",\"vllm-tt-plugin\")]:\n s=u.find_spec(module)\n try: version=m.version(distribution)\n except m.PackageNotFoundError: version=None\n out[\"modules\"][module]={\"found\":s is not None,\"origin\":None if s is None else s.origin,\"distribution_version\":version}\nfor group in [\"vllm.general_plugins\",\"vllm.platform_plugins\"]:\n out[\"entry_points\"][group]=[(p.name,p.value) for p in m.entry_points(group=group)]\nprint(json.dumps(out,indent=2))\n"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"python\": \"/opt/venv/bin/python\",\n  \"modules\": {\n    \"openai\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"uvloop\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm\": {\n      \"found\": true,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm_tt_plugin\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    }\n  },\n  \"entry_points\": {\n    \"vllm.general_plugins\": [],\n    \"vllm.platform_plugins\": []\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "/usr/bin/python3",
+      "-B",
+      "-c",
+      "import importlib.util as u, importlib.metadata as m, json, sys\nout={\"python\":sys.executable,\"modules\":{},\"entry_points\":{}}\nfor module,distribution in [(\"openai\",\"openai\"),(\"uvloop\",\"uvloop\"),(\"vllm\",\"vllm\"),(\"vllm_tt_plugin\",\"vllm-tt-plugin\")]:\n s=u.find_spec(module)\n try: version=m.version(distribution)\n except m.PackageNotFoundError: version=None\n out[\"modules\"][module]={\"found\":s is not None,\"origin\":None if s is None else s.origin,\"distribution_version\":version}\nfor group in [\"vllm.general_plugins\",\"vllm.platform_plugins\"]:\n out[\"entry_points\"][group]=[(p.name,p.value) for p in m.entry_points(group=group)]\nprint(json.dumps(out,indent=2))\n"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"python\": \"/usr/bin/python3\",\n  \"modules\": {\n    \"openai\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"uvloop\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm\": {\n      \"found\": true,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm_tt_plugin\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    }\n  },\n  \"entry_points\": {\n    \"vllm.general_plugins\": [],\n    \"vllm.platform_plugins\": []\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/bin/python3.10",
+      "-B",
+      "-c",
+      "import importlib.util as u, importlib.metadata as m, json, sys\nout={\"python\":sys.executable,\"modules\":{},\"entry_points\":{}}\nfor module,distribution in [(\"openai\",\"openai\"),(\"uvloop\",\"uvloop\"),(\"vllm\",\"vllm\"),(\"vllm_tt_plugin\",\"vllm-tt-plugin\")]:\n s=u.find_spec(module)\n try: version=m.version(distribution)\n except m.PackageNotFoundError: version=None\n out[\"modules\"][module]={\"found\":s is not None,\"origin\":None if s is None else s.origin,\"distribution_version\":version}\nfor group in [\"vllm.general_plugins\",\"vllm.platform_plugins\"]:\n out[\"entry_points\"][group]=[(p.name,p.value) for p in m.entry_points(group=group)]\nprint(json.dumps(out,indent=2))\n"
+    ],
+    "returncode": 0,
+    "stdout": "{\n  \"python\": \"/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/bin/python3.10\",\n  \"modules\": {\n    \"openai\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"uvloop\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm\": {\n      \"found\": true,\n      \"origin\": null,\n      \"distribution_version\": null\n    },\n    \"vllm_tt_plugin\": {\n      \"found\": false,\n      \"origin\": null,\n      \"distribution_version\": null\n    }\n  },\n  \"entry_points\": {\n    \"vllm.general_plugins\": [],\n    \"vllm.platform_plugins\": []\n  }\n}\n",
+    "stderr": ""
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "args": [
+    "/home/container_app_user/tt-metal/python_env/bin/python",
+    "-m",
+    "readiness_check.run_vllm_server",
+    "--stages",
+    "qualitative,benchmark,sampling",
+    "--server-url",
+    "http://localhost:8000",
+    "--model-dir",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it",
+    "--hf-model",
+    "google/gemma-4-26B-A4B-it",
+    "--max-num-seqs",
+    "32",
+    "--max-model-len",
+    "262144",
+    "--sampling-profile",
+    "full",
+    "--benchmark-prompt-len",
+    "4096",
+    "--benchmark-output-len",
+    "128",
+    "--benchmark-num-requests",
+    "1",
+    "--benchmark-concurrency",
+    "1"
+  ],
+  "server_command": "full_server_command.json",
+  "log": "readiness_vllm/final_checks_runner.log",
+  "secondary_ci_serving_profile": "default enabled:100 input,100 output,32 prompts,no explicit max-concurrency"
+}
