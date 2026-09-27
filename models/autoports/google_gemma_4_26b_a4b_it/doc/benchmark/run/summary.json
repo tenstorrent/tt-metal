@@ -4,7 +4,7 @@
   "elapsed_seconds": null,
   "accuracy": {},
   "performance": {},
-  "failure": "Required upstream lm-evaluation-harness is unavailable; repository instructions prohibit dependency installation. No supplied live Stage 10 server. No phase collector prepared or validated.",
+  "failure": "Upstream lm-evaluation-harness is unavailable in both provisioned environments; AGENTS.md prohibits dependency installation and no exception or alternate client was supplied. Live collector/control integration and all Stage 11 measurements remain incomplete.",
   "setup_inventory": "setup_inventory.json",
   "offline_preparation": {
     "native_tokenizer": "tokenizer_preflight.json",
@@ -30,5 +30,6 @@
       "exit_code": 0,
       "log": "context_check_continued.log"
     }
-  }
+  },
+  "blocked_audit": "blocked_audit.json"
 }

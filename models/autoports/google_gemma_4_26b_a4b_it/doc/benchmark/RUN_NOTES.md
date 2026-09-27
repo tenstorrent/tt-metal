@@ -87,3 +87,18 @@ Published references are retained without comparing absent local scores.
 Continued checks: {"phase_reducer_tests": {"exit_code": 0, "log": "phase_reducer_tests_continued.log"}, "server_config_tests": {"exit_code": 0, "log": "server_config_tests_continued.log"}, "evidence_check": {"exit_code": 2, "log": "evidence_check_continued.log"}, "context_check": {"exit_code": 0, "log": "context_check_continued.log"}}. Python-only setup tools; no C++ build required. Explicit Black check passed; repository pre-commit passed.
 
 Offline preparation commit: `45da007fb7b9134226c59ec6cd57cf94af3455f6`. Seven direct host tests and commit hooks passed. No push, server launch, installation or new measurement.
+
+## Third-turn blocker audit
+
+run/blocked_audit.json revalidates the same unavailable-client constraint in
+three consecutive goal turns. Both provisioned interpreters still lack lm_eval;
+Docker/Podman/socket and serving processes are absent. No installation exception
+or alternate client path has been supplied. The prior turn was progress
+(offline preparation), not a completed benchmark or a wait on live inference.
+The context contract hash remains unchanged. The goal is incomplete and requires
+external client provisioning or explicit authorization to override AGENTS.md's
+no-dependency-install instruction before execution can proceed.
+
+All measurements remain unavailable. The timed runner has never been invoked,
+so no under-one-hour completion claim is made. No hardware command, installation,
+process stop, benchmark, profiling or push occurred during this audit.

@@ -52,3 +52,10 @@ validator. These tools are not yet connected to a live collector/control hook.
 The checkpoint's top_k64 policy is capped to32 by the current device formatter;
 an existing request-specific host-sampling route is under validation. No claim
 is made that live benchmark protocol or roofline collection is ready.
+
+Final setup audit: the client prerequisite remains unavailable across three
+consecutive goal turns; see [blocked audit](blocked_audit.json). Supply a
+provisioned upstream lm-eval client or explicitly authorize its isolated setup
+under the repository's no-install constraint. Offline tools are preserved, but
+live collector integration, both profiles and accuracy measurements remain
+unverified and incomplete.
