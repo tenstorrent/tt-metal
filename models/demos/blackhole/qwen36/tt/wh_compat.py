@@ -4,70 +4,43 @@
 
 This model runs on Blackhole (P150) and Wormhole (n300). The shared kernels in
 ``models/experimental/gated_attention_gated_deltanet`` were tuned for Blackhole, which has
-substantially more L1 to spend:
+substantially more total L1 and more interleave banks, so working sets that fit comfortably there
+do not fit here -- and the Tensix circular buffers those kernels allocate are L1-only by hardware,
+so the only things that can move are the surrounding activations.
 
-    Blackhole  140 worker cores x 1,572,864 B L1  ~= 210 MB,  80 interleave banks
-    Wormhole    80 worker cores x 1,499,136 B L1  ~= 114 MB,  64 interleave banks
+The shared module is NOT edited: the adjustments are applied from inside this model's folder.
+``apply()`` is idempotent and runs from the qwen36 GDN entry points before any GDN forward.
 
-Blackhole therefore has ~1.84x the total L1 (the delta is core count, not L1 per core), and with
-64 banks instead of 80 the same interleaved tensor costs ~1.25x more per bank on Wormhole.
-Working sets that fit comfortably there do not fit here, and the Tensix circular buffers those
-kernels allocate are L1-only by hardware -- compute cannot read DRAM -- so the only things that
-can move are the surrounding activations.
+Three adjustments, all no-ops on Blackhole:
 
-The shared module is NOT edited: both adjustments are applied from inside this model's folder.
-``apply()`` is idempotent and is called by the qwen36 GDN entry points before any GDN forward.
+1. ``_seq_memory_config`` -> DRAM. Upstream keeps short sequences in L1; on Wormhole those
+   activations no longer fit beside the chunk-seq kernel's circular buffers.
+2. ``chunk_gated_delta_rule_seq`` -> called with ``out_dtype=bfloat16``, halving an L1-resident
+   fp32 relayout that does not otherwise fit.
+3. ``fused_decay_and_write_ttnn`` -> DRAM for the [B,H,K,V] state-write intermediates once they
+   exceed the L1 budget. See that override for why upstream cannot do B=32 in L1.
 
-Two adjustments, both no-ops on Blackhole:
+BLAST RADIUS: these rebind module globals on the SHARED module, so within a process that imports
+it the change is visible to any other model using it -- and ``apply()`` runs as an import side
+effect of any qwen36 GDN module, so it is not opt-in and has no per-caller scoping. Every override
+is guarded by ``is_blackhole()`` evaluated PER CALL (not at import, which would need an open
+device), so Blackhole is bit-for-bit unchanged and only Wormhole takes the new paths.
 
-1. ``_seq_memory_config`` -> DRAM. Upstream keeps short sequences in L1 for speed; on Wormhole
-   those activations no longer fit beside the chunk-seq kernel's circular buffers and fail as
-   "clash with L1 buffers" for T <= 512.
-
-2. ``chunk_gated_delta_rule_seq`` -> the bf16 variant in ``chunk_seq_wh.py``. Its
-   L1-resident ``[BH, L, V]`` fp32 relayout needs 33,554,432 B at L=2048, which does not fit;
-   bf16 halves it to 16,777,216 B. That dispatch delegates to the upstream function whenever
-   ``is_blackhole()``, so Blackhole always runs upstream code.
-
-NOTE on blast radius: these rebind module-globals in the shared module, so within a process that
-imports it the change is visible to any other model using it. Both are guarded by
-``is_blackhole()`` evaluated per call (not at import, which would need an open device), so
-Blackhole behaviour is bit-for-bit unchanged and only Wormhole takes the new paths.
-
-    Blackhole: no exposure. Both overrides delegate to the upstream implementation whenever
-    ``is_blackhole()``, so any model in the process -- qwen36 or not -- runs upstream code.
-
-    Wormhole: real exposure, and it is process-wide, not qwen36-scoped. Importing any qwen36
-    GDN module (``tt/gdn/tp.py``, ``tt/gdn/decode.py``, or this module) runs ``apply()`` as an
-    import side effect, which rebinds ``_seq_memory_config`` and
-    ``chunk_gated_delta_rule_seq`` on the SHARED module. From that point any *other* Wormhole
-    model that imports ``models/experimental/gated_attention_gated_deltanet`` in the same
-    process silently gets DRAM chunk-seq activations and the bf16 output relayout, even though
-    it never imported anything under qwen36. It is not opt-in and there is no per-caller
-    scoping.
-
-    Why that is acceptable today: qwen36 is the only Wormhole consumer of the shared GDN
-    module, so no other model can observe the rebind. Both overrides are also strictly
-    L1-relief changes on a path that OOMs without them -- the alternative for a co-resident
-    Wormhole model is not "upstream numerics", it is a failed allocation.
-
-    What to do if that stops holding: if a second Wormhole model starts using the shared GDN
-    module, do NOT leave this as an import side effect. Drop the module-level ``apply()`` call
-    at the bottom of this file, keep the explicit calls at the qwen36 GDN entry points, and
-    push the dtype/memory-config choice down into the shared module as a parameter so each
-    caller picks its own. The pytest process is the case to watch: a single session that
-    collects both qwen36 and another Wormhole GDN model would share one interpreter, and
-    collection-time imports alone are enough to flip the globals -- test order, not the model
-    under test, would decide which kernels run.
+That is acceptable only because qwen36 is currently the sole Wormhole consumer of the shared
+module, and because all three are strictly L1-relief on paths that OOM without them -- the
+alternative for a co-resident Wormhole model is not "upstream numerics", it is a failed
+allocation. If a SECOND Wormhole model starts using the shared module, do not leave this as an
+import side effect: drop the module-level ``apply()`` below, keep the explicit entry-point calls,
+and push the dtype/memory-config choice into the shared module as a per-caller parameter. Watch
+pytest in particular -- one session collecting two such models shares an interpreter, and
+collection-time imports alone would let test order decide which kernels run.
 """
-import inspect
 
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops as _shared_ops
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq as _shared_seq
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _shared
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.blackhole.qwen36.tt.chunk_seq_wh import chunk_gated_delta_rule_seq_dispatch
 
 _FLAG = "_qwen36_wh_compat_applied"
 
@@ -75,31 +48,11 @@ _FLAG = "_qwen36_wh_compat_applied"
 # recurrent_decode_wh._OUTER_L1_BUDGET_BYTES, which gates the same tensor on the fork side.
 _STATE_L1_BUDGET_BYTES = 8 << 20
 
-# chunk_seq_wh.py is a verbatim copy of this upstream function with one dtype change. If
-# upstream edits it, the copy is stale -- fail loudly, not run old kernels.
-_UPSTREAM_ANCHOR = "ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1)"
-
-
-def _check_fork_is_current():
-    try:
-        upstream_src = inspect.getsource(_shared_seq.chunk_gated_delta_rule_seq)
-    except (OSError, TypeError):  # source unavailable (zipimport etc.) -- skip the check
-        return
-    if _UPSTREAM_ANCHOR not in upstream_src:
-        raise RuntimeError(
-            "models/demos/blackhole/qwen36/tt/chunk_seq_wh.py is a copy of "
-            "chunk_gated_delta_rule_seq() from ttnn_delta_rule_seq.py, and upstream has changed: "
-            f"the anchor {_UPSTREAM_ANCHOR!r} is gone. Re-copy that function into chunk_seq_wh.py "
-            "and re-apply the single bf16 edit (marked 'THE ONE CHANGE vs upstream')."
-        )
-
 
 def apply():
     """Install the Wormhole GDN adjustments on the shared module. Idempotent."""
     if getattr(_shared, _FLAG, False):
         return
-
-    _check_fork_is_current()
 
     # --- 1. chunk-seq activations: DRAM on Wormhole -------------------------------------- #
     _orig_seq_memory_config = _shared._seq_memory_config
@@ -125,9 +78,32 @@ def apply():
 
     _shared._seq_memory_config = _seq_memory_config
 
-    # --- 2. chunk-seq kernel wrapper: bf16 output relayout on Wormhole -------------------- #
+    # --- 2. chunk-seq output relayout: bf16 on the Wormhole configs that need it --------- #
     # The adapter calls this as a module global, so rebinding it here takes effect.
-    _shared_seq.chunk_gated_delta_rule_seq = chunk_gated_delta_rule_seq_dispatch
+    _orig_chunk_seq = _shared_seq.chunk_gated_delta_rule_seq
+
+    def _chunk_gated_delta_rule_seq(*args, **kwargs):
+        """Ask upstream for a bf16 output relayout instead of the default fp32.
+
+        Upstream relayouts the kernel output as an L1-resident [BH,L,V] tensor. At fp32 that does
+        not fit Wormhole's smaller L1 and dies with "Out of Memory"; bf16 halves it and costs
+        nothing measurable (logit PCC 0.9998-1.0000).
+
+        Blackhole absorbs the fp32, so it keeps the default. A 8-device T3K also keeps it: its
+        per-chip head count makes the tensor smaller than the config that first needed the fix, and
+        the fp32 path was measured to fit there. N150 KEEPS the fix -- at TP=1 it holds the full
+        head count on one chip, twice N300's per-chip size, so it needs it more than N300, not
+        less. T3K is detected via the mesh_device kwarg the adapter always passes.
+        """
+        if is_blackhole():
+            return _orig_chunk_seq(*args, **kwargs)
+        mesh = kwargs.get("mesh_device")
+        if mesh is not None and mesh.get_num_devices() == 8:
+            return _orig_chunk_seq(*args, **kwargs)
+        kwargs.setdefault("out_dtype", ttnn.bfloat16)
+        return _orig_chunk_seq(*args, **kwargs)
+
+    _shared_seq.chunk_gated_delta_rule_seq = _chunk_gated_delta_rule_seq
 
     # --- 3. decode state write: DRAM for the [B,H,K,V] tensors that do not fit L1 --------- #
     # recurrent_gated_delta_rule_decode_ttnn calls this as a module global, so rebinding takes
