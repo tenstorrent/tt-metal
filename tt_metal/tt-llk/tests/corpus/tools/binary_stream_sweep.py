@@ -79,6 +79,12 @@ def validate_corr(corr, args, leg, count):
         raise RuntimeError(
             f"invalid golden sidecar counts: joints={joints}, n_out_of_tol={n_out}"
         )
+    unknown_classes = set(classes) - ulp_admission.BINARY_CLASS_NAMES
+    if unknown_classes:
+        raise RuntimeError(
+            "invalid golden sidecar class vocabulary: "
+            f"unknown={sorted(unknown_classes)}"
+        )
     if (
         not math.isfinite(max_ulp)
         or max_ulp < 0

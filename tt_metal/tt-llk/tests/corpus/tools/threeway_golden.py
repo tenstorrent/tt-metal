@@ -44,7 +44,13 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from ulp_admission import format_class_ulp
+from ulp_admission import (
+    BINARY_CLASS_NAMES,
+    IEEE_BF16_CLASSES,
+    UNARY_DOMAIN_PARTITION_OPS,
+    format_class_ulp,
+    unary_class_names,
+)
 
 try:
     import torch
@@ -152,6 +158,8 @@ def _ieee_bf16_masks(values: np.ndarray) -> tuple[dict[str, np.ndarray], np.ndar
         "pos_subnormal": subnormal & ~sign,
         "neg_subnormal": subnormal & sign,
     }
+    if set(masks) != IEEE_BF16_CLASSES:
+        raise AssertionError("IEEE bf16 class vocabulary drift")
     special = np.zeros(bits.shape, dtype=bool)
     for mask in masks.values():
         special |= mask
@@ -183,6 +191,8 @@ def unary_input_classes(
     )
     if np.any(membership != 1):
         raise AssertionError("unary IEEE/domain classes are not disjoint and exhaustive")
+    if set(classes) != unary_class_names(domain is not None):
+        raise AssertionError("unary IEEE/domain class vocabulary drift")
     return classes
 
 
@@ -217,6 +227,8 @@ def binary_input_classes(
     )
     if np.any(membership != 1):
         raise AssertionError("binary IEEE classes are not disjoint and exhaustive")
+    if set(classes) != BINARY_CLASS_NAMES:
+        raise AssertionError("binary IEEE class vocabulary drift")
     return classes
 
 
@@ -510,6 +522,10 @@ for _op, _why in _UNSUPPORTED.items():
     REGISTRY[_op] = GoldenSpec(
         _op, None, kind="unsupported", note=_why, checkable=False
     )
+if {op for op, spec in REGISTRY.items() if spec.domain is not None} != set(
+    UNARY_DOMAIN_PARTITION_OPS
+):
+    raise RuntimeError("golden registry/domain class vocabulary drift")
 
 
 def get_spec(op: str) -> Optional[GoldenSpec]:

@@ -172,13 +172,16 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         "max_bf16_ulp": "2",
         "n_out_of_tol": "0",
         "within_contract": "True",
-        "class_ulp": "in_domain:16:2",
+        "class_ulp": "in_domain_finite_normal:16:2",
     }
     fp32.validate_corr(good, args, "sem", 16)
     for changed, message in (
         (dict(good, op="other"), "identity mismatch"),
         (dict(good, patterns="15"), "coverage mismatch"),
-        (dict(good, class_ulp="in_domain:15:2"), "class coverage mismatch"),
+        (
+            dict(good, class_ulp="in_domain_finite_normal:15:2"),
+            "class coverage mismatch",
+        ),
         (dict(good, class_ulp=""), "invalid golden sidecar"),
         (
             {key: value for key, value in good.items() if key != "n_out_of_tol"},
@@ -189,6 +192,7 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         (dict(good, max_bf16_ulp="nan"), "invalid golden sidecar max_bf16_ulp"),
         (dict(good, max_bf16_ulp="65536"), "invalid golden sidecar max_bf16_ulp"),
         (dict(good, max_bf16_ulp="1"), "max/class mismatch"),
+        (dict(good, class_ulp="bogus:16:2"), "class vocabulary"),
         (dict(good, within_contract="False"), "invalid golden sidecar within_contract"),
         (dict(good, status="UNCHECKED"), "not checked"),
     ):
@@ -206,7 +210,7 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         "max_bf16_ulp": "4",
         "n_out_of_tol": "1",
         "within_contract": "False",
-        "class_ulp": "ordinary:15:4|special:1:0",
+        "class_ulp": "pos_normal_base_normal_exp:15:4|base_nan:1:0",
     }
     binary.validate_corr(binary_good, binary_args, "hand", 16)
     for changed in (
@@ -215,6 +219,7 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         dict(binary_good, n_out_of_tol="17"),
         dict(binary_good, max_bf16_ulp="inf"),
         dict(binary_good, max_bf16_ulp="3"),
+        dict(binary_good, class_ulp="bogus:16:4"),
     ):
         try:
             binary.validate_corr(changed, binary_args, "hand", 16)

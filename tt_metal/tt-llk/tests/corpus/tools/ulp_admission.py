@@ -8,6 +8,31 @@ import re
 
 
 _CLASS_RE = re.compile(r"[a-z][a-z0-9_]*")
+IEEE_BF16_CLASSES = frozenset(
+    {"nan", "pos_inf", "neg_inf", "pos_zero", "neg_zero", "pos_subnormal", "neg_subnormal"}
+)
+UNARY_DOMAIN_PARTITION_OPS = frozenset({"erfinv-fresh"})
+
+
+def unary_class_names(domain_partition: bool) -> frozenset[str]:
+    names = {f"{name}_input" for name in IEEE_BF16_CLASSES}
+    names.add("in_domain_finite_normal")
+    if domain_partition:
+        names.update(
+            {
+                "domain_lower_boundary",
+                "domain_upper_boundary",
+                "out_of_domain_finite_normal",
+            }
+        )
+    return frozenset(names)
+
+
+BINARY_CLASS_NAMES = frozenset(
+    {f"base_{name}" for name in IEEE_BF16_CLASSES}
+    | {f"normal_base_exp_{name}" for name in IEEE_BF16_CLASSES}
+    | {"pos_normal_base_normal_exp", "neg_normal_base_normal_exp"}
+)
 
 
 def parse_class_ulp(encoded: str) -> dict[str, tuple[int, float]]:
