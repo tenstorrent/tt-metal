@@ -35,6 +35,7 @@ from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
     _residual_depth,
     create_program_descriptor,
 )
+from ttnn.bringup.rms_norm_ttnn.tests.unit.builders import BUILDER_IDS, BUILDERS
 
 _ML = ttnn.TensorMemoryLayout
 
@@ -83,7 +84,8 @@ def _config():
     return cfg
 
 
-def _descriptor(device, shape, memory_layout, shard):
+def _descriptor(device, shape, memory_layout, shard, builder="python"):
+    """`builder` picks the Python builder or the C++ host side (the op ttnn.bringup.rms_norm runs)."""
     from eval.sharding import shard_config
 
     dtype = ttnn.bfloat16
@@ -102,9 +104,8 @@ def _descriptor(device, shape, memory_layout, shard):
     g = ttnn.from_torch(
         torch.zeros(1, 1, 1, shape[-1], dtype=torch.bfloat16), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
     )
-    return create_program_descriptor(
-        x, out, weight=g, epsilon=1e-12, compute_kernel_config=_config(), program_config=_PC_NONE
-    )
+    build = create_program_descriptor if builder == "python" else BUILDERS[builder]
+    return build(x, out, weight=g, epsilon=1e-12, compute_kernel_config=_config(), program_config=_PC_NONE)
 
 
 def _noc_of(kernel):
@@ -135,8 +136,9 @@ _NOC_CASES = [
     _NOC_CASES,
     ids=["width_shard_28c", "block_shard_64c", "interleaved_width_split", "interleaved_row_split"],
 )
-def test_combine_noc_is_gated_on_a_resident_x(device, shape, memory_layout, shard, swapped):
-    d = _descriptor(device, shape, memory_layout, shard)
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_combine_noc_is_gated_on_a_resident_x(device, shape, memory_layout, shard, swapped, builder):
+    d = _descriptor(device, shape, memory_layout, shard, builder)
     reader_swapped, reader_noc = _noc_of(d.kernels[0])
     writer_swapped, writer_noc = _noc_of(d.kernels[1])
     assert reader_swapped == swapped and writer_swapped == swapped, (
@@ -244,9 +246,10 @@ _TRANSPORT_CASES = [
     _TRANSPORT_CASES,
     ids=["width_28c", "width_8c", "width_compact_4c", "block_64c", "no_combine"],
 )
-def test_transport_words_reach_the_writer(device, shape, memory_layout, shard, compact, single_round):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_transport_words_reach_the_writer(device, shape, memory_layout, shard, compact, single_round, builder):
     """End-to-end: the two gates land in the writer's CT list where the kernel reads them."""
-    d = _descriptor(device, shape, memory_layout, shard)
+    d = _descriptor(device, shape, memory_layout, shard, builder)
     writer_ct = list(d.kernels[1].compile_time_args)
     word = writer_ct[_WRITER_CT_FACES]
     assert word & 0xFF == GATHER_FACES
@@ -262,6 +265,7 @@ def test_transport_words_reach_the_writer(device, shape, memory_layout, shard, c
         ), "the pre-handshake bit must be OFF exactly on a single-round combine"
 
 
-def test_compute_carries_the_finalize_site(device):
-    d = _descriptor(device, (1, 1, 32, 7168), _ML.WIDTH_SHARDED, ([32, 256], (7, 4)))
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_compute_carries_the_finalize_site(device, builder):
+    d = _descriptor(device, (1, 1, 32, 7168), _ML.WIDTH_SHARDED, ([32, 256], (7, 4)), builder)
     assert list(d.kernels[2].compile_time_args)[_COMPUTE_CT_FIN_SPREAD] == 0
