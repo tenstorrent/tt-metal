@@ -68,7 +68,7 @@
   },
   "accuracy_execution": "shared",
   "error": "Accuracy incomplete: interrupted after8/536responses at942.54s to reserve the original remaining budget for required serving measurements. No complete benchmark aggregate is available.",
-  "elapsed_seconds": 2934.2977528031915,
+  "elapsed_seconds": 3014.1878241766244,
   "performance_recovery": {
     "status": "measurements_collected_stage_still_failed",
     "original_started_monotonic": 5311679.6,
