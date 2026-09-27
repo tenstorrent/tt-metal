@@ -135,7 +135,13 @@ _ttrun_emit_device_timing() {
 
 # ---------------------------------------------------------------------------
 # ttrun_resolve_selector: turns MESH_MODE + DEVICE_SELECTOR (+ a pre-set
-# TT_VISIBLE_DEVICES) into a validated DEVICE_SELECTOR (auto | mesh | N).
+# TT_VISIBLE_DEVICES, + TTPOOL_DEFAULT_SELECTOR) into a validated
+# DEVICE_SELECTOR (auto | mesh | N).
+#
+# With no --device / --mesh the selector is TTPOOL_DEFAULT_SELECTOR, default
+# "mesh": the whole box, exactly as before the pool (multi-device tests on a
+# 1xN mesh keep working with no flags). Export TTPOOL_DEFAULT_SELECTOR=auto to
+# make per-card (lowest free card) the default for a shell / agent fleet.
 # ---------------------------------------------------------------------------
 ttrun_resolve_selector() {
     if [[ "$MESH_MODE" == true && -n "$DEVICE_SELECTOR" ]]; then
@@ -146,21 +152,22 @@ ttrun_resolve_selector() {
         DEVICE_SELECTOR="mesh"
     elif [[ -z "$DEVICE_SELECTOR" ]]; then
         # A caller that already pinned a card via TT_VISIBLE_DEVICES gets that card's lock, so
-        # lock and visibility can never disagree. A list means multi-device: require --mesh.
+        # lock and visibility can never disagree. A list is multi-device: hold every card (mesh
+        # leaves TT_VISIBLE_DEVICES untouched, so the caller's list still applies).
         if [[ -n "${TT_VISIBLE_DEVICES:-}" ]]; then
             if [[ "$TT_VISIBLE_DEVICES" =~ ^[0-9]+$ ]]; then
                 DEVICE_SELECTOR="$TT_VISIBLE_DEVICES"
                 _ttrun_say "TT_VISIBLE_DEVICES=${TT_VISIBLE_DEVICES} in env -> --device ${TT_VISIBLE_DEVICES}"
             else
-                echo "${TTRUN_PREFIX}_ERROR: TT_VISIBLE_DEVICES='${TT_VISIBLE_DEVICES}' is a list; pass --mesh (all cards) or --device N and unset it"
-                return 1
+                DEVICE_SELECTOR="mesh"
+                _ttrun_say "TT_VISIBLE_DEVICES=${TT_VISIBLE_DEVICES} in env (a list) -> --mesh (all cards locked)"
             fi
         else
-            DEVICE_SELECTOR="auto"
+            DEVICE_SELECTOR="${TTPOOL_DEFAULT_SELECTOR:-mesh}"
         fi
     fi
     if [[ "$DEVICE_SELECTOR" != auto && "$DEVICE_SELECTOR" != mesh && ! "$DEVICE_SELECTOR" =~ ^[0-9]+$ ]]; then
-        echo "${TTRUN_PREFIX}_ERROR: --device wants a UMD card id or 'auto' (got: $DEVICE_SELECTOR)"
+        echo "${TTRUN_PREFIX}_ERROR: --device / TTPOOL_DEFAULT_SELECTOR want a UMD card id, 'auto' or 'mesh' (got: $DEVICE_SELECTOR)"
         return 1
     fi
     # Canonical decimal: "00" and "0" are the same card and must take the same lock.
