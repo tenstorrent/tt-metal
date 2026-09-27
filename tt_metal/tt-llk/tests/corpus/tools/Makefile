@@ -2,7 +2,7 @@
 # (laneMH; corpus/tools).  See PROVE_ALL_README.md.
 #
 # OUT overrides the run directory; JOBS the bitexact sim parallelism.
-OUT  ?= $(HOME)/sfpi-uplift/laneMH-evidence-20260903/run
+OUT  ?= $(if $(CRAQ_PROVE_OUT),$(CRAQ_PROVE_OUT),$(HOME)/craq-keep/prove-all)
 JOBS ?= 8
 
 .PHONY: prove-all prove-all-selftest prove-all-manifest prove-all-force
