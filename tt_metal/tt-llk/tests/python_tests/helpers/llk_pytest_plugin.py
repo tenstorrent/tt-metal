@@ -30,6 +30,7 @@ driver that lives outside ``tests/sources/``.
 
 import atexit
 import collections
+import csv
 import datetime
 import json
 import logging
@@ -1105,6 +1106,42 @@ def pytest_configure_node(node):
         node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid
 
 
+_REPORTS_WRITTEN = set()
+
+
+def _dump_or_append(report, path):
+    """Write the report, keeping the rows of earlier chunks of this module on this worker (worksteal can run a
+    module in several chunks). A file this process has not written yet is stale and gets replaced.
+    """
+    if path not in _REPORTS_WRITTEN or not path.exists() or path.stat().st_size == 0:
+        _REPORTS_WRITTEN.add(path)
+        report.dump_csv(path)
+        return
+    chunk = path.with_name(path.name + ".chunk")
+    report.dump_csv(chunk)
+    tables = [t for t in (_read_csv_rows(path), _read_csv_rows(chunk)) if t]
+    if tables:
+        # The cells are copied as text, so the values are written back exactly as they were dumped.
+        columns = list(dict.fromkeys(c for header, _ in tables for c in header))
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=columns, restval="")
+            writer.writeheader()
+            for header, rows in tables:
+                writer.writerows(dict(zip(header, row)) for row in rows)
+    chunk.unlink(missing_ok=True)
+
+
+def _read_csv_rows(path):
+    """(header, rows) of a CSV, or None: a chunk whose tests were all skipped dumps a file with no header."""
+    try:
+        with open(path, newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            return (header, list(reader)) if header else None
+    except FileNotFoundError:
+        return None
+
+
 @pytest.fixture(scope="module", autouse=True)
 def counter_report(request, worker_id):
     """Separate report for raw hardware counter CSV data (--dump-perf-counters)."""
@@ -1135,11 +1172,7 @@ def counter_report(request, worker_id):
     )
 
     counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
-
-    if counters_path.exists():
-        counters_path.unlink()
-
-    temp_report.dump_csv(counters_path)
+    _dump_or_append(temp_report, counters_path)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1168,15 +1201,9 @@ def perf_report(request, worker_id):
     raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
     post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"
 
-    if raw_path.exists():
-        raw_path.unlink()
-
-    if post_path.exists():
-        post_path.unlink()
-
-    temp_report.dump_csv(raw_path)
+    _dump_or_append(temp_report, raw_path)
     temp_report.post_process()
-    temp_report.dump_csv(post_path)
+    _dump_or_append(temp_report, post_path)
 
 
 @pytest.hookimpl(optionalhook=True)
