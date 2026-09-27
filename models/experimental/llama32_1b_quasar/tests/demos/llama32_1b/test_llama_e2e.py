@@ -270,19 +270,18 @@ def _install_quasar_fp32_acc_off(monkeypatch):
             monkeypatch.setattr(ttnn, name, _force_off(orig))
 
 
-def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
-    """Force the decode matmuls interleaved on Quasar.
+def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):  # noqa: ARG001 (mesh_device kept for symmetry)
+    """Run the decode + prefill matmuls ON DEVICE on Quasar via the mainline mcast picker.
 
-    The model's decode QKV / WO / MLP(W1,W2,W3) / LM-head matmuls use DRAM-sharded program configs
-    (ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, WH/BH-only) with L1_WIDTH_SHARDED output
-    and WIDTH_SHARDED inputs -- all of which need the sharded/mcast matmul path that is broken on the
-    Quasar sim (the same mcast-credit gap as the sharded RMSNorm). With the norm now interleaved, the QKV
-    matmul gets an interleaved input against a sharded program config -> `bad optional access`.
-
-    This wrapper, on Quasar, de-shards the input + weight to DRAM-interleaved, drops the program_config
-    (falls back to the default interleaved matmul), and makes the output interleaved. Bring-up hack to
-    surface downstream errors -- precision/perf are not the point. De-shard prefers the Gen2-native quasar
-    to_memory_config where available.
+    The model's QKV / WO / MLP(W1,W2,W3) / LM-head matmuls use DRAM-sharded program configs
+    (ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, WH/BH-only) that don't run on Quasar. This
+    wrapper de-shards the inputs to DRAM-interleaved and drops that program_config so the mainline picker
+    auto-selects a standard mcast matmul. Both mcast factories are now Gen2-ported (1D:
+    test_quasar_qkv_matmul_dfb.py; 2D: test_quasar_matmul_2d_mcast.py), so small-M decode goes 1D and large-M
+    prefill / wide lm_head go 2D (which streams out_block to fit L1) -- all on device. Output is forced
+    DRAM-interleaved (create_qkv_heads_decode's Interleaved factory is ported, so no width-shard trick is
+    needed; s2i_copy handles the downstream alias) and bf8_b/bf4_b output dtype is coerced to bf16.
+    Requires TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 in the env.
     """
 
     def _to_dram(t):
@@ -296,71 +295,28 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
             logger.warning(f"[llama-e2e][quasar] matmul de-shard failed ({e}); passing tensor through")
             return t
 
-    dev = mesh_device.compute_with_storage_grid_size()
-    cx, cy = _qsr_capped_grid_xy(dev)
-    core_grid = ttnn.CoreGrid(y=cy, x=cx)
-
     def _wrap(orig):
         def _mm(input_tensor, weight, *args, **kwargs):
-            # De-shard the INPUTS to DRAM-interleaved and drop the DRAM-sharded program_config so the picker
-            # selects the interleaved 1D-mcast matmul. Do NOT touch the OUTPUT memory_config: the model
-            # asks for L1_WIDTH_SHARDED output and its post-matmul code (e.g. attention
-            # _all_reduce_qkv_decode -> sharded_to_interleaved -> deallocate -> reshape) relies on that
-            # being a real sharded->interleaved conversion. Forcing the output interleaved makes
-            # sharded_to_interleaved a no-op that ALIASES the input, so the following deallocate frees the
-            # tensor the reshape then uses ("Tensor is not allocated").
-            # Pin an explicit 1D mcast_in0 config at the capped (2-node) grid + DRAM output. WHY:
-            #  - With program_config=None the auto-picker chose the 2D-mcast factory
-            #    (matmul_multi_core_reuse_mcast_2d_optimized), whose in0_sender DM kernel is Gen1-UNPORTED on
-            #    Quasar (program_spec.cpp:1325 FATAL). The 1D mcast_in0 factory IS Gen2-ported (validated by
-            #    test_quasar_qkv_matmul_dfb.py), so force it.
-            #  - Small grid: the 1D matmul FAILS at large grids on Quasar (that test fails at (8,4)); cap to 2
-            #    nodes -- the validated regime -- regardless of the sim's device size.
-            #  - Output memcfg is chosen below: WIDTH_SHARDED L1 when the per-core shard fits (decode QKV must
-            #    be sharded so create_qkv_heads_decode uses its Gen2 Sharded factory, not the self-looping
-            #    Interleaved one), else DRAM (wide lm_head, prefill). _install_quasar_s2i_copy handles the
-            #    downstream sharded_to_interleaved-of-an-interleaved-tensor alias for the DRAM case.
+            # 1D AND 2D mcast matmul are now Gen2-ported on Quasar (test_quasar_qkv_matmul_dfb.py and
+            # test_quasar_matmul_2d_mcast.py pass). So: de-shard the inputs to DRAM-interleaved and DROP the
+            # model's DRAM-sharded program_config, then let the MAINLINE PICKER auto-select -- 1D mcast for
+            # small-M decode, 2D mcast for large-M prefill / wide lm_head. The picker sizes out_block to fit
+            # L1 (2D streams the output), so prefill + lm_head now run ON DEVICE (no more host fallback).
+            # Force DRAM-interleaved output: create_qkv_heads_decode's Interleaved factory is now ported too,
+            # so an interleaved QKV output is fine (the width-shard-to-feed-the-Sharded-factory trick is no
+            # longer needed), and DRAM avoids any width-shard L1 OOM; _install_quasar_s2i_copy covers the
+            # downstream sharded_to_interleaved-of-an-interleaved alias. Coerce bf8_b/bf4_b output dtype ->
+            # bf16 (unsupported on Quasar). REQUIRES TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 in the env.
             input_tensor = _to_dram(input_tensor)
             weight = _to_dram(weight)
+            kwargs["program_config"] = None
+            kwargs.pop("core_grid", None)  # let the picker use the device grid
+            kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
             try:
-                ish = input_tensor.padded_shape  # [.., M, K]
-                wsh = weight.padded_shape  # [.., K, N]
-                mt = max(int(ish[-2]) // 32, 1)
-                kt = max(int(ish[-1]) // 32, 1)
-                nt = max(int(wsh[-1]) // 32, 1)
-                nc = cx * cy
-                per_core_n = max((nt + nc - 1) // nc, 1)
-                in0_block_w = next((d for d in (4, 2, 1) if kt % d == 0), 1)
-                osw = next((d for d in (4, 2, 1) if per_core_n % d == 0), 1)
-                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(cx, cy),
-                    in0_block_w=in0_block_w,
-                    out_subblock_h=1,
-                    out_subblock_w=osw,
-                    per_core_M=mt,
-                    per_core_N=per_core_n,
-                    fuse_batch=False,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-                # Output memcfg: WIDTH_SHARDED L1 when the per-core output shard fits L1, else DRAM. The decode
-                # QKV matmul MUST be width-sharded so its consumer nlp_create_qkv_heads_decode picks the
-                # Gen2-clean Sharded factory (the Interleaved factory self-loops reader_scratch -> Gen2 FATAL).
-                # But wide outputs (lm_head N=128256 -> 2004 tiles/core) and prefill (per_core_M=32) OOM L1, so
-                # those stay DRAM (their consumers -- concat/residual/argmax, and prefill's non-decode
-                # create_qkv -- accept interleaved). Threshold 128 tiles/core (~256KB bf16).
-                out_tiles = mt * per_core_n
-                if out_tiles <= 128:
-                    kwargs["memory_config"] = ttnn.MemoryConfig(
-                        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
-                    )
-                else:
-                    kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-                kwargs.pop("core_grid", None)
-            except Exception as e:
-                logger.warning(f"[llama-e2e][quasar] 1D matmul cfg build failed ({e}); auto-select w/ core_grid")
-                kwargs["program_config"] = None
-                kwargs["core_grid"] = core_grid
+                if kwargs.get("dtype") in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                    kwargs["dtype"] = ttnn.bfloat16
+            except Exception:
+                pass
             return orig(input_tensor, weight, *args, **kwargs)
 
         return _mm
