@@ -20,10 +20,12 @@
 namespace ttnn::operations::bringup::rms_norm_ttnn {
 
 // What the binding hands back: the INPUT tensor object itself under `inplace` (the caller reads
-// their own tensor back, so identity is the contract), else the new output.
+// their own tensor back, so identity is the contract), else the new output.  Under
+// `return_residual_sum` that output is the first member of a tuple whose second is t = x + r.
 struct RmsNormPyResult {
     const ttnn::Tensor* alias = nullptr;
     std::optional<ttnn::Tensor> value;
+    std::optional<ttnn::Tensor> residual_sum;
 };
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn
@@ -92,8 +94,8 @@ struct type_caster<ttnn::operations::bringup::rms_norm_ttnn::RmsNormPyResult> {
 
     bool from_python(handle, uint8_t, cleanup_list*) noexcept { return false; }
 
-    static handle from_cpp(
-        const ttnn::operations::bringup::rms_norm_ttnn::RmsNormPyResult& v, rv_policy, cleanup_list* cleanup) noexcept {
+    static handle output_of(
+        const ttnn::operations::bringup::rms_norm_ttnn::RmsNormPyResult& v, cleanup_list* cleanup) noexcept {
         if (v.alias != nullptr) {
             // rv_policy::reference looks the pointer up among the live instances first, so this returns the
             // caller's own Python object (the input) rather than a new wrapper.
@@ -101,6 +103,23 @@ struct type_caster<ttnn::operations::bringup::rms_norm_ttnn::RmsNormPyResult> {
                 &typeid(ttnn::Tensor), const_cast<ttnn::Tensor*>(v.alias), rv_policy::reference, cleanup, nullptr);
         }
         return make_caster<ttnn::Tensor>::from_cpp(*v.value, rv_policy::copy, cleanup);
+    }
+
+    static handle from_cpp(
+        const ttnn::operations::bringup::rms_norm_ttnn::RmsNormPyResult& v, rv_policy, cleanup_list* cleanup) noexcept {
+        if (!v.residual_sum.has_value()) {
+            return output_of(v, cleanup);
+        }
+        // return_residual_sum: (output, residual_sum).
+        object y = steal(output_of(v, cleanup));
+        if (!y.is_valid()) {
+            return handle();
+        }
+        object t = steal(make_caster<ttnn::Tensor>::from_cpp(*v.residual_sum, rv_policy::copy, cleanup));
+        if (!t.is_valid()) {
+            return handle();
+        }
+        return PyTuple_Pack(2, y.ptr(), t.ptr());
     }
 };
 
@@ -118,8 +137,10 @@ RmsNormPyResult rms_norm_py(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ProgramConfigArg>& program_config,
-    const std::optional<ComputeConfigArg>& compute_kernel_config) {
-    auto [out, inplace] = rms_norm_with_inplace(
+    const std::optional<ComputeConfigArg>& compute_kernel_config,
+    bool return_residual_sum,
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config) {
+    auto r = rms_norm_full(
         input_tensor,
         epsilon,
         weight,
@@ -127,11 +148,14 @@ RmsNormPyResult rms_norm_py(
         residual_input_tensor,
         memory_config,
         program_config,
-        compute_kernel_config);
-    if (inplace) {
-        return RmsNormPyResult{.alias = &input_tensor, .value = std::nullopt};
+        compute_kernel_config,
+        return_residual_sum,
+        residual_sum_memory_config);
+    if (r.inplace) {
+        return RmsNormPyResult{
+            .alias = &input_tensor, .value = std::nullopt, .residual_sum = std::move(r.residual_sum)};
     }
-    return RmsNormPyResult{.alias = nullptr, .value = std::move(out)};
+    return RmsNormPyResult{.alias = nullptr, .value = std::move(r.output), .residual_sum = std::move(r.residual_sum)};
 }
 
 tt::tt_metal::ProgramDescriptor program_descriptor_py(
@@ -142,7 +166,8 @@ tt::tt_metal::ProgramDescriptor program_descriptor_py(
     const std::optional<ttnn::Tensor>& residual,
     double epsilon,
     const std::optional<ComputeConfigArg>& compute_kernel_config,
-    uint32_t subblock_w) {
+    uint32_t subblock_w,
+    const std::optional<ttnn::Tensor>& residual_sum) {
     return create_program_descriptor(
         input_tensor,
         output_tensor,
@@ -151,7 +176,8 @@ tt::tt_metal::ProgramDescriptor program_descriptor_py(
         residual,
         epsilon,
         normalize_compute_kernel_config(compute_kernel_config),
-        subblock_w);
+        subblock_w,
+        residual_sum);
 }
 
 }  // namespace
@@ -203,9 +229,16 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
                 ``inplace`` are honoured, ``inplace`` returns the input tensor object itself.
             compute_kernel_config (optional): ttnn.ComputeConfigDescriptor or a device compute-kernel config.
                 Defaults to HiFi4 / approx / fp32_dest_acc_en=False.
+            return_residual_sum (bool): also return t = input_tensor + residual_input_tensor, the sum the
+                statistics are taken over, at the input's dtype and layout -- the next residual add's input in a
+                transformer's residual stream, so no separate ttnn.add is needed. Needs residual_input_tensor and
+                a TILE input. Defaults to False.
+            residual_sum_memory_config (ttnn.MemoryConfig, optional): t's placement (any TILE placement,
+                interleaved or sharded). Defaults to the input's. Only with return_residual_sum=True.
 
         Returns:
-            ttnn.Tensor: the normalized tensor (the input tensor itself under ``inplace``).
+            ttnn.Tensor: the normalized tensor (the input tensor itself under ``inplace``); with
+            ``return_residual_sum=True`` a tuple ``(normalized, residual_sum)``.
         )doc",
         &rms_norm_py,
         nb::arg("input_tensor"),
@@ -216,7 +249,9 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
         nb::arg("residual_input_tensor") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("return_residual_sum") = false,
+        nb::arg("residual_sum_memory_config") = nb::none());
 
     // For the parity test: the C++ builder's ProgramDescriptor, without dispatching.
     mod.def(
@@ -231,6 +266,7 @@ void bind_rms_norm_ttnn(nb::module_& mod) {
         nb::arg("epsilon") = 1e-12,
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("subblock_w") = 0,
+        nb::arg("residual_sum") = nb::none(),
         R"doc(Build ttnn.bringup.rms_norm's ProgramDescriptor with the C++ builder (no dispatch). Test-only.)doc");
 }
 
