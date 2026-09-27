@@ -161,6 +161,10 @@ class TT_CCL:
         # capacity is the fixed prefill chunk length, not the growing KV-cache length.
         self.mla_high_bw_all_gather_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Stable reduce-scatter staging/output buffers for the serial MLA and indexer calls. Keep
+        # separate entries by call site: their outputs can be live at the same time within a layer.
+        self.mla_reduce_scatter_buffers: dict[tuple, list["ttnn.Tensor"]] = {}
+
         # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
@@ -430,6 +434,66 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return self.mla_high_bw_all_gather_buffers[key]
+
+    def get_mla_reduce_scatter_buffers(
+        self, *, name, input_tensor, dim, topology, cluster_axis, compute_kernel_config=None, keep_output=True
+    ):
+        """Reuse the contiguous ring reduce-scatter staging and, for internal results, its output.
+
+        A two-chip Ring resolves to Linear in the op; its staging layout differs, so leave that
+        configuration on the existing allocation path. The epilogue result is caller-owned and
+        explicitly deallocated, so keep_output=False supplies only the stable intermediate.
+        """
+        device = input_tensor.device()
+        ring_size = device.shape[cluster_axis]
+        normalized_dim = dim % len(input_tensor.shape)
+        shape = tuple(input_tensor.shape)
+        # The op uses a composite path for row-major or non-tile-aligned output shards; its
+        # contiguous staging helper applies only to the direct tiled Ring program.
+        if (
+            topology != ttnn.Topology.Ring
+            or ring_size <= 2
+            or normalized_dim == 0
+            or input_tensor.layout != ttnn.TILE_LAYOUT
+            or shape[normalized_dim] % (ring_size * ttnn.TILE_SIZE) != 0
+        ):
+            return None
+        key = (
+            name,
+            shape,
+            tuple(input_tensor.padded_shape),
+            input_tensor.dtype,
+            input_tensor.layout,
+            device.id(),
+            normalized_dim,
+            cluster_axis,
+            str(compute_kernel_config),
+            keep_output,
+        )
+        buffers = self.mla_reduce_scatter_buffers.get(key)
+        if buffers is None or not all(buffer.is_allocated() for buffer in buffers):
+            intermediate, penult = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                input_tensor,
+                dim=normalized_dim,
+                topology=topology,
+                cluster_axis=cluster_axis,
+                compute_kernel_config=compute_kernel_config,
+            )
+            if keep_output:
+                output_shape = list(shape)
+                output_shape[normalized_dim] //= ring_size
+                output = ttnn.empty(
+                    output_shape,
+                    dtype=input_tensor.dtype,
+                    layout=input_tensor.layout,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                buffers = [intermediate, output, penult]
+            else:
+                buffers = [intermediate]
+            self.mla_reduce_scatter_buffers[key] = buffers
+        return buffers
 
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.

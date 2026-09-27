@@ -478,7 +478,13 @@ class TtIndexer:
             return t
         t = ttnn.experimental.reduce_scatter_minimal_async(
             t,
-            persistent_output_buffers=None,
+            persistent_output_buffers=self.tt_ccl.get_mla_reduce_scatter_buffers(
+                name="indexer_k",
+                input_tensor=t,
+                dim=3,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            ),
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
@@ -511,7 +517,14 @@ class TtIndexer:
             return t
         return ttnn.experimental.reduce_scatter_minimal_async(
             t,
-            persistent_output_buffers=None,
+            persistent_output_buffers=self.tt_ccl.get_mla_reduce_scatter_buffers(
+                name="indexer_weights",
+                input_tensor=t,
+                dim=2,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+                compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
+            ),
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),

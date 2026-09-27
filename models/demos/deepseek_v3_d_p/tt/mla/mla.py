@@ -1101,7 +1101,13 @@ class ttMLA:
         if self.tp_factor > 1:
             qr = ttnn.experimental.reduce_scatter_minimal_async(
                 qr,
-                persistent_output_buffers=None,
+                persistent_output_buffers=self.tt_ccl.get_mla_reduce_scatter_buffers(
+                    name="mla_q_a_latent",
+                    input_tensor=qr,
+                    dim=3,
+                    topology=self.tp_ccl_topology,
+                    cluster_axis=self.tp_axis,
+                ),
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
@@ -1492,6 +1498,14 @@ class ttMLA:
         if self.tp_factor > 1:
             return ttnn.experimental.reduce_scatter_minimal_async(
                 v_out,
+                persistent_output_buffers=self.tt_ccl.get_mla_reduce_scatter_buffers(
+                    name="mla_o_proj",
+                    input_tensor=v_out,
+                    dim=3,
+                    topology=self.tp_ccl_topology,
+                    cluster_axis=self.tp_axis,
+                    keep_output=False,
+                ),
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
