@@ -106,20 +106,6 @@
 #include "api/compute/clamped_silu_glu.h"
 #endif
 
-// GeGLU (Gemma-4): gelu_tanh(gate) * up. Uses the unary silu path (gate activation on dst,
-// then multiply_phase) with gelu_tanh_tile in place of silu_tile.
-#ifdef ROUTED_GELU_TANH
-#if defined(SWIGLU_OAI) || defined(SITU_GLU) || defined(CLAMPED_SILU_GLU)
-#error "ROUTED_GELU_TANH is exclusive with the fused binary activation variants"
-#endif
-#include "api/compute/eltwise_unary/gelu.h"
-#define GATE_ACT_INIT() gelu_tanh_tile_init()
-#define GATE_ACT_TILE(i) gelu_tanh_tile(i)
-#else
-#define GATE_ACT_INIT() silu_tile_init()
-#define GATE_ACT_TILE(i) silu_tile(i)
-#endif
-
 namespace {
 
 // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
@@ -665,7 +651,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
         partials_gu_cb.pop_front(out_subblock_num_tiles);
         // MATH-thread SFPU pass: apply silu to each dst tile before pack.
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            GATE_ACT_TILE(i);
+            silu_tile(i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -1024,7 +1010,7 @@ void kernel_main() {
     // vConstFloatPrgm0 = 2.0f, which nothing between here and the tile calls reprograms.
     BINARY_ACT_INIT();
 #else
-    GATE_ACT_INIT();
+    silu_tile_init();
 #endif
 
 
