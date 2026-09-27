@@ -280,11 +280,9 @@ def test_device_streaming_encoder_naive_lookahead_corrupts_real_lookahead_recove
     import ttnn
     from models.demos.audio.cosyvoice2.tt.flow.encoder import (
         CHUNK_SIZE,
-        CHUNK_SIZE_UP,
         PRE_LOOKAHEAD_LEN,
         TtUpsampleConformerEncoder,
         UpsampleConformerEncoderRef,
-        chunk_causal_bias_torch,
     )
 
     torch.manual_seed(0)
@@ -330,7 +328,9 @@ def test_device_streaming_encoder_naive_lookahead_corrupts_real_lookahead_recove
     # measurably worse than real lookahead) is robust regardless of weight scale, and is
     # what this permanent regression actually needs to catch; the real checkpoint script
     # is the source of truth for the absolute risk.
-    assert naive_pcc < lookahead_pcc, f"expected naive zero-lookahead to be worse than real lookahead context: naive={naive_pcc} lookahead={lookahead_pcc}"
+    assert (
+        naive_pcc < lookahead_pcc
+    ), f"expected naive zero-lookahead to be worse than real lookahead context: naive={naive_pcc} lookahead={lookahead_pcc}"
     assert lookahead_pcc >= GATE_BF16, f"real lookahead context should clear the {GATE_BF16} gate, got {lookahead_pcc}"
 
 
@@ -387,4 +387,82 @@ def test_device_bucketed_encoder_matches_exact_length(device):
     T2 = T_TRUE * 2
     passed, pcc = comp_pcc(exact_out[:, :T2, :], bucketed_out[:, :T2, :], GATE_BF16)
     print(f"\n  exact length T={T_TRUE} vs bucketed B={B_BUCKET} (valid_length={T_TRUE}) PCC {pcc}")
+    assert passed, pcc
+
+
+def _region_stats(want: torch.Tensor, got: torch.Tensor, lo: int, hi: int):
+    """PCC and max|diff| over frames [lo, hi) of `[B, T, C]` tensors."""
+    w, g = want[:, lo:hi, :], got[:, lo:hi, :]
+    _, pcc = comp_pcc(w, g, GATE_BF16)
+    return float(pcc), (w - g).abs().max().item()
+
+
+# Bucketed vs exact-length streaming encoder, over the valid frames and over the last partial chunk:
+# not bit-identical (bf16 rounding differs between the two geometries), measured max|diff|
+# 0.016-0.0625 here and 0.016-0.055 with real weights, region PCC >= 0.99991. The real-weight
+# negative control (chunk-only mask) sits at 0.23-0.39 -- see test_flow_checkpoint.py.
+ENCODER_BUCKET_MAX_ABS = 0.125
+ENCODER_REGION_PCC = 0.999
+
+
+@needs_l1_small
+@pytest.mark.parametrize("valid", [70, 110, 137])  # none a multiple of CHUNK_SIZE=25
+def test_device_streaming_encoder_final_chunk_bucketed_matches_exact(device, monkeypatch, valid):
+    """A streaming utterance's final (`finalize=True`) flow call has an arbitrary length, so under
+    bucketing its last chunk is partial and shares a chunk with bucket padding; the key-padding
+    term (`streaming_attn_bias_torch`) must hide that padding from every query. With large random
+    values in the padded rows (`_bucket_padding` overridden), the bucketed TT output must match
+    the exact-length TT output over every valid frame and over the affected region (the last
+    partial chunk, at the up-rate stage), and the exact-length output must match the torch
+    chunk-causal reference.
+
+    Random-init weights cannot carry the negative control: measured, a chunk-only mask's leak
+    stays at bf16-noise level here (pre-norm LayerNorm neutralizes the padding's magnitude and
+    random attention is near-uniform). The real-weight test in test_flow_checkpoint.py has it."""
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.flow.encoder import (
+        CHUNK_SIZE,
+        CHUNK_SIZE_UP,
+        TtUpsampleConformerEncoder,
+        UpsampleConformerEncoderRef,
+        bucket_length,
+    )
+
+    assert valid % CHUNK_SIZE != 0
+    torch.manual_seed(valid)
+    d = 512
+    bucket = bucket_length(valid)
+    enc = UpsampleConformerEncoderRef()
+    enc.eval()
+    tokens_emb = torch.randn(1, valid, d) * 0.1
+    tt_enc = TtUpsampleConformerEncoder(device, enc)
+    monkeypatch.setattr(
+        tt_enc,
+        "_bucket_padding",
+        lambda b, rows: ttnn.from_torch(
+            torch.randn(b, rows, d) * 100.0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        ),
+    )
+
+    def run(t_len, content, **kw):
+        x = ttnn.from_torch(content, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.to_torch(tt_enc(x, t_len, 1, streaming=True, **kw)).float()
+
+    exact = run(valid, tokens_emb)
+    bucketed = run(bucket, torch.cat([tokens_emb, torch.zeros(1, bucket - valid, d)], dim=1), valid_length=valid)
+
+    v2 = 2 * valid
+    lo = (v2 // CHUNK_SIZE_UP) * CHUNK_SIZE_UP  # start of the last (partial) up-rate chunk
+    whole, region = _region_stats(exact, bucketed, 0, v2), _region_stats(exact, bucketed, lo, v2)
+    print(
+        f"\n  valid={valid} bucket={bucket}: valid frames PCC {whole[0]:.6f} max|diff| {whole[1]:.4g}; "
+        f"last chunk [{lo},{v2}) PCC {region[0]:.6f} max|diff| {region[1]:.4g}"
+    )
+    assert whole[1] <= ENCODER_BUCKET_MAX_ABS and region[1] <= ENCODER_BUCKET_MAX_ABS, (whole, region)
+    assert region[0] >= ENCODER_REGION_PCC, region
+
+    with torch.no_grad():
+        want = enc(tokens_emb, streaming=True)
+    passed, pcc = comp_pcc(want, exact, GATE_BF16)
+    print(f"  exact-length TT vs torch chunk-causal reference PCC {pcc}")
     assert passed, pcc

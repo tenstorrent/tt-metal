@@ -139,6 +139,21 @@ def chunk_causal_bias_torch(size: int, chunk_size: int, neg: float = -30000.0) -
     return bias
 
 
+def streaming_attn_bias_torch(size: int, valid: int, chunk_size: int, neg: float = -30000.0) -> torch.Tensor:
+    """The streaming attention mask for a bucketed call, as an additive bias `[1, 1, size, size]`:
+    upstream's `add_optional_chunk_mask` result, `masks & subsequent_chunk_mask(size, chunk_size)`,
+    where `masks` is the key-padding mask -- so keys at `[valid, size)` (bucket padding) are masked
+    for EVERY query, on top of the chunk-causal term. The chunk term alone only hides padding when
+    `valid` is a multiple of `chunk_size`; a streaming utterance's final (`finalize=True`) call has
+    an arbitrary length, and its last partial chunk would otherwise attend to the padded keys.
+    Every query keeps at least one valid key (padded queries come after all valid positions), so
+    no row is fully masked. `valid == size` gives exactly `chunk_causal_bias_torch`."""
+    keep = subsequent_chunk_mask_torch(size, chunk_size) & (torch.arange(size) < valid).unsqueeze(0)
+    bias = torch.zeros(1, 1, size, size)
+    bias[:, :, ~keep] = neg
+    return bias
+
+
 # ---------------------------------------------------------------------------
 # torch reference
 # ---------------------------------------------------------------------------
@@ -815,8 +830,9 @@ class TtUpsampleConformerEncoder:
         """xs: ttnn [B, T, d_model] -> ttnn [B, T*stride, d_model]. `streaming=False`
         (default): original, unchanged behavior -- all-valid mask, no context, every
         existing non-streaming caller is unaffected. `streaming=True`: real chunk-causal
-        masking (`chunk_causal_bias_torch`); `context` (ttnn [B, pre_lookahead_len,
-        d_model], real next tokens already embedded) feeds `pre_lookahead_layer` only.
+        masking plus the key-padding term (`streaming_attn_bias_torch`); `context` (ttnn
+        [B, pre_lookahead_len, d_model], real next tokens already embedded) feeds
+        `pre_lookahead_layer` only.
 
         `valid_length` (bucketing): `length` is the TENSOR's geometry (e.g. a fixed
         bucket size several chunks share, so `TtConv1d`/`GeometryWeightCache` see a
@@ -827,9 +843,10 @@ class TtUpsampleConformerEncoder:
         length)` are caller-supplied padding (content doesn't matter -- masked from every
         attention layer, and `pre_lookahead_layer` never sees them: it computes only over
         `[0, valid_length)` + `context`, and the padding region is concatenated back on
-        afterward). `valid_length` MUST be a multiple of `CHUNK_SIZE` for the mask to
-        correctly exclude the padding region for every query (real streaming chunk
-        boundaries always are, by construction -- `chunk_size` tokens per chunk).
+        afterward). Any `valid_length` works: the mask's key-padding term hides the padding
+        from every query, including a final (`finalize=True`) call whose length is not a
+        multiple of `CHUNK_SIZE` (mid-stream calls always are; the final one takes every
+        remaining token).
 
         `streaming=True` always runs eager -- tracing is already proven unavailable for
         this module (see class docstring) regardless of streaming, and chunk-causal/
@@ -843,6 +860,17 @@ class TtUpsampleConformerEncoder:
             return self._call_eager(xs, length, batch_size)
         return self._call_traced(xs, length, batch_size)
 
+    def _bucket_padding(self, batch_size: int, rows: int):
+        """The rows a bucketed call appends after `pre_lookahead_layer`'s true-content output.
+        Zeros, but their content must not matter: the streaming mask hides them from every
+        query (tests override this with large values to check exactly that)."""
+        return ttnn.from_torch(
+            torch.zeros(batch_size, rows, self.d_model),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+
     def _call_eager(
         self,
         xs,
@@ -855,15 +883,13 @@ class TtUpsampleConformerEncoder:
         if valid_length is None:
             valid_length = length
         assert 0 < valid_length <= length
-        if streaming and valid_length < length:
-            assert valid_length % CHUNK_SIZE == 0, (
-                f"valid_length={valid_length} must be a multiple of CHUNK_SIZE={CHUNK_SIZE} for the "
-                "chunk-causal mask to correctly exclude the bucket padding region for every query"
-            )
 
         if streaming:
             bias1 = ttnn.from_torch(
-                chunk_causal_bias_torch(length, CHUNK_SIZE), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                streaming_attn_bias_torch(length, valid_length, CHUNK_SIZE),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
             )
         else:
             bias1 = ttnn.from_torch(
@@ -887,12 +913,7 @@ class TtUpsampleConformerEncoder:
             h_valid = self.embed(xs_valid)
             h_valid = self.pre_lookahead_layer(h_valid, valid_length, batch_size, context=context_embedded)
             ttnn.deallocate(xs_valid)
-            pad = ttnn.from_torch(
-                torch.zeros(batch_size, length - valid_length, self.d_model),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
+            pad = self._bucket_padding(batch_size, length - valid_length)
             h = ttnn.concat([h_valid, pad], dim=1)
             ttnn.deallocate(pad)
         for layer in self.encoders:
@@ -901,8 +922,13 @@ class TtUpsampleConformerEncoder:
         h = self.up_layer(h, length, batch_size)
         length2 = length * self.up_layer.stride
         if streaming:
+            # up_layer is causal (left-padded conv after a nearest x2 upsample), so the valid
+            # up-rate positions are exactly [0, valid_length * stride).
             bias2 = ttnn.from_torch(
-                chunk_causal_bias_torch(length2, CHUNK_SIZE_UP), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+                streaming_attn_bias_torch(length2, valid_length * self.up_layer.stride, CHUNK_SIZE_UP),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
             )
         else:
             bias2 = ttnn.from_torch(

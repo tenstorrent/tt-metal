@@ -107,3 +107,94 @@ def test_estimator_down_blocks_container_shapes_match_real_checkpoint():
         assert f"mid_blocks.{i}.0.res_conv.weight" in est_sub
         for j in range(4):
             assert f"mid_blocks.{i}.1.{j}.attn1.to_q.weight" in est_sub
+
+
+# Streaming encoder, final chunk under bucketing (real weights). Gates over the affected region (the
+# last partial up-rate chunk): PCC >= ENCODER_REGION_PCC and max|diff| <= ENCODER_REGION_MAX_ABS.
+# Measured 2026-09-27 at valid 70/110/137/263: bucketed vs TT exact 0.016-0.055, bucketed vs the torch
+# chunk-causal reference 0.039-0.067 (region PCC >= 0.99984); the chunk-only control 0.23-0.39 (region
+# PCC 0.988-0.996, while its whole-output PCC stayed 0.998-0.9998 -- whole-output PCC misses it).
+ENCODER_REGION_PCC = 0.999
+ENCODER_REGION_MAX_ABS = 0.125
+
+
+@pytest.fixture(scope="module")
+def real_flow_encoder():
+    from models.demos.audio.cosyvoice2.tt.checkpoint import load_checkpoint_file, sub_state_dict
+    from models.demos.audio.cosyvoice2.tt.flow.encoder import UpsampleConformerEncoderRef
+
+    flow_sd = load_checkpoint_file("flow.pt")
+    ref = UpsampleConformerEncoderRef.from_checkpoint(sub_state_dict(flow_sd, "encoder."))
+    ref.eval()
+    return ref, flow_sd["input_embedding.weight"].float()
+
+
+@needs_l1_small
+@pytest.mark.parametrize("valid", [70, 137, 263])  # none a multiple of CHUNK_SIZE=25
+def test_device_streaming_encoder_final_chunk_real_checkpoint(device, monkeypatch, real_flow_encoder, valid):
+    """Real `flow.pt` encoder, real token embeddings, a final (non-chunk-aligned) streaming call
+    under bucketing, with large random values in the padded rows. Over the last partial chunk:
+      * TT bucketed must match the torch chunk-causal reference at the EXACT length, and TT
+        exact-length (the key-padding term hides the padding);
+      * negative control: the same bucketed run with a chunk-only mask (no key-padding term) must
+        fail that gate against TT exact-length."""
+    import models.demos.audio.cosyvoice2.tt.flow.encoder as encoder_module
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.flow.encoder import (
+        CHUNK_SIZE,
+        CHUNK_SIZE_UP,
+        TtUpsampleConformerEncoder,
+        bucket_length,
+        chunk_causal_bias_torch,
+    )
+
+    ref, input_embedding = real_flow_encoder
+    assert valid % CHUNK_SIZE != 0
+    torch.manual_seed(valid)
+    xs = input_embedding[torch.randint(0, input_embedding.shape[0], (1, valid))]
+    bucket = bucket_length(valid)
+    tt_enc = TtUpsampleConformerEncoder(device, ref)
+    monkeypatch.setattr(
+        tt_enc,
+        "_bucket_padding",
+        lambda b, rows: ttnn.from_torch(
+            torch.randn(b, rows, xs.shape[-1]) * 100.0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        ),
+    )
+
+    def run(t_len, content, **kw):
+        x = ttnn.from_torch(content, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.to_torch(tt_enc(x, t_len, 1, streaming=True, **kw)).float()
+
+    padded = torch.cat([xs, torch.zeros(1, bucket - valid, xs.shape[-1])], dim=1)
+    exact = run(valid, xs)
+    bucketed = run(bucket, padded, valid_length=valid)
+    with monkeypatch.context() as m:
+        m.setattr(
+            encoder_module,
+            "streaming_attn_bias_torch",
+            lambda size, v, chunk_size, neg=-30000.0: chunk_causal_bias_torch(size, chunk_size, neg),
+        )
+        chunk_only = run(bucket, padded, valid_length=valid)
+    with torch.no_grad():
+        want = ref(xs, streaming=True)
+
+    v2 = 2 * valid
+    lo = (v2 // CHUNK_SIZE_UP) * CHUNK_SIZE_UP  # start of the last (partial) up-rate chunk
+
+    def region(a, b):
+        wa, wb = a[:, lo:v2], b[:, lo:v2]
+        return float(comp_pcc(wa, wb, GATE_BF16)[1]), (wa - wb).abs().max().item()
+
+    def ok(stats):
+        return stats[0] >= ENCODER_REGION_PCC and stats[1] <= ENCODER_REGION_MAX_ABS
+
+    vs_ref, vs_exact, control = region(want, bucketed), region(exact, bucketed), region(exact, chunk_only)
+    print(
+        f"\n  valid={valid} bucket={bucket} last chunk [{lo},{v2}) PCC / max|diff|: bucketed vs torch "
+        f"{vs_ref[0]:.6f} / {vs_ref[1]:.4g}; bucketed vs TT exact {vs_exact[0]:.6f} / {vs_exact[1]:.4g}; "
+        f"chunk-only control vs TT exact {control[0]:.6f} / {control[1]:.4g}"
+    )
+    assert ok(vs_ref), vs_ref
+    assert ok(vs_exact), vs_exact
+    assert not ok(control), f"negative control passed the gate: {control}"
