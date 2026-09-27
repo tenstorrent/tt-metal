@@ -16,7 +16,15 @@ GRID = SimpleNamespace(x=11, y=10)
 
 @pytest.mark.parametrize(
     "slab, sliding, expected",
-    [(256, False, (64, 256, 3)), (512, False, (128, 256, 3)), (1024, False, (96, 256, 1)), (256, True, (128, 128, 1))],
+    [
+        (256, False, (64, 256, 3)),
+        (512, False, (128, 256, 3)),
+        (1024, False, (96, 256, 1)),
+        (256, True, (128, 128, 1)),
+        # A quarter slab that is not whole tiles falls back to one tile.
+        (64, False, (32, 256, 3)),
+        (160, False, (32, 256, 3)),
+    ],
 )
 def test_ring_sdpa_chunk_sizes(slab, sliding, expected):
     assert ring_sdpa_chunk_sizes(slab, sliding) == expected
