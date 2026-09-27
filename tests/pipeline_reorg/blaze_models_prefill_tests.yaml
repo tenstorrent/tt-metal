@@ -950,6 +950,29 @@
   sp_config: sc1
 
 
+- name: "(GLM-5.2-744B) fused distributed RMSNorm host dispatch, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=ERROR
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_fused_rmsnorm_host.py -xvs
+    '
+  test_type: glm_fused_norm_host_profile
+  test_tags: [glm_5_2]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 25
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 - name: "(GLM-5.2-744B) MTP module + predictor accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
