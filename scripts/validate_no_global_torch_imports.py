@@ -62,6 +62,7 @@ def main():
         sys.exit(1)
 
     exceptions = [
+        "bringup",  # forked ops of model bring-ups: their tests/ build torch references; ttnn never imports them
         "examples",
         "model_preprocessing.py",
         "torch_tracer.py",
