@@ -321,3 +321,41 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
         )
         tensor.deallocate(True)
     return gathered
+
+
+def ccl_partition_rows(tensor, mesh_config):
+    """Keep this TP device's 1/TP of the rows of a TP-replicated tensor."""
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    return ttnn.mesh_partition(tensor, dim=2, cluster_axis=mesh_config.tp_axis)
+
+
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Sum row-parallel projection partials across TP and keep this device's 1/TP of the rows.
+
+    With ccl_allgather(dim=2) this is an all-reduce split around the norms and residual adds, which then run on
+    1/TP of the rows.
+    """
+    if mesh_config is None or mesh_config.tp_degree <= 1:
+        return tensor
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    if ccl_async_enabled():
+        result = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            chunks_per_sync=ccl_chunks_per_sync(),
+            num_workers_per_link=ccl_num_workers_per_link(),
+            num_buffers_per_channel=ccl_num_buffers_per_channel(),
+        )
+    else:
+        result = ttnn.reduce_scatter(tensor, dim=2, cluster_axis=mesh_config.tp_axis, memory_config=memory_config)
+    tensor.deallocate(True)
+    return result
