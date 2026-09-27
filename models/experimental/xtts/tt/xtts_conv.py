@@ -5,8 +5,15 @@ import math
 
 import torch
 import ttnn
+from loguru import logger
 
 from models.common.lightweightmodule import LightweightModule
+
+
+def is_l1_clash(exc: BaseException) -> bool:
+    """Return whether an exception is a static-CB / L1-buffer clash."""
+    msg = str(exc).lower()
+    return "circular buffer" in msg or "clash" in msg
 
 
 def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
@@ -165,6 +172,23 @@ class TtConv1d(LightweightModule):
         if conv_config_overrides:
             for _k, _v in conv_config_overrides.items():
                 setattr(self.conv_config, _k, _v)
+
+        # Fallback configs for shapes whose auto-sharded program's static circular buffers clash
+        # with the L1 buffers the traced pipeline keeps alive around the vocoder. Tried in order
+        # on a clash, each shrinking the program's L1 footprint further; the output is the same.
+        def _variant(**over):
+            cfg = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False, activation=activation)
+            for _k, _v in {**(conv_config_overrides or {}), **over}.items():
+                setattr(cfg, _k, _v)
+            return cfg
+
+        single = {"enable_act_double_buffer": False, "enable_weights_double_buffer": False}
+        self._fallback_configs = [
+            _variant(**single),
+            _variant(**single, act_block_h_override=32),
+            _variant(**single, act_block_h_override=32, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        ]
+        self._fallback_level = {}
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=math_fidelity,
@@ -191,7 +215,36 @@ class TtConv1d(LightweightModule):
             combined = ttnn.to_layout(ttnn.add(self._raw_bias_fp32, cond_bias), ttnn.ROW_MAJOR_LAYOUT)
             bias_tensor = ttnn.from_device(combined)
             ttnn.deallocate(combined)
-        out, out_length, [weight, bias] = ttnn.conv1d(
+        level = self._fallback_level.get(key, -1)
+        while True:
+            config = self.conv_config if level < 0 else self._fallback_configs[level]
+            try:
+                out, out_length, [weight, bias] = self._conv1d(x, bias_tensor, batch_size, input_length, config)
+                break
+            except RuntimeError as e:
+                if not is_l1_clash(e) or level + 1 >= len(self._fallback_configs):
+                    raise
+                level += 1
+                logger.warning(
+                    f"conv1d {self.in_channels}->{self.out_channels} k={self.kernel_size} d={self.dilation} "
+                    f"L={input_length}: static circular buffers clash with live L1 buffers, retrying with "
+                    f"fallback config {level}"
+                )
+                self.tt_weight, self.tt_bias = self._host_weight, self._host_bias
+        self._fallback_level[key] = level
+        self.tt_weight = weight
+        if fold:
+            self._folded_bias[fold_key] = (cond_bias, bias)
+        else:
+            self.tt_bias = bias
+        self._prepared_for = key
+        if keep_sharded:
+            return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
+        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
+
+    def _conv1d(self, x, bias_tensor, batch_size, input_length, conv_config):
+        """Run ttnn.conv1d with the given config, returning (out, out_length, [weight, bias])."""
+        return ttnn.conv1d(
             input_tensor=x,
             weight_tensor=self.tt_weight,
             bias_tensor=bias_tensor,
@@ -206,20 +259,11 @@ class TtConv1d(LightweightModule):
             batch_size=batch_size,
             input_length=input_length,
             dtype=self.activations_dtype,
-            conv_config=self.conv_config,
+            conv_config=conv_config,
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        self.tt_weight = weight
-        if fold:
-            self._folded_bias[fold_key] = (cond_bias, bias)
-        else:
-            self.tt_bias = bias
-        self._prepared_for = key
-        if keep_sharded:
-            return ttnn.reshape(out, [batch_size, out_length, self.out_channels])
-        return _interleaved(out, [batch_size, out_length, self.out_channels], row_major=False)
 
 
 class TtConvTranspose1d(LightweightModule):

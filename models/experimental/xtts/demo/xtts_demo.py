@@ -11,7 +11,7 @@ Decoding SAMPLES on device (temperature 0.65 / top-k 50 / top-p 0.85 / repetitio
 penalty 5.0 — the tuned XTTS-v2 settings), which is what gives natural prosody and
 lets a take self-terminate at STOP instead of droning to the token cap.
 
-Only ``--text`` / ``--ref-audio`` / ``--min-tokens`` are exposed; every other knob is
+Only ``--text`` / ``--ref-audio`` / ``--min-tokens`` / ``--seed`` are exposed; every other knob is
 fixed to those tuned defaults in ``main()``, so the demo always runs full-model-traced.
 
 Everything runs on device except the BPE tokenizer, the reference-audio load/resample,
@@ -344,9 +344,13 @@ def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, cfg, seed_o
             spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
         )
         if cfg.generation.seed is not None:
-            # distinct-but-reproducible-ish seed per take (ttnn sampling isn't bit-exact across
-            # runs regardless, so takes differ even without this).
-            ttnn.manual_seed(cfg.generation.seed + seed_offset, device=device)
+            # Distinct seed per take. The sampler's Gumbel noise is drawn on the host with torch,
+            # so seeding torch makes a take reproducible for a given binary (the perf test relies
+            # on the same property through the reset_seeds fixture).
+            seed = cfg.generation.seed + seed_offset
+            torch.manual_seed(seed)
+            np.random.seed(seed % 2**32)
+            ttnn.manual_seed(seed, device=device)
         if len(chunks) == 1:
             wav_np, codes, dt, stopped, compile_s = _generate_one(
                 tt, chunks[0][1], chunks[0][2], cond_wav, spk_wav_tt, cfg
@@ -376,6 +380,13 @@ def main():
         "-1 = auto (~2x the wrapped text length). Raise it if a LONG prompt is only partly "
         "spoken; leave it at 0 for short prompts, where a floor makes the model ramble.",
     )
+    ap.add_argument(
+        "--seed",
+        type=int,
+        default=GENERATION.seed,
+        help="seed the sampler (host Gumbel noise and device RNG) so a take reproduces; "
+        "default (unset) draws a different take every run",
+    )
     ap.add_argument("--output", default=DEMO.output, help="where to write the generated WAV")
     ap.add_argument(
         "--write-torch-ref",
@@ -385,15 +396,16 @@ def main():
     )
     args = ap.parse_args()
 
-    # Only --text / --ref-audio / --min-tokens / --output / --write-torch-ref are exposed; every
-    # other setting comes from config.DEMO, so the demo runs full-model-traced with no other knobs.
+    # Only --text / --ref-audio / --min-tokens / --seed / --output / --write-torch-ref are exposed;
+    # every other setting comes from config.DEMO, so the demo runs full-model-traced with no other
+    # knobs.
     cfg = replace(
         DEMO,
         text=args.text,
         ref_audio=args.ref_audio,
         output=args.output,
         write_torch_ref=args.write_torch_ref,
-        generation=replace(DEMO.generation, min_tokens=args.min_tokens),
+        generation=replace(DEMO.generation, min_tokens=args.min_tokens, seed=args.seed),
     )
 
     from scipy.signal import resample_poly

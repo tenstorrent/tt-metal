@@ -15,6 +15,7 @@
 #include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include <host_api.hpp>
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
@@ -75,7 +76,7 @@
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
-#include "impl/emulation/emulated_program_runner.hpp"
+#include "emulated_program_runner.hpp"
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
@@ -243,7 +244,8 @@ bool WriteToDeviceDRAMChannel(
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    metal_ctx.get_cluster().write_dram_vec(host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address);
+    metal_ctx.get_cluster().write_dram_vec(
+        host_buffer.data(), host_buffer.size(), device->id(), dram_channel, address, tt::umd::IoOrdering::Relaxed);
     return true;
 }
 
@@ -1160,7 +1162,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = metal_ctx.hal();
-    uint32_t max_cbs = hal.get_arch_num_circular_buffers();
+    uint32_t max_dfbs = hal.get_num_dataflow_buffers();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal.get_core_type(index);
@@ -1178,7 +1180,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 const bool scans_remote_cb_configs =
-                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_dfbs;
                 if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
@@ -1201,7 +1203,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
                                 remote_offset_index +
-                                ((max_cbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                                ((max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
@@ -1279,25 +1281,11 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     TT_FATAL(
                         prefetcher_pipe_offset != REMOTE_DFB_OFFSET_NONE,
                         "PrefetcherPipe participants present but prefetcher_pipe_offset is NONE");
-                    const uint8_t num_program_slots = program.impl().num_prefetcher_pipe_slots();
-                    const uint32_t payload_words = remote_dfb_config_region_words(num_program_slots);
-                    std::vector<uint32_t> prefetcher_pipe_vec(payload_words, 0u);
-                    prefetcher_pipe_vec[0] = num_program_slots;
-                    for (const auto& participant : persistent_it->second) {
-                        TT_FATAL(
-                            participant.prefetcher_pipe_id < num_program_slots,
-                            "PrefetcherPipe sparse participant prefetcher_pipe_id {} exceeds program slot count {}",
-                            participant.prefetcher_pipe_id,
-                            num_program_slots);
-                        const uint32_t base = REMOTE_DFB_REGION_HEADER_WORDS +
-                                              participant.prefetcher_pipe_id * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
-                        prefetcher_pipe_vec[base + 0] = participant.config_page_addr;
-                        prefetcher_pipe_vec[base + 1] = participant.entry_size;
-                        prefetcher_pipe_vec[base + 2] = participant.relay_dfb_id;
-                    }
+                    // Same encoding as fast dispatch (relay word carries the active lane count).
+                    std::vector<uint32_t> prefetcher_pipe_vec =
+                        program_dispatch::build_prefetcher_pipe_config_payload(program.impl(), persistent_it->second);
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, prefetcher_pipe_vec, addr);
+                    metal_ctx.get_cluster().write_core(device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
@@ -1872,17 +1860,7 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
@@ -2063,22 +2041,6 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 }
 
 namespace experimental {
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    distributed::MeshDevice& device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
 
 CBHandle CreateCircularBuffer(
     Program& program,

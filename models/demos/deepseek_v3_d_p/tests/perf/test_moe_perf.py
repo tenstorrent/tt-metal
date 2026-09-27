@@ -56,12 +56,16 @@ def test_deepseek_v3_moe_perf_loudbox():
         expected_ns_8x1=3_360_055,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-09-07 on the CI LoudBox (bh_loudbox), run 34128459250. One sample.
-        # Same cause as 8x1, and this slot is the most exposed to it: the routed expert is 61% of
-        # the total at 4,044,853 ns against a 2,541,825 ns remainder, so the op alone moved 1.56x.
+        # Re-cut 2026-09-15 on the CI LoudBox (bh_loudbox). One sample, and UNATTRIBUTED: the 8x1
+        # slot above holds to 0.2% across the same span and its routed expert reads 3.4% SLOWER, so
+        # nothing found explains a 4.5% drop confined to this slot. The routed expert is 61% of this
+        # total against ~30% of 8x1, which is the only reason a 2x4-only move is even plausible.
+        # Because the centre is unexplained, a miss here is suspect until a second sample lands --
+        # AVG DEVICE KERNEL DURATION is a SUM, so a truncated capture reads low exactly like a
+        # speedup. Diff the Matmul/CCL/Other split against a main run before trusting either.
         # This gate still has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7%
         # slower.
-        expected_ns_2x4=6_586_678,
+        expected_ns_2x4=6_287_918,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

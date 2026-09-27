@@ -70,6 +70,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    bool circular_kv_cache = false);
+    bool circular_kv_cache = false,
+    // When set, the logical_n / logical_l params above are worst-case placeholders (see RingJointSDPAInputs).
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

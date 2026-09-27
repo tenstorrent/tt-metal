@@ -16,6 +16,7 @@ TEST_PADDING_VALUE = -42
 pytestmark = pytest.mark.use_module_device
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 8])
 @pytest.mark.parametrize("h", [24, 32, 384])
 @pytest.mark.parametrize("w", [42, 64, 1024])

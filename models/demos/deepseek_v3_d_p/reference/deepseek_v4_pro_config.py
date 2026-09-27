@@ -22,7 +22,7 @@ class DeepSeekV4ProConfig:
     # shape the composite already wins from 256 and gives the band back only at 576, where its
     # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
     # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
@@ -45,6 +45,7 @@ class DeepSeekV4ProConfig:
 
     # Model architecture
     NUM_LAYERS = 61
+    NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
@@ -71,5 +72,9 @@ class DeepSeekV4ProConfig:
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
     ROPE_THETA = 10000
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # Read at runtime by the shared expert only; the routed kernel bakes the same value at compile
+    # time (ClampedSiluGluConfigDsV4), so the two must stay equal.
     SWIGLU_LIMIT = 10.0
     MAX_POSITION_EMBEDDINGS = 1048576

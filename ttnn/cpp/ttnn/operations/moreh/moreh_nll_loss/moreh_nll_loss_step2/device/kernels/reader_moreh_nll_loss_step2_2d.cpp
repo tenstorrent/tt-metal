@@ -79,17 +79,22 @@ void kernel_main() {
                 dfb_input_obj.pop_front(onetile);
             } else {
                 tmp_input_l1_ptr[tilized_idx] = fp32_dest_acc_cast(0.0f);
+#if defined(WEIGHT)
+                tmp_weight_l1_ptr[tilized_idx] = fp32_dest_acc_cast(0.0f);
+#endif
             }
 
 #if defined(WEIGHT)
-            uint32_t noc_id = target_val / TILE_WIDTH;
-            uint32_t weight_tilized_idx = get_tilized_idx(0, target_val);
-            read_value(dfb_weight_obj, addrg_weight, noc_id, weight_tilized_idx);
+            if (target_val != ignore_index && (0 <= target_val && target_val < static_cast<int32_t>(C))) {
+                uint32_t noc_id = target_val / TILE_WIDTH;
+                uint32_t weight_tilized_idx = get_tilized_idx(0, target_val);
+                read_value(dfb_weight_obj, addrg_weight, noc_id, weight_tilized_idx);
 
-            dfb_weight_obj.wait_front(onetile);
-            CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
-            tmp_weight_l1_ptr[tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[weight_tilized_idx]);
-            dfb_weight_obj.pop_front(onetile);
+                dfb_weight_obj.wait_front(onetile);
+                CoreLocalMem<volatile uint16_t> weight_l1_ptr(dfb_weight_obj.get_read_ptr());
+                tmp_weight_l1_ptr[tilized_idx] = fp32_dest_acc_cast(weight_l1_ptr[weight_tilized_idx]);
+                dfb_weight_obj.pop_front(onetile);
+            }
 #endif
         }
         dfb_tmp_input_obj.push_back(onetile);

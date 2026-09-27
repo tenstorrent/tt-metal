@@ -114,6 +114,8 @@ struct ChunkGdnScanParams {
     uint32_t val_dim;
     bool has_initial_state;
     bool output_final_state;
+    bool use_mcast = true;
+    bool force_serial = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -160,6 +162,7 @@ std::vector<Tensor> chunk_gdn_scan(
     uint32_t chunk_size,
     bool output_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_mcast = true);
 
 }  // namespace ttnn::prim

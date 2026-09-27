@@ -45,6 +45,8 @@ FORCE_INLINE void store_prefetcher_pipe_config_word(
 FORCE_INLINE void setup_prefetcher_pipe_interface(
     CrossNodeDFBInterface& interface, uint32_t config_page_addr, uint32_t entry_size_word, uint32_t relay_dfb_id_word) {
     ASSERT(config_page_addr != 0);
+    ASSERT(entry_size_word != 0);
+    ASSERT(entry_size_word % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
 
     const uint32_t entry_size = entry_size_word;
     const uint32_t config_page_ptr = config_page_addr;
@@ -59,10 +61,14 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_FIFO_PTR_CHECKPOINT);
     const uint32_t noc_xy_addr =
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_NOC_XY_OFFSET);
-    const uint32_t aligned_cnt_ptr =
+    // Sender page: block bases. Receiver page: this receiver's lane-0 slot in each block.
+    // Sender and receiver pages share one layout, so each offset also addresses the mirror
+    // counter on the peer core.
+    const uint32_t sent_ptr =
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_SENT_OFFSET);
-    const uint32_t remote_cnt_ptr =
+    const uint32_t acked_ptr =
         config_page_ptr + load_prefetcher_pipe_config_word(l1_config, PREFETCHER_PIPE_CFG_PAGES_ACKED_OFFSET);
+    // Active lane count (kernel-config slot) is cached by the PrefetcherPipe ctor, not the iface.
 
     const uint32_t size_aligned = fifo_size - (fifo_size % entry_size);
     const uint32_t fifo_limit = fifo_start_addr + size_aligned;
@@ -76,14 +82,15 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         // through the per-receiver cursors in the credit slots, not through this field.
         iface.fifo_wr_ptr = fifo_ptr_checkpoint;
         iface.receiver_noc_xy_ptr = noc_xy_addr;
-        iface.aligned_pages_sent_ptr = aligned_cnt_ptr;
-        iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, remote_cnt_ptr);
+        iface.aligned_pages_sent_ptr = sent_ptr;    // local, cached stores
+        iface.aligned_pages_acked_ptr = acked_ptr;  // receivers' NoC atomics
+        // Remote sent base = same offset on each receiver page.
+        iface.num_receivers_and_remote_pages_sent_ptr = cross_node_dfb_pack(num_receivers, sent_ptr);
         iface.fifo_limit_page_aligned = fifo_limit;
     } else {
         volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(noc_xy_addr);
         const uint32_t sender_noc_x = xy[0];
         const uint32_t sender_noc_y = xy[1];
-        const uint32_t aligned_acked_ptr = aligned_cnt_ptr + L1_ALIGNMENT;
 
         CrossNodeReceiverDFBInterface& iface = interface.receiver;
         iface.config_ptr = config_page_ptr;
@@ -92,10 +99,13 @@ FORCE_INLINE void setup_prefetcher_pipe_interface(
         iface.fifo_rd_ptr = fifo_ptr_checkpoint;
         iface.sender_noc_x = static_cast<uint16_t>(sender_noc_x);
         iface.sender_noc_y = static_cast<uint16_t>(sender_noc_y);
-        iface.aligned_pages_acked_ptr = aligned_acked_ptr;
-        iface.remote_pages_acked_ptr = remote_cnt_ptr;
+        // Lane 0 slots; PrefetcherPipe ctor offsets all three by tid * L1_ALIGNMENT when lanes > 1.
+        iface.aligned_pages_sent_ptr = sent_ptr;    // sender's NoC atomics
+        iface.aligned_pages_acked_ptr = acked_ptr;  // local, cached stores
+        iface.remote_pages_acked_ptr = acked_ptr;   // same slot on the sender page
         iface.fifo_limit_page_aligned = fifo_limit;
-        iface.relay_id = static_cast<uint8_t>(relay_dfb_id_word);
+        // Low byte only; the slot word also carries the active lane count (remote_dfb_constants.h).
+        iface.relay_id = static_cast<uint8_t>(prefetcher_pipe_slot_relay_id(relay_dfb_id_word));
     }
 }
 
@@ -128,37 +138,70 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
 #ifdef ARCH_QUASAR
     // Quasar relay DFB state lives in LocalDFBInterface / TC slots (not LocalCBInterface).
     LocalDFBInterface& local = get_local_dfb_interface(relay_dfb_id);
-    ASSERT(local.num_tcs_to_rr == 1);
+    ASSERT(local.num_tcs_to_rr >= 1);
     const uint32_t entry_size_units = entry_size >> cb_addr_shift;
     ASSERT(entry_size_units != 0);
     ASSERT((cb_size_page_aligned >> cb_addr_shift) % entry_size_units == 0);
     local.entry_size = static_cast<decltype(local.entry_size)>(entry_size_units);
 #if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
     // Host precomputes stride in tile units as entry_size_units * stride_in_entries; keep
-    // stride_size_tiles from init and recompute stride_size for the new entry size.
+    // stride_size_tiles / per-TC base+base_entry from DFB init and recompute stride_size for
+    // this launch's entry size. Never rewrite TC geometry: a STRIDED consumer hart still has
+    // num_tcs_to_rr==1 but a non-zero base_entry_idx that must be preserved.
+    // Multi-TC (num_tcs_to_rr > 1 or non-zero base_entry_idx): assumes entry_size still matches
+    // DFB serialization — live page-size resize with N>1 consumers is unsupported.
+    ASSERT(local.stride_size_tiles != 0);
     local.stride_size = static_cast<uint16_t>(entry_size_units * local.stride_size_tiles);
     local.num_entries = static_cast<uint16_t>((cb_size_page_aligned >> cb_addr_shift) / entry_size_units);
-    DFBTCSlot& slot = local.tc_slots[0];
-    slot.base_addr = fifo_start_addr >> cb_addr_shift;
-    slot.ring_size = cb_size_page_aligned >> cb_addr_shift;
-    slot.base_entry_idx = 0;
-    const uint16_t entry_idx =
-        static_cast<uint16_t>(((next_fifo_rd_ptr - fifo_start_addr) / entry_size) * local.stride_size_tiles);
+    const uint32_t global_entry = (next_fifo_rd_ptr - fifo_start_addr) / entry_size;
+    const uint8_t stride = local.stride_size_tiles;
+    for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+        DFBTCSlot& slot = local.tc_slots[t];
+        uint32_t idx = slot.base_entry_idx;
+        if (global_entry > idx) {
+            const uint32_t delta = global_entry - idx;
+            idx = idx + ((delta + stride - 1) / stride) * stride;
+        }
+        if (idx >= local.num_entries) {
+            idx = slot.base_entry_idx;
+        }
 #if defined(UCK_CHLKC_UNPACK)
-    slot.rd_entry_idx = entry_idx;
+        slot.rd_entry_idx = static_cast<uint16_t>(idx);
 #else
-    slot.wr_entry_idx = entry_idx;
+        slot.wr_entry_idx = static_cast<uint16_t>(idx);
 #endif
+    }
     local.tc_idx = 0;
 #elif !defined(COMPILE_FOR_TRISC)
     // DM: ptrs/limits are raw bytes; entry_size is address units (cb_addr_shift==0 → bytes).
-    local.stride_size = entry_size;  // 1-entry stride in bytes
     local.num_entries = static_cast<uint16_t>(cb_size_page_aligned / entry_size);
-    DFBTCSlot& slot = local.tc_slots[0];
-    slot.base_addr = fifo_start_addr;
-    slot.limit = fifo_limit_page_aligned;
-    slot.rd_ptr = next_fifo_rd_ptr;
-    slot.wr_ptr = next_fifo_rd_ptr;
+    if (local.num_tcs_to_rr == 1) {
+        local.stride_size = entry_size;  // 1-entry stride in bytes
+        DFBTCSlot& slot = local.tc_slots[0];
+        slot.base_addr = fifo_start_addr;
+        slot.limit = fifo_limit_page_aligned;
+        slot.rd_ptr = next_fifo_rd_ptr;
+        slot.wr_ptr = next_fifo_rd_ptr;
+    } else {
+        // Preserve stride_size and per-TC base/limit from DFB init; snap rd/wr to the first
+        // owned byte at/after the durable checkpoint.
+        ASSERT(local.stride_size != 0);
+        ASSERT(local.stride_size % entry_size == 0);
+        for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+            DFBTCSlot& slot = local.tc_slots[t];
+            uint32_t ptr = slot.base_addr;
+            if (next_fifo_rd_ptr > slot.base_addr) {
+                const uint32_t delta = next_fifo_rd_ptr - slot.base_addr;
+                const uint32_t aligned = ((delta + local.stride_size - 1) / local.stride_size) * local.stride_size;
+                ptr = slot.base_addr + aligned;
+                if (ptr >= slot.limit) {
+                    ptr = slot.base_addr;
+                }
+            }
+            slot.rd_ptr = ptr;
+            slot.wr_ptr = ptr;
+        }
+    }
     local.tc_idx = 0;
 #endif
 #else
@@ -200,7 +243,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_slot(uint32_t relay_dfb_id,
     const uint32_t config_page_addr = load_prefetcher_pipe_config_word(slot, 0);
     const uint32_t entry_size = load_prefetcher_pipe_config_word(slot, 1);
     // Host must have registered this local DFB as the relay for this persistent slot
-    // (CreatePrefetcherPipeRelayDataflowBuffer); catches a mismatched token.
+    // (DFBAdvancedOptions::prefetcher_pipe_relays); catches a mismatched token.
     ASSERT(load_prefetcher_pipe_config_word(slot, 2) == relay_dfb_id);
     align_local_dfb_to_prefetcher_pipe_checkpoint(relay_dfb_id, config_page_addr, entry_size);
 }
@@ -215,7 +258,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     uint32_t relay_dfb_id, const CrossNodeReceiverDFBInterface& iface) {
 #ifdef ARCH_QUASAR
     LocalDFBInterface& local = get_local_dfb_interface(relay_dfb_id);
-    ASSERT(local.num_tcs_to_rr == 1);
+    ASSERT(local.num_tcs_to_rr >= 1);
     const uint32_t entry_size = iface.fifo_page_size;
     ASSERT(entry_size != 0);
     ASSERT(entry_size % REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == 0);
@@ -223,13 +266,32 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     ASSERT(ring_bytes % entry_size == 0);
     // DM: ptrs are raw bytes; entry_size field is address units (shift 0 → bytes).
     local.entry_size = entry_size;
-    local.stride_size = entry_size;
     local.num_entries = static_cast<uint16_t>(ring_bytes / entry_size);
-    DFBTCSlot& slot = local.tc_slots[0];
-    slot.base_addr = iface.fifo_start_addr;
-    slot.limit = iface.fifo_limit_page_aligned;
-    slot.rd_ptr = iface.fifo_rd_ptr;
-    slot.wr_ptr = iface.fifo_rd_ptr;
+    if (local.num_tcs_to_rr == 1) {
+        local.stride_size = entry_size;
+        DFBTCSlot& slot = local.tc_slots[0];
+        slot.base_addr = iface.fifo_start_addr;
+        slot.limit = iface.fifo_limit_page_aligned;
+        slot.rd_ptr = iface.fifo_rd_ptr;
+        slot.wr_ptr = iface.fifo_rd_ptr;
+    } else {
+        ASSERT(local.stride_size != 0);
+        ASSERT(local.stride_size % entry_size == 0);
+        for (uint8_t t = 0; t < local.num_tcs_to_rr; ++t) {
+            DFBTCSlot& slot = local.tc_slots[t];
+            uint32_t ptr = slot.base_addr;
+            if (iface.fifo_rd_ptr > slot.base_addr) {
+                const uint32_t delta = iface.fifo_rd_ptr - slot.base_addr;
+                const uint32_t aligned = ((delta + local.stride_size - 1) / local.stride_size) * local.stride_size;
+                ptr = slot.base_addr + aligned;
+                if (ptr >= slot.limit) {
+                    ptr = slot.base_addr;
+                }
+            }
+            slot.rd_ptr = ptr;
+            slot.wr_ptr = ptr;
+        }
+    }
     local.tc_idx = 0;
 #else
     LocalCBInterface& local = get_local_cb_interface(relay_dfb_id);

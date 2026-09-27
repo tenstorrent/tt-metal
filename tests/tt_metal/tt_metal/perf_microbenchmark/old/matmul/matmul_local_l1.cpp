@@ -42,6 +42,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #define LAUNCH
 
@@ -251,8 +252,7 @@ int main(int argc, char** argv) {
                 auto activations_tile_layout =
                     convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-                pass &=
-                    tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], core, activations_addr, activations);
+                pass &= slow_dispatch::WriteToL1(*device, core, activations_addr, activations);
                 TT_FATAL(pass, "Error");
 
                 auto identity_tilized = tilize_swizzled(weights_slice, Kt * 32, per_core_Nt * 32);
@@ -260,8 +260,7 @@ int main(int argc, char** argv) {
                     convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
-                pass &= tt_metal::detail::WriteToDeviceL1(
-                    device->get_devices()[0], core, weights_addr, weights_tile_transposed);
+                pass &= slow_dispatch::WriteToL1(*device, core, weights_addr, weights_tile_transposed);
                 TT_FATAL(pass, "Error");
             }
         }
@@ -350,8 +349,8 @@ int main(int argc, char** argv) {
                     CoreCoord core = {(size_t)c, (size_t)r};
 
                     std::vector<uint32_t> result_vec;
-                    tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core, output_addr, cb_output_tiles * single_tile_size, result_vec);
+                    slow_dispatch::ReadFromL1(
+                        *device, core, output_addr, cb_output_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto result_flat_layout =
                         convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));

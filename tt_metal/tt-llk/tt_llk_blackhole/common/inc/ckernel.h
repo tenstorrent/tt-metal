@@ -323,9 +323,15 @@ inline void t6_semaphore_wait_on_zero(const std::uint8_t index)
     TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_ZERO);
 }
 
-// Tensix thread semaphore get optionally stalled
+// Tensix thread semaphore init optionally stalled
+template <std::uint32_t WaitRes = p_stall::NONE>
 inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_value, const std::uint8_t max_value)
 {
+    if constexpr (WaitRes != p_stall::NONE)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes);
+    }
+
     TTI_SEMINIT(max_value, min_value, semaphore::t6_sem(index));
 }
 

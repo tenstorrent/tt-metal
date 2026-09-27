@@ -301,8 +301,6 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
-// This can be enabled on Quasar once GH issue #49608 is resolved.
-#ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
 
     // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
@@ -311,7 +309,6 @@ public:
     // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
     template <typename T = uint32_t>
     T read_tile_value(uint32_t tile_index, uint32_t element_offset);
-#endif
 #endif
 
     void finish() { finish_impl(); }
@@ -395,7 +392,7 @@ private:
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
-    void handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index);
+    void handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
@@ -432,11 +429,11 @@ private:
     // Metadata for implicit sync
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
-    uint16_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
+    uint32_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
 
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
-    uint16_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+    uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
 #endif
 };
 

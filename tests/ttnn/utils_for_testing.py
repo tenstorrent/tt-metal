@@ -174,6 +174,18 @@ def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     return pcc_passed, pcc_message
 
 
+def assert_reshape(torch_output, actual, dtype):
+    """Assert a reshape preserved shape and values. Block-float dtypes quantize, so compare with
+    PCC; every other dtype (bf16/fp32/int) must be bit-exact."""
+    assert list(actual.shape) == list(
+        torch_output.shape
+    ), f"Shape mismatch: got {list(actual.shape)}, expected {list(torch_output.shape)}"
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        assert_with_pcc(torch_output, actual, 0.99)
+    else:
+        assert torch.equal(torch_output, actual), "Data mismatch: reshape should preserve values exactly"
+
+
 def assert_allclose(
     expected_result: Union[ttnn.Tensor, torch.Tensor],
     actual_result: Union[ttnn.Tensor, torch.Tensor],
