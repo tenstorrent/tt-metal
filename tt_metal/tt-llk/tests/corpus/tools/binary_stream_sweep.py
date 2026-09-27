@@ -17,6 +17,7 @@ Usage:
       --runner-temp <RT> --band-bits 26 --chip 0 --out <dir> [--idmap <tsv>]
 """
 import argparse
+import math
 import os
 import re
 import shlex
@@ -33,14 +34,27 @@ _RUNS_RE = re.compile(r"runs=(\d+)")
 
 
 def parse_corr(corr_file):
-    """Parse a per-band .corr sidecar (SFPU_CORRECTNESS,k=v,...) into a dict, or None."""
+    """Parse one SFPU_CORRECTNESS record, refusing ambiguous input."""
     p = Path(corr_file)
     if not p.exists():
         return None
     lines = p.read_text().strip().splitlines()
-    if not lines or "SFPU_CORRECTNESS" not in lines[0]:
+    if not lines:
         return None
-    return dict(kv.split("=", 1) for kv in lines[0].split(",") if "=" in kv)
+    if len(lines) != 1:
+        raise RuntimeError("invalid correctness sidecar: expected exactly one line")
+    fields = lines[0].split(",")
+    if fields[0] != "SFPU_CORRECTNESS":
+        return None
+    parsed = {}
+    for field in fields[1:]:
+        if "=" not in field:
+            raise RuntimeError(f"invalid correctness sidecar field: {field!r}")
+        key, value = field.split("=", 1)
+        if not key or key in parsed:
+            raise RuntimeError(f"duplicate/empty correctness sidecar key: {key!r}")
+        parsed[key] = value
+    return parsed
 
 
 def validate_corr(corr, args, leg, count):
@@ -53,10 +67,39 @@ def validate_corr(corr, args, leg, count):
             f"got op={corr.get('op')},leg={corr.get('leg')}"
         )
     try:
-        joints = int(corr.get("joints", ""))
-        classes = ulp_admission.parse_class_ulp(corr.get("class_ulp", ""))
+        joints = int(corr["joints"])
+        n_out = int(corr["n_out_of_tol"])
+        max_ulp = float(corr["max_bf16_ulp"])
+        classes = ulp_admission.parse_class_ulp(corr["class_ulp"])
+    except KeyError as error:
+        raise RuntimeError(f"invalid golden sidecar: missing {error.args[0]}") from error
     except ValueError as error:
         raise RuntimeError(f"invalid golden sidecar: {error}") from error
+    if joints < 0 or n_out < 0 or n_out > joints:
+        raise RuntimeError(
+            f"invalid golden sidecar counts: joints={joints}, n_out_of_tol={n_out}"
+        )
+    if (
+        not math.isfinite(max_ulp)
+        or max_ulp < 0
+        or max_ulp > 0xFFFF
+        or not max_ulp.is_integer()
+    ):
+        raise RuntimeError(f"invalid golden sidecar max_bf16_ulp: {max_ulp}")
+    class_max = max(class_ulp for _, class_ulp in classes.values())
+    if max_ulp != class_max:
+        raise RuntimeError(
+            "golden sidecar max/class mismatch: "
+            f"max_bf16_ulp={max_ulp}, class_max={class_max}"
+        )
+    within = corr.get("within_contract")
+    if within not in ("True", "False") or (within == "True") != (n_out == 0):
+        raise RuntimeError(
+            "invalid golden sidecar within_contract: "
+            f"within_contract={within!r}, n_out_of_tol={n_out}"
+        )
+    if "status" in corr:
+        raise RuntimeError(f"golden sidecar is not checked: status={corr['status']}")
     if joints != count:
         raise RuntimeError(
             f"golden sidecar coverage mismatch: joints={joints}, expected={count}"
@@ -332,19 +375,19 @@ def _fold_leg(acc, corr):
     if not corr:
         return
     acc["checked"] = True
-    acc["joints"] += int(corr.get("joints", 0))
-    mu = float(corr.get("max_bf16_ulp", 0))
+    acc["joints"] += int(corr["joints"])
+    mu = float(corr["max_bf16_ulp"])
     if mu > acc["max_ulp"]:
         acc["max_ulp"] = mu
         acc["max_ulp_at"] = corr.get("max_ulp_joint", "-")
-    acc["n_out"] += int(corr.get("n_out_of_tol", 0))
-    ulp_admission.fold_class_ulp(acc["class_ulp"], corr.get("class_ulp", ""))
+    acc["n_out"] += int(corr["n_out_of_tol"])
+    ulp_admission.fold_class_ulp(acc["class_ulp"], corr["class_ulp"])
     fw = corr.get("first_witness", "0x00000000")
     try:
         fwi = int(fw, 0)
     except ValueError:
         fwi = 0
-    if int(corr.get("n_out_of_tol", 0)) > 0 and fwi != 0:
+    if int(corr["n_out_of_tol"]) > 0 and fwi != 0:
         cand = (
             fwi,
             corr.get("first_witness_class", "-"),

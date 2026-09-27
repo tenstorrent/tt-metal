@@ -169,6 +169,9 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         "op": "exp",
         "leg": "sem",
         "patterns": "16",
+        "max_bf16_ulp": "2",
+        "n_out_of_tol": "0",
+        "within_contract": "True",
         "class_ulp": "in_domain:16:2",
     }
     fp32.validate_corr(good, args, "sem", 16)
@@ -177,12 +180,65 @@ def test_correctness_sidecar_identity_and_class_data() -> None:
         (dict(good, patterns="15"), "coverage mismatch"),
         (dict(good, class_ulp="in_domain:15:2"), "class coverage mismatch"),
         (dict(good, class_ulp=""), "invalid golden sidecar"),
+        (
+            {key: value for key, value in good.items() if key != "n_out_of_tol"},
+            "missing n_out_of_tol",
+        ),
+        (dict(good, n_out_of_tol="-1"), "invalid golden sidecar counts"),
+        (dict(good, n_out_of_tol="17", within_contract="False"), "invalid golden sidecar counts"),
+        (dict(good, max_bf16_ulp="nan"), "invalid golden sidecar max_bf16_ulp"),
+        (dict(good, max_bf16_ulp="65536"), "invalid golden sidecar max_bf16_ulp"),
+        (dict(good, max_bf16_ulp="1"), "max/class mismatch"),
+        (dict(good, within_contract="False"), "invalid golden sidecar within_contract"),
+        (dict(good, status="UNCHECKED"), "not checked"),
     ):
         try:
             fp32.validate_corr(changed, args, "sem", 16)
             raise AssertionError(f"bad sidecar accepted: {changed}")
         except RuntimeError as error:
             assert message in str(error)
+
+    binary_args = SimpleNamespace(golden="binarypow")
+    binary_good = {
+        "op": "binarypow",
+        "leg": "hand",
+        "joints": "16",
+        "max_bf16_ulp": "4",
+        "n_out_of_tol": "1",
+        "within_contract": "False",
+        "class_ulp": "ordinary:15:4|special:1:0",
+    }
+    binary.validate_corr(binary_good, binary_args, "hand", 16)
+    for changed in (
+        {key: value for key, value in binary_good.items() if key != "n_out_of_tol"},
+        dict(binary_good, n_out_of_tol="-1"),
+        dict(binary_good, n_out_of_tol="17"),
+        dict(binary_good, max_bf16_ulp="inf"),
+        dict(binary_good, max_bf16_ulp="3"),
+    ):
+        try:
+            binary.validate_corr(changed, binary_args, "hand", 16)
+            raise AssertionError(f"bad binary sidecar accepted: {changed}")
+        except RuntimeError:
+            pass
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        for parser in (fp32.parse_corr, binary.parse_corr):
+            duplicate = root / f"duplicate-{parser.__module__}.corr"
+            duplicate.write_text(
+                "SFPU_CORRECTNESS,op=exp,leg=sem,n_out_of_tol=0,n_out_of_tol=1\n"
+            )
+            malformed = root / f"malformed-{parser.__module__}.corr"
+            malformed.write_text("SFPU_CORRECTNESS,op=exp,broken\n")
+            multiline = root / f"multiline-{parser.__module__}.corr"
+            multiline.write_text("SFPU_CORRECTNESS,op=exp\nextra=record\n")
+            for path in (duplicate, malformed, multiline):
+                try:
+                    parser(path)
+                    raise AssertionError(f"malformed sidecar accepted: {path}")
+                except RuntimeError:
+                    pass
 
 
 def _write_slice(

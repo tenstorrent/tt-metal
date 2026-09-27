@@ -14,6 +14,7 @@ Usage:
       --band-bits 29 --chip 0 --out <dir>
 """
 import argparse
+import math
 import os
 import re
 import shlex
@@ -30,18 +31,26 @@ _RUNS_RE = re.compile(r"runs=(\d+)")
 
 
 def parse_corr(corr_file):
-    """Parse a per-band .corr sidecar (SFPU_CORRECTNESS,k=v,...) into a dict, or None."""
+    """Parse one SFPU_CORRECTNESS record, refusing ambiguous input."""
     p = Path(corr_file)
     if not p.exists():
         return None
-    line = p.read_text().strip().splitlines()
-    if not line or "SFPU_CORRECTNESS" not in line[0]:
+    lines = p.read_text().strip().splitlines()
+    if not lines:
+        return None
+    if len(lines) != 1:
+        raise RuntimeError("invalid correctness sidecar: expected exactly one line")
+    fields = lines[0].split(",")
+    if fields[0] != "SFPU_CORRECTNESS":
         return None
     d = {}
-    for kv in line[0].split(","):
-        if "=" in kv:
-            k, v = kv.split("=", 1)
-            d[k] = v
+    for field in fields[1:]:
+        if "=" not in field:
+            raise RuntimeError(f"invalid correctness sidecar field: {field!r}")
+        key, value = field.split("=", 1)
+        if not key or key in d:
+            raise RuntimeError(f"duplicate/empty correctness sidecar key: {key!r}")
+        d[key] = value
     return d
 
 
@@ -55,10 +64,53 @@ def validate_corr(corr, args, leg, count):
             f"got op={corr.get('op')},leg={corr.get('leg')}"
         )
     try:
-        patterns = int(corr.get("patterns", ""))
-        classes = ulp_admission.parse_class_ulp(corr.get("class_ulp", ""))
+        patterns = int(corr["patterns"])
+        n_out = int(corr["n_out_of_tol"])
+        max_ulp = float(corr["max_bf16_ulp"])
+        classes = ulp_admission.parse_class_ulp(corr["class_ulp"])
+    except KeyError as error:
+        raise RuntimeError(f"invalid golden sidecar: missing {error.args[0]}") from error
     except ValueError as error:
         raise RuntimeError(f"invalid golden sidecar: {error}") from error
+    if patterns < 0 or n_out < 0 or n_out > patterns:
+        raise RuntimeError(
+            f"invalid golden sidecar counts: patterns={patterns}, n_out_of_tol={n_out}"
+        )
+    if (
+        not math.isfinite(max_ulp)
+        or max_ulp < 0
+        or max_ulp > 0xFFFF
+        or not max_ulp.is_integer()
+    ):
+        raise RuntimeError(f"invalid golden sidecar max_bf16_ulp: {max_ulp}")
+    class_max = max(class_ulp for _, class_ulp in classes.values())
+    if max_ulp != class_max:
+        raise RuntimeError(
+            "golden sidecar max/class mismatch: "
+            f"max_bf16_ulp={max_ulp}, class_max={class_max}"
+        )
+    within = corr.get("within_contract")
+    if within not in ("True", "False") or (within == "True") != (n_out == 0):
+        raise RuntimeError(
+            "invalid golden sidecar within_contract: "
+            f"within_contract={within!r}, n_out_of_tol={n_out}"
+        )
+    if "status" in corr:
+        raise RuntimeError(f"golden sidecar is not checked: status={corr['status']}")
+    if "max_ulp_true_sech2" in corr:
+        try:
+            true_max = float(corr["max_ulp_true_sech2"])
+        except ValueError as error:
+            raise RuntimeError(f"invalid golden sidecar: {error}") from error
+        if (
+            not math.isfinite(true_max)
+            or true_max < 0
+            or true_max > 0xFFFF
+            or not true_max.is_integer()
+        ):
+            raise RuntimeError(
+                f"invalid golden sidecar max_ulp_true_sech2: {true_max}"
+            )
     if patterns != count:
         raise RuntimeError(
             f"golden sidecar coverage mismatch: patterns={patterns}, expected={count}"
@@ -336,22 +388,22 @@ def _fold_leg(acc, corr):
         acc["unchecked_reason"] = corr.get("reason", "")
         return
     acc["checked"] = True
-    acc["patterns"] += int(corr.get("patterns", 0))
-    mu = float(corr.get("max_bf16_ulp", 0))
+    acc["patterns"] += int(corr["patterns"])
+    mu = float(corr["max_bf16_ulp"])
     if mu > acc["max_ulp"]:
         acc["max_ulp"] = mu
         acc["max_ulp_input"] = corr.get("max_ulp_input", "-")
     if "max_ulp_true_sech2" in corr:
-        mt = float(corr.get("max_ulp_true_sech2", 0))
+        mt = float(corr["max_ulp_true_sech2"])
         acc["max_ulp_true"] = max(acc["max_ulp_true"], mt)
-    acc["n_out"] += int(corr.get("n_out_of_tol", 0))
-    ulp_admission.fold_class_ulp(acc["class_ulp"], corr.get("class_ulp", ""))
+    acc["n_out"] += int(corr["n_out_of_tol"])
+    ulp_admission.fold_class_ulp(acc["class_ulp"], corr["class_ulp"])
     fw = corr.get("first_witness", "0x00000000")
     try:
         fwi = int(fw, 0)
     except ValueError:
         fwi = 0
-    if int(corr.get("n_out_of_tol", 0)) > 0 and fwi != 0:
+    if int(corr["n_out_of_tol"]) > 0 and fwi != 0:
         cand = (
             fwi,
             corr.get("first_witness_class", "-"),
