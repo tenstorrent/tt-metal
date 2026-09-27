@@ -301,6 +301,7 @@ class LTXPipeline:
         # neither replay overwrites them.
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+        self._device_prompt_handoff = os.environ.get("LTX_DEVICE_PROMPT_HANDOFF", "0") == "1" and not dynamic_load
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:

@@ -424,6 +424,37 @@ class GemmaTokenizerEncoderPair:
         )
         return video, audio
 
+    def _encode_prompt_device(self, prompt: str) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """Return borrowed trace outputs; consume/copy before another encode or trace replay."""
+        assert self.gemma_encoder is not None, "Call ensure_loaded() first"
+        tokens = self.tokenizer(
+            prompt, return_tensors="pt", padding="max_length", max_length=self._sequence_length, truncation=True
+        )
+        tt_ids = ttnn.from_torch(
+            tokens.input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        seq = tt_ids.shape[-1]
+        tt_gemma_mask = self.gemma_encoder.build_attn_mask(tokens.attention_mask, seq)
+        fe_mask = self.feature_extractor.build_mask(tokens.attention_mask)
+        src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
+        return self._encode_device(
+            tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
+        )
+
+    def encode_to_device_buffers(self, prompt: str, video_buffer: ttnn.Tensor, audio_buffer: ttnn.Tensor) -> None:
+        """Copy a fresh static encode into caller-owned, preallocated DiT inputs.
+
+        The sinks must predate every consumer trace. No encoder output alias is
+        retained, and subsequent prompts update the same addresses.
+        """
+        assert not self.dynamic_load, "device prompt handoff requires resident encoder weights"
+        assert tuple(video_buffer.shape) == (1, 1, self._sequence_length, self._video_dim)
+        assert tuple(audio_buffer.shape) == (1, 1, self._sequence_length, self._audio_dim)
+        video, audio = self._encode_prompt_device(prompt)
+        assert audio is not None, "device prompt handoff requires AV mode"
+        ttnn.copy(ttnn.unsqueeze(video, 0), video_buffer)
+        ttnn.copy(ttnn.unsqueeze(audio, 0), audio_buffer)
+
     def encode(self, prompts: list[str]) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
         """Tokenize → traced whole-encode device graph → host embeds, one
         ``(video_embeds, audio_embeds)`` per prompt. Pure compute; the disk cache lives in the
@@ -432,22 +463,7 @@ class GemmaTokenizerEncoderPair:
 
         results = []
         for prompt in prompts:
-            tokens = self.tokenizer(
-                prompt, return_tensors="pt", padding="max_length", max_length=self._sequence_length, truncation=True
-            )
-            tt_ids = ttnn.from_torch(
-                tokens.input_ids, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            seq = tt_ids.shape[-1]
-            # Per-prompt device inputs, built on host and copied into the trace on replay.
-            tt_gemma_mask = self.gemma_encoder.build_attn_mask(tokens.attention_mask, seq)
-            fe_mask = self.feature_extractor.build_mask(tokens.attention_mask)
-            # src_idx/keep_mask are dim-independent → shared by both connectors (build once).
-            src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
-
-            video_dev, audio_dev = self._encode_device(
-                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
-            )
+            video_dev, audio_dev = self._encode_prompt_device(prompt)
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (
                 ttnn.to_torch(ttnn.get_device_tensors(audio_dev)[0]).float() if audio_dev is not None else None

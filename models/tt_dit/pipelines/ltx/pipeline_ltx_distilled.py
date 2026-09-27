@@ -23,12 +23,10 @@ from ...models.transformers.ltx.transformer_ltx import (
     build_video_pad_mask,
 )
 from ...models.vae.vae_ltx import upsample_latent
-from ...utils import tensor as _tensor_utils
 from ...utils import walltime
-from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
-from ...utils.tracing import StateTensor, traced_function
+from ...utils.tracing import StateTensor, Tracer, traced_function
 from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
@@ -339,6 +337,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # separately at the end of this method (it coresident-evicts the DiT/VAE).
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
+        if self._device_prompt_handoff:
+            self._allocate_device_prompt_buffers()
 
         # Allocate every requested stage's persistent trace I/O before any capture so all held inputs
         # sit below every trace's activation region and no replay overwrites another's inputs. The
@@ -869,6 +869,27 @@ class LTXDistilledPipeline(LTXPipeline):
                 device=self.mesh_device,
             )
 
+    def _allocate_device_prompt_buffers(self):
+        """Reserve shared prompt sinks before encoder/DiT/VAE captures."""
+        pair = self.gemma_encoder_pair
+        assert not self.dynamic_load
+        assert pair.video_dim == self.cross_attention_dim, "device handoff requires matching video prompt width"
+        if self._prompt_v.value is None or self._prompt_a.value is None:
+            assert not Tracer._traces_live.get(
+                self.mesh_device.id(), 0
+            ), "prompt buffers must be allocated before capture; release all encoder and consumer traces first"
+        for state, width in ((self._prompt_v, pair.video_dim), (self._prompt_a, pair.audio_dim)):
+            if state.value is None:
+                state.update(
+                    ttnn.zeros(
+                        (1, 1, pair.sequence_length, width),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                    ),
+                    True,
+                )
+
     def _denoise_no_guidance(
         self,
         v_embeds: torch.Tensor,
@@ -895,6 +916,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # trace is still capturing trips !trace_id_.has_value(). Warmup captures, so only the replay
         # path (generate) may set this.
         profile_drain: bool = False,
+        device_prompts: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         _t_init = time.perf_counter()
@@ -1006,14 +1028,19 @@ class LTXDistilledPipeline(LTXPipeline):
             ref_latent_frames=ref_latent_frames,
         )
 
-        prompt_v = self._prepare_prompt(v_embeds)
-        prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
-        # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
-        # fragmenting DRAM for the downstream VAE decode.
-        if traced:
-            self._prompt_v.update(prompt_v, traced)
-            self._prompt_a.update(prompt_a, traced)
+        if device_prompts:
+            assert self._device_prompt_handoff and v_embeds is None and a_embeds is None
+            assert self._prompt_v.value is not None and self._prompt_a.value is not None
             prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
+        else:
+            prompt_v = self._prepare_prompt(v_embeds)
+            prompt_a = bf16_tensor(a_embeds.unsqueeze(0), device=self.mesh_device)
+            # Traced persists the shared prompt (baked address); untraced keeps locals to avoid
+            # fragmenting DRAM for the downstream VAE decode.
+            if traced:
+                self._prompt_v.update(prompt_v, traced)
+                self._prompt_a.update(prompt_a, traced)
+                prompt_v, prompt_a = self._prompt_v.value, self._prompt_a.value
 
         sigmas = torch.tensor(sigma_values, dtype=torch.float32)
 
@@ -1263,7 +1290,10 @@ class LTXDistilledPipeline(LTXPipeline):
         mean, std = self._vae_per_channel_stats()
         io = {"noise": StateTensor(), "mean": StateTensor(), "std": StateTensor(), "weights": None}
         io["noise"].update(
-            torch.zeros(1, 1, video_N, self.in_channels), False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
+            torch.zeros(1, 1, video_N, self.in_channels),
+            False,
+            mesh_axes=[None, None, sp_axis, None],
+            device=self.mesh_device,
         )
         for key, v in (("mean", mean), ("std", std)):
             io[key].update(v.reshape(1, 1, 1, -1).float(), False, device=self.mesh_device)
@@ -1339,7 +1369,16 @@ class LTXDistilledPipeline(LTXPipeline):
         return ttnn.typecast(lat, ttnn.bfloat16)
 
     def _run_stage_transition(
-        self, tokens: ttnn.Tensor, *, num_frames: int, s1_height: int, s1_width: int, height: int, width: int, seed: int, traced: bool
+        self,
+        tokens: ttnn.Tensor,
+        *,
+        num_frames: int,
+        s1_height: int,
+        s1_width: int,
+        height: int,
+        width: int,
+        seed: int,
+        traced: bool,
     ) -> ttnn.Tensor | None:
         """Upload this gen's seeded stage-2 noise and run the (traced) transition. Returns None when the
         upsampler's weights no longer sit at the addresses the trace baked (a reload landed elsewhere),
@@ -1488,8 +1527,13 @@ class LTXDistilledPipeline(LTXPipeline):
         cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
-        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+        if self._device_prompt_handoff:
+            self._allocate_device_prompt_buffers()
+            self.gemma_encoder_pair.encode_to_device_buffers(prompt, self._prompt_v.value, self._prompt_a.value)
+            v_embeds = a_embeds = None
+        else:
+            enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
+            v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
 
         def _stats(label, t):
@@ -1652,6 +1696,7 @@ class LTXDistilledPipeline(LTXPipeline):
             trace_key=s1_trace_key,
             profile_drain=True,
             return_device_video=device_resident,
+            device_prompts=self._device_prompt_handoff,
         )
         t_stage1 = time.time() - t0
         if not device_resident:
@@ -1711,6 +1756,7 @@ class LTXDistilledPipeline(LTXPipeline):
             initial_video_latent=upsampled_flat,
             initial_video_latent_device=upsampled_dev,
             initial_audio_latent=s1_audio.unsqueeze(0) if s1_audio.dim() == 2 else s1_audio,
+            device_prompts=self._device_prompt_handoff,
             image_conds=full_image_conds,
             ref_latent=ref_latent_full,
             ref_strength=ref_strength,
