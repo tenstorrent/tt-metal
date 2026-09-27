@@ -25,6 +25,14 @@ _BYTES_PER_ELEMENT = {ttnn.bfloat16: 2.0, ttnn.bfloat8_b: 1.0625}
 # The margin over that is for placement, which is what actually fails first -- see
 # docs/kv-slot-capacity.md.
 DEFAULT_RUN_RESERVE_BYTES = 1024**3
+# Slots a migrating deployment needs per live sequence. The shared prefill migration driver sends
+# slot ``src`` to ``src + dst_slot_offset`` and defaults that offset to the producer's live-user
+# count (common/prefill/runners/migration_driver.py), so a loopback migration wants a table twice the
+# live set: [0, n) hold sequences and [n, 2n) receive them. MiniMax M3 and GPT-OSS both encode this
+# as a 4-slot runner table against a 2-user producer. It matters here because a count taken from all
+# of DRAM puts every destination out of range, and the driver's advice at that point -- "Grow
+# PREFILL_NUM_USERS" -- is the one thing such a deployment cannot do.
+MIGRATION_SLOTS_PER_USER = 2
 
 
 @dataclass
@@ -119,6 +127,7 @@ def max_user_slots(
     max_seq_len=DEFAULT_MAX_SEQ_LEN,
     cache_dtype=ttnn.bfloat8_b,
     reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
+    slots_per_user=1,
 ):
     """How many slots fit in the DRAM that is free *right now*, with room left to run.
 
@@ -130,14 +139,23 @@ def max_user_slots(
     bank and weights leave the banks slightly fragmented; and ``reserve_bytes`` is withheld for the
     activations a chunk allocates after the cache exists, since a cache that fits but leaves no room
     to run is not useful.
+
+    ``slots_per_user`` rounds the answer down to a multiple of itself, so the caller gets a count it
+    can divide evenly. Pass :data:`MIGRATION_SLOTS_PER_USER` for a deployment that migrates: the live
+    set is then half the returned slots and the other half are their destinations. That costs exactly
+    what doubling the context would -- two slots either way -- so the migratable count at a capacity
+    is the plain count at twice it.
     """
+    if type(slots_per_user) is not int or slots_per_user < 1:
+        raise ValueError(f"slots_per_user must be a positive int, got {slots_per_user!r}")
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
     banks = mesh_device.dram_grid_size().x
     usable_per_bank = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank)
     budget = usable_per_bank * banks - reserve_bytes
     if budget <= 0:
         return 0
-    return int(budget // slot_bytes_per_chip(max_seq_len, cache_dtype))
+    slots = int(budget // slot_bytes_per_chip(max_seq_len, cache_dtype))
+    return slots - slots % slots_per_user
 
 
 def allocate_kv_cache(
@@ -149,6 +167,7 @@ def allocate_kv_cache(
     max_seq_len=DEFAULT_MAX_SEQ_LEN,
     cache_dtype=ttnn.bfloat8_b,
     reserve_bytes=DEFAULT_RUN_RESERVE_BYTES,
+    slots_per_user=1,
 ):
     """Allocate zeroed K/V caches in the packed, block-cyclic SP4/TP8 layout.
 
@@ -159,17 +178,26 @@ def allocate_kv_cache(
     Pass ``num_users="max"`` to take everything DRAM allows at this capacity, which is what a serving
     front end wants when it would rather admit more sequences than choose a number by hand. The count
     is then derived from free DRAM at call time via :func:`max_user_slots`, so it must be called with
-    the weights already loaded, and ``reserve_bytes`` is what stays free for the chunk to run in.
+    the weights already loaded, ``reserve_bytes`` is what stays free for the chunk to run in, and
+    ``slots_per_user`` is how many slots each sequence needs -- :data:`MIGRATION_SLOTS_PER_USER` if
+    its KV has to have somewhere to migrate to.
     """
+    if slots_per_user != 1 and num_users != "max":
+        raise ValueError(f'slots_per_user only applies to num_users="max", got num_users={num_users!r}')
     if num_users == "max":
         num_users = max_user_slots(
-            mesh_device, max_seq_len=max_seq_len, cache_dtype=cache_dtype, reserve_bytes=reserve_bytes
+            mesh_device,
+            max_seq_len=max_seq_len,
+            cache_dtype=cache_dtype,
+            reserve_bytes=reserve_bytes,
+            slots_per_user=slots_per_user,
         )
         if num_users < 1:
             free_per_bank = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank
             free = free_per_bank * mesh_device.dram_grid_size().x
+            want = "no KV slot fits" if slots_per_user == 1 else f"fewer than {slots_per_user} KV slots fit"
             raise RuntimeError(
-                f"no KV slot fits: a slot at max_seq_len={max_seq_len} costs "
+                f"{want}: a slot at max_seq_len={max_seq_len} costs "
                 f"{slot_bytes_per_chip(max_seq_len, cache_dtype) / 2**20:.1f} MiB per chip, and only "
                 f"{free / 2**30:.2f} GiB per chip is free before the {reserve_bytes / 2**30:.2f} GiB run "
                 f"reserve. Lower max_seq_len or free device memory."

@@ -23,6 +23,7 @@ from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt import kv_cache as cache_module
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
+    MIGRATION_SLOTS_PER_USER,
     LlamaKVCache,
     allocate_kv_cache,
     max_user_slots,
@@ -336,8 +337,9 @@ def test_cache_prefix_tracks_complete_writes_and_invalidates_failed_suffix(monke
 
 # A capacity failure must name the knob that caused it and must not strand the cache that did fit,
 # while any other RuntimeError must arrive unedited rather than wearing footprint advice that does
-# not apply. Inject the failure: provoking a real one needs a slot count whose host staging tensor
-# is larger than the DRAM it is meant to overflow, and the device path is covered above.
+# not apply. Inject the failure rather than provoking one: a real shortfall at this slot count is
+# what `test_max_user_slots_tracks_free_dram_and_allocates_what_it_promises` covers on device, and
+# it cannot reach the second allocation, which is the leak this asserts against.
 @pytest.mark.parametrize(
     "message, names_num_users",
     [
@@ -351,7 +353,7 @@ def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
 ):
     live = []
 
-    def fake_from_torch(source, **metadata):
+    def fake_zeros(shape, **metadata):
         if len(live) == 1:  # the K cache fit; fail the V cache
             raise RuntimeError(message)
         tensor = SimpleNamespace(deallocate=lambda force: live.remove(tensor))
@@ -360,10 +362,7 @@ def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
 
     monkeypatch.setattr(cache_module, "_validate_target", lambda *args, **kwargs: None)
     monkeypatch.setattr(cache_module, "_cache_memory_config", lambda mesh_device: None)
-    monkeypatch.setattr(cache_module.ttnn, "from_torch", fake_from_torch)
-    monkeypatch.setattr(cache_module.ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
-    # The staging buffer is beside the point here and would be 4 GB at this slot count.
-    monkeypatch.setattr(cache_module.torch, "zeros", lambda shape: None)
+    monkeypatch.setattr(cache_module.ttnn, "zeros", fake_zeros)
 
     with expect_error(RuntimeError, "num_users=64" if names_num_users else message):
         allocate_kv_cache(object(), object(), num_users=64, max_seq_len=8192)
@@ -545,6 +544,92 @@ def test_max_user_slots_tracks_free_dram_and_allocates_what_it_promises(mesh_dev
             f"auto-sized cache: {wanted} slots took {taken / 2**20:.1f} MiB/chip, "
             f"top slot (batch {top_plane}) writable; a full-DRAM ask at max_seq_len={MAX_SEQ_LEN} "
             f"would have given {max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN)} slots"
+        )
+    finally:
+        cache.k.deallocate(True)
+        cache.v.deallocate(True)
+
+
+# A count taken from all of DRAM is exactly the count a migrating deployment cannot use: the shared
+# driver sends slot `src` to `src + num_users`, so an odd or fully-consumed table puts every
+# destination out of range. `slots_per_user` reserves the destinations up front. What this checks is
+# that the reservation is real -- the pairing is exact, and the destination half is addressable, which
+# is the part a byte count alone would not catch.
+@pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
+def test_max_user_slots_reserves_a_migration_destination_for_every_slot(mesh_device, expect_error):
+    mesh_config = MeshConfig(MESH_SHAPE, TP)
+    banks = mesh_device.dram_grid_size().x
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    usable = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank) * banks
+    slot_bytes = slot_bytes_per_chip(MAX_SEQ_LEN)
+
+    # The whole point of the constant: a live sequence plus its destination costs two slots, which is
+    # what one slot of twice the context costs, so these two numbers are the same reading.
+    assert MIGRATION_SLOTS_PER_USER == 2
+    migratable = max_user_slots(
+        mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=0, slots_per_user=MIGRATION_SLOTS_PER_USER
+    )
+    doubled = max_user_slots(mesh_device, max_seq_len=2 * MAX_SEQ_LEN, reserve_bytes=0)
+    assert migratable % MIGRATION_SLOTS_PER_USER == 0
+    assert abs(migratable // MIGRATION_SLOTS_PER_USER - doubled) <= 1, f"{migratable} vs {doubled}"
+
+    # Rounding down, never up: at every reserve that leaves an odd number of slots, the migratable
+    # count is the even number below it and still fits.
+    for odd in (3, 5, 7):
+        reserve = usable - odd * slot_bytes
+        plain = max_user_slots(mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=reserve)
+        paired = max_user_slots(
+            mesh_device, max_seq_len=MAX_SEQ_LEN, reserve_bytes=reserve, slots_per_user=MIGRATION_SLOTS_PER_USER
+        )
+        assert (plain, paired) == (odd, odd - 1), f"reserve for {odd} slots gave {plain}/{paired}"
+
+    with expect_error(ValueError, "slots_per_user must be a positive int"):
+        max_user_slots(mesh_device, slots_per_user=0)
+    with expect_error(ValueError, "slots_per_user must be a positive int"):
+        max_user_slots(mesh_device, slots_per_user=True)
+    # An explicit count already states the table size, so the two together would be contradictory
+    # rather than merely redundant.
+    with expect_error(ValueError, 'slots_per_user only applies to num_users="max"'):
+        allocate_kv_cache(mesh_device, mesh_config, num_users=4, slots_per_user=MIGRATION_SLOTS_PER_USER)
+    # Two live slots need four, so a reserve leaving three is a shortfall and must say so.
+    with expect_error(RuntimeError, f"fewer than {MIGRATION_SLOTS_PER_USER} KV slots fit"):
+        allocate_kv_cache(
+            mesh_device,
+            mesh_config,
+            num_users="max",
+            reserve_bytes=usable - slot_bytes,
+            slots_per_user=MIGRATION_SLOTS_PER_USER,
+        )
+
+    live = 2
+    reserve = usable - (live * MIGRATION_SLOTS_PER_USER + 1) * slot_bytes
+    cache = allocate_kv_cache(
+        mesh_device, mesh_config, num_users="max", reserve_bytes=reserve, slots_per_user=MIGRATION_SLOTS_PER_USER
+    )
+    try:
+        assert cache.num_users == live * MIGRATION_SLOTS_PER_USER
+        # Every source has a destination inside the table, which is what the driver's range check
+        # asks of it, and the destinations carry the highest batch indices in the packing.
+        for src in range(live):
+            dst = src + live
+            assert dst < cache.num_users
+            chunk = torch.full((NUM_KV_HEADS, GLOBAL_CHUNK, HEAD_DIM), float(src + 1))
+            tt_k, tt_v = _to_chunk(mesh_device, chunk), _to_chunk(mesh_device, -chunk)
+            write_kv_chunk(cache, tt_k, tt_v, slot_idx=dst, layer_idx=0, actual_start=0, actual_end=GLOBAL_CHUNK)
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+        ttnn.synchronize_device(mesh_device)
+        for src in range(live):
+            plane = (src + live) * NUM_LAYERS
+            for device_idx, shard in enumerate(ttnn.get_device_tensors(cache.k)):
+                rows = ttnn.to_torch(shard).float()[plane, 0, :LOCAL_CHUNK]
+                expected = torch.full_like(rows, float(src + 1))
+                assert torch.equal(rows, expected), f"destination slot {src + live} unwritten on chip {device_idx}"
+        logger.info(
+            f"migratable cache: {cache.num_users} slots for {live} live sequences, destinations "
+            f"{live}..{cache.num_users - 1} writable; a full-DRAM migratable ask at "
+            f"max_seq_len={MAX_SEQ_LEN} would give {migratable} slots for "
+            f"{migratable // MIGRATION_SLOTS_PER_USER} sequences"
         )
     finally:
         cache.k.deallocate(True)
