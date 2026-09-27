@@ -40,7 +40,11 @@ import torch
 
 import ttnn
 
-from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import torch_rms_norm_ttnn
+
+# The op under test is the C++ binding; the Python builder is its parity reference
+# (test_rms_norm_ttnn_cpp_parity.py).
+rms_norm_ttnn = ttnn.bringup.rms_norm
 
 LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 

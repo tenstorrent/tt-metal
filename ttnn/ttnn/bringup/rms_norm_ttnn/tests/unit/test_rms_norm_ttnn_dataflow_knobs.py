@@ -49,6 +49,8 @@ from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
     create_program_descriptor,
 )
 
+from ttnn.bringup.rms_norm_ttnn.tests.unit.builders import BUILDER_IDS, BUILDERS
+
 _ML = ttnn.TensorMemoryLayout
 
 # Where each knob lands.  Indices, not slices: an off-by-one here is exactly the drift
@@ -68,8 +70,9 @@ def _config():
     return c
 
 
-def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    """Build the descriptor for one configuration.  No dispatch."""
+def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, builder="python"):
+    """Build the descriptor for one configuration.  No dispatch.  `builder` picks the Python builder or the
+    C++ host side (the op ttnn.bringup.rms_norm runs); knob-flipping tests can only reach the Python one."""
     torch.manual_seed(0)
     W = shape[-1]
     mc = ttnn.DRAM_MEMORY_CONFIG
@@ -84,9 +87,8 @@ def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE
         else None
     )
     out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, mc)
-    return create_program_descriptor(
-        x, out, weight=w, bias=b, residual=r, epsilon=1e-12, compute_kernel_config=_config()
-    )
+    build = create_program_descriptor if builder == "python" else BUILDERS[builder]
+    return build(x, out, weight=w, bias=b, residual=r, epsilon=1e-12, compute_kernel_config=_config())
 
 
 # --------------------------------------------------------------------------------
@@ -94,19 +96,21 @@ def _build(device, shape, *, mode="gamma", dtype=ttnn.bfloat16, layout=ttnn.TILE
 # --------------------------------------------------------------------------------
 
 
-def test_pass_a_square_takes_the_dest_block_by_default(device):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_pass_a_square_takes_the_dest_block_by_default(device, builder):
     """Measured 1.009-1.026x on the interleaved prefill -- it ships ON."""
     assert PD.PASS_A_SQ_BLOCK == 1, "pass A's DEST-lane block is the phase's measured win; it ships on"
-    d = _build(device, (1, 1, 256, 1024))
+    d = _build(device, (1, 1, 256, 1024), builder=builder)
     ct = list(d.kernels[2].compile_time_args)
     assert len(ct) == COMPUTE_CT_SCALARS
     assert ct[_CT_PASS_A_SQ_BLOCK] == 1
 
 
-def test_res_fuse_is_parked_at_its_byte_identical_default(device):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_res_fuse_is_parked_at_its_byte_identical_default(device, builder):
     """Lamp L-RES-FUSE measured 0.989x where it is even correct -- parked, NOT deleted."""
     assert PD.RES_FUSE == 0
-    d = _build(device, (1, 1, 256, 1024), mode="gamma_bias_residual")
+    d = _build(device, (1, 1, 256, 1024), mode="gamma_bias_residual", builder=builder)
     assert list(d.kernels[2].compile_time_args)[_CT_RES_FUSE] == 0
 
 
@@ -128,10 +132,11 @@ def test_the_pass_a_knobs_are_still_live(device, knob, index):
 # --------------------------------------------------------------------------------
 
 
-def test_the_transaction_word_is_a_plain_block_rows_at_the_default(device):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_the_transaction_word_is_a_plain_block_rows_at_the_default(device, builder):
     assert PD.DM_TXN_ROWS_MAX == 1, "lever 3 measured flat; it ships parked at the seed's per-tile-row barrier"
     for shape in [(1, 1, 8192, 1024), (1, 1, 256, 1024), (1, 1, 1024, 256)]:
-        d = _build(device, shape)
+        d = _build(device, shape, builder=builder)
         reader = list(d.kernels[0].compile_time_args)[_CT_BLOCK_ROWS]
         writer = list(d.kernels[1].compile_time_args)[_CT_BLOCK_ROWS]
         assert reader == writer, "both dataflow halves must decode the SAME packed word"
@@ -171,11 +176,12 @@ def test_a_transaction_unit_that_does_not_divide_the_block_is_refused(expect_err
 # --------------------------------------------------------------------------------
 
 
-def test_per_channel_trim_ships_derived(device):
+@pytest.mark.parametrize("builder", BUILDER_IDS)
+def test_per_channel_trim_ships_derived(device, builder):
     """D23's derived policy WON the re-measurement (0.76-1.00x for anything coarser)."""
     assert PD.PER_CHANNEL_TRIM_GAMMA == TRIM_DERIVED
     assert PD.PER_CHANNEL_TRIM_BIAS == TRIM_DERIVED
-    d = _build(device, (1, 1, 256, 1024), mode="gamma_bias")
+    d = _build(device, (1, 1, 256, 1024), mode="gamma_bias", builder=builder)
     ct = list(d.kernels[0].compile_time_args)
     assert len(ct) >= READER_CT_SCALARS
     # bf16's 2048-byte tile has a 512-byte face: 64-byte aligned, so both take the
