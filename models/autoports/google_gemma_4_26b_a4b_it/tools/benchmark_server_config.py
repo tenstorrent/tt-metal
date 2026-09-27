@@ -42,6 +42,8 @@ def profile_plan(slots):
         option("--block-size"),
         "--max-num-seqs",
         str(slots),
+        "--host",
+        "127.0.0.1",
         "--port",
         "8000",
         "--max-model-len",
@@ -59,6 +61,7 @@ def profile_plan(slots):
             **inherited["environment"],
             "MESH_DEVICE": option("--mesh-device"),
             "HF_MODEL": MODEL,
+            "VLLM_SERVER_DEV_MODE": "1",
         },
         "inherited_precision": "doc/datatype_sweep/selected_precision_config.json",
         "required_before_launch": [

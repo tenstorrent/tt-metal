@@ -1,0 +1,21 @@
+["/home/container_app_user/tt-metal/python_env/bin/python", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_server.py", "--max-num-seqs", "32", "--base-url", "http://127.0.0.1:8000", "--output", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/perf-b32-server.json"]
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_server.py", line 229, in <module>
+    main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_server.py", line 171, in main
+    info = get_json(args.base_url + "/server_info?config_format=json")
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_server.py", line 76, in get_json
+    with urlopen(url, timeout=10) as response:
+  File "/usr/lib/python3.10/urllib/request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+  File "/usr/lib/python3.10/urllib/request.py", line 525, in open
+    response = meth(req, response)
+  File "/usr/lib/python3.10/urllib/request.py", line 634, in http_response
+    response = self.parent.error(
+  File "/usr/lib/python3.10/urllib/request.py", line 563, in error
+    return self._call_chain(*args)
+  File "/usr/lib/python3.10/urllib/request.py", line 496, in _call_chain
+    result = func(*args)
+  File "/usr/lib/python3.10/urllib/request.py", line 643, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 404: Not Found

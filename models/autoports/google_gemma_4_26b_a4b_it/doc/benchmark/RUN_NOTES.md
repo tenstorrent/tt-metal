@@ -127,3 +127,7 @@ Blackhole devices; no external reservation was acquired or released.
 Setup records, client transport proof and frozen task settings are separate
 from timed inference. Native top64 accuracy uses the existing host logits sampler;
 greedy performance uses device sampling. No live device profiler is enabled.
+
+Timed attempt01: startup succeeded, but configuration endpoint /server_info returned404.
+All evidence retained at attempts/01-configuration-endpoint/. Elapsed178.00277232471853seconds, no accuracy/performance inference. Hook stopped its owned server.
+Preparation commit4fa30800a4f2ac5994986f3bcbc16bd15285f974;33host tests passed.

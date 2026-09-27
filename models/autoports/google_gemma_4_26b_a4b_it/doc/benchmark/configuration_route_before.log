@@ -1,0 +1,17 @@
+test_drift_rejected (__main__.ServerConfigurationTests) ... ok
+test_effective_configuration_route_enabled_for_both_profiles (__main__.ServerConfigurationTests) ... FAIL
+test_profiles_preserve_context_and_pin_revisions (__main__.ServerConfigurationTests) ... ok
+test_wrong_trace_rejected (__main__.ServerConfigurationTests) ... ok
+
+======================================================================
+FAIL: test_effective_configuration_route_enabled_for_both_profiles (__main__.ServerConfigurationTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchmark_server_config.py", line 80, in test_effective_configuration_route_enabled_for_both_profiles
+    self.assertEqual(plan["environment_overrides"].get("VLLM_SERVER_DEV_MODE"), "1")
+AssertionError: None != '1'
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.005s
+
+FAILED (failures=1)
