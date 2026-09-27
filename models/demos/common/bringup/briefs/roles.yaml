@@ -47,6 +47,12 @@ perf: |
   Precision (owner rule): lower matmul fidelity from HiFi4 to HiFi2 one group of matmuls at a time (a group that fails
   accuracy at HiFi2 stays at HiFi4), then lower weight precision step by step (e.g. bf16 -> bfp8). Never bfp4 unless
   the HF checkpoint stores those weights in 4 bits. Do not change activation precision.
+optests: |
+  Role: optests. $model calls derived bring-up ops (`ttnn.bringup.*`, see `ttnn/ttnn/bringup/INDEX.md`). Every
+  distinct call it makes needs a test case in that fork's `tests/`, with random inputs (never the model's real
+  activations, goldens or weights). Follow `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`. The gate
+  records the calls in `$bringup_dir/results/fork_calls.json` and its log lists the ones with no case (sig, op). Add
+  cases for those; never remove or loosen another model's case. The gate then runs every test of every fork used.
 assemble: |
   Role: assemble. Every step of every block type has passed on the device, but through the hybrid harness
   (`$model_dir/bringup/hooks.py`: the CPU reference with host in / host out around each device step). Build the model

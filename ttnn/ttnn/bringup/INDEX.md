@@ -7,8 +7,11 @@ Before forking, check this table. If the op is already here, reuse the fork, and
 whose default keeps the fork's current behaviour. Each fork's `CHANGELOG.md` lists its source path and SHA, and every
 change made to it (what, why, which model and task).
 
-Forking: `python ttnn/ttnn/bringup/fork_op.py <source op folder> --model <model> --task <task>`, then make the change,
-fill the changelog, `./build_metal.sh`, and run the fork's tests (`<fork>/tests/`).
+How to fork: `models/demos/common/bringup/skill/bringup-fork-op/SKILL.md`. In short: `python
+ttnn/ttnn/bringup/fork_op.py <source op folder> --model <model> --task <task>`, then make the change, fill the
+changelog, `./build_metal.sh`, and run the fork's tests (`<fork>/tests/`). Every model that calls a fork adds a
+random-input case to those tests for each call it makes: `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`
+(bring-up task O.1).
 
 A person decides later whether a fork is ported back to the original op. When it is, the fork is deleted and its
 users are switched back.
