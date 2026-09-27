@@ -44,9 +44,28 @@ original; leave them unless your change needs them.
 ## 3. Change it
 
 Make the change in the fork only. Keep it as small as the need; the smaller the diff, the easier the port back.
-- New behaviour goes behind an option, default off (see 1).
-- If the option changes what the program compiles to, add it to the program-cache key (the op's
-  `compute_program_hash` / attributes).
+Forks are shared, so extending one must never change what it already does. Follow this recipe for every change to an
+existing fork, whether it is a new feature, a new argument, a new output or a bug fix:
+
+1. **Baseline first.** Before touching anything, run the fork's whole test suite and write down the counts: its own
+   unit suite (`tests/unit/`, if it has one) and every model's cases (`tests/test_*.py`), with
+   `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests`. Known failures stay known; a new one after
+   your change is yours.
+2. **Behind an option, default off.** The new behaviour is an argument or enum value whose default keeps today's
+   behaviour, return type and program. When it is off, the program must be the one it was: the same kernels
+   (e.g. new kernel code only behind a define that is absent when off), the same compile-time and runtime args, and
+   the same circular buffers. If the option changes what the program compiles to, add it to the program-cache key
+   (the op's `compute_program_hash` / attributes).
+3. **Old tests again, option off.** Rerun the same suite. The counts must match the baseline. Where the fork has a
+   program-level check (a parity or descriptor test), it must show the option-off program is unchanged.
+4. **New tests for the new setting.** Put them in the fork's own tests (`tests/unit/` for an op-level feature). Check
+   the new output against a torch reference, cover the shapes, layouts and placements you claim, test the refusals,
+   and show once, by hand, that a test fails when the new output is corrupted. A model that starts calling the new
+   setting then gets its case through task O.1 (skill `bringup-fork-tests`).
+5. **Record it.** Add a `CHANGELOG.md` entry (below) and update the `INDEX.md` row.
+
+A bug fix that has to change the default behaviour is the one exception to step 2. Say so in the changelog, and
+rerun every model's cases: they are exactly the models the fix changes.
 - Kernels compile at run time, so kernel-only edits need no build. Host code (program factory, device operation,
   bindings) does.
 
@@ -88,7 +107,8 @@ the fork and relinks ttnn. If a build dies halfway, run it again before reading 
 - Give the fork a test case for every call the model makes. That is the `bringup-fork-tests` skill
   (`models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`), with random inputs.
 - Run the fork's whole test folder, not only your cases: `scripts/run_safe_pytest.sh --run-all
-  ttnn/ttnn/bringup/<fork>/tests`. Another model's case failing means your change broke that model.
+  ttnn/ttnn/bringup/<fork>/tests`. Another model's case failing means your change broke that model. When you extended
+  an existing fork, this is step 3 of the recipe in section 3: the counts must match your baseline.
 
 ## 7. For the reviewer
 
