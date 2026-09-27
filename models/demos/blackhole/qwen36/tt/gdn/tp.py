@@ -9,6 +9,7 @@ Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm u
 
 import math
 import os
+import time
 from dataclasses import dataclass
 
 import torch
@@ -1588,25 +1589,56 @@ class TPGatedDeltaNet:
             self._hist_packed_valid = False
         self._conv_win_stale = True
 
-    def remap_slots(self, remap):
+    def remap_slots(self, remap, timing=None):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
         previously at slot remap[i] (identity entries are no-ops). Mirrors
         seed_manager.apply_slot_remap for GDN's per-slot recurrent+conv state, which the plugin's
         slot_remap does not itself move. In-place copy into the fixed buffers (preserves the decode
-        trace's baked addresses)."""
+        trace's baked addresses).
+
+        ``timing`` (perf triage, QWEN36_DECODE_SLOW_LOG): a dict that accumulates wall seconds per phase
+        (``taps_s`` sync_conv_taps, ``rec_s`` recurrent gather, ``conv_s`` the K tap gathers, ``packed_s`` the
+        packed-history remap incl. its cross-parity host round trips, ``hist_sync_s`` the rebuild fallback),
+        with the device synchronized around every phase, plus ``moved`` / ``cross_parity`` row counts and
+        ``packed`` (the packed path ran). None (the default) adds no sync and no work."""
         idx = [int(remap[i]) for i in range(self.B)]
         if all(idx[i] == i for i in range(self.B)):
             return
+        if timing is None:
+            _phase = None
+        else:
+            timing["moved"] = sum(1 for i, s in enumerate(idx) if s != i)
+            timing["cross_parity"] = sum(1 for i, s in enumerate(idx) if (s & 1) != (i & 1))
+            ttnn.synchronize_device(self.mesh)
+            _mark = [time.perf_counter()]
+
+            def _phase(name):
+                ttnn.synchronize_device(self.mesh)
+                now = time.perf_counter()
+                timing[name] = timing.get(name, 0.0) + now - _mark[0]
+                _mark[0] = now
+
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
+        if _phase:
+            _phase("taps_s")
         self._gather_indices(self.rec_state, idx, dim=0)
+        if _phase:
+            _phase("rec_s")
         # conv_states first: the packed-history fallback below (no valid packed buffer) rebuilds FROM conv_states, so
         # they must already be in the post-remap order when it runs.
         for m in range(self.K):
             self._gather_indices(self.conv_states[m], idx, dim=1)
+        if _phase:
+            _phase("conv_s")
         if self.conv_hist_packed is not None and self._hist_packed_valid:
             self._remap_conv_hist_packed(idx)
+            if _phase:
+                timing["packed"] = True
+                _phase("packed_s")
         else:
             self._sync_conv_hist_packed()
+            if _phase:
+                _phase("hist_sync_s")
         self._conv_win_stale = True
 
     def _remap_conv_hist_packed(self, idx):

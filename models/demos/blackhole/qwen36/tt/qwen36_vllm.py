@@ -88,7 +88,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     # ``supports_chunked_prefill`` True plus ``tt_prefill_chunk_tokens`` (the 2048 chunk-trace unit; the plugin's chunk
     # size must be a multiple of it), consumed by the plugin's chunk policy. A resumed chunk continues from the GDN
     # state parked in the B=1 prefill scratch (model.prefill_paged_slots, tt/chunked_prefill.py). With the knob off
-    # neither key is present, so every profile resolves exactly as before.
+    # both keys read as absent (``in`` False, ``.get`` returns the caller's default, ``[]`` of the chunk size raises),
+    # so every profile resolves exactly as before. The two keys are DYNAMIC: they live only in the accessors, not in
+    # the dict storage, so a copy (``dict(caps)``, ``{**caps}``) or ``.items()`` / iteration sees only the static
+    # entries. Consumers must query the class attribute through ``[]`` / ``in`` / ``.get`` (the plugin does), and a
+    # subclass that copies the dict (the DFlash class) must state its own chunked-prefill entries explicitly.
+    # The knob is model-side only: with QWEN36_CHUNKED_PREFILL=1 the park buffer (~147 MiB/device at TP=2) is
+    # allocated at warmup even when the plugin later leaves the policy off (async scheduling, kv_transfer_config /
+    # p1d1, --no-enable-chunked-prefill), which only costs KV-pool headroom; set the knob only on a chunking profile.
     class _ModelCapabilities(dict):
         """dict whose ``supports_async_decode`` (QWEN36_ASYNC_DECODE_OK) and chunked-prefill (QWEN36_CHUNKED_PREFILL)
         entries are read from the environment at access time."""
@@ -113,16 +120,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             return super().__getitem__(key)
 
         def __contains__(self, key):
-            if key == self._CHUNK_TOKENS:
+            if key in (self._CHUNK_TOKENS, self._CHUNKED):
                 return self._chunked_on()
-            if key == self._CHUNKED:
-                return True
             return super().__contains__(key)
 
         def get(self, key, default=None):
-            if key in (self._ASYNC, self._CHUNKED):
+            if key == self._ASYNC:
                 return self[key]
-            if key == self._CHUNK_TOKENS:
+            if key in (self._CHUNKED, self._CHUNK_TOKENS):
                 return self[key] if self._chunked_on() else default
             return super().get(key, default)
 
@@ -525,13 +530,23 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
         # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
         # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
-        _slow_log = os.environ.get("QWEN36_DECODE_SLOW_LOG", "0") == "1"  # perf triage: log slow decode steps
+        # QWEN36_DECODE_SLOW_LOG=1 (perf triage, off by default): drain the device FIRST, so neither the step time
+        # nor the remap time includes work still queued from the previous step (a prefill's slot-write copies, the
+        # conv-history sync), then time the GDN slot remap phase by phase (model._remap_gdn_slots timing=: device
+        # synced between phases) and log every remap step and every other step slower than 150 ms. The syncs slow
+        # the logged steps a little; do not quote TPOT from a run with it on.
+        _slow_log = os.environ.get("QWEN36_DECODE_SLOW_LOG", "0") == "1"
+        if _slow_log:
+            _tq0 = time.perf_counter()
+            ttnn.synchronize_device(self.mesh_device)
+            _t_queued = time.perf_counter() - _tq0
         _td0 = time.perf_counter() if _slow_log else 0.0
         _t_remap = 0.0
+        _remap_timing = {} if _slow_log else None
         if model.use_tp and model.args.max_batch_size > 1:
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
-                model._remap_gdn_slots(slot_remap)
+                model._remap_gdn_slots(slot_remap, timing=_remap_timing)
                 if _slow_log:
                     ttnn.synchronize_device(self.mesh_device)
                     _t_remap = time.perf_counter() - _td0
@@ -591,9 +606,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         out = super().decode_forward(*args, **kwargs)
         _dt = time.perf_counter() - _td0
         if _dt > 0.15 or kwargs.get("slot_remap") is not None:
+            _rt = _remap_timing or {}
+            _phases = " ".join(
+                f"{k}={1e3 * _rt[k]:.0f}" for k in ("taps_s", "rec_s", "conv_s", "packed_s", "hist_sync_s") if k in _rt
+            )
             logger.info(
                 f"[DECODE_SLOW] {1e3 * _dt:.0f} ms B={int(tokens.shape[0]) if tokens is not None else None} "
                 f"remap={'yes' if kwargs.get('slot_remap') is not None else 'no'} remap_ms={1e3 * _t_remap:.0f} "
+                f"queued_ms={1e3 * _t_queued:.0f} moved={_rt.get('moved', 0)} cross_parity={_rt.get('cross_parity', 0)} "
+                f"packed={'yes' if _rt.get('packed') else 'no'} phases_ms[{_phases}] "
                 f"kw={sorted(k for k in kwargs if kwargs[k] is not None and k not in ('tokens', 'page_table', 'kv_cache'))}"
             )
         return out

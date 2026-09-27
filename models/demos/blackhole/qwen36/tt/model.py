@@ -2838,8 +2838,8 @@ class Qwen36Model:
         """Allocate the chunked-prefill PARK buffer once: a same-shape twin of every GDN layer's persistent B=1 prefill
         scratch (rec_state, the K conv taps, conv_carry), and compile both copy directions. Call it at warmup BEFORE
         any trace is captured (the chunk trace bakes the scratch addresses; a buffer allocated later could alias a
-        trace intermediate). ~154 MB/device at TP=2 (48 layers x (fp32 [1,24,128,128] 1.5 MB + 5 tile-padded
-        [1,<=3,5120] bf16 taps/carry 0.33 MB each)), which comes out of the KV-pool headroom that
+        trace intermediate). 147 MiB/device measured at TP=2 (48 layers x (fp32 [1,24,128,128] 1.5 MiB + 5 tile-padded
+        [1,<=3,5120] bf16 taps/carry ~0.31 MiB each)), which comes out of the KV-pool headroom that
         QWEN36_MAX_TOKENS_ALL_USERS can grow into. QWEN36_CP_PARK_HOST=1 parks through host memory instead (no device
         buffer; ~2 host round trips of the state per park/unpark), the fallback should the device copy ever drift."""
         if getattr(self, "_gdn_park", None) is not None:
@@ -3689,14 +3689,15 @@ class Qwen36Model:
             ]
             dn.write_slot(slot, rec, convs, sync_hist=sync_hist)
 
-    def _remap_gdn_slots(self, remap):
+    def _remap_gdn_slots(self, remap, timing=None):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
         (device-side; slot i takes the state at slot remap[i]). Mirrors seed_manager.apply_slot_remap
         for GDN's per-slot recurrent+conv state, which the plugin's slot_remap does not itself move.
-        No-op for an identity remap."""
+        No-op for an identity remap. ``timing``: optional dict, per-phase seconds summed over the GDN
+        layers (GDNTP.remap_slots; perf triage only, it synchronizes the device between phases)."""
         for layer in self.layers:
             if not layer.is_full_attention:
-                layer.attention.remap_slots(remap)
+                layer.attention.remap_slots(remap, timing=timing)
 
     def set_gdn_fused_decode(self, enabled: bool) -> None:
         """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op
