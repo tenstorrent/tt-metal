@@ -144,7 +144,7 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
             g = mag * 0.265625f + -0.046875f;
         }
         v_endif;
-        sfpi::dst_reg[0] = sfpi::setsgn(g, input) + 0.5f;
+        sfpi::dst_reg[0] = sfpi::copysgn(g, input) + 0.5f;
         sfpi::dst_reg++;
     }
 }
@@ -155,7 +155,7 @@ __attribute__((noinline)) void calculate_signbit_fresh_cpp() {
     {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vInt sign = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(input), -31));
-        sfpi::dst_reg[0] = sfpi::int32_to_float(sign, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat>(sign, sfpi::RoundMode::Nearest);
         sfpi::dst_reg++;
     }
 }

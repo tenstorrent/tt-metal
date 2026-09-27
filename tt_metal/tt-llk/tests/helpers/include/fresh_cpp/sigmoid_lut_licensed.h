@@ -74,7 +74,7 @@ __attribute__((noinline)) void calculate_sigmoid_lut_licensed_cpp()
             s = a * 0x1.a08p-5f + 0x1.28cp-2f;
         }
         v_endif;
-        sfpi::dst_reg[0] = sfpi::setsgn(s, x) + 0.5f;
+        sfpi::dst_reg[0] = sfpi::copysgn(s, x) + 0.5f;
         sfpi::dst_reg++;
     }
 }

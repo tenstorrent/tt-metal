@@ -67,7 +67,7 @@ __attribute__((noinline)) void calculate_tanh_lut_licensed_cpp()
             t = a * 0x1.244p-6f + 0x1.dfp-1f;
         }
         v_endif;
-        sfpi::dst_reg[0] = sfpi::setsgn(t, x);
+        sfpi::dst_reg[0] = sfpi::copysgn(t, x);
         sfpi::dst_reg++;
     }
 }

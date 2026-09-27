@@ -53,8 +53,8 @@ __attribute__((noinline)) void calculate_div_int32_floor_fresh_cpp()
             const sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
             const sfpi::vInt b = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
 
-            const sfpi::vFloat fa = sfpi::int32_to_float(a, sfpi::RoundMode::Nearest); // exact: |a| < 2^23
-            const sfpi::vFloat fb = sfpi::int32_to_float(b, sfpi::RoundMode::Nearest);
+            const sfpi::vFloat fa = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest); // exact: |a| < 2^23
+            const sfpi::vFloat fb = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
 
             // Hardware-seeded reciprocal (positive finite divisors only,
             // which the domain guarantees).
