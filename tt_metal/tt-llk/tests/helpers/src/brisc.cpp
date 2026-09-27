@@ -156,8 +156,12 @@ int main()
                 break;
         }
 
-        // Wait for 1us before polling again
-        ckernel::wait(ARCH_CYCLE_MICRO_SECOND);
+        // Poll about every 100 us and spin on NOPs in between: each poll is an L1 read, and the old wall clock wait kept
+        // the debug register bus busy. Both changed the timing of the kernel under test.
+        for (std::uint32_t i = 0; i < 100 * ARCH_CYCLE_MICRO_SECOND; ++i)
+        {
+            asm volatile("nop");
+        }
     }
 }
 
