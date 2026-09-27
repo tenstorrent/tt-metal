@@ -324,3 +324,32 @@ DEST on the NP-2 / per-core-heavy shapes (K3 +9%, M3 +19%, TP4 +7%), faster only
 buy speed back but the bias returns (1.09-1.10 at 7 K-blocks). Each pass packs 8 tiles with an L1 read-modify-write
 and a packer drain, comparable to the pass's matmul on these shapes. fp32 DEST stays the default; l1acc is kept as
 an option. Untried: ping-pong partial buffers (pass g into buffer g % 2) to drop the per-pass drain, summed once.
+
+### Targeting K3 and TP4 at large M (fp32 gate/up), vs the existing ops
+- K3 cost diagnosis: bf16 at MT 1 costs exactly what fp32 costs (155 vs 157 us/expert at M 512, 557 vs 557 at 2048):
+  fp32 itself is free, the cost is the 32-row sub-blocks it forced. Zones: gate/up and down compute per row tile
+  identical at MT 1 / 2 (5.93 vs 11.76 us per zone), i.e. a fixed ~3.5-4 us per sub-block of pipeline overhead.
+- Fix: gate/up row passes (`SE_GU_RP`, host `MIMO_FL_GU_RP` auto: dynamic counts, NP <= 2, NK_GU <= X_SLOTS): the
+  pipeline keeps the 8-tile-sized sub-block, gate/up runs its K loop once per 4 / (2 NP) row tiles over the same x
+  blocks (held in the x ring until the final pass; block b addressed with the signed wrap offset, first version
+  without it gave rel err 0.41) and the same resident weights. K3: 50.2 / 126.2 / 419.7 us (fp32 was 49.1 / 156.5 /
+  557.1, bf16 50.0 / 123.4 / 420.2). DSv4-F also gains (98.4 -> 89.2 at 512, 327.7 -> 284.3 at 2048); M3 neutral;
+  K2 cannot use it (28 K-blocks > 24 x slots, no L1 for more).
+- Tried, worse: full-sync fp32 DST (8 tiles, no math/pack overlap): K3 184 / 708 us at 512 / 2048.
+- TP4: G 2 + 2 relay helpers is now the default for splits that would put gate/up on < 32 cores (G 1: 20.9 / 112.5 /
+  435.0; G2: 24.9 / 91.8 / 346.1; G2 + 2 helpers: 24.7 / 85.2 / 309.1; G2 + 3 helpers: 25.3 / 82.0 / 305.0; G4 + 2
+  helpers: 35.5 / 94.2 / 328.7). M-groups by rectangle (`MIMO_FL_GROUP_RECT`, auto for G 2: each relay multicasts
+  only its group's rows, half the bytes) changed nothing (310.4). Profile at 2048: gate/up cores busy ~92%, 18.4 us
+  median per 128-row sub-block vs 13.6 us minimum; the ~5 us stall is not the relays' tilize / DRAM / multicast
+  bytes or the h chain (all probed): unresolved.
+
+Final defaults (fp32 gate/up + row passes + TP4 G2), us per expert, 8 balanced experts, row-major bf16 DRAM input;
+best existing = faster of unified / fused (fused cannot run clamped SiLU-GLU as the small-M path):
+| shape | M 32 flat / existing | M 512 | M 2048 | norm ratio | PCC |
+|---|---|---|---|---|---|
+| K2 7168x2048 | 62.1 / 83.0 (1.34x) | 128.3 / 156.3 (1.22x) | 453.0 / 573.0 (1.26x) | 1.042 | 0.9982 |
+| K3 3584x3072 situ | 50.4 / 74.0 (1.47x) | 125.7 / 149.4 (1.19x) | 419.7 / 544.2 (1.30x) | 1.051 | 0.9979 |
+| K2 TP4 7168x512 | 24.4 / 36.4 (1.49x) | 85.5 / 90.1 (1.05x) | 310.1 / 286.3 (0.92x) | 1.025 | 0.9983 |
+| DSv4-F 4096x2048 | 35.6 / 77.5 (2.18x) | 89.0 / 104.8 (1.18x) | 283.6 / 366.8 (1.29x) | 1.041 | 0.9981 |
+| M3 6144x3072 oai | 80.6 / 111.7 (1.39x) | 185.7 / 200.1 (1.08x) | 666.8 / 736.5 (1.10x) | 1.049 | 0.9979 |
+Existing ops' norm ratio on K2: 1.02-1.04.

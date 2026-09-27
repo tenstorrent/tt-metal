@@ -87,7 +87,13 @@ constexpr uint32_t hk = 8;  // h_all K-block width (the gather layout)
 #ifndef SE_DST_TILES
 #define SE_DST_TILES 8  // DST half: 8 bf16 tiles, 4 with fp32 accumulation (SE_DST_TILES 4)
 #endif
-static_assert(mt * gw <= SE_DST_TILES && rt_d * pcd <= 8 && mt % rt_d == 0 && kt_d % kblk_d == 0 && kt_d % hk == 0);
+#ifdef SE_GU_RP
+constexpr uint32_t gu_dst_tiles = SE_GU_RP * gw;  // row passes: one pass's rows in DST
+#else
+constexpr uint32_t gu_dst_tiles = mt * gw;
+#endif
+static_assert(
+    gu_dst_tiles <= SE_DST_TILES && rt_d * pcd <= 8 && mt % rt_d == 0 && kt_d % kblk_d == 0 && kt_d % hk == 0);
 
 uint32_t popped = 0;               // weight blocks popped from the in1 ring (absolute block index of its front)
 uint32_t gu_done = 0, d_done = 0;  // experts whose gate/up (down) blocks have all had their last use
@@ -151,6 +157,60 @@ FORCE_INLINE void pop_used() {
         cb_pop_front(in1_cb, slot);
         ++popped;
     }
+}
+
+// Gate/up activation on DST tiles [0, N) (gate t, up t + 1 -> t), on the PACK thread's SFPU (after tile_regs_wait).
+FORCE_INLINE void act_dst(uint32_t n) {
+#ifndef SE_NO_ACT
+    PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+#if SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
+    for (uint32_t t = 0; t < n; t += 2) {  // one binary op: gate t, up t + 1 -> t
+#if SE_ACT == 1
+        PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(t, t + 1, t)));
+#elif SE_ACT == 2
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_situ_glu,
+            (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi),
+            t,
+            t + 1,
+            t,
+            VectorMode::RC)));
+#else
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_clamped_silu_glu,
+            (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4),
+            t,
+            t + 1,
+            t,
+            VectorMode::RC)));
+#endif
+    }
+#else
+    for (uint32_t t = 0; t < n; t += 2) {  // unary gate activation, then gate * up
+#if SE_ACT == 4
+        gelu_tanh_tile_pack(t);
+#else
+        silu_tile_pack(t);
+#endif
+    }
+    for (uint32_t t = 0; t < n; t += 2) {
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_mul,
+            (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE),
+            t,
+            t + 1,
+            t,
+            VectorMode::RC)));
+    }
+#endif
+    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
 }
 
 // ROWS: row tiles of the sub-block that hold tokens (dynamic counts: the last sub-block of an entry may hold fewer;
@@ -264,54 +324,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         cb_reserve_back(h_local_cb, mt * np);
         tile_regs_wait();
 #ifndef SE_NO_ACT
-        PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-#if SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
-        for (uint32_t t = 0; t < rows * gw; t += 2) {  // one binary op: gate t, up t + 1 -> t
-#if SE_ACT == 1
-            PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(t, t + 1, t)));
-#elif SE_ACT == 2
-            PACK((SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_situ_glu,
-                (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi),
-                t,
-                t + 1,
-                t,
-                VectorMode::RC)));
-#else
-            PACK((SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_clamped_silu_glu,
-                (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4),
-                t,
-                t + 1,
-                t,
-                VectorMode::RC)));
-#endif
-        }
-#else
-        for (uint32_t t = 0; t < rows * gw; t += 2) {  // unary gate activation, then gate * up
-#if SE_ACT == 4
-            gelu_tanh_tile_pack(t);
-#else
-            silu_tile_pack(t);
-#endif
-        }
-        for (uint32_t t = 0; t < rows * gw; t += 2) {
-            PACK((SFPU_BINARY_CALL(
-                DST_SYNC_MODE,
-                DST_ACCUM_MODE,
-                calculate_sfpu_binary_mul,
-                (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE),
-                t,
-                t + 1,
-                t,
-                VectorMode::RC)));
-        }
-#endif
-        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+        act_dst(rows * gw);
 #endif
         pack_reconfig_data_format(out_cb, h_local_cb);
 #ifdef SE_GU_ONLY
@@ -330,6 +343,70 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         cb_push_back(h_local_cb, mt * np);
     }
 }
+
+#if defined(SE_GU_RP) && defined(SE_DYN) && defined(SE_GU_ONLY)
+uint32_t x_front = 0;  // x blocks popped (the ring's read slot = x_front % SE_XSLOTS)
+// Row passes (SE_GU_RP row tiles each): the sub-block keeps MT rows for the whole pipeline (x delivery, h exchange,
+// down passes cost ~3.5 us per sub-block on K3 whatever its rows), but DST (4 fp32 tiles) only holds RP x 2 NP
+// gate/up tiles, so the K loop runs once per row pass over the same x blocks, which stay in the x ring until the
+// final pass (host: X_SLOTS >= NK_GU) and the same resident weights (popped in the final pass).
+FORCE_INLINE void gate_up_rp(uint32_t e, bool last, uint32_t ph0, uint32_t rows) {
+    constexpr uint32_t rp = SE_GU_RP;
+    constexpr uint32_t xblk = xmt * kblk;
+    constexpr uint32_t xs = SE_XSLOTS;  // x ring blocks: block b of this sub-block sits in slot (front + b) % xs
+    const uint32_t npass = (rows + rp - 1) / rp;
+    cb_reserve_back(h_local_cb, mt * np);
+    for (uint32_t ps = 0; ps < npass; ++ps) {
+        const uint32_t r0 = ps * rp, rr = rows - r0 < rp ? rows - r0 : rp;
+        const bool fin = ps + 1 == npass;
+        {
+#ifdef SE_ZONES
+            DeviceZoneScopedN("SE_GU_MM");
+#endif
+            if (rr != cur_rt || cur_ct != gw) {
+                matmul_block_init(x_cb, in1_cb, false, gw, rr, kblk);
+                cur_ct = gw;
+                cur_rt = rr;
+            }
+            tile_regs_acquire();
+            for (uint32_t b = 0; b < nk_gu; ++b) {
+                uint32_t xo = 0;
+                if (fin) {  // the final pass consumes the blocks: block b is at the front
+                    cb_wait_front(x_cb, xblk);
+                } else {  // (unpacker indices do not wrap: a block past the ring end gets a negative offset)
+                    cb_wait_front(x_cb, (b + 1) * xblk);
+                    const uint32_t f = x_front % xs;
+                    xo = static_cast<uint32_t>(static_cast<int32_t>((f + b) % xs) - static_cast<int32_t>(f)) * xblk;
+                }
+                const uint32_t w = wblock_dyn(e * nk_gu + b, ph0 + b);
+                for (uint32_t k = 0; k < kblk; ++k) {
+                    matmul_block(x_cb, in1_cb, xo + x_row0 + r0 * kblk + k, w + k * gw, 0, false, gw, rr, kblk);
+                }
+                if (fin) {
+                    cb_pop_front(x_cb, xblk);
+                    ++x_front;
+                    if (last) {
+                        cb_pop_front(in1_cb, slot);
+                        ++d_popped;
+                    }
+                }
+            }
+            tile_regs_commit();
+        }
+        tile_regs_wait();
+        act_dst(rr * gw);
+        pack_reconfig_data_format(out_cb, h_local_cb);
+        for (uint32_t p = 0; p < np; ++p) {  // [p][m] as gate_up: this pass's rows r0.. of each K tile
+            for (uint32_t m = 0; m < rr; ++m) {
+                pack_tile<true>(m * gw + 2 * p, h_local_cb, p * mt + r0 + m);
+            }
+        }
+        pack_reconfig_data_format(h_local_cb, out_cb);
+        tile_regs_release();
+    }
+    cb_push_back(h_local_cb, mt * np);  // (rows past ROWS: never written, never used)
+}
+#endif
 
 FORCE_INLINE void down(uint32_t v) {
     const uint32_t e = v / sub;
@@ -425,7 +502,11 @@ void kernel_main() {
             // this group's row tiles holding tokens (none: one garbage row, the down cores never write it out)
             const uint32_t lr = s + 1 == subs ? lmt : xmt;
             const uint32_t rows = lr > grp * mt ? (lr - grp * mt < mt ? lr - grp * mt : mt) : 1;
+#ifdef SE_GU_RP
+            gate_up_rp(ld, last_use && s + 1 == subs, ph0, rows);
+#else
             gate_up(v, ld, last_use && s + 1 == subs, ph0, rows);
+#endif
         }
     }
     cb_pop_front(tt::CBIndex::c_6, 1);

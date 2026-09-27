@@ -73,7 +73,7 @@ RD_SLOTS = int(os.environ.get("MIMO_FL_RD_SLOTS", "0"))  # reader CB slots (0: 2
 XHELP_ENV = os.environ.get(
     "MIMO_FL_XHELP", "auto"
 )  # e2e: one multicaster per rectangle, a helper core reads / tilizes half of x
-LAND_SLOTS = int(os.environ.get("MIMO_FL_LAND_SLOTS", "3"))  # helper -> primary landing ring (super-blocks)
+LAND_SLOTS_ENV = os.environ.get("MIMO_FL_LAND_SLOTS")  # helper -> primary landing ring (super-blocks)
 SMALL_T = int(
     os.environ.get("MIMO_FL_SMALL_T", "0")
 )  # dyn + reader-down: <= this many tokens per expert -> readers drop down
@@ -135,21 +135,39 @@ def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
     full-K slice) + the x ring."""
     if os.environ.get("MIMO_FL_NP"):
         return int(os.environ["MIMO_FL_NP"]), int(os.environ.get("MIMO_FL_G", "1"))
-    best = None
+    best, cands = None, []
     for np_ in (1, 2, 3, 4):
         for g in (1, 2, 4):
             ps = It // np_
-            fp32_ = os.environ.get("MIMO_FL_GU_ACC", "fp32" if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else "bf16")
-            dst = 4 if fp32_ == "fp32" else 8
+            dst, _ = _gu_dst(np_, Ht, x_slots)
             if It % np_ or ps % 16 or ps * g > 64 or min(dst // (2 * np_), MT_MAX // g) < 1:
                 continue
             mt_ = g * min(dst // (2 * np_), MT_MAX // g)
             if Ht and 2 * Ht * 2 * np_ * w_tile + x_slots * mt_ * KBLK * BF8_TILE > GU_L1_BUDGET:
                 continue
+            cands.append((ps * g, np_, g))
             cand = ((-g, ps * g, -np_), np_, g)
             best = cand if best is None or cand > best else best
     assert best, f"no gate/up split for {It} tile columns"
+    # fewer than 32 gate/up cores (TP4-like splits): 2 M-groups on twice the cores (K2 TP4, us/expert M 32 / 512 /
+    # 2048: G1 16 cores 20.9 / 112.5 / 435.0, G2 + 2 relay helpers 24.7 / 85.2 / 309.1)
+    if best[0][1] < 32:
+        g2 = [c for c in cands if c[2] == 2 and c[1] == best[1] and c[0] >= 2 * best[0][1]]
+        if g2:
+            return g2[0][1], 2
     return best[1], best[2]
+
+
+def _gu_dst(np_, Ht, x_slots):
+    """(DST tiles the gate/up sub-block may use, gate/up row passes?). fp32 DEST (half sync) holds 4 tiles; with row
+    passes (MIMO_FL_GU_RP, auto: dynamic counts, NP <= 2, the x ring holds a whole sub-block's K-blocks) the
+    sub-block keeps the 8-tile (bf16-sized) rows and gate/up runs its K loop once per 4 / (2 NP) row tiles."""
+    acc = os.environ.get("MIMO_FL_GU_ACC", "fp32" if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else "bf16")
+    if acc != "fp32" or os.environ.get("MIMO_FL_GU_DST", "half") == "full":
+        return 8, False
+    rp_env = os.environ.get("MIMO_FL_GU_RP", "auto")
+    rp = (DYN and np_ <= 2 and Ht is not None and Ht // KBLK <= x_slots) if rp_env == "auto" else bool(int(rp_env))
+    return (8, True) if rp else (4, False)
 
 
 def _chains(cores, n, phys, noc):
@@ -228,7 +246,9 @@ def test_stream_expert_flat(device, m, wdtype):
     assert GU_ACC in ("fp32", "l1acc", "bf16"), GU_ACC
     GU_FP32 = GU_ACC == "fp32"
     L1ACC_GRP = int(os.environ.get("MIMO_FL_GU_L1ACC_GRP", "1"))
-    DST_T = 4 if GU_FP32 else 8
+    # full-sync DST (MIMO_FL_GU_DST=full): one 16-tile file, 8 fp32 tiles, but math and pack no longer overlap
+    GU_FULL = os.environ.get("MIMO_FL_GU_DST", "half") == "full"
+    DST_T, GU_RP = _gu_dst(NP, H // 32, X_SLOTS)  # (row passes: DST_T is the sub-block's, a pass uses 4 fp32 tiles)
     MT_CAP = G * min(DST_T // (2 * NP), MT_MAX // G)  # a group's rows x 2 NP gate/up tiles fit DST
     MT = int(os.environ["MIMO_FL_MT"]) if os.environ.get("MIMO_FL_MT") else min(MT_CAP, max(G, m // 32 // G * G))
     assert MT % G == 0 and (MT // G) * 2 * NP <= DST_T, (MT, G, NP, DST_T)
@@ -246,7 +266,9 @@ def test_stream_expert_flat(device, m, wdtype):
     if XHELP:  # the X2 cores, but relays 2 / 3 only read + tilize for relays 0 / 1 (one sender per rectangle)
         assert E2E and not XCOL
         X2 = True
-    NH = int(os.environ.get("MIMO_FL_XHELP_N", "1")) if XHELP else 1  # helpers per rectangle
+    # helpers per rectangle (default 2 with M-groups: the relays then pace the smaller gate/up work)
+    NH = int(os.environ.get("MIMO_FL_XHELP_N", "2" if G > 1 else "1")) if XHELP else 1
+    LAND_SLOTS = int(LAND_SLOTS_ENV) if LAND_SLOTS_ENV else (2 if NH > 1 else 3)  # (landing ring per helper: L1)
     grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL, NH)
     ND = len(down)
     nrl = len(relays)
@@ -297,6 +319,11 @@ def test_stream_expert_flat(device, m, wdtype):
     out_tiles = MT * pcd
     pk = lambda c: (phys(c).x << 16) | phys(c).y
 
+    # M-groups by rectangle (MIMO_FL_GROUP_RECT, auto: G == 2 and each rectangle holds its group's cores): halves
+    # the x each rectangle's relay multicasts (a group only reads its rows of every x block)
+    rect_n = [(x1 - x0 + 1) * (y1 - y0 + 1) for x0, x1, y0, y1 in rects]
+    GR_ENV = os.environ.get("MIMO_FL_GROUP_RECT", "auto")
+    GROUP_RECT = (G == 2 and E2E and not XCOL and min(rect_n) >= (It // NP)) if GR_ENV == "auto" else bool(int(GR_ENV))
     # gate/up cores per reader: 4 each, nearest by the forwarder's NoC hops, balanced
     rect_of0 = lambda c: next(i for i, (x0, x1, y0, y1) in enumerate(rects) if x0 <= c.x <= x1 and y0 <= c.y <= y1)
     left = list(range(ngu))
@@ -319,9 +346,11 @@ def test_stream_expert_flat(device, m, wdtype):
                 left.remove(best)
         assert not left
     else:
-        for _ in range(R_):
+        for j_ in range(R_):
             for r, c in enumerate(readers):
-                best = min(left, key=lambda ci: noc_hops(phys(c), phys(gu[ci]), 1))
+                # GROUP_RECT: M-group g's cores all in rectangle g (its relay then multicasts only that group's rows)
+                cand = [ci for ci in left if not GROUP_RECT or rect_of0(gu[ci]) == j_ % G] or left
+                best = min(cand, key=lambda ci: noc_hops(phys(c), phys(gu[ci]), 1))
                 per_reader[r].append(best)
                 left.remove(best)
     order = [ci for r in range(n_rd) for ci in per_reader[r]]  # core r * R_ + j: reader r's pair-set j / G, group j % G
@@ -849,7 +878,9 @@ def test_stream_expert_flat(device, m, wdtype):
             hp = relays[idx + 2]
             xm_l = (
                 xm_l[:6]
-                + [V * nsb, XARR, 1, 0, 0, 0, 0, 0, pk(hp), base + LAND_OFF, LAND_SLOTS]
+                # RT 10: the row tiles this rectangle's cores read (GROUP_RECT: its group's), m0 | m1 << 8 (0: all)
+                + [V * nsb, XARR, 1, 0, (idx * MTG) | ((idx + 1) * MTG << 8) if GROUP_RECT else 0, 0, 0, 0]
+                + [pk(hp), base + LAND_OFF, LAND_SLOTS]
                 + [pk(relays[2 + 2 * j_ + idx]) for j_ in range(1, NH)]
             )
         if XHELP and idx >= 2:
@@ -1206,13 +1237,16 @@ def test_stream_expert_flat(device, m, wdtype):
                 core_ranges=gu_crs,
                 compile_time_args=[KBLK, MTG, nk_gu, 0, 1, E, S, slot, 1, 1, NP, 0, ring_g],
                 runtime_args=gu_crt,
-                defines=[("SE_DST_TILES", str(DST_T))]
+                defines=[("SE_DST_TILES", str(4 if GU_RP else DST_T))]
+                + ([("SE_GU_RP", str(max(1, 4 // (2 * NP)))), ("SE_XSLOTS", str(X_SLOTS))] if GU_RP else [])
                 + ([("SE_GU_L1ACC", str(L1ACC_GRP))] if GU_ACC == "l1acc" else [])
                 + zones
                 + dyn_def
                 + [("SE_GU_ONLY", "1"), ("SE_ACT", str(ACTS[ACT])), ("SE_XMT", str(MT))]
                 + ([("SE_NO_ACT", "1")] if os.environ.get("MIMO_FL_NO_ACT") else []),
-                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=GU_FP32),
+                config=ttnn.ComputeConfigDescriptor(
+                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=GU_FP32, dst_full_sync_en=GU_FULL
+                ),
             ),
         ]
     )
@@ -1380,6 +1414,9 @@ def test_stream_expert_flat(device, m, wdtype):
             + (f"_xh{NH}" if NH != 1 else "")
             + (f"_hb{HBUF}" if HBUF != 3 else "")
             + ((f"_acc{GU_ACC}" + (str(L1ACC_GRP) if GU_ACC == "l1acc" else "")) if GU_ACC != "fp32" else "")
+            + ("_dstfull" if GU_FULL else "")
+            + ("_rp" if GU_RP else "")
+            + ("_grect" if GROUP_RECT else "")
             + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
             + ("_e2e" if E2E else "")
             + ("_pp" if PREPASS else "")

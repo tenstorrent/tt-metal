@@ -10,7 +10,8 @@
 // CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 X_SLOTS, 4 XARR_SEM, 5 WORD_SEM, 6 KBLK
 // RT: 0 x ring address, 1 rect start xy, 2 end xy, 3 dests, 4 freed words address, 5 cores whose words gate a slot,
 //     6 super-blocks this relay sends, 7 XARR semaphore id, 8 STRIDE, 9 OFF (this relay sends super-blocks OFF,
-//     OFF + STRIDE, ... in stream order; a block's ring slot follows its global index), 10 unused
+//     OFF + STRIDE, ... in stream order; a block's ring slot follows its global index), 10 row tiles to send,
+//     m0 | m1 << 8 (0: all MT; M-groups by rectangle: the rectangle's cores only read their group's rows)
 #include <stdint.h>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
@@ -41,6 +42,8 @@ void kernel_main() {
     const uint32_t a0 = get_arg_val<uint32_t>(1), a1 = get_arg_val<uint32_t>(2), dests = get_arg_val<uint32_t>(3);
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(4));
     const uint32_t n_cores = get_arg_val<uint32_t>(5);
+    const uint32_t rows_rt = get_arg_val<uint32_t>(10);
+    const uint32_t m0 = rows_rt ? (rows_rt & 0xFF) : 0, m1 = rows_rt ? (rows_rt >> 8) : mt;
 #ifdef SE_DYN
     // Dynamic counts: this relay's super-blocks follow from the active experts' sub-blocks (RT 14.. are the
     // se_dyn.hpp args, CT 7 NUM_E, CB 7's upper half this RISC's scratch)
@@ -146,8 +149,8 @@ void kernel_main() {
             for (uint32_t q = 0; q < nrect; ++q) {
                 for (uint32_t k = 0; k < n; ++k) {
                     const uint32_t dst = ring + (gidx(sent + k) % x_slots) * blk_bytes;
-                    for (uint32_t m = 0; m < mt; ++m) {
-                        const bool last = k + 1 == n && m + 1 == mt;  // the chain ends before the next rectangle's
+                    for (uint32_t m = m0; m < m1; ++m) {
+                        const bool last = k + 1 == n && m + 1 == m1;  // the chain ends before the next rectangle's
                         noc_async_write_multicast(
                             src + (m * SE_SBT + (i + k) * kblk) * tb,
                             rects[q] | (dst + m * piece),

@@ -32,7 +32,8 @@ PATHS = _env_list("MIMO_KREF_PATHS", "unified,fused")
 TOKENS = _env_list("MIMO_KREF_TOKENS", "128,256,512", int)
 EXPERTS = int(os.environ.get("MIMO_KREF_EXPERTS", "4"))
 ITERS = int(os.environ.get("MIMO_KREF_ITERS", "3"))
-H, I = int(os.environ.get("MIMO_KREF_H", "7168")), 2048
+H, I = int(os.environ.get("MIMO_KREF_H", "7168")), int(os.environ.get("MIMO_KREF_I", "2048"))
+ACT = os.environ.get("MIMO_KREF_ACT", "Silu")  # ttnn.RoutedExpertActivation: Silu, SwiGluOai, SituGlu, ClampedSiluGlu
 RM = int(os.environ.get("MIMO_KREF_RM", "0"))
 XSTD = float(os.environ.get("MIMO_KREF_XSTD", "0.1"))
 CHECK = int(os.environ.get("MIMO_KREF_CHECK", "0"))  # 1: output vs the quantized-weight reference (norm ratio, PCC)
@@ -92,7 +93,7 @@ def test_expert_ref_k2(mesh_device, path, tokens):
         torch_weights=[w] * E,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        activation=ttnn.RoutedExpertActivation.Silu,
+        activation=getattr(ttnn.RoutedExpertActivation, ACT),
         hybrid_token_threshold={"unified": None, "fused": tokens}[path],
     )
     tok_pad = (tokens + 31) // 32 * 32
@@ -122,7 +123,7 @@ def test_expert_ref_k2(mesh_device, path, tokens):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    tag = f"kref_{path}{'_rm' if RM else ''}_M{tokens}_E{E}" + (
+    tag = f"kref_{path}{'_rm' if RM else ''}_H{H}_I{I}_{ACT}_M{tokens}_E{E}" + (
         "_c" + os.environ["MIMO_KREF_COUNTS"].replace(",", "-") if os.environ.get("MIMO_KREF_COUNTS") else ""
     )
     STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
