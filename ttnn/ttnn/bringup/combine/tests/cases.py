@@ -36,4 +36,36 @@ CASES = [
         "seed": 0,
         "exact": True,
     },
+    {
+        # Gemma-4 A4B routed experts, EP=4 on a 1x4 mesh: dispatch groups are the 4 columns, each a single chip.
+        # The expert-output buffer is BFLOAT8_B (the routed-expert op's default output); combine unpacks it to bf16.
+        "id": "gemma4_a4b_d_p-1x4-dgs1-s5120-h2816-e128-k8-bfp8",
+        "model": "gemma4_a4b_d_p",
+        "task": "O.1",
+        "sig": "4600d93ca9",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "seq_len_per_chip": 5120,
+        "emb_dim": 2816,
+        "num_routed_experts": 128,  # counts / regions are [1, 128] (global expert ids)
+        "num_experts_per_tok": 8,
+        "experts_per_chip": 32,
+        "dispatch_group_size": 1,
+        "max_dispatch_buffer_token_size": 41952,
+        "metadata_len": 3,
+        # buffer [1, 1, 41952, 2816] BFLOAT8_B TILE; metadata [1, 1, 41952, 3] INT32 ROW_MAJOR;
+        # counts, regions [1, 128] UINT32 ROW_MAJOR; all DRAM interleaved
+        "buffer": {"dtype": "BFLOAT8_B", "layout": "TILE"},
+        "metadata": {"dtype": "INT32", "layout": "ROW_MAJOR"},
+        "counts": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "regions": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "cluster_axis": 0,
+        "num_links": 1,
+        "topology": "Linear",
+        "memory_config": "DRAM",
+        "init_zeros": True,
+        "use_fp8_combine": False,
+        "seed": 0,
+        "exact": True,
+    },
 ]

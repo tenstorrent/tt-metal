@@ -25,3 +25,10 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Why: task O.1, every call a model makes to a fork gets a case.
 - Needed by: mimo_v2_6_d_p O.1
 - Files: `tests/__init__.py`, `tests/cases.py`, `tests/reference.py`, `tests/test_*.py`
+
+### Tests: gemma4_a4b_d_p case
+- What: appended the random-input case for the call gemma4_a4b_d_p makes (1x4 mesh, S 5120, H 2816, 128 experts
+  top-8, 32 per chip). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: gemma4_a4b_d_p O.1
+- Files: `tests/cases.py`

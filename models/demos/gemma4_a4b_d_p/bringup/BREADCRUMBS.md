@@ -914,3 +914,15 @@ Append-only log, one section per task attempt: what was done, decisions and why,
 - SDPA is 75% of attention and the next target. This profile does not split sliding from global. From P.2, global is about 35 ms per layer at 51k.
 - Runs without BRINGUP_TASK set write the metrics to `generated/bringup_adhoc/`, not `bringup/results/`.
 - Re-run: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py`
+
+## O.1 optests (run1, attempt 1): a fork-test case for each of the 4 ttnn.bringup calls. Gate PASSES
+- Captured calls (`results/fork_calls.json`, ladder rung last): combine 4600d93ca9, dispatch 61d407d901, offset_cumsum e9fc860f6a, unified_routed_expert_moe befc6cf758. All run on a 1x4 mesh with S 5120, H 2816, I 704, E 128, top-8, 32 experts per chip, and a 41952-row dispatch buffer.
+- Appended one gemma4 case to each fork's `tests/cases.py`, with the values written out literally. The mimo cases are untouched.
+- combine: gemma4 passes a BFLOAT8_B TILE buffer (mimo passes bf16). `test_combine.py` now uses the device's rounded buffer (read back) as the reference when the dtype is not bf16. The check is still exact.
+- unified_routed_expert_moe: GeluTanh, HiFi2, fp32 dest, bf16 weights, `high_precision` default (False).
+  - Measured on seeds 0 and 1: PCC 0.999781, rel 0.0241 on every chip (bfp8 output floor).
+  - Limits: pcc >= 0.999, rel <= 0.04.
+- Fail checks (temporary edits, reverted): URE output x1.05 fails (rel 0.066), and one zeroed combine (t, k) row fails.
+- Fork CHANGELOGs have a "Tests: gemma4_a4b_d_p case" entry. INDEX.md already listed gemma4 as a user.
+- Gate: 8 passed. `{"forks_used": 4, "fork_calls": 4, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`.
+- Re-run the fork tests only: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/{combine,dispatch,offset_cumsum,unified_routed_expert_ffn}/tests`.
