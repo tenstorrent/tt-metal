@@ -24,7 +24,6 @@ from models.demos.deepseek_v3_d_p.tt.v4.kv_table import build_v4_kv_chunk_table
 from models.demos.deepseek_v3_d_p.tt.v4.transformer import TtV4PrefillTransformer
 
 
-@dataclass
 def _clear_export_caches(kv_caches, why: str) -> None:
     """DS4F-0271 (launch 20/21c audit): the compile warm-up and the capture warm chunk run a token-0 chunk through every layer
     AND its export writes, so the migration caches hold non-zero "token-0 text" rows up to max_seq before the first request;
@@ -44,6 +43,7 @@ def _clear_export_caches(kv_caches, why: str) -> None:
     logger.info(f"[v4 runtime] export caches zeroed ({n} tensors) after {why}")
 
 
+@dataclass
 class TtV4PrefillRuntimeConfig:
     chunk_size: int
     max_seq_len: int
