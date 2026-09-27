@@ -188,4 +188,9 @@ stage contract. This attempt does not satisfy that requirement and must not be
 marked complete. Faster execution or an owner-approved change to the time/workload
 contract is needed before another completion attempt.
 
-Final client-stage wall time through verification and reporting: 2703.5 seconds (original clock, not reset).
+Final client-stage wall time through verification and reporting: 2934.3 seconds (original clock, not reset).
+
+A subsequent [source-only runtime audit](../AUTODEBUG_runtime_limit.md) found no
+proven transport/scheduling defect. Trace turnover and full-logit host sampling
+are optimization hypotheses, with no measured repair. Runtime projections do
+not prove mathematical impossibility; this attempt remains incomplete.

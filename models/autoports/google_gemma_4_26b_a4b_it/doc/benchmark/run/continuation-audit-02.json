@@ -1,0 +1,21 @@
+{
+  "audit_number_since_accuracy_runtime_blocker": 2,
+  "previous_turn_classification": "progress: completed performance, accounting, retained scoring/input evidence, report and local commits",
+  "checked_at_utc": "2026-09-27T19:47:22.178289+00:00",
+  "original_clock_elapsed_seconds_at_audit": 2863.4726044815034,
+  "original_deadline_monotonic": 5315279.6,
+  "live_matching_processes": [],
+  "accuracy_completed": 8,
+  "accuracy_selected": 536,
+  "missing_accuracy_responses": 528,
+  "accuracy_aggregate_available": false,
+  "performance_profiles_valid": [
+    1,
+    32
+  ],
+  "context_contract_sha256": "dc2a250ac132929c96ee1e267f51d5ceec9fe982767688f2261548736aaa5fb2",
+  "same_remaining_condition": "Frozen accuracy incomplete; no verified path to finishing it under the original one-hour contract with the measured implementation. No deadline reset or protocol reduction authorized.",
+  "new_measurements": false,
+  "source_audit": "../AUTODEBUG_runtime_limit.md",
+  "goal_status": "active; blocked audit threshold not yet reached"
+}
