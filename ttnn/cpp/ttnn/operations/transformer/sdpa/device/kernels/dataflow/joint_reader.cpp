@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(13);
     constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(14);
     constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(15);
-    constexpr auto q_args = TensorAccessorArgs<16>();
+    constexpr bool kv_chain = get_compile_time_arg_val(16) == 1;
+    constexpr auto q_args = TensorAccessorArgs<17>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto joint_q_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -58,8 +59,10 @@ void kernel_main() {
     const uint32_t next_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
-    if (participates) {
-        Semaphore<>(valid_semaphore_id).set(VALID);
+    if constexpr (kv_chain) {
+        if (participates) {
+            Semaphore<>(valid_semaphore_id).set(VALID);
+        }
     }
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
@@ -154,26 +157,36 @@ void kernel_main() {
                     const auto kv_row_end_tile = kv_row_start_tile + Sk_chunk_t;
                     const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_end_tile, 0, DHt);
 
-                    chained_read(
-                        cb_k,
-                        cb_k_in,
-                        cat_k_generator,
-                        kv_slice,
-                        kv_row_end_tile,
-                        k_tile_bytes,
-                        true,
-                        should_receive,
-                        should_forward);
-                    chained_read(
-                        cb_v,
-                        cb_v_in,
-                        cat_v_generator,
-                        kv_slice,
-                        kv_row_end_tile,
-                        v_tile_bytes,
-                        false,
-                        should_receive,
-                        should_forward);
+                    if constexpr (kv_chain) {
+                        chained_read(
+                            cb_k,
+                            cb_k_in,
+                            cat_k_generator,
+                            kv_slice,
+                            kv_row_end_tile,
+                            k_tile_bytes,
+                            true,
+                            should_receive,
+                            should_forward);
+                        chained_read(
+                            cb_v,
+                            cb_v_in,
+                            cat_v_generator,
+                            kv_slice,
+                            kv_row_end_tile,
+                            v_tile_bytes,
+                            false,
+                            should_receive,
+                            should_forward);
+                    } else {
+                        read_block(
+                            cat_k_generator, kv_slice, kv_row_end_tile, cb_k_in, k_tile_bytes, true /*transpose*/
+                        );
+
+                        read_block(
+                            cat_v_generator, kv_slice, kv_row_end_tile, cb_v_in, v_tile_bytes, false /*transpose*/
+                        );
+                    }
                 }
             }
         }

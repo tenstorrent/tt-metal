@@ -242,6 +242,7 @@ bool causal_pairs_uniform(uint32_t q_num_chunks, uint32_t Sq_chunk_t, uint32_t S
 
 uint32_t kv_chain_mode_for(
     bool is_causal,
+    bool blackhole,
     bool plain_kv_stream,
     bool causal_pairs,
     bool fp32_legacy_block_float_kv,
@@ -255,6 +256,10 @@ uint32_t kv_chain_mode_for(
     }
     if (!is_causal) {
         return 1;
+    }
+    // The causal chains below were measured on Blackhole only; other archs keep main's configuration.
+    if (!blackhole) {
+        return 0;
     }
     // The legacy kernel with fp32 DEST is compute bound: with block float K/V a chain pays only for bfp8 on the full
     // grid with exp_approx_mode off, two q tiles or fewer and 64 K chunks or more (measured on Blackhole).
@@ -761,6 +766,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         input_tensor_k.dtype() == DataType::BFLOAT8_B || input_tensor_k.dtype() == DataType::BFLOAT4_B;
     const uint32_t kv_chain_mode = kv_chain_mode_for(
         is_causal,
+        device->arch() == tt::ARCH::BLACKHOLE,
         !is_chunked && !has_sliding_window && !is_windowed && !use_mask_block_map,
         global_q_pair_distribute && !use_provided_mask,
         fp32_dest_acc_en && !use_streaming_compute && block_float_kv,
@@ -1050,6 +1056,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (use_streaming_compute && fp32_dest_acc_en) {
         defines_map["SDPA_FP32_NORMALIZE"] = "1";
+    }
+    if (use_streaming_compute && is_causal && device->arch() == tt::ARCH::BLACKHOLE) {
+        defines_map["SDPA_CAUSAL_V_RECONFIG"] = "1";
     }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 

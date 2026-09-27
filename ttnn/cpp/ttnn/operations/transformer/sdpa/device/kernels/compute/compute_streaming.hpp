@@ -1967,9 +1967,13 @@ static void sdpa_inner_loop_step(
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
         const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
         constexpr bool fp32_acc = sdpa_fp32_accumulator();
-        // The V matmul's unpack formats: fp32 needs the CBs named at compile time, and with bf16 the causal kernels
-        // measured faster that way while the non causal ones keep main's form (Blackhole).
+        // The V matmul's unpack formats: fp32 needs the CBs named at compile time, and with bf16 the causal SDPA
+        // kernels measured faster that way on Blackhole (the factories set the define there); the others keep main's.
+#ifdef SDPA_CAUSAL_V_RECONFIG
         constexpr bool compile_time_v_reconfig = fp32_acc || is_causal_sdpa;
+#else
+        constexpr bool compile_time_v_reconfig = fp32_acc;
+#endif
         constexpr uint32_t cb_after_v = compile_time_v_reconfig ? cb_recip_scratch : cb_qkt_im;
 
         // V wait deferred: don't block here. The sub_exp drain loop below

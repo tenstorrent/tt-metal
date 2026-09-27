@@ -145,9 +145,11 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
 
+    // The streaming kernel and the K/V chain below were measured on Blackhole; other archs keep main's program.
     // fp32 DEST accumulation keeps the legacy compute kernel. The streaming kernel narrows the padded tiles of
     // the chunk where the spatial segment ends and of the last chunk, and stamps their partial tiles.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
+    const bool use_streaming_compute = !fp32_dest_acc_en && blackhole;
     const uint32_t streaming_valid_Skt = padded_Nkt + valid_Lt;
     const uint32_t k_partial_col = use_streaming_compute ? (L % TILE_HEIGHT) : 0;
     const uint32_t n_partial_col = use_streaming_compute ? (N % TILE_HEIGHT) : 0;
@@ -304,6 +306,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         sender_semaphore_id,
         receiver_semaphore_id,
         valid_semaphore_id,
+        static_cast<uint32_t>(blackhole),  // K/V chain
     };
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -397,10 +400,12 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     // The cores of one (batch, head) group read identical K and V, so they form a unicast chain: the first
     // core streams from DRAM and every core hands each chunk to the next while the next still has q chunks.
-    for (const auto& [id, initial] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
-             {sender_semaphore_id, INVALID}, {receiver_semaphore_id, INVALID}, {valid_semaphore_id, VALID}}) {
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = initial});
+    if (blackhole) {
+        for (const auto& [id, initial] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
+                 {sender_semaphore_id, INVALID}, {receiver_semaphore_id, INVALID}, {valid_semaphore_id, VALID}}) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = initial});
+        }
     }
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -690,7 +695,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
             return c < num_cores && (c / q_parallel_factor) / nh_parallel_factor < B && q_count_of(c) > 0;
         };
         const uint32_t chain_pos = i % q_parallel_factor;
-        const bool participates = q_parallel_factor > 1 && active(i);
+        const bool participates = blackhole && q_parallel_factor > 1 && active(i);
         const bool is_injector = chain_pos == 0;
         const bool has_next = participates && chain_pos + 1 < q_parallel_factor && active(i + 1);
         const uint32_t prev_i = is_injector ? i : i - 1;

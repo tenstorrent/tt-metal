@@ -229,8 +229,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    // Same selection as the single chip factory: only fp32 DEST accumulation keeps the legacy compute kernel.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    // The streaming kernel was measured on Blackhole, where only fp32 DEST accumulation keeps the legacy one; other
+    // archs keep main's legacy kernel.
+    const bool use_streaming_compute = !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE;
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
@@ -248,6 +249,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+    const uint32_t drain_group_h = use_streaming_compute ? out_out_subblock_h : 0;
     if (use_streaming_compute) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
@@ -353,7 +355,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                                             //(uint32_t)sliding_window_size,
         1,                                             // arg 20: lightweight causal mask
         static_cast<uint32_t>(use_streaming_compute),  // arg 21: row grouped cb_out drain
-        out_out_subblock_h,                            // arg 22: drain group height
+        drain_group_h,                                 // arg 22: drain group height
         0,                                             // arg 23: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
@@ -414,7 +416,10 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    defines_map["SDPA_STREAMING_PHASES"] = "2";  // the Q range is walked once per ring phase
+    if (use_streaming_compute) {
+        defines_map["SDPA_STREAMING_PHASES"] = "2";  // the Q range is walked once per ring phase
+        defines_map["SDPA_CAUSAL_V_RECONFIG"] = "1";
+    }
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 
     // ---- Circular buffers ----
