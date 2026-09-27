@@ -353,3 +353,15 @@ best existing = faster of unified / fused (fused cannot run clamped SiLU-GLU as 
 | DSv4-F 4096x2048 | 35.6 / 77.5 (2.18x) | 89.0 / 104.8 (1.18x) | 283.6 / 366.8 (1.29x) | 1.041 | 0.9981 |
 | M3 6144x3072 oai | 80.6 / 111.7 (1.39x) | 185.7 / 200.1 (1.08x) | 666.8 / 736.5 (1.10x) | 1.049 | 0.9979 |
 Existing ops' norm ratio on K2: 1.02-1.04.
+
+### Correction: the relay "tilize ~80-96 cycles/tile" figure was not a tilize measurement
+In se11_tz.cpp the `TZ_BLK` zone wraps `fast_tilize_block`, preceded by `TZ_IN` around `cb_wait_front(rm_cb)`.
+`cb_wait_front` only blocks the UNPACK thread: the math / pack threads enter `TZ_BLK` immediately and wait inside it
+for the unpacker, which waits for the reader's DRAM rows. So the TRISC1/2 `TZ_BLK` times (~2.3 us per 32 tiles)
+include data-movement waits. The unpack thread (which waits correctly) shows ~0.57 us waiting + ~0.56 us issuing per
+32-tile block (~23 cyc/tile issue). Documented BH fast tilize (PR #43577, gist cc166d487bbcea86d2bd311cfe934adf,
+L1 to L1, one tile row): bf16 -> bf8 ~35-39 cyc/tile at widths 3-4, bf16 -> bf16 ~34-39 at widths 4-8.
+Consequences: "relay tilize paces TP4 / K2 at large M" is UNSUPPORTED (it also fits the tiny gain from a third
+helper); the ~5 us per sub-block gate/up stall on TP4 at M 2048 is unattributed again; the "tilize to bf16"
+idea has no support (bf8 is not slower in the LLK data). Next: a tilize microbenchmark (pre-filled row-major CB,
+idle core vs relay under load) and a per-sub-block critical-path trace across readers, relays, gate/up, down.
