@@ -1250,7 +1250,8 @@ def test_stream_expert_flat(device, m, wdtype):
                     + zones
                     + dyn_def
                     + ([("XMC_WHOLE_SB", "1")] if int(os.environ.get("MIMO_FL_WHOLE_SB", "1" if E2E else "0")) else [])
-                    + ([("XMC_HELPER", "1"), ("SE_XNH", str(NH))] if XHELP else []),
+                    + ([("XMC_HELPER", "1"), ("SE_XNH", str(NH))] if XHELP else [])
+                    + [("XMC_ZERO_WORDS", "1")],
                     config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1 if XNOC == 1 else ttnn.NOC.NOC_0),
                 ),
             ]
@@ -1591,7 +1592,8 @@ def test_stream_expert_flat(device, m, wdtype):
                     + "\n"
                 )
         for it in range(1 + ITERS):
-            ttnn.copy_host_to_device_tensor(words_zero, words)  # relay freed words restart every launch
+            if not E2E:  # (end to end: the relays zero their freed words themselves)
+                ttnn.copy_host_to_device_tensor(words_zero, words)  # relay freed words restart every launch
             ttnn.synchronize_device(device)
             if PREPASS:
                 if it:
@@ -1764,6 +1766,20 @@ def test_stream_expert_flat(device, m, wdtype):
                 pcc = comp_pcc(ref, got, 0.0)[1] if not DYN else "n/a"
                 logger.info(f"{tag}: PCC {pcc_q} vs quantized-weight reference, {pcc} vs fp32")
                 assert ok or os.environ.get("MIMO_FL_XRD_SKIP"), pcc_q
+        if int(os.environ.get("MIMO_FL_B2B", "0")):  # dispatch probe: N launches back to back, no host sync between
+            ttnn.synchronize_device(device)
+            signpost(f"{tag}_b2b_start")
+            for _ in range(int(os.environ["MIMO_FL_B2B"])):
+                if not E2E:
+                    ttnn.copy_host_to_device_tensor(words_zero, words)
+                ttnn.generic_op(
+                    [w_dev, wd_dev, x_dev, arena, y_dram, words]
+                    + ([wr_dev] if RDOWN else [])
+                    + ([wx_dev] if SMALL else []),
+                    program,
+                )
+            ttnn.synchronize_device(device)
+            signpost(f"{tag}_b2b_end")
         if E2E and ITERS and not os.environ.get("MIMO_FL_XRD_SKIP"):  # the measured launches' output too:
             # every active expert's rows bit-identical to the checked warm-up launch
             y_last = ttnn.to_torch(y_dram).float()

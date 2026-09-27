@@ -42,6 +42,13 @@ void kernel_main() {
     const uint32_t a0 = get_arg_val<uint32_t>(1), a1 = get_arg_val<uint32_t>(2), dests = get_arg_val<uint32_t>(3);
     volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(4));
     const uint32_t n_cores = get_arg_val<uint32_t>(5);
+#ifdef XMC_ZERO_WORDS
+    // the freed words restart every launch: zeroed here (the gate/up cores only bump them after consuming x this
+    // relay sent in this launch), so no host write is needed between launches
+    for (uint32_t i = 0; i < n_cores; ++i) {
+        freed[i] = 0;
+    }
+#endif
     const uint32_t rows_rt = get_arg_val<uint32_t>(10);
     const uint32_t m0 = rows_rt ? (rows_rt & 0xFF) : 0, m1 = rows_rt ? (rows_rt >> 8) : mt;
 #ifdef SE_DYN

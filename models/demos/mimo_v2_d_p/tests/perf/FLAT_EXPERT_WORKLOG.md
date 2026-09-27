@@ -416,3 +416,22 @@ readers each). Not done.
   TP2 is now 1.15x at 32, ~1.0x at 512, still 0.93x at 2048 (was 0.79x). Remaining limit: 16 gate/up cores per
   subgrid at NP 2 (the grid's second reader-free region is 3 x 10, so 32-core rectangles for NP 1 do not fit twice).
   Regression K2 / K3 (1 subgrid) unchanged: 61.9 / 130.0 / 452.5 and 50.5 / 126.9 / 421.4.
+
+### Dispatch cost (back-to-back launches, `MIMO_FL_B2B` / `MIMO_KREF_B2B`)
+All earlier numbers were device kernel duration only. Back to back (no host sync between 8 launches), per launch
+device span (last FW end - first FW start) / N minus the kernel duration, us; 8 experts, K2 unless noted:
+| op | M 32 | M 512 | host enqueue per launch |
+|---|---|---|---|
+| flat, with the per-launch host copy resetting the relays' freed words | +77 (op-to-op 77) | +77 | ~30 |
+| flat, relays zero their words in-kernel (`XMC_ZERO_WORDS`, no host copy) | +17 | +37 | ~30 |
+| flat TP4 2 subgrids, host copy / in-kernel | +75 / +37 | +75 / +34 | ~31 |
+| unified | +0.7 | +2.0 | ~6 |
+| fused | +5.3 | +5.4 | ~6 |
+The host copy was the whole op-to-op gap (77 -> 0.6 us) and would also have blocked tracing; the relays now zero
+their freed words at kernel start (safe: the gate/up cores only bump them after consuming x the relay sent in the
+same launch). What remains (~17-37 us) is the program's launch: ~19 kernel descriptors (several per role: readers
+plain / reader-tail, forwarders, relay reader / tilizer / multicaster / one per helper, gate/up recv / compute,
+down recv / weights / compute per column-width group) over fragmented core ranges, and unique runtime args on
+~100 cores (gate/up / down cores carry 20-70 words of core coordinates). Not yet fixed; ideas: merge each role's
+kernels into one binary with the role / width as runtime args (the SDXL diag-matmul fix: 16-19 -> ~1 us), fewer
+per-core coordinate lists (derive from a base + stride), and measure under trace.

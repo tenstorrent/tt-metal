@@ -152,4 +152,13 @@ def test_expert_ref_k2(mesh_device, path, tokens):
             _check(y, x, x_host, w, counts[0, ids].tolist(), tok_pad, tag)
         if y.buffer_address() != x.buffer_address():
             y.deallocate(True)
+    if int(os.environ.get("MIMO_KREF_B2B", "0")):  # dispatch probe: N calls back to back, no host sync between
+        ttnn.synchronize_device(mesh_device)
+        signpost(f"{tag}_b2b_start")
+        ys = [expert(x, tt_counts, tt_regions) for _ in range(int(os.environ["MIMO_KREF_B2B"]))]
+        ttnn.synchronize_device(mesh_device)
+        signpost(f"{tag}_b2b_end")
+        for y in ys:
+            if y.buffer_address() != x.buffer_address():
+                y.deallocate(True)
     logger.info(f"ran {tag}")
