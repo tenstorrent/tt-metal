@@ -682,7 +682,9 @@ void kernel_main() {
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
                 constexpr uint32_t qktv_h =
                     ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, dst_size, Sq_chunk_t);
-                static_assert(Sq_chunk_t % qktv_h == 0, "K split merge walks whole SALAD row groups");
+                // kernel_main is not a template, so a discarded if-constexpr branch is still checked.
+                static_assert(
+                    !ksplit_enabled || Sq_chunk_t % qktv_h == 0, "K split merge walks whole SALAD row groups");
                 const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
                 for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
                     if (ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count).empty()) {
