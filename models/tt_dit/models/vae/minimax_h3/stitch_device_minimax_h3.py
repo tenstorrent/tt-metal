@@ -42,28 +42,28 @@ class DeviceTileStitcher:
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
         self.mesh_device = mesh_device
-        self._ramps: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._ramps: dict[tuple, ttnn.Tensor] = {}
 
-    def _ramp_pair(self, shape: tuple[int, ...], extent: int, dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """`(weight_a, weight_b)` broadcast to `shape`, where `weight_a = 1 - i/extent` along `dim`.
-
-        Materialized at full tile shape rather than relying on ttnn broadcast semantics: a few MB,
-        built once, and it removes any question of which operand broadcasts.
-        """
-        key = (shape, extent, dim)
+    def _ramp(self, plane: tuple[int, int], rank: int, dim: int) -> ttnn.Tensor:
+        """`weight_a = 1 - i/extent` along `dim`, over the trailing `plane = (H, W)`; leading dims broadcast."""
+        key = (plane, dim)
         if key not in self._ramps:
+            extent = plane[dim - (rank - 2)]
             positions = torch.arange(extent, dtype=torch.float32)
-            view = [1] * len(shape)
+            view = [1] * rank
             view[dim] = extent
-            slab = list(shape)
-            slab[dim] = extent
+            slab = [1] * (rank - 2) + list(plane)
             weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
-            weight_b = (positions / extent).view(view).expand(slab).contiguous()
-            self._ramps[key] = tuple(
-                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
-                for w in (weight_a, weight_b)
+            self._ramps[key] = ttnn.from_torch(
+                weight_a, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
             )
         return self._ramps[key]
+
+    def bind_ramps(self, extents, tile: int) -> None:
+        """Build every ramp up front (before trace capture); one allocated mid-request gets clobbered by replays."""
+        for extent in extents:
+            self._ramp((extent, tile), 5, 3)
+            self._ramp((tile, extent), 5, 4)
 
     @staticmethod
     def _slice(tensor: ttnn.Tensor, dim: int, start: int, stop: int) -> ttnn.Tensor:
@@ -86,8 +86,8 @@ class DeviceTileStitcher:
 
         tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
         head_b = self._slice(b, axis, 0, blend_extent)
-        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis)
-        blended = ttnn.add(ttnn.multiply(tail_a, weight_a), ttnn.multiply(head_b, weight_b))
+        weight_a = self._ramp((head_b.shape[-2], head_b.shape[-1]), rank, axis)
+        blended = ttnn.add(head_b, ttnn.multiply(ttnn.subtract(tail_a, head_b), weight_a))
 
         if blend_extent == b.shape[axis]:
             return blended
@@ -120,6 +120,156 @@ class DeviceTileStitcher:
                 result_row.append(tile)
             result_rows.append(ttnn.concat(result_row, dim=-1))
         return ttnn.concat(result_rows, dim=-2)
+
+
+class NeighborTileBlender:
+    """Gather-free stitch: each tile cross-fades in place from its raw up/left neighbour halos.
+
+    Halos come from a per-axis neighbour exchange; the blend is two matmuls against per-device constant
+    weights. Requires a grid-aligned wave (tile ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)``).
+    """
+
+    def __init__(self, mesh_device: ttnn.MeshDevice, ccl_manager) -> None:
+        assert ccl_manager is not None, "the neighbour exchange needs a CCLManager"
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self._weights: dict[tuple, tuple] = {}
+        self._compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
+
+    @staticmethod
+    def _band_matrix(pad: int, extent: int, overlap: int) -> torch.Tensor:
+        """``(pad+extent, extent)`` identity with the first ``overlap`` outputs cross-faded from the halo."""
+        m = torch.zeros(pad + extent, extent, dtype=torch.float32)
+        for k in range(extent):
+            if k < overlap:
+                m[pad - overlap + k, k] = 1.0 - k / overlap
+                m[pad + k, k] = k / overlap
+            else:
+                m[pad + k, k] = 1.0
+        return m
+
+    def _geometry_weights(
+        self,
+        *,
+        grid_rows: int,
+        grid_cols: int,
+        y_overlaps: list[int],
+        x_overlaps: list[int],
+        chunks_per_wave: int,
+        tile_h: int,
+        tile_w: int,
+        hpad: int,
+        wpad: int,
+    ) -> tuple:
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        key = (
+            mesh_rows,
+            mesh_cols,
+            grid_rows,
+            grid_cols,
+            tuple(y_overlaps),
+            tuple(x_overlaps),
+            chunks_per_wave,
+            tile_h,
+            tile_w,
+        )
+        if key not in self._weights:
+            mv_shards, nh_shards = [], []
+            for shard in range(mesh_rows * mesh_cols):
+                r, mc = shard // mesh_cols, shard % mesh_cols
+                k, c = mc // grid_cols, mc % grid_cols
+                valid = r < grid_rows and k < chunks_per_wave
+                hov = y_overlaps[r - 1] if valid and r > 0 else 0
+                wov = x_overlaps[c - 1] if valid and c > 0 else 0
+                mv_shards.append(self._band_matrix(hpad, tile_h, hov))
+                nh_shards.append(self._band_matrix(wpad, tile_w, wov))
+
+            def upload(shards):
+                stacked = torch.stack(shards, dim=0)
+                tensor = ttnn.from_torch(
+                    stacked,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                )
+                return ttnn.reshape(tensor, tuple(stacked.shape[1:]))
+
+            self._weights[key] = (upload(mv_shards), upload(nh_shards))
+        return self._weights[key]
+
+    def _exchange(self, x: ttnn.Tensor, *, pad: int, axis: int) -> ttnn.Tensor:
+        """Prepend the previous device-along-``axis``'s trailing ``pad`` rows of ``x`` (dim 1)."""
+        num_links = max(1, min(int(x.shape[0]), self.ccl_manager.num_links))
+        return self.ccl_manager.neighbor_pad_persistent_buffer(
+            x,
+            dims=[1],
+            pad_left=[pad],
+            pad_right=[0],
+            padding_mode="zeros",
+            axes=[axis],
+            neighbor_sems=[self.ccl_manager.get_np_ping_pong_semaphore(axis)],
+            num_links=[num_links],
+        )
+
+    def blend_wave(
+        self,
+        pixels: ttnn.Tensor,
+        *,
+        grid_rows: int,
+        grid_cols: int,
+        y_overlaps: list[int],
+        x_overlaps: list[int],
+        chunks_per_wave: int,
+    ) -> ttnn.Tensor:
+        """``(1, C, F, H, W)`` ROW_MAJOR raw tiles in, blended fp32 tiles out, same shape."""
+        _, channels, frames, tile_h, tile_w = (int(d) for d in pixels.shape)
+        hpad = max(y_overlaps) if y_overlaps else 0
+        wpad = max(x_overlaps) if x_overlaps else 0
+        mv, nh = (
+            self._geometry_weights(
+                grid_rows=grid_rows,
+                grid_cols=grid_cols,
+                y_overlaps=y_overlaps,
+                x_overlaps=x_overlaps,
+                chunks_per_wave=chunks_per_wave,
+                tile_h=tile_h,
+                tile_w=tile_w,
+                hpad=hpad,
+                wpad=wpad,
+            )
+            if hpad or wpad
+            else (None, None)
+        )
+
+        def tiled_f32(t: ttnn.Tensor) -> ttnn.Tensor:
+            return ttnn.typecast(ttnn.to_layout(t, ttnn.TILE_LAYOUT), ttnn.float32)
+
+        x = ttnn.reshape(pixels, (channels * frames, tile_h, tile_w))
+
+        if hpad:
+            stacked = self._exchange(x, pad=hpad, axis=0)
+            v_t = ttnn.matmul(tiled_f32(ttnn.permute(stacked, (0, 2, 1))), mv, compute_kernel_config=self._compute)
+            v = ttnn.permute(ttnn.to_layout(v_t, ttnn.ROW_MAJOR_LAYOUT), (0, 2, 1))
+        else:
+            v = ttnn.typecast(ttnn.to_layout(x, ttnn.TILE_LAYOUT), ttnn.float32)
+            v = ttnn.to_layout(v, ttnn.ROW_MAJOR_LAYOUT)
+
+        if not wpad:
+            return ttnn.reshape(v, (1, channels, frames, tile_h, tile_w))
+
+        halo_t = self._exchange(ttnn.permute(x, (0, 2, 1)), pad=wpad, axis=1)
+        halo_t = ttnn.slice(halo_t, [0, 0, 0], [channels * frames, wpad, tile_h])
+        halo = ttnn.permute(halo_t, (0, 2, 1))
+        halo = ttnn.to_layout(
+            ttnn.typecast(ttnn.to_layout(halo, ttnn.TILE_LAYOUT), ttnn.float32), ttnn.ROW_MAJOR_LAYOUT
+        )
+        stacked = ttnn.concat([halo, v], dim=2)
+        out = ttnn.matmul(ttnn.to_layout(stacked, ttnn.TILE_LAYOUT), nh, compute_kernel_config=self._compute)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (1, channels, frames, tile_h, tile_w))
 
 
 def unpatchify_device(

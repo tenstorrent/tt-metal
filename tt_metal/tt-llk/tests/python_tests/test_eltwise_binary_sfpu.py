@@ -103,7 +103,11 @@ _FACES_PER_TILE = 4
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
-# Per-op (atol, rtol) overrides, mirroring CUSTOM_TOLERANCES in test_eltwise_unary_sfpu.py.
+# Per-op (atol, rtol) overrides. The unary side's CUSTOM_TOLERANCES is gone: those numbers
+# moved next to their ops in helpers/sfpu_accuracy_budget.yaml, which the unary driver
+# reads through accuracy_contract() in helpers/sfpu_accuracy_budget.py -- the table is the
+# YAML, the module only loads and resolves it. This table is the binary equivalent, not
+# yet migrated.
 # `None` keeps the format default. Only two ops belong here: their error is a property of the
 # op's own composition rather than of the stimuli, so it grows with the operands however the
 # domain is drawn. pow's error is relative and roughly flat; xlogy's is absolute and linear in
@@ -998,6 +1002,83 @@ def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, matho
     )
 
 
+def _int_arith_negative_spec():
+    """Paired Int32 stimuli where both operands independently take either sign.
+
+    The Int32 add/sub kernels convert each operand out of sign-magnitude before the integer
+    add and the result back into it, so three sign folds run per element. The positive-only
+    default never sets an operand's sign bit, which leaves the two input-side folds unreached
+    by every other Int32 test here -- only the output-side one is exercised, and then only
+    because `a - b` on non-negative operands still goes negative.
+
+    The two operands vary at different rates so the face walks the full 8x8 product of
+    operand values rather than a single diagonal. A mirrored pair would collapse `a + b` to a
+    constant zero and test nothing. Values stay small so neither sum nor difference can
+    overflow; test_eltwise_binary_sfpu_int_extremes drives the range ends separately.
+    """
+
+    def a_face(size, dtype, generator):
+        positions = torch.arange(size, dtype=torch.float32)
+        # -4..3, cycling every 8 elements.
+        return ((positions % 8) - 4.0).to(dtype)
+
+    def b_face(size, dtype, generator):
+        positions = torch.arange(size, dtype=torch.float32)
+        # -4..3, cycling every 64, so each a value meets every b value, including (0, 0).
+        return (((positions // 8) % 8) - 4.0).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_arith_across_zero(formats, dest_acc, mathop):
+    """Negative and mixed-sign operands for the Int32 add/sub kernels.
+
+    Covers the input-side sign folds in _add_int_ / _sub_int_, which no other Int32 test in
+    this file reaches.
+
+    Unlike test_eltwise_binary_sfpu_int_comparison_across_zero above, this one keeps the
+    sign-magnitude default rather than passing twos_complement=True. These kernels are
+    sign-magnitude end to end -- operands in, result out -- so two's-complement stimuli are
+    read back with the sign bit as a magnitude bit and every negative lane diverges. The
+    comparison ops can take either encoding on the way out only because they emit 0 or 1.
+    """
+    spec_A, spec_B = _int_arith_negative_spec()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_arith_wide_signed(formats, dest_acc, mathop):
+    """Large-magnitude operands of both signs for the Int32 add/sub kernels.
+
+    across_zero above walks every combination of operand sign but only at magnitude <= 4, and
+    the positive-only default reaches wide magnitudes but never sets an operand's sign bit.
+    Between them a sign fold that only misbehaves on a wide bit pattern -- the shape a cast
+    defect usually takes -- goes unseen.
+
+    Bounds are +-2**29 so neither the sum nor the difference can leave the +-(2**31 - 1) that
+    sign-magnitude Dst represents. A and B draw distinct values because the paired face walk
+    advances one shared RNG stream across faces, not because of the per-spec seed, which
+    generate_face ignores whenever an external generator is supplied.
+    """
+    bound = float(2**29)
+    spec_A = StimuliSpec(
+        distribution=DistributionKind.UNIFORM, low=-bound, high=bound, seed=0
+    )
+    spec_B = StimuliSpec(
+        distribution=DistributionKind.UNIFORM, low=-bound, high=bound, seed=1
+    )
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[
@@ -1087,8 +1168,9 @@ def test_eltwise_binary_sfpu_eq_ne_int(formats, dest_acc, mathop):
 
 
 # Integer shift edge cases: shift amounts outside [0, 31], arithmetic sign extension, and
-# negative operands. INT32_MIN is excluded because sign-magnitude Dst cannot represent it --
-# see the xfail test below and docs/SFPU_INT32_SHIFT.md.
+# negative operands, INT32_MIN included. These tests pack two's complement, which is the encoding
+# native Int32 tiles carry in Dst, so the whole int32 range round-trips -- including 0x80000000,
+# which sign-magnitude packing would turn into "negative zero".
 
 _INT32_MIN = -(2**31)
 
@@ -1117,7 +1199,7 @@ _SHIFT_EDGE_VALUES = [
     0x55555555,
     -0x55555555,
     0x7FFFFFFF,  # INT32_MAX
-    -0x80000000,  # INT32_MIN (filtered out per-op; see _build_shift_edge_case_src)
+    -0x80000000,  # INT32_MIN
 ]
 
 # Shift amounts now live in sfpu_domains.SHIFT_EDGE_AMOUNTS, because the unary shift sweep
@@ -1146,14 +1228,9 @@ def _shift_reference(mathop, value, shift):
 
 def _build_shift_edge_case_src(mathop):
     """Build a deterministic [64, 32] Int32 operand: tile 0 holds values, tile 1 holds
-    per-element shift amounts (tilize pairs them by index). Walks the cartesian product of
-    interesting (value, shift) pairs; pairs touching INT32_MIN are dropped (sign-magnitude
-    Dst can't represent -2^31)."""
-    pairs = [
-        (v, s)
-        for v, s in itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS)
-        if v != _INT32_MIN and _shift_reference(mathop, v, s) != _INT32_MIN
-    ]
+    per-element shift amounts (tilize pairs them by index). Walks the full cartesian product of
+    interesting (value, shift) pairs, INT32_MIN included."""
+    pairs = list(itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS))
     return _build_paired_tile_override(pairs, torch.int32)
 
 
@@ -1167,30 +1244,21 @@ def _build_shift_edge_case_src(mathop):
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_int_shift_edge_cases(
-    request,
     formats,
     dest_acc,
     mathop,
 ):
-    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-        # xfail rather than skip so a Blackhole kernel port surfaces as XPASS instead of
-        # staying silently green-by-omission. The bug is an external dependency of this
-        # suite, not a task in it, but a skip cannot tell us when it is fixed.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Blackhole shift kernels (left / arithmetic right / logical right) "
-                "are unmigrated TTI microcode whose predicated out-of-range/sign handling "
-                "breaks under INT32_2S_COMP for negative operands, so all three diverge "
-                "from the two's-complement golden. See docs/SFPU_INT32_SHIFT.md.",
-                strict=False,
-            )
-        )
-
+    # twos_complement=True is required, not decorative, and for the same reason as in
+    # test_eltwise_binary_sfpu_int_extremes: the shift kernels operate on Dst bits directly, so
+    # sign-magnitude stimuli would hand them 0x80000001 for -1 and every negative lane would
+    # diverge from the two's-complement golden. Native Int32 tiles are 2's complement in Dst
+    # (see binary_shift.h), so this is also the encoding the kernels see in production.
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
         src_A_override=_build_shift_edge_case_src(mathop),
+        twos_complement=True,
     )
 
 
@@ -1427,13 +1495,6 @@ def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
     )
 
 
-@pytest.mark.xfail(
-    reason="Dst stores int32 as sign-magnitude with range +-(2^31 - 1). INT32_MIN "
-    "(0x80000000) is 'negative zero' and cannot round-trip through Dst, so shifts that "
-    "consume or produce it diverge from the two's-complement golden. This is a hardware "
-    "limitation of the Wormhole SFPU load/store path; see docs/SFPU_INT32_SHIFT.md.",
-    strict=False,
-)
 @parametrize(
     formats=input_output_formats(
         [
@@ -1443,13 +1504,14 @@ def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
     mathop=_SHIFT_EDGE_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
+def test_eltwise_binary_sfpu_int_shift_int32_min(
     formats,
     dest_acc,
     mathop,
 ):
-    # Every value lane is INT32_MIN shifted by 0: the golden expects INT32_MIN back, but
-    # HW loads it as sign-magnitude "negative zero", so this is expected to fail.
+    # Every value lane is INT32_MIN shifted by 0, so the golden expects INT32_MIN back. Worth its
+    # own test because 0x80000000 is the one value whose round-trip depends entirely on the Dst
+    # encoding: two's complement carries it, sign-magnitude reads it as "negative zero".
     num_elements = 32 * 32
     value_grid = [_INT32_MIN] * num_elements
     shift_grid = [0] * num_elements
@@ -1459,6 +1521,7 @@ def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
         dest_acc,
         mathop,
         src_A_override=src,
+        twos_complement=True,
     )
 
 

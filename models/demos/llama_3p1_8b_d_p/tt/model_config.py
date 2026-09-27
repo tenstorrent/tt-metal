@@ -2,26 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Llama-3.1-8B ModelArgs (weights). Mirrors ``gpt_oss_d_p/tt/model_config.py``.
+"""Checkpoint path/config helpers retained for the prefill adapter scaffold.
 
-Loads the bf16 safetensors and converts the q/k projections to Meta format for the on-device
-(indexed) RoPE.
+The implemented model uses ``tt.weights.CheckpointWeights`` for incremental raw-HF loading.
+That loader does not permute Q/K. ``QKVProjection`` performs the single required HF-to-Meta
+conversion when it constructs device weights, so the resulting K frame matches Blaze decode.
 
-**The q/k conversion is not optional.** HF ships Llama's q_proj/k_proj permuted so that its
-``rotate_half`` (half-split) RoPE reproduces Meta's interleaved rotation. blaze decode writes K in
-the **Meta-interleaved** frame (``blaze/ops/rope/kernels/op.hpp``, and ``make_cos_sin`` builds the
-table as ``stack((cos,cos),-1).flatten(-2)`` -- each frequency duplicated *adjacently*). If prefill
-writes the HF frame instead, KV migration copies bytes faithfully and decode reads a permutation:
-the byte-compare gate passes and the output is fluent garbage. ``convert_hf_qkv_to_meta_format``
-is the shared helper that does this, and is what gpt_oss_d_p uses for the same reason.
-
-Note the split of responsibilities: the **config** comes from the repo-bundled ``config.json`` named
-by the adapter's ``hf_model_default`` (no mount, no network), while the **weights** come from the
-checkpoint named here. Keeping them separate is what lets ``load_hf_config`` run in the H2D producer
-and in device-free tests.
-
-Scaffold status: the weight-loading body lands with #4149 (runner integration); the path resolution
-and the dim cross-check are live now so later ops can import this module.
+The adapter config remains import-light and independent of checkpoint availability. Do not use
+this module's unsupported bulk-loader scaffold for the full model; use CheckpointWeights.layer
+and release each host layer mapping after construction.
 """
 
 import os
@@ -76,8 +65,8 @@ def cross_check_hf_config(hf_config) -> None:
 class ModelArgs:
     """Llama-3.1-8B ModelArgs.
 
-    Scaffold: carries the resolved weights path. Weight loading (``load_state_dict``) lands with
-    #4149.
+    Carries the resolved checkpoint path for the adapter scaffold. The implemented model uses
+    CheckpointWeights directly for incremental loading.
     """
 
     def __init__(self, mesh_device=None, max_seq_len: int = 2048):
@@ -88,13 +77,12 @@ class ModelArgs:
 
     @staticmethod
     def load_state_dict(weights_path, convert_to_meta_format: bool = True):
-        """Load the bf16 safetensors and convert q/k to Meta format.
+        """Unsupported legacy bulk-loader signature; use incremental raw CheckpointWeights.
 
-        Lands with #4149. See the module docstring for why ``convert_to_meta_format`` must stay on:
-        the frame has to match what blaze decode writes, or migration silently permutes K.
+        The signature is retained for compatibility with the scaffold only. Its historical
+        convert_to_meta_format default must not be applied before QKVProjection.
         """
         raise NotImplementedError(
-            "Llama-3.1-8B prefill weight loading lands with tt-blaze#4149 (runner integration). "
-            "Use models.tt_transformers.tt.load_checkpoints.convert_hf_qkv_to_meta_format for the "
-            "q/k frame conversion, as gpt_oss_d_p does."
+            "Use models.demos.llama_3p1_8b_d_p.tt.weights.CheckpointWeights for incremental raw-HF "
+            "loading. Do not pre-convert Q/K: QKVProjection performs that conversion exactly once."
         )

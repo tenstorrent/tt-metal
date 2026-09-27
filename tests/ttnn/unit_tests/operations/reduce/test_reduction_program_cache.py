@@ -13,12 +13,13 @@ The ReduceDeviceOperation uses 3 ProgramFactory variants:
     MULTI_CORE_HW which also maps to ReduceSingleCoreHwProgramFactory
 
 compute_program_hash() includes:
-  math_op, dim, scaler, output_mem_config, output_dtype, compute_kernel_config,
+  math_op, dim, scaler_mode, output_mem_config, output_dtype, compute_kernel_config,
   sub_core_grids, negate, program_factory.index(), input dtype,
   input memory_config, input padded_shape.
 
-override_runtime_arguments() only updates buffer addresses — shape/work distribution
-changes require separate cache entries (padded_shape is in hash).
+It deliberately EXCLUDES the two scalar floats (scaler / post_mul_scaler): they reach the
+kernels as common runtime args, so distinct scalar values share one program (#54180), and
+override_runtime_arguments() re-applies them on a cache hit.
 """
 
 import pytest
@@ -37,17 +38,17 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
-def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """Run a reduce op on device and return (torch_result, ttnn_result)."""
+def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, scalar=1.0):
+    """Run a reduce op on device and return (torch_result, ttnn_result). ttnn(x, scalar=s) == torch(s * x)."""
     torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
     torch_a = torch.rand(shape, dtype=torch_dtype) + 0.1
 
-    ttnn_ops = {ttnn.sum: torch.sum, ttnn.max: torch.amax, ttnn.min: torch.amin}
-    torch_result = ttnn_ops[op](torch_a, dim=dim, keepdim=True)
+    ttnn_ops = {ttnn.sum: torch.sum, ttnn.max: torch.amax, ttnn.min: torch.amin, ttnn.mean: torch.mean}
+    torch_result = ttnn_ops[op](scalar * torch_a, dim=dim, keepdim=True)
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     with device.cache_entries_counter.measure():
-        tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config)
+        tt_result = op(tt_a, dim=dim, keepdim=True, memory_config=memory_config, scalar=scalar)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -58,6 +59,7 @@ def run_reduce_op(device, op, shape, dim, dtype=ttnn.bfloat16, memory_config=ttn
 # =============================================================================
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
     """Same op, same shape, same dtype run twice -> 1 cache entry, different outputs."""
     shape = [1, 1, 64, 64]
@@ -95,6 +97,7 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 # =============================================================================
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     """Different reduce math ops (sum vs max) -> different cache entries."""
     torch.manual_seed(0)
@@ -125,6 +128,7 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     """Different reduce dims (W vs H) -> different program factories -> different cache entries."""
     torch.manual_seed(0)
@@ -157,6 +161,7 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache):
     """Different input dtypes -> different cache entries."""
     torch.manual_seed(0)
@@ -187,6 +192,7 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cache):
     """Different memory configs -> different cache entries."""
     torch.manual_seed(0)
@@ -223,6 +229,7 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     """Different padded shapes -> different cache entries.
     padded_shape is included in compute_program_hash() because Ht, Wt are compile-time args."""
@@ -253,6 +260,7 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.merge_gate
 def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     """Different sub_core_grids -> different cache entries.
     sub_core_grids is in compute_program_hash() and affects work distribution (compile-time)."""
@@ -287,5 +295,133 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
         atol=0.25,
         frobenius_threshold=0.001,
     )
+
+    assert device.cache_entries_counter.total == 2
+
+
+# =============================================================================
+# Scalar values are runtime args (#54180): one program must serve every value
+# =============================================================================
+
+
+@pytest.mark.parametrize("op", [ttnn.sum, ttnn.max, ttnn.min, ttnn.mean])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
+    """Different scalar values -> 1 cache entry, and each result is correct."""
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 64]
+
+    for scalar in [1.0, 0.5, 2.0]:
+        torch_ref, tt_out = run_reduce_op(device, op, shape, dim=dim, scalar=scalar)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+
+    assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("dim", [-2, -1], ids=["H", "W"])
+def test_reduce_cache_reuse_across_scalars_two_core_groups(device, isolate_program_cache, dim):
+    """Uneven core split -> compute_g2 exists, and its scalar must be re-stamped on a cache hit.
+
+    ttnn.max resolves to ScalerMode::PostMul, so the scalar reaches the compute kernels as a common
+    runtime arg. If override_runtime_arguments re-stamped only compute_g1, the columns/rows owned by
+    the second core group would keep the previous call's scalar.
+    """
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    # One work unit past an exact 2-per-core split; that remainder is what creates core_group_2.
+    num_units = 2 * grid.x * grid.y + 1
+    # The H factory splits NC*Wt columns across cores, the W factory splits NC*Ht rows.
+    shape = [1, 1, 32, 32 * num_units] if dim == -2 else [1, 1, 32 * num_units, 32]
+
+    for scalar in [1.0, 0.5, 2.0]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.max, shape, dim=dim, scalar=scalar)
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+
+    assert device.cache_entries_counter.total == 1
+
+
+def test_reduce_cache_reuse_across_scalars_h_axis_split(device, isolate_program_cache):
+    """H-axis split (num_h_slices > 1): both stages must survive a scalar change on a cache hit.
+
+    Ht = 20 meets the split threshold while NC*Wt = 8 leaves grid room for >= 2 slices. The split
+    lowers to a unit-scaler stage 1 plus a stage 2 that applies the scalar, so it is the only
+    configuration where the override sizes its core split from a sliced column count.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 640, 256]
+
+    for scalar in [1.0, 0.5, 2.0]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.sum, shape, dim=-2, scalar=scalar)
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=1e-06,
+            atol=1e-06,
+            frobenius_threshold=1e-09,
+        )
+
+    # Stage 1 and stage 2 are distinct programs; neither recompiles for a new scalar.
+    assert device.cache_entries_counter.total == 2
+
+
+def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache):
+    """Mixed-sign scalars on the HW factory -> 1 cache entry.
+
+    The host used to hand REDUCE_SCALAR sqrt(scaler), which is NaN for a negative value, so
+    `dim == HW && scaler < 0` was forced onto the two-step W-then-H path. The scalar is applied
+    after the reduction now, so both signs share the one HW program: this cost 3 entries before
+    (1 for the positive HW program, 2 for the forked W-then-H) and costs 1 now.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 32]
+
+    for scalar in [0.5, -0.5]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.sum, shape, dim=[-2, -1], scalar=scalar)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=0.007,
+            atol=0.25,
+            frobenius_threshold=0.008,
+        )
+
+    assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("op", [ttnn.std, ttnn.var])
+@pytest.mark.parametrize("dim", [-1, -2, [-2, -1]], ids=["W", "H", "HW"])
+def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
+    """Welford std/var: distinct scalars share one program, per correction setting.
+
+    compute_program_hash excludes `scalar`, which the kernels read as a runtime arg (#54180).
+    Six configurations therefore cost 2 entries instead of 6. Numerics are covered by
+    tests/ttnn/nightly/.../test_generic_ops_w_scalar.py.
+    """
+    torch.manual_seed(0)
+    torch_a = torch.rand([1, 1, 64, 64], dtype=torch.bfloat16) + 0.1
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with device.cache_entries_counter.measure():
+        for scalar in [1.0, 0.5, 2.0]:
+            for correction in [True, False]:
+                op(tt_a, dim=dim, keepdim=True, scalar=scalar, correction=correction)
 
     assert device.cache_entries_counter.total == 2

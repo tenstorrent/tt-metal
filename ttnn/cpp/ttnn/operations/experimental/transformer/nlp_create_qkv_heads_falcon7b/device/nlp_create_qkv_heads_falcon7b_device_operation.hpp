@@ -5,12 +5,12 @@
 #pragma once
 
 #include <optional>
-#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/device_operation.hpp"
 #include "nlp_create_qkv_heads_falcon7b_device_operation_types.hpp"
-#include "nlp_create_qkv_heads_falcon7b_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -19,8 +19,15 @@ struct NlpCreateHeadsFalcon7BDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = NlpCreateQkvHeadsFalcon7bResultSpec;
     using tensor_return_value_t = NlpCreateQkvHeadsFalcon7bResult;
-    using program_factory_t = std::variant<NlpCreateQkvHeadsFalcon7BProgramFactory>;
-    using shared_variables_t = NlpCreateQkvHeadsFalcon7BProgramFactory::shared_variables_t;
+
+    // The only per-dispatch state is the four buffer addresses (input, q, k, v); every other
+    // per-core arg is derived from the input's padded shape and the compute grid, both part of the
+    // program hash. Declaring the addresses as runtime-arg bindings is therefore enough to refresh
+    // the program on a cache hit, so there is no factory wrapper and no override.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

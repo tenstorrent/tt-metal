@@ -15,7 +15,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_con
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 
@@ -29,7 +29,7 @@ def _forward(layer: ttKDA, hidden: torch.Tensor, state: KdaState) -> torch.Tenso
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, _ = layer.forward(hidden_tt, state)
+        output, _ = layer.forward(hidden_tt, state, make_actual_start(layer.device))
     return ttnn.to_torch(output)
 
 
@@ -106,13 +106,11 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
     cache_prefix = "layer_0.kda"
     KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, config, device)
 
-    in_memory_layer = ttKDA(device, config, state_dict)
+    in_memory_layer = ttKDA(device, config, state_dict, active_seq_len=32)
     cached_layer = ttKDA(
-        device,
-        config,
-        weights=KDAWeights.from_cache(tmp_path, cache_prefix, config, device),
+        device, config, weights=KDAWeights.from_cache(tmp_path, cache_prefix, config, device), active_seq_len=32
     )
-    cache_only_layer = ttKDA(device, config, None, weight_cache_path=tmp_path, layer_idx=0)
+    cache_only_layer = ttKDA(device, config, None, weight_cache_path=tmp_path, layer_idx=0, active_seq_len=32)
     outputs = {
         "in-memory": _forward(in_memory_layer, hidden, in_memory_layer.allocate_state()),
         "preloaded-cache": _forward(cached_layer, hidden, cached_layer.allocate_state()),
@@ -127,7 +125,7 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
 def test_program_config_resolution(device: ttnn.Device) -> None:
     config = make_small_kda_test_config()
     program_config = replace(KDAProgramConfig(), qkv_channel_chunk_size=128, tp_ccl_topology=ttnn.Topology.Ring)
-    layer = ttKDA(device, config, random_weights(config), program_config=program_config)
+    layer = ttKDA(device, config, random_weights(config), program_config=program_config, active_seq_len=32)
 
     assert layer.qkv_convolution_program_config.channel_chunk_size == 96
     assert layer.tp_ccl_topology == ttnn.Topology.Ring
@@ -161,3 +159,19 @@ def test_program_config_rejects_invalid_values(
 ) -> None:
     with expect_error(ValueError, message):
         config_type(**kwargs)
+
+
+@pytest.mark.parametrize("local_rows,expected_group_chunks", [(640, 20), (1280, 20), (2560, 20), (320, 10)])
+def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+
+    config = kimi_k3_program_config(active_seq_len_local=local_rows, tp_ccl_topology=ttnn.Topology.Linear)
+    assert config.recurrence.summary_group_chunks == expected_group_chunks
+    assert config.recurrence.local_scan_strategy == "grouped"
+
+
+def test_kimi_k3_rejects_untuned_geometry(expect_error):
+    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+
+    with expect_error(ValueError, "no tuned"):
+        kimi_k3_program_config(active_seq_len_local=672, tp_ccl_topology=ttnn.Topology.Linear)

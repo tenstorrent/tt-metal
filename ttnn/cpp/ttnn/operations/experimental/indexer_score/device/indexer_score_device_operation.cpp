@@ -254,6 +254,33 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
     }
 }
 
+// Structural checks shared by every 1-element metadata tensor the fused reader consumes
+// (chunk_start_idx_tensor, valid_end_tensor, cache_batch_idx_tensor). Their VALUES are read
+// on-device, so only the container can be checked here -- and all three must satisfy the same
+// contract, so keep it in one place rather than three drifting copies.
+//
+// The DRAM pin is load-bearing, not style: the reader bakes each buffer's TensorAccessorArgs in as
+// COMPILE-TIME args while the program hash records only that the metadata is present, so an L1
+// tensor on one dispatch and a DRAM one on the next would cache-hit a binary built for the other
+// address space and resolve the address against the wrong accessor.
+void validate_scalar_metadata_tensor(const Tensor& m, const Tensor& q, std::string_view name) {
+    TT_FATAL(
+        m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+        "indexer_score: {} must be allocated on device",
+        name);
+    TT_FATAL(m.device() == q.device(), "indexer_score: {} must be on the same mesh device as q", name);
+    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: {} must be UINT32 (got {})", name, m.dtype());
+    TT_FATAL(m.layout() == Layout::ROW_MAJOR, "indexer_score: {} must be ROW_MAJOR (got {})", name, m.layout());
+    TT_FATAL(
+        m.logical_volume() == 1, "indexer_score: {} must hold exactly 1 element (got {})", name, m.logical_volume());
+    TT_FATAL(
+        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "indexer_score: {} must be interleaved (a sharded 1-element tensor would not sit at the single fixed "
+        "address the kernel reads page 0 from)",
+        name);
+    TT_FATAL(m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: {} must be in DRAM", name);
+}
+
 // Validate metadata properties available without reading its device-resident value.
 void validate_chunk_start_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
     if (!t.has_chunk_start_metadata()) {
@@ -275,27 +302,34 @@ void validate_chunk_start_metadata(const operation_attributes_t& attrs, const te
         "indexer_score: chunk_start_idx_tensor requires the block-cyclic layout (block_cyclic_chunk_local), "
         "whose sp/chunk_local are what the kernel derives kv_len and the causal rotation from");
 
-    const auto& m = *t.chunk_start_idx_tensor;
-    TT_FATAL(
-        m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
-        "indexer_score: chunk_start_idx_tensor must be allocated on device");
-    TT_FATAL(m.device() == t.q.device(), "indexer_score: chunk_start_idx_tensor must be on the same mesh device as q");
-    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: chunk_start_idx_tensor must be UINT32 (got {})", m.dtype());
-    TT_FATAL(
-        m.layout() == Layout::ROW_MAJOR,
-        "indexer_score: chunk_start_idx_tensor must be ROW_MAJOR (got {})",
-        m.layout());
-    TT_FATAL(
-        m.logical_volume() == 1,
-        "indexer_score: chunk_start_idx_tensor must hold exactly 1 element (got {})",
-        m.logical_volume());
-    TT_FATAL(
-        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "indexer_score: chunk_start_idx_tensor must be interleaved (a sharded 1-element tensor would not sit at "
-        "the single fixed address the kernel reads page 0 from)");
-    TT_FATAL(
-        m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: chunk_start_idx_tensor must be in DRAM");
+    validate_scalar_metadata_tensor(*t.chunk_start_idx_tensor, t.q, "chunk_start_idx_tensor");
 }
+// Structural checks for the real-token-end tensor. Mirrors validate_chunk_start_metadata; the value is
+// read on-device, so only the container and the co-requirements can be checked here.
+void validate_valid_end_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!t.has_valid_end_metadata()) {
+        return;
+    }
+    TT_FATAL(
+        attrs.has_fused_ring(),
+        "indexer_score: valid_end_tensor is supported only on the fused ring path "
+        "(ring_indexer_score_dsa); the classic factory has no on-device metadata read");
+    TT_FATAL(
+        t.has_chunk_start_metadata(),
+        "indexer_score: valid_end_tensor requires chunk_start_idx_tensor -- it only CAPS the bound the "
+        "chunk-start derivation produces, so on its own there is nothing for it to cap");
+    TT_FATAL(
+        attrs.has_block_cyclic(),
+        "indexer_score: valid_end_tensor requires the block-cyclic layout, whose sp/chunk_local are what "
+        "the kernel derives the uncapped bound from");
+    validate_scalar_metadata_tensor(*t.valid_end_tensor, t.q, "valid_end_tensor");
+}
+
+void validate_metadata_mode(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    validate_chunk_start_metadata(attrs, t);
+    validate_valid_end_metadata(attrs, t);
+}
+
 // Structural checks for the trace-safe cache-slot tensor. Mirrors validate_chunk_start_metadata: the
 // value is read on-device, so only the container and the recomposition terms can be checked here.
 void validate_cache_slot_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
@@ -326,27 +360,7 @@ void validate_cache_slot_metadata(const operation_attributes_t& attrs, const ten
         "indexer_score: index_cache_layer_idx {} must be < index_cache_num_layers {}",
         attrs.index_cache_layer_idx,
         attrs.index_cache_num_layers);
-    const auto& m = *t.cache_batch_idx_tensor;
-    TT_FATAL(m.storage_type() == StorageType::DEVICE, "indexer_score: cache_batch_idx_tensor must be on device");
-    TT_FATAL(m.device() == t.q.device(), "indexer_score: cache_batch_idx_tensor must be on the same mesh device as q");
-    TT_FATAL(m.dtype() == DataType::UINT32, "indexer_score: cache_batch_idx_tensor must be UINT32 (got {})", m.dtype());
-    TT_FATAL(
-        m.layout() == Layout::ROW_MAJOR,
-        "indexer_score: cache_batch_idx_tensor must be ROW_MAJOR (got {})",
-        m.layout());
-    TT_FATAL(
-        m.logical_volume() == 1,
-        "indexer_score: cache_batch_idx_tensor must hold exactly 1 element (got {})",
-        m.logical_volume());
-    TT_FATAL(
-        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "indexer_score: cache_batch_idx_tensor must be interleaved");
-    // The reader bakes this buffer's TensorAccessorArgs in as COMPILE-TIME arguments, while the program
-    // hash records only that slot metadata is present. An L1 tensor on one dispatch and a DRAM one on the
-    // next would therefore cache-hit a binary built for the other address space and resolve the address
-    // against the wrong accessor. Pin it to the documented DRAM placement, as chunk_start_idx_tensor is.
-    TT_FATAL(
-        m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: cache_batch_idx_tensor must be in DRAM");
+    validate_scalar_metadata_tensor(*t.cache_batch_idx_tensor, t.q, "cache_batch_idx_tensor");
 }
 
 }  // namespace
@@ -409,6 +423,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.has_runtime_kv_len(),
         // Metadata presence selects kernels with additional CBs and accessor arguments. Its value remains dynamic.
         tensor_args.has_chunk_start_metadata(),
+        tensor_args.has_valid_end_metadata(),
         // Reading the slot on-device changes the reader binary, so the PRESENCE is hashed. The layer terms
         // are NOT: cache_batch_idx is hash-excluded so one program serves every slot and layer, and hashing
         // the layer index would fork it per layer (21 programs at L78), each fork allocating two more
@@ -445,7 +460,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     validate_runtime_values(attrs, tensor_args);
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
-    validate_chunk_start_metadata(attrs, tensor_args);
+    validate_metadata_mode(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
 }
 
@@ -479,7 +494,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
-    validate_chunk_start_metadata(attrs, tensor_args);
+    validate_metadata_mode(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL
@@ -870,6 +885,9 @@ ttnn::Tensor launch_indexer_score(
     // Trace-safe metadata: 1-element uint32 chunk_start_idx read on-device (see tensor_args_t). nullopt =
     // the host-scalar path, byte-identical to before.
     std::optional<ttnn::Tensor> chunk_start_idx_tensor = std::nullopt,
+    // Real-token end (actual_end) read on-device, capping the derived kv_len at ceil32(valid_end) so the
+    // metadata bound matches the scalar one on a partial chunk. nullopt = uncapped (padded-window end).
+    std::optional<ttnn::Tensor> valid_end_tensor = std::nullopt,
     // Trace-safe cache-slot select: 1-element uint32 USER id read on-device, recomposed with the two
     // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
@@ -1082,6 +1100,7 @@ ttnn::Tensor launch_indexer_score(
     operation_attributes.fused_ring = std::move(fused_ring);
     tensor_args.k_local = std::move(k_local);
     tensor_args.chunk_start_idx_tensor = std::move(chunk_start_idx_tensor);
+    tensor_args.valid_end_tensor = std::move(valid_end_tensor);
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
@@ -1186,6 +1205,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> block_cyclic_chunk_local,
     bool block_cyclic_cache_tp_sharded,
     const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& valid_end_tensor,
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
     uint32_t index_cache_layer_idx) {
@@ -1287,6 +1307,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         k_local,
         fused_ring,
         chunk_start_idx_tensor,
+        valid_end_tensor,
         cache_batch_idx_tensor,
         index_cache_num_layers,
         index_cache_layer_idx);

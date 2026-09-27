@@ -24,15 +24,15 @@
   skus:
     wh_n150:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_quietbox_2:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
       timeout: 20
@@ -53,7 +53,7 @@
   skus:
     bh_quietbox_2:
       timeout: 30
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
       hf_model: meta-llama/Llama-3.3-70B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
@@ -70,7 +70,7 @@
   skus:
     bh_quietbox_2:
       timeout: 30
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
       hf_model: Qwen/Qwen3-32B
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
