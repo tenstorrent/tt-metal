@@ -5,7 +5,7 @@
 
     dense routing [S, 128] (8 nonzeros per row) -> topk(8) on device -> idx [S, 8], weights [S, 8]
       -> masked_bincount + offset_cumsum -> TtDispatchModule (1-chip dispatch group, local dispatch)
-      -> TtRoutedExpert (unified_routed_expert_moe, RoutedExpertActivation.GeluTanh: down(gelu_tanh(gate) * up))
+      -> ttnn.bringup.unified_routed_expert_moe (fork, RoutedExpertActivation.GeluTanh: down(gelu_tanh(gate) * up))
       -> TtCombineModule -> TtReduceModule (fused weighted top-k sum over this chip's experts)
       -> all_reduce (cluster_axis=1) -> experts_out [1, 1, S, H] replicated
 
@@ -13,8 +13,8 @@ EP=4: chip c holds experts 32c..32c+31 (bf16 gate/up [704, 2816], down [2816, 70
 expert_region_offsets are per chip [1, 128] (global expert ids, see known issues). The routed partial is all-reduced on
 its own: post_feedforward_layernorm_2 comes next and is nonlinear, so it cannot be folded into another reduction.
 
-Adapted from models/demos/ernie45_d_p/tt/moe_unified.py (routed_partial). Needs the 1-device dispatch-axis ttnn patches
-(commits 2727352de41, e30d505c4ae) and the GeluTanh activation added to unified_routed_expert_ffn in this bring-up.
+Adapted from models/demos/ernie45_d_p/tt/moe_unified.py (routed_partial). Uses the bring-up forks (ttnn/ttnn/bringup):
+offset_cumsum, dispatch and combine for the 1-device dispatch axis, unified_routed_expert_ffn for GeluTanh.
 """
 
 from __future__ import annotations
@@ -36,6 +36,49 @@ CACHE_ROOT = REPO / "generated/gemma4_a4b_d_p/tt_cache"
 DGS = 1  # dispatch group = one chip (mesh rows)
 # Dispatch/combine hold no per-layer state: one pair per (mesh, chunk length) is shared by every MoE layer.
 _SEQ_MODULES = {}
+
+
+def _dispatch(m, x, indices, offsets, table):
+    """TtDispatchModule.forward on the bring-up fork ttnn.bringup.dispatch (1-device dispatch axis, no fabric;
+    ttnn/ttnn/bringup/INDEX.md). m is the TtDispatchModule holding the sizes; returns (buffer, metadata)."""
+    return ttnn.bringup.dispatch(
+        input_tensor=x,
+        indices_tensor=indices,
+        expert_offsets_tensor=offsets,
+        expert_dispatch_table_tensor=table,
+        dispatch_group_size=m.dispatch_group_size,
+        experts_per_chip=m.experts_per_chip,
+        num_routed_experts=m.num_routed_experts,
+        num_experts_per_tok=m.num_experts_per_tok,
+        metadata_len=m.metadata_len,
+        max_dispatch_buffer_token_size=m.max_dispatch_buffer_token_size,
+        cluster_axis=m.cluster_axis,
+        num_links=m.num_links,
+        topology=m.topology,
+        fp8_output=m.fp8_output,
+        subdevice_id=m.subdevice_id,
+        num_workers_per_sender=m.num_workers_per_sender,
+    )
+
+
+def _combine(m, buf, meta, counts, region_offsets, seq_len):
+    """TtCombineModule.forward on the bring-up fork ttnn.bringup.combine (1-device dispatch axis, no fabric)."""
+    return ttnn.bringup.combine(
+        buf,
+        meta,
+        counts,
+        region_offsets,
+        dispatch_group_size=m.dispatch_group_size,
+        experts_per_chip=m.experts_per_chip,
+        num_experts_per_tok=m.num_experts_per_tok,
+        seq_len_per_chip=seq_len,
+        cluster_axis=m.cluster_axis,
+        num_links=m.num_links,
+        topology=m.topology,
+        memory_config=m.memory_config,
+        init_zeros=m.init_zeros,
+        use_fp8_combine=m.fp8_output,
+    )
 
 
 class TtExperts:
@@ -97,7 +140,9 @@ class TtExperts:
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
             ),
-            activation=ttnn.RoutedExpertActivation.GeluTanh,
+            # TtRoutedExpert only holds the weights and tables here: its forward calls the original op, which has no
+            # GeluTanh; _routed calls the fork ttnn.bringup.unified_routed_expert_moe with it.
+            activation=ttnn.RoutedExpertActivation.Silu,
         )
         # cluster_axis=0 has 1 device -> no reduce-scatter: fused weighted top-k sum over local experts only.
         self.reduce = TtReduceModule(
@@ -140,6 +185,22 @@ class TtExperts:
             _SEQ_MODULES[key] = (self.mesh, dispatch, combine)
         return _SEQ_MODULES[key][1:]
 
+    def _routed(self, buf, counts, region_offsets):
+        """TtRoutedExpert.forward (Blackhole, ROW_MAJOR bf16 buffer) on the fork with GeluTanh."""
+        r = self.routed
+        return ttnn.bringup.unified_routed_expert_moe(
+            buf,
+            region_offsets,
+            counts,
+            r.global_expert_idx_table,
+            r.gate_projs,
+            r.up_projs,
+            r.down_projs,
+            max_dispatched_tokens_per_expert=r.max_tokens,
+            compute_kernel_config=r.compute_kernel_config,
+            activation=ttnn.bringup.RoutedExpertActivation.GeluTanh,
+        )
+
     def topk_from_dense(self, dense):
         """dense [1,1,S,E] bf16 (exactly K nonzeros per row) -> (idx uint16 [1,1,S,K], weights bf16 [1,1,S,K])."""
         if dense.dtype != ttnn.bfloat16:
@@ -153,7 +214,7 @@ class TtExperts:
         dispatch, combine = self._seq_modules(S)
         idx2 = ttnn.reshape(ttnn.typecast(idx, ttnn.uint16) if idx.dtype != ttnn.uint16 else idx, (S, K))
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(idx2, self.dispatch_table, self.E, K)
-        offsets, counts, region_offsets = ttnn.experimental.deepseek_prefill.offset_cumsum(
+        offsets, counts, region_offsets = ttnn.bringup.offset_cumsum(
             hist,
             cluster_axis=0,
             num_links=self.num_links,
@@ -163,13 +224,13 @@ class TtExperts:
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         wb = ttnn.typecast(wts, ttnn.bfloat16) if wts.dtype != ttnn.bfloat16 else wts
         scores = ttnn.reshape(ttnn.to_layout(wb, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
-        buf, meta = dispatch(ttnn.squeeze(x, dim=0), scores, ind, offsets, self.dispatch_table)
+        buf, meta = _dispatch(dispatch, ttnn.squeeze(x, dim=0), ind, offsets, self.dispatch_table)
         # ROW_MAJOR bf16 buffer -> the op's fused path (tilize + bf8 pack inside the kernel, fresh output).
         buf2 = ttnn.squeeze(ttnn.squeeze(buf, dim=0), dim=0)
-        out = self.routed(buf2, counts, region_offsets)
+        out = self._routed(buf2, counts, region_offsets)
         ttnn.deallocate(buf2)
         out = ttnn.unsqueeze(ttnn.unsqueeze(out, dim=0), dim=0)
-        comb = combine(out, meta, counts, region_offsets, seq_len_per_chip=S)
+        comb = _combine(combine, out, meta, counts, region_offsets, S)
         ttnn.deallocate(out)
         red = self.reduce(comb, weights=scores, indices=ind, expert_dispatch_table=self.dispatch_table)
         ttnn.deallocate(comb)
