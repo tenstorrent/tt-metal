@@ -429,7 +429,13 @@ def test_formal_row_wrapper_refuses_unsafe_artifacts_and_environment() -> None:
         assert sentinel.read_text() == "do not delete\n"
 
         clean = root / "clean"
-        inherited = dict(os.environ, TTSIM_TRACE_SFPU_STREAM="0")
+        # Isolate this negative control from CI-owned variables such as
+        # RUNNER_TEMP and PYTHONPATH, which the wrapper correctly refuses
+        # before it reaches the TTSIM hook this assertion is exercising.
+        inherited = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "TTSIM_TRACE_SFPU_STREAM": "0",
+        }
         result = subprocess.run(
             ["bash", str(wrapper), "safe-row", str(clean)],
             env=inherited,
