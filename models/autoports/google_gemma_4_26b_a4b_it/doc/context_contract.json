@@ -331,6 +331,7 @@
       "optimized_multichip_decoder/native_endpoint_source_equivalence.json"
     ],
     "current_runtime_sha256": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
-    "review": "optimized_multichip_decoder/stage_review.md"
+    "review": "optimized_multichip_decoder/stage_review.md",
+    "implementation_commit": "dc254cbde8997f0ec8f8f42bccb5aaf1f0e8d69e"
   }
 }
