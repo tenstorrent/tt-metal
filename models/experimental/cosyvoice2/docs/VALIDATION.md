@@ -7,9 +7,9 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 | target (#54104) | stage | status | enforced in |
 |---|---|---|---|
 | RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **measured, not met on distinct utterances** (below); verdict not recorded yet | `tests/perf/test_pipeline_perf.py` |
-| token-level accuracy > 95 % against the PyTorch reference | Stage 1 | not measured yet (teacher-forced, next step) | — |
-| WER < 5.0 | Stage 1 | not measured yet | — (reference venv: `scripts/eval_wer_sim.py`, next step) |
-| speaker similarity > 0.60 | Stage 1 | not measured yet; will be reported as WavLM-base-plus-sv cosine x 100, TT against the PyTorch reference | — |
+| token-level accuracy > 95 % against the PyTorch reference | Stage 1 | not measured yet (teacher-forced) | — |
+| WER < 5.0 | Stage 1 | **measured: corpus WER 0.68 % for TT and for the PyTorch reference** (below) | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
+| speaker similarity > 0.60 | Stage 1 | **measured: 94.90 for TT, 95.21 for the reference** (WavLM-base-plus-sv cosine x 100; below) | same |
 | time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | streaming not built | — |
 
 ## How the figures are produced
@@ -119,6 +119,35 @@ calls 2–4.
   the F0 predictor and source path alone. This process also recompiled HiFT for lengths the demo had compiled (see
   above).
 
+## Speech quality: WER and speaker similarity (2026-09-27)
+
+`scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch
+reference run (`scripts/run_reference.py`, after the fixes in `0d687d840e`). Both were scored by the same command.
+- **ASR:** Whisper large-v3, CPU, greedy, English.
+- **WER:** NFKC, lowercase, punctuation stripped, word-level edit distance against the LibriSpeech transcript.
+  Corpus WER is total errors over total words.
+- **Speaker similarity:** `microsoft/wavlm-base-plus-sv` x-vector cosine x 100, between the output and the case's
+  prompt utterance (16 kHz). This is not the paper's SV model, so the comparison is TT against the reference,
+  never against the paper's figure.
+
+| case | words | WER % reference | WER % TT | SIM reference | SIM TT | audio s reference / TT |
+|---|---|---|---|---|---|---|
+| zero_shot_260-123286-0014 | 7 | 14.29 | 14.29 | 95.82 | 94.41 | 3.12 / 3.04 |
+| zero_shot_260-123440-0010 | 20 | 0.00 | 0.00 | 96.85 | 97.26 | 8.32 / 8.08 |
+| zero_shot_260-123440-0002 | 44 | 0.00 | 0.00 | 97.74 | 97.89 | 12.04 / 12.76 |
+| zero_shot_121-127105-0015 | 10 | 0.00 | 0.00 | 92.61 | 91.42 | 3.68 / 3.36 |
+| zero_shot_121-127105-0003 | 18 | 0.00 | 0.00 | 94.32 | 94.79 | 7.64 / 7.04 |
+| zero_shot_121-127105-0024 | 48 | 0.00 | 0.00 | 93.94 | 93.64 | 12.84 / 13.04 |
+| **corpus (6 utterances)** | 147 | **0.68** (1 error) | **0.68** (1 error) | **95.21** | **94.90** | |
+
+- **TT and the reference are indistinguishable at this size.** The one error is the same substitution in both runs:
+  "Truly this sea" transcribed as "Truly, the sea". Speaker similarity differs by 0.31 on average, and in both
+  directions per utterance.
+- **The corpus is small:** 6 utterances, 147 words. One error is 0.68 %.
+- **The CAM++ cosine is recorded in `scores.json` as a diagnostic only.** It is self-referential, because the model
+  conditions on it. Its means are 76.19 (reference, seven utterances) and 84.13 (TT, six).
+- **The CosyVoice1-parity sentence** was run by the reference only: WER 0 %, SIM 94.86.
+
 ## The PyTorch reference, for scale
 
 `scripts/run_reference.py` (upstream CosyVoice2 at 074ca6dc9e80, CPU fp32, torch 2.11.0+cpu, same host, seed
@@ -128,8 +157,7 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
 
 ## Open
 
-- **Token accuracy, WER and speaker similarity.** Token accuracy is teacher-forced, over full sequences with the
-  speech prompt. These make up the evaluation step, not started.
+- **Token accuracy** is not measured yet: teacher-forced, over full sequences with the speech prompt.
 - **Stage 1 RTF on distinct utterances is far from 1.0** while every utterance brings new geometries. At steady state
   the same pipeline runs at 0.39–0.56. Its verdict in `gates.py` is not recorded until the measurement protocol
   (kernel cache state, geometry bucketing and pre-warming) is settled.
