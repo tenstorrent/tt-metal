@@ -160,6 +160,39 @@ def test_topk_xl_unfused_macro_equals_opt_out(K):
     good, base = good_cfg.run().result, base_cfg.run().result
 
     _check(good, K, rows, compare_index_set=True)
+    if not torch.equal(good, base):
+        different = torch.nonzero(good != base, as_tuple=False).flatten().tolist()
+        region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
+        padding = 0
+        samples = []
+        for offset in different:
+            row, within_row = divmod(offset, 2 * region)
+            index_region = within_row >= region
+            lane = within_row % region
+            value_offset = row * 2 * region + lane
+            both_padding = (
+                K == 512
+                and ((int(good[value_offset]) >> 16) & 0xFFFF) == 0xFF80
+                and ((int(base[value_offset]) >> 16) & 0xFFFF) == 0xFF80
+            )
+            padding += int(both_padding)
+            if len(samples) < 32:
+                samples.append(
+                    (offset, int(good[offset]), int(base[offset]),
+                     "index" if index_region else "value", both_padding)
+                )
+        print(
+            f"TOPK_DIAGNOSTIC K={K} mismatches={len(different)} "
+            f"both_value_padding={padding} other={len(different) - padding} "
+            f"first32(offset,good,base,region,both_value_padding)={samples}",
+            flush=True,
+        )
+        try:
+            _check(base, K, rows, compare_index_set=True)
+        except AssertionError as error:
+            print(f"TOPK_DIAGNOSTIC opt_out_golden=FAIL: {error!r}", flush=True)
+        else:
+            print("TOPK_DIAGNOSTIC opt_out_golden=PASS", flush=True)
     assert torch.equal(good, base), (
         f"K={K}: macro build's packed output differs from the opt-out "
         f"(shipping-body) build — the unfused SFPLOADMACRO bodies are not "
