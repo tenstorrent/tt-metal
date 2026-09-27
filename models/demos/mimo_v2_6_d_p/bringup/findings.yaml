@@ -1,0 +1,15 @@
+findings:
+- id: K1-contract-layer-count
+  task: K.1
+  kind: CONTRACT
+  title: The contract test expects acks for all 48 layers, but only layers 0-5 are brought up (framework fix needed)
+  detail: >-
+    testing/contract.py sets L = s.num_layers (48) for PrefillRunParams.num_layers and the expected ack list, and
+    engine_env sets PREFILL_NUM_LAYERS = s.num_layers. The spec brings up layers "0-5", the golden has 6 layers, and the device
+    model builds 6. The runtime acks the 6 layers it runs, 12 acks for 2 chunks, against 96 expected. The gate fails on this
+    check alone (attempts 1 and 2, same result): acks_early 0 (192 blocks checked), table round-trip and migration base address
+    OK, pcc_producer_kv_k 0.99994, pcc_producer_kv_v 0.99979. Acking the 42 layers that never run would fake the check. The fix is
+    outside K.1's allowed paths, in models/demos/common/bringup/testing/contract.py. When s.layers() == list(range(n)),
+    use n = len(s.layers()) in engine_env ("PREFILL_NUM_LAYERS") and in run_contract_test (L); gqa_independent_pcc's loop
+    over range(s.num_layers) needs the same change. The adapter already serves only the subset (served_layers,
+    num_kv_cache_layers, read_slot_kv_and_check_pcc). Attempt 3 (2026-09-27): contract.py still unchanged, same result; retrying the contract role cannot pass until the framework fix lands.
