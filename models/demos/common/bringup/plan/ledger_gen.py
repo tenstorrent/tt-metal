@@ -329,6 +329,28 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         fm,
         device=True,
     )
+    # The derived ops (ttnn/ttnn/bringup) this model calls get a test case for every call it makes: record the
+    # ttnn.bringup calls of one target-size chunk, then check each fork's tests/cases.py and run those tests
+    # (skill/bringup-fork-tests). Passes at once when the model calls no fork.
+    chunk = spec.data["target"]["chunk"]
+    cap = next(
+        (r for r in ladder if r.get("prefix_from_golden") and r["chunk"] == chunk),
+        next((r for r in ladder if r["chunk"] == chunk), ladder[-1]),
+    )
+    calls = f"{rel(spec, spec.bringup_dir)}/results/fork_calls.json"
+    add(
+        "O.1",
+        "Derived-op tests: a random-input case for every ttnn.bringup call this model makes",
+        "optests",
+        ["X.3"],
+        f"BRINGUP_CAPTURE_FORKS={calls} BRINGUP_RUNG={cap['name']} {SAFE} --no-precompile"
+        " models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture"
+        f" && {PY}.testing.fork_cases --capture {calls} --run-tests",
+        {"forks_used": ">= 0", "fork_calls_uncovered": "== 0", "fork_tests_failed": "== 0"},
+        role="optests",
+        paths=["ttnn/ttnn/bringup"],
+        device=True,
+    )
     return {"model": spec.data["hf_id"], "target": spec.data["target"], "tasks": tasks}
 
 

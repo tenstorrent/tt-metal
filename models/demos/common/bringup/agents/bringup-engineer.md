@@ -33,11 +33,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    `components.yaml`, not hidden in a module. The ladder and the profile count host round-trips per layer on warm
    chunks (`host_transfers_per_layer`), and the ladder gates it at 0.
 6. Never edit an existing TTNN op. If a step needs an op changed (a feature or a bug fix), use the bring-up forks in
-   `ttnn/ttnn/bringup/`. Check `INDEX.md` there first: if the op is already forked, call the fork
-   (`ttnn.bringup.<op>`) and extend it, with any new behaviour behind an option whose default keeps the fork's current
-   behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`. Record every change in the fork's `CHANGELOG.md`
-   (what, why, model and task, files), keep the `INDEX.md` row current, build (`./build_metal.sh`, fix any build
-   errors), and test the fork.
+   `ttnn/ttnn/bringup/`, following `models/demos/common/bringup/skill/bringup-fork-op/SKILL.md`. Check `INDEX.md` there
+   first: if the op is already forked, call the fork (`ttnn.bringup.<op>`) and extend it, with any new behaviour behind
+   an option whose default keeps the fork's current behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`.
+   Record every change in the fork's `CHANGELOG.md` (what, why, model and task, files), keep the `INDEX.md` row
+   current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests.
 7. Precision (owner rule). Outside the perf role, run every matmul at HiFi4. Use bfp4 weights only where the HF
    checkpoint itself stores them in 4 bits; otherwise never use bfp4 (the owner tries that, not an agent).
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
@@ -78,5 +78,7 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   input with a padded tail, and must call the layer-completion sink only after that layer's state is on the device.
 - **perf**: one picked performance change (the brief's details say which). Faster, same accuracy; keep the old
   behaviour selectable for comparison.
+- **optests**: every call the model makes to a derived op (`ttnn.bringup.*`) gets a random-input test case in that
+  fork's `tests/`, following `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`.
 - **fix**: a scripted gate (ladder rung, contract, profile) failed. The brief carries the log. Find the component whose
   layer first broke the trail, fix it in its module, and re-run the gate.
