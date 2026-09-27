@@ -1,0 +1,11 @@
+{
+  "hf_model_id": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "prompt_source": "aime24",
+  "chat_template": true,
+  "generation_length": 100,
+  "top_k": 100,
+  "sha256": "9b792e83314a35e9619e58434f11f4d3c4b1e1edb9f18d14f1799495ff7c4e69",
+  "command": "OMP_NUM_THREADS=8 python -m models.common.readiness_check.generate --hf-model google/gemma-4-26B-A4B-it --prompt-source aime24 --chat-template --gen-len 100 --top-k 100 --output models/autoports/google_gemma_4_26b_a4b_it/readiness_aime24_chat.refpt",
+  "log": "doc/full_model/hf_reference_retry.log"
+}

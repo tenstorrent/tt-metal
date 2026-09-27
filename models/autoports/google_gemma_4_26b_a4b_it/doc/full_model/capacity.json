@@ -1,0 +1,20 @@
+[
+  {
+    "prompt_length": 262143,
+    "full_layers": 30,
+    "cache_context": 262144,
+    "logical_tail_sliced": true,
+    "finite_logits": true,
+    "final_position_decode": true,
+    "elapsed_seconds": 158.23786985129118
+  },
+  {
+    "prompt_length": 262144,
+    "full_layers": 30,
+    "cache_context": 262144,
+    "logical_tail_sliced": true,
+    "finite_logits": true,
+    "final_position_decode": false,
+    "elapsed_seconds": 156.2121813762933
+  }
+]

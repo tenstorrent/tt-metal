@@ -1,0 +1,20 @@
+[
+  {
+    "dtype": "bfloat16",
+    "page_bytes": 2048,
+    "local_shape": [
+      1,
+      1,
+      32,
+      32
+    ],
+    "ring": false,
+    "devices_passed": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "passed": true
+  }
+]

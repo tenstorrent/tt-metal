@@ -1,0 +1,311 @@
+{
+  "isolated_slot_comparison": [
+    {
+      "slot": 0,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 1,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 2,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 3,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 4,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 5,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 6,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 7,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 8,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 9,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 10,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 11,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 12,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 13,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 14,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 15,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 16,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 17,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 18,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 19,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 20,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 21,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 22,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 23,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 24,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 25,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 26,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 27,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 28,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 29,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 30,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    },
+    {
+      "slot": 31,
+      "prefill_pcc": 0.9999999403953552,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    }
+  ],
+  "batch": 32,
+  "active_slots": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "mixed_lengths": [
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127,
+    31,
+    127
+  ],
+  "feedback": true,
+  "inactive_cache_unchanged": false,
+  "counters": {
+    "model_replays": 2,
+    "sampling_replays": 2,
+    "token_refreshes": 1,
+    "position_refreshes": 0,
+    "cache_position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 0,
+    "full_logits_readbacks": 99,
+    "teacher_forcing_token_refreshes": 0
+  }
+}

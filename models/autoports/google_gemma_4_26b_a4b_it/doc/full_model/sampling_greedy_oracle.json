@@ -1,0 +1,65 @@
+[
+  {
+    "step": 1,
+    "predicted": 47,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 68885
+  },
+  {
+    "step": 2,
+    "predicted": 29,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 59898
+  },
+  {
+    "step": 3,
+    "predicted": 29,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 55357
+  },
+  {
+    "step": 4,
+    "predicted": 29,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 50436
+  },
+  {
+    "step": 5,
+    "predicted": 29,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 48928
+  },
+  {
+    "step": 6,
+    "predicted": 26,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 45201
+  },
+  {
+    "step": 7,
+    "predicted": 26,
+    "host_token": 1,
+    "predicted_value": 30.0,
+    "host_value": 30.0,
+    "maximum": 30.0,
+    "tied_maxima": 44080
+  }
+]

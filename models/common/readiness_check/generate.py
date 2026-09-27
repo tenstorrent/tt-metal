@@ -126,6 +126,7 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
             [{"role": "user", "content": prompt_text}],
             add_generation_prompt=True,
             tokenize=True,
+            return_dict=False,
         )
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)

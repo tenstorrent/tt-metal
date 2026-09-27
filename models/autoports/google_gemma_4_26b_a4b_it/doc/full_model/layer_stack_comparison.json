@@ -1,0 +1,19 @@
+{
+  "basis": "warmed host-wall traced layer timings; diagnostic comparison, not device-time subtraction",
+  "sliding_attention": {
+    "count": 25,
+    "decode_ms": 0.653344
+  },
+  "full_attention": {
+    "count": 5,
+    "decode_ms": 0.701861
+  },
+  "layer_stack_ms": 19.842905000000002,
+  "full_model_token_out_ms": 20.315021401139226,
+  "difference_ms": 0.4721164011392247,
+  "relative_difference_percent": 2.3792705812945467,
+  "sources": [
+    "../optimized_multichip_decoder/README.md",
+    "performance.json"
+  ]
+}

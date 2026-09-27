@@ -1,0 +1,26 @@
+{
+  "tokens": [
+    267,
+    1,
+    143,
+    173
+  ],
+  "completion": "\u001d<eos>       <tr>",
+  "prompt_tokens": 261,
+  "elapsed_seconds": 32.76198795810342,
+  "metrics": {
+    "ttft_ms": 14438.831222243607,
+    "decode_tps": 2.555666020760219,
+    "input_tokens": 261,
+    "output_tokens": 4,
+    "batch": 1,
+    "source": "autoregressive",
+    "reduced_probe": true,
+    "host_sampling": false,
+    "counters": {
+      "model_replays": 3,
+      "sampling_replays": 3,
+      "token_readbacks": 3
+    }
+  }
+}

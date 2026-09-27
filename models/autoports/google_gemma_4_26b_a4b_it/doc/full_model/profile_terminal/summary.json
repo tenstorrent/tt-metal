@@ -1,0 +1,87 @@
+{
+  "scope": "reduced model, layers 0 and 5 plus real embedding/norm/LM-head/common split greedy sampler; not a full-model measurement",
+  "input_tokens": 4096,
+  "batch": 1,
+  "mesh": [
+    1,
+    4
+  ],
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/full_model/profile_terminal/reports/terminal_two_layers/2026_09_27_07_41_22/ops_perf_results_terminal_two_layers_2026_09_27_07_41_22.csv",
+  "window_basis": "first device firmware start to last firmware end within PERF_DECODE signposts, including all internal gaps; cycle/ns conversion inferred from matching profiler duration columns",
+  "device_windows": {
+    "3": {
+      "cycles_per_ns_from_report": 1.35,
+      "whole_window_us": 3076.754814814815,
+      "trace_0_us": 2560.902222222222,
+      "trace_1_us": 508.3859259259259
+    },
+    "2": {
+      "cycles_per_ns_from_report": 1.3500034972371826,
+      "whole_window_us": 3078.760913216932,
+      "trace_0_us": 2558.922259882908,
+      "trace_1_us": 512.3668208382985
+    },
+    "1": {
+      "cycles_per_ns_from_report": 1.3500079151495963,
+      "whole_window_us": 3077.8012138836775,
+      "trace_0_us": 2567.241244371482,
+      "trace_1_us": 503.0926058864916
+    },
+    "0": {
+      "cycles_per_ns_from_report": 1.35,
+      "whole_window_us": 3074.139259259259,
+      "trace_0_us": 2555.262962962963,
+      "trace_1_us": 511.4192592592592
+    }
+  },
+  "max_per_op_report_device_us": {
+    "MatmulDeviceOperation 32 x 2816 x 65536": 944.789,
+    "BinaryNgDeviceOperation": 287.33099999999996,
+    "TopkLargeIndicesDeviceOperation": 279.038,
+    "AllGatherAsyncDeviceOperation": 97.636,
+    "LayerNormDeviceOperation": 94.45500000000001,
+    "SparseMatmulDeviceOperation active=8/128 x 32 x 2816 x 384": 91.982,
+    "TypecastDeviceOperation": 84.22099999999999,
+    "ReduceScatterMinimalAsyncDeviceOperation": 82.30175,
+    "TilizeWithValPaddingDeviceOperation": 79.98400000000001,
+    "SdpaDecodeDeviceOperation": 78.14,
+    "ReduceDeviceOperation": 66.975,
+    "FillPadDeviceOperation": 64.07600000000001,
+    "RotaryEmbeddingHfDeviceOperation": 63.456,
+    "UnaryDeviceOperation": 51.081,
+    "SliceDeviceOperation": 29.420999999999996,
+    "SamplingDeviceOperation": 27.474,
+    "SparseMatmulDeviceOperation active=8/128 x 32 x 192 x 2816": 26.973,
+    "TopkRoutePrepDeviceOperation": 26.686,
+    "MatmulDeviceOperation 32 x 2816 x 128": 25.817,
+    "ShardedToInterleavedDeviceOperation": 23.468,
+    "UntilizeWithUnpaddingDeviceOperation": 22.787,
+    "TopkRouteFinishDeviceOperation": 21.295,
+    "InterleavedToShardedDeviceOperation": 20.535999999999998,
+    "MatmulDeviceOperation 32 x 2816 x 3072": 20.507,
+    "MatmulDeviceOperation 32 x 2816 x 1088": 18.695999999999998,
+    "MatmulDeviceOperation 32 x 2816 x 2048": 18.565,
+    "MatmulDeviceOperation 32 x 2048 x 2816": 18.059,
+    "AllGatherDeviceOperation": 18.017,
+    "ManualSeedDeviceOperation": 17.679,
+    "EmbeddingsDeviceOperation": 15.627,
+    "PadDeviceOperation": 13.671,
+    "MatmulDeviceOperation 32 x 1024 x 2816": 10.183,
+    "MatmulDeviceOperation 32 x 544 x 2816": 10.033999999999999,
+    "PagedFusedUpdateCacheDeviceOperation": 10.019,
+    "ReshapeViewDeviceOperation": 8.418,
+    "TransposeDeviceOperation": 8.193999999999999,
+    "NLPCreateQKVHeadsDecodeDeviceOperation": 7.916,
+    "MatmulDeviceOperation 32 x 32 x 2816": 6.1080000000000005,
+    "ScatterDeviceOperation": 4.702,
+    "UntilizeDeviceOperation": 4.574,
+    "ConcatDeviceOperation": 4.051,
+    "RepeatDeviceOperation": 3.801,
+    "GeneralizedMoeGateDeviceOperation": 2.9290000000000003,
+    "NLPConcatHeadsDecodeDeviceOperation": 2.762,
+    "PlusOneDeviceOperation": 1.7159999999999997,
+    "GatherDeviceOperation": 1.355
+  },
+  "report_basis": "tt-perf-report chooses slowest device per operation; op sums are a breakdown, not a whole-layer roofline denominator",
+  "sampling_contract": "temperature=0 normalized to k1,p0; allow_force_argmax=False; persistent tt_out_tok"
+}

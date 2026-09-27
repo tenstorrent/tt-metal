@@ -4,13 +4,34 @@
 from types import SimpleNamespace
 
 import pytest
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import PreTrainedTokenizerFast
 
 from models.common.readiness_check.generate import (
+    _chat_or_plain_prompt_tokens,
     _generation_stop_ids,
     _normal_token_ids,
     _resolve_prompt_text,
     _safe_pad_id,
 )
+
+
+@pytest.mark.parametrize("chat_template, expected", [(True, [2, 1, 3]), (False, [1])])
+def test_prompt_tokens_are_flat_ids_with_hf_tokenizer(chat_template, expected):
+    backend = Tokenizer(WordLevel({"[UNK]": 0, "hello": 1, "user": 2, "assistant": 3}, unk_token="[UNK]"))
+    backend.pre_tokenizer = Whitespace()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        chat_template=(
+            "{{ messages[0]['role'] }} {{ messages[0]['content'] }} "
+            "{% if add_generation_prompt %}assistant{% endif %}"
+        ),
+    )
+
+    assert _chat_or_plain_prompt_tokens(tokenizer, "hello", chat_template=chat_template) == expected
 
 
 @pytest.mark.parametrize(

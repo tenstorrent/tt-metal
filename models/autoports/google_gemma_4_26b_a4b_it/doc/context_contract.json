@@ -333,5 +333,32 @@
     "current_runtime_sha256": "6938c6d512d19cf25c3c9d7fb5cee29f2b3f46d174426b715180527b16e02cd3",
     "review": "optimized_multichip_decoder/stage_review.md",
     "implementation_commit": "dc254cbde8997f0ec8f8f42bccb5aaf1f0e8d69e"
+  },
+  "full_model": {
+    "status": "full_stack_capacity_validated",
+    "supported_context_target": 262144,
+    "capability_reduction": false,
+    "mesh": [
+      1,
+      4
+    ],
+    "layers": 30,
+    "weight_policy_source": "optimized_multichip_decoder/README.md",
+    "decoder_weight_bytes_per_device": 10986081280,
+    "embedding_bytes_per_device": 369098752,
+    "lm_head_bytes_per_device": 369098752,
+    "tied_weights": "Same HF embedding weight supplies both matrices; hidden-sharded row-major embedding and vocab-sharded tiled LM head require distinct device representations. Both counted.",
+    "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
+    "rope_prefill_and_decode_bytes_per_device": 1610612736,
+    "page_table_bytes_per_device_batch1": 32768,
+    "trace_activation_allocator_reserve_bytes_per_device": 2147483648,
+    "persistent_ccl_bytes_per_device": 2690688,
+    "persistent_ccl_memory": "L1",
+    "conservative_peak_bound_bytes_per_device": 28467973120,
+    "capacity_basis": "Stage05 conservative bound, replace its replicated tied weight allowance with both actual sharded terminal representations and add B1 table; 2GiB reserve includes trace, sampler state and chunk scratch. Actual all-layer maximum-context caches and262143/262144 prompt execution pass, including final-position decode.",
+    "largest_tested_full_model_context": 262144,
+    "capacity_evidence": "full_model/capacity.json",
+    "nonaligned_prompt_validated": 262143,
+    "final_supported_position_decode_validated": 262143
   }
 }

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "shared_0",
+    "first_divergence": 1,
+    "tt_token": 17752,
+    "hf_token": 40037,
+    "hf_rank": 2
+  },
+  {
+    "id": "shared_1",
+    "first_divergence": 33,
+    "tt_token": 51836,
+    "hf_token": 902,
+    "hf_rank": 3
+  },
+  {
+    "id": "shared_2",
+    "first_divergence": 20,
+    "tt_token": 236772,
+    "hf_token": 21164,
+    "hf_rank": 7
+  },
+  {
+    "id": "shared_3",
+    "first_divergence": 0,
+    "tt_token": 8409,
+    "hf_token": 82225,
+    "hf_rank": 2
+  },
+  {
+    "id": "shared_4",
+    "first_divergence": 21,
+    "tt_token": 10896,
+    "hf_token": 504,
+    "hf_rank": 2
+  },
+  {
+    "id": "shared_5",
+    "first_divergence": 0,
+    "tt_token": 79629,
+    "hf_token": 3810,
+    "hf_rank": 2
+  }
+]
