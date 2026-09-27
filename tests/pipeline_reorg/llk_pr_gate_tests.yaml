@@ -55,7 +55,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto -x \
+    TTPOLY_TOPK_HISTORY_PROBES=1 pytest -q --override-ini=log_cli=false -n auto -x \
       --dist=worksteal -m "$PYTEST_MARKERS" \
       --splits 2 --group 2 \
       --timeout=60 \

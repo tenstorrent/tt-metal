@@ -777,6 +777,39 @@ def pytest_runtest_logreport(report):
 
 
 _topk_diagnostic_history = []
+_topk_diagnostic_calls = 0
+_topk_diagnostic_probes = 0
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    global _topk_diagnostic_calls, _topk_diagnostic_probes
+    outcome = yield
+    if (outcome.excinfo is not None
+            or os.environ.get("TTPOLY_TOPK_HISTORY_PROBES") != "1"
+            or TestConfig.TENSIX_LOCATION is None
+            or "topk" in item.nodeid):
+        return
+    _topk_diagnostic_calls += 1
+    # Diagnostic branch only: at most 24 extra strict K512 checks per worker.
+    if _topk_diagnostic_calls % 100 or _topk_diagnostic_probes >= 24:
+        return
+    _topk_diagnostic_probes += 1
+    print("TOPK_PREDECESSOR_PROBE " + repr({
+        "worker": getattr(item.config, "workerinput", {}).get("workerid", "master"),
+        "core": TestConfig.TENSIX_LOCATION,
+        "after": item.nodeid,
+        "probe": _topk_diagnostic_probes,
+        "history": _topk_diagnostic_history,
+    }), flush=True)
+    try:
+        from test_topk_xl_unfused_macro import test_topk_xl_unfused_macro_equals_opt_out
+        # A direct call does not invoke pytest hooks recursively.
+        test_topk_xl_unfused_macro_equals_opt_out((512,))
+    except Exception as error:
+        outcome.force_exception(error)
+    else:
+        item._topk_probe_passed = True
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -790,13 +823,6 @@ def pytest_runtest_makereport(item, call):
     if report.when == "call" and not report.skipped:
         _topk_diagnostic_history.append(item.nodeid)
         del _topk_diagnostic_history[:-64]
-        if report.failed and "test_topk_xl_unfused_macro_equals_opt_out" in item.nodeid:
-            report.longrepr = str(report.longrepr) + (
-                "\nTOPK_WORKER_HISTORY "
-                + repr({"worker": getattr(item.config, "workerinput", {}).get("workerid", "master"),
-                        "core": TestConfig.TENSIX_LOCATION,
-                        "tests": _topk_diagnostic_history})
-            )
 
     if report.when == "call" and not report.skipped and _RECORD_TEST_ORDER:
         worker_id = getattr(item.config, "workerinput", {}).get("workerid", "master")
@@ -884,6 +910,16 @@ def pytest_runtest_makereport(item, call):
                         f"{exc_msg}\n"
                         f"Python Call trace:\n{stack_trace_str}"
                     )
+
+    if report.when == "call" and report.failed:
+        report.longrepr = str(report.longrepr) + (
+            "\nTOPK_WORKER_HISTORY "
+            + repr({"worker": getattr(item.config, "workerinput", {}).get("workerid", "master"),
+                    "core": TestConfig.TENSIX_LOCATION,
+                    "tests": _topk_diagnostic_history})
+        )
+    if getattr(item, "_topk_probe_passed", False):
+        report.user_properties.append(("topk_predecessor_probe", "pass"))
 
     return report
 
