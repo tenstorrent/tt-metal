@@ -128,11 +128,15 @@ def _skip_if_small(mesh_device):
         pytest.skip(f"needs an {GRID_X}x{GRID_Y} grid; device has {grid.x}x{grid.y}")
 
 
-def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None):
+def _run_paged(
+    mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None, nq=N_Q_HEADS, nkv=N_KV_HEADS
+):
     """Paged flash-decode SDPA at the llama shapes. num_cores_per_head is grid-derived (8x4 / 8 KV heads = 4),
     so a multi-core TREE reduction is configured; whether it actually runs (and deadlocks on Quasar) depends
     on k_num_chunks>1 (children get K data). max_cores_per_head_batch=1 collapses to 1 core/head (no tree).
-    grid_xy overrides the program-config compute grid (the e2e clamps it to 2 nodes)."""
+    grid_xy overrides the program-config compute grid (the e2e clamps it to 2 nodes). nq/nkv override the head
+    counts -- nkv=1 tests the ATOMIC UNIT of the 'split into per-kv-head SDPAs' idea (1 kv-head -> 1 core, the
+    config that maps like the passing 8x4-1/head case; if this passes on a small grid, the split fits 2 cores)."""
     if grid_xy is None:
         _skip_if_small(mesh_device)
     else:
@@ -142,9 +146,9 @@ def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0
             pytest.skip(f"grid {gx}x{gy} needs a device >= that; device is {dev.x}x{dev.y}")
     batch = 1
     torch.manual_seed(0)
-    q = torch.randn(1, batch, N_Q_HEADS, HEAD_DIM, dtype=torch.bfloat16)
-    keys = torch.randn(MAX_NUM_BLOCKS, N_KV_HEADS, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
-    values = torch.randn(MAX_NUM_BLOCKS, N_KV_HEADS, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+    q = torch.randn(1, batch, nq, HEAD_DIM, dtype=torch.bfloat16)
+    keys = torch.randn(MAX_NUM_BLOCKS, nkv, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+    values = torch.randn(MAX_NUM_BLOCKS, nkv, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
     page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).reshape(1, MAX_NUM_BLOCKS).repeat(batch, 1)
     cur_pos_t = torch.full((batch,), cur_pos, dtype=torch.int32)
 
@@ -214,6 +218,32 @@ def test_paged_sdpa_decode_single_core_grid(mesh_device, grid_xy):
       - if both hang -> single-core multi-chunk decode is broken on device regardless of grid (keep host SDPA).
     Run under watcher; alias=0 in the env (matches the e2e)."""
     _run_paged(mesh_device, cur_pos=200, max_cores_per_head_batch=1, k_chunk_size=BLOCK_SIZE, grid_xy=grid_xy)
+
+
+@pytest.mark.parametrize("grid_xy", [(1, 1), (2, 1)], ids=["1node", "2node"])
+def test_paged_sdpa_decode_single_kv_head(mesh_device, grid_xy):
+    """ATOMIC UNIT of the 'split decode SDPA into per-kv-head calls' idea (for fitting a 2-core device).
+    The full 8-kv-head decode HANGS when a core owns >1 kv-head (1x1 / 2-node); it PASSES at 8x4 (1 kv-head/core).
+    So split it into calls each carrying <= num_cores kv-heads (1 kv-head/core). This tests the smallest such
+    call: nkv=1, multi-chunk (cur_pos=200, k_chunk=32), on 1 and 2 cores, max_cores=1.
+    nq=32 (not the real split's 4) because a sub-tile q height (4) fails the intermediate tilize and
+    from_torch(TILE) hangs on the sim; nq=32 is tile-aligned AND a STRONGER proxy -- 32 q-heads/core is more
+    than the real split's 4, so if 1 kv-head/core passes here it passes there. It isolates kv-heads/core.
+    If it PASSES, the split is viable -- run 4 calls (2 kv-heads each) or 8 (1 each) on 2 cores and concat.
+    If it HANGS even at nkv=1, the hang is intrinsic to single-core multi-chunk (not kv-head count) -> keep host."""
+    gx, gy = grid_xy
+    dev = mesh_device.compute_with_storage_grid_size()
+    if dev.x < gx or dev.y < gy:
+        pytest.skip(f"grid {gx}x{gy} needs a device >= that; device is {dev.x}x{dev.y}")
+    _run_paged(
+        mesh_device,
+        cur_pos=200,
+        max_cores_per_head_batch=1,
+        k_chunk_size=BLOCK_SIZE,
+        grid_xy=grid_xy,
+        nq=N_Q_HEADS,
+        nkv=1,
+    )
 
 
 def test_non_paged_sdpa_decode(mesh_device):

@@ -512,6 +512,15 @@ void kernel_main() {
                         // wait_front increments on a given buffer are identical.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_dfb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (#48552): this is a BARE wait_front->pop_front drain (mm_partials is
+                            // discarded, not consumed). On Quasar the TDMA engine won't order the POP after the
+                            // WAIT without a real UNPACR between them, tripping LLK_TDMA_GUARD_ASSERT_DISARMED
+                            // (llk_io_unpack.h). dummy_unpack issues an UNPACR_NOP that reads nothing (so
+                            // PACKER_L1_ACC is undisturbed) and disarms the guard. Mirrors the proven
+                            // experimental/quasar matmul kernel. WH/BH have no such requirement.
+                            dummy_unpack(mm_partials_dfb_id);
+#endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -522,6 +531,12 @@ void kernel_main() {
                     if (block < num_blocks_inner_dim - 2) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_dfb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (#48552): bare wait_front->pop_front drain -- see the FUSE_BIAS drain
+                            // above. dummy_unpack orders the POP after the WAIT on Quasar (UNPACR_NOP, reads
+                            // nothing). WH/BH unaffected.
+                            dummy_unpack(mm_partials_dfb_id);
+#endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
                         }
                     }
