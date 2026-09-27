@@ -473,3 +473,16 @@ were refreshed. Four negative tests now use the repository expect_error fixture
 with the same exception and regex. Post-hook targeted host rerun passed83/83
 in35.43s (`post_hook_host_tests.log`). All11 measured runtime/policy hashes remain
 unchanged. These closure-only changes were sent for independent review audit.
+
+
+Final post-hook independent review retains clean-pass;83hosttests passed.
+Local tt-metal source/evidence checkpoint: branch gemma-4-26b-a4b-it,
+commit `d6a165c5ff66af6a40471770003a855373db73c4`. All applicable repository
+pre-commit hooks passed on this commit; no hook was bypassed.
+Local vllm checkpoint: branch gemma4-vllm-integration,
+commit `7f72b1c6e905f5137fe3377f2e7b42738d3f271d`.
+`checkpoints.json` records both. This following documentation-only checkpoint
+records their SHAs; nothing was pushed. Stage09serving requirements are complete.
+Rawlogs and tensor controls remain local under existing ignore policies; JSON
+evidence and manifests are versioned. The unrelated operator intervention note
+and embedded vllm directory were excluded from the tt-metal checkpoint.

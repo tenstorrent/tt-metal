@@ -1,0 +1,12 @@
+{
+  "tt_metal": {
+    "branch": "gemma-4-26b-a4b-it",
+    "commit": "d6a165c5ff66af6a40471770003a855373db73c4"
+  },
+  "vllm": {
+    "branch": "gemma4-vllm-integration",
+    "commit": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d"
+  },
+  "review": "clean-pass",
+  "pushed": false
+}
