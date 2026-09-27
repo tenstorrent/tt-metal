@@ -194,3 +194,17 @@ def test_the_ledger_assembles_the_all_device_model_before_the_ladder(gspec):
     m = tasks["M.1"]
     assert m["step"] == "assemble" and m["gate"]["metrics"]["host_transfers_per_layer"] == "== 0"
     assert all(d.startswith("S.") for d in m["deps"]) and "M.1" in tasks["L.s256"]["deps"]
+
+
+def test_contract_serves_the_layer_subset(fx, monkeypatch):
+    """F41: the serving contract expects acks and read-back for the brought-up layers only (MiMo 0-5 of 48 expected
+    96 acks for 2 chunks, 12 were right)."""
+    from models.demos.common.bringup.testing import contract
+
+    monkeypatch.setattr(contract.os, "environ", {})
+    s = Spec.load(fx(layers=[0, 1]))
+    assert contract.served_layers(s) == (0, 2)
+    assert contract.engine_env(s)["PREFILL_NUM_LAYERS"] == "2"
+    assert contract.served_layers(Spec.load(fx())) == (0, 3)
+    with pytest.raises(ValueError, match="contiguous"):
+        contract.served_layers(Spec.load(fx(layers=[0, 2])))
