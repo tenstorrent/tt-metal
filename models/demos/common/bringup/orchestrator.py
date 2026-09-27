@@ -102,6 +102,8 @@ INFRA_FAILURES = re.compile(
 )
 # The prefill engine the contract step plugs a model into; its agent may change it (owner, F29).
 CONTRACT_SHARED = "models/demos/common/prefill"
+# Forked TTNN ops of bring-ups (agent rule 6): every step that writes code may fork or extend one there.
+BRINGUP_OPS = "ttnn/ttnn/bringup"
 # A test killed by pytest-timeout ran out of time, it did not fail a check: an agent cannot fix that from the log.
 TEST_TIMEOUT = re.compile(r"Timeout \(>[\d.]+s\) from pytest-timeout")
 
@@ -303,6 +305,7 @@ class Orchestrator:
         extra = [f"{b}/plan.yaml", f"{b}/plan.md", f"{b}/components.yaml", f"{b}/tasks.yaml"] if role == "plan" else []
         if task.get("step") == "contract":
             extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
+        extra.append(BRINGUP_OPS)
         return list(task.get("paths") or []) + extra + self.common_paths()
 
     # ---- briefs

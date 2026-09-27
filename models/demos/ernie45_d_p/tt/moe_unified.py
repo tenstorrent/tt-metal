@@ -13,8 +13,9 @@ S tokens (replicated residual) and dispatches them LOCALLY to its own 16 experts
 the weighted top-k sum yields this chip's partial [S, H] (its experts only), which is added to its shared-expert
 TP partial and reduced with one all_reduce -- the same single CCL per MoE as the dense-EP path.
 
-Needs three small ttnn patches for a 1-device dispatch axis (see BREADCRUMBS P3.2): offset_cumsum skips its
-internal all_gather; dispatch and combine build their existing no-fabric kernel variants (no neighbour lookup).
+A 1-device dispatch axis needs the bring-up forks ttnn.bringup.offset_cumsum (skips its internal all_gather),
+ttnn.bringup.dispatch and ttnn.bringup.combine (their no-fabric kernel variants, no neighbour lookup); see
+ttnn/ttnn/bringup/INDEX.md.
 Dispatch/combine buffers are sized per chunk length and built lazily; expert weights are shared.
 """
 
@@ -36,6 +37,49 @@ DISPATCH_CAPACITY_FACTOR = 6
 DGS = 1  # dispatch group = one chip (mesh rows)
 # Dispatch/combine hold no per-layer state: one pair per (mesh, chunk length) is shared by all 27 MoE layers.
 _SEQ_MODULES = {}
+
+
+def _dispatch(m, x, indices, offsets, table):
+    """TtDispatchModule.forward on the bring-up fork ttnn.bringup.dispatch (1-device dispatch axis, no fabric;
+    ttnn/ttnn/bringup/INDEX.md). m is the TtDispatchModule holding the sizes; returns (buffer, metadata)."""
+    return ttnn.bringup.dispatch(
+        input_tensor=x,
+        indices_tensor=indices,
+        expert_offsets_tensor=offsets,
+        expert_dispatch_table_tensor=table,
+        dispatch_group_size=m.dispatch_group_size,
+        experts_per_chip=m.experts_per_chip,
+        num_routed_experts=m.num_routed_experts,
+        num_experts_per_tok=m.num_experts_per_tok,
+        metadata_len=m.metadata_len,
+        max_dispatch_buffer_token_size=m.max_dispatch_buffer_token_size,
+        cluster_axis=m.cluster_axis,
+        num_links=m.num_links,
+        topology=m.topology,
+        fp8_output=m.fp8_output,
+        subdevice_id=m.subdevice_id,
+        num_workers_per_sender=m.num_workers_per_sender,
+    )
+
+
+def _combine(m, buf, meta, counts, region_offsets, seq_len):
+    """TtCombineModule.forward on the bring-up fork ttnn.bringup.combine (1-device dispatch axis, no fabric)."""
+    return ttnn.bringup.combine(
+        buf,
+        meta,
+        counts,
+        region_offsets,
+        dispatch_group_size=m.dispatch_group_size,
+        experts_per_chip=m.experts_per_chip,
+        num_experts_per_tok=m.num_experts_per_tok,
+        seq_len_per_chip=seq_len,
+        cluster_axis=m.cluster_axis,
+        num_links=m.num_links,
+        topology=m.topology,
+        memory_config=m.memory_config,
+        init_zeros=m.init_zeros,
+        use_fp8_combine=m.fp8_output,
+    )
 
 
 class TtMoEUnified:
@@ -138,7 +182,7 @@ class TtMoEUnified:
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(
             idx2, self.dispatch_table, self.cfg.moe_num_experts, self.cfg.moe_k
         )
-        return ttnn.experimental.deepseek_prefill.offset_cumsum(
+        return ttnn.bringup.offset_cumsum(
             hist,
             cluster_axis=0,
             num_links=self.num_links,
@@ -155,7 +199,7 @@ class TtMoEUnified:
         offsets, counts, region_offsets = self._routing_setup(idx2)
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         scores = ttnn.reshape(ttnn.to_layout(ttnn.typecast(wts, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
-        buf, meta = dispatch(ttnn.squeeze(x, dim=0), scores, ind, offsets, self.dispatch_table)
+        buf, meta = _dispatch(dispatch, ttnn.squeeze(x, dim=0), ind, offsets, self.dispatch_table)
         # ROW_MAJOR bf16 buffer -> the op's fused fast path (tilize + bf8 pack inside the kernel, fresh output).
         buf2 = ttnn.squeeze(ttnn.squeeze(buf, dim=0), dim=0)
         signpost("moe.experts")
@@ -163,7 +207,7 @@ class TtMoEUnified:
         ttnn.deallocate(buf2)
         signpost("moe.combine_reduce")
         out = ttnn.unsqueeze(ttnn.unsqueeze(out, dim=0), dim=0)
-        comb = combine(out, meta, counts, region_offsets, seq_len_per_chip=S)
+        comb = _combine(combine, out, meta, counts, region_offsets, S)
         ttnn.deallocate(out)
         red = self.reduce(comb, weights=scores, indices=ind, expert_dispatch_table=self.dispatch_table)
         ttnn.deallocate(comb)
