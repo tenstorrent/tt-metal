@@ -247,8 +247,9 @@ def get_pcc_threshold(request, default=0.99):
     return table.get(func, default)
 
 
-# MESH_DEVICE -> mesh shape. N150x4 is the Wormhole (1,4) mesh; the P150* names are the pre-existing Blackhole set.
-_MESH_SHAPES = {
+# MESH_DEVICE -> mesh shape, shared with demo/text_demo.py so a new device is only added once.
+# N150x4 is the Wormhole (1,4) mesh; the P150* names are the pre-existing Blackhole set.
+MESH_SHAPES = {
     "P150": (1, 1),
     "P150x4": (1, 4),
     "P150x8": (1, 8),
@@ -258,7 +259,7 @@ _MESH_SHAPES = {
 
 def _resolve_mesh_shape(max_tp=8):
     # MESH_DEVICE wins outright; the fallback is computed lazily so an explicit mesh never calls get_device_ids(), which can raise at collection.
-    shape = _MESH_SHAPES.get(os.environ.get("MESH_DEVICE"))
+    shape = MESH_SHAPES.get(os.environ.get("MESH_DEVICE"))
     if shape is not None:
         return shape
     return (1, min(len(ttnn.get_device_ids()), max_tp))

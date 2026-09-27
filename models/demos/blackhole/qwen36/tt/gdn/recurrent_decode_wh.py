@@ -18,19 +18,25 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
     _recurrent_read_query_program_config,
     l2_norm_ttnn,
 )
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    recurrent_gated_delta_rule_decode_ttnn as _recurrent_gated_delta_rule_decode_upstream,
-)
 
-_OUTER_L1_BUDGET_BYTES = 8 << 20  # see dispatch below
+_OUTER_L1_BUDGET_BYTES = 8 << 20  # see wh_decode_fork_applies below
 
 
 def wh_decode_fork_applies(B, Hq, K, V, gqa_repeat=1, high_precision=False):
-    """Will the dispatch below take the Wormhole fork for this shape?
+    """Should this shape take the Wormhole fork rather than the shared upstream decode?
 
-    SINGLE SOURCE OF TRUTH: the dispatch and gdn/tp.py must agree. A caller that fuses q/k while
-    the dispatch falls back to upstream would apply the gated-norm epsilon compensation to an
-    uncompensated ``o``. Keep the budget evaluated only here."""
+    The fork materializes the full [B,H,K,V] outer product in L1, so take it only while that fits;
+    widen the budget only with a measurement. gdn/tp.py calls this once and uses the answer for
+    BOTH the q/k fusion and the choice of decode function, so the two can never disagree -- a
+    caller that fused while falling back to upstream would apply the gated-norm epsilon
+    compensation to an uncompensated ``o``. Keep the budget evaluated only here.
+
+    The arch gate is ``is_blackhole()``, NOT a narrower device check: for this model's shape the
+    upstream kernel OVERFLOWS on Wormhole -- the recurrence output saturates, the following
+    rms_norm underflows, and every GDN decode returns zeros -- so upstream is a correctness
+    failure there, not just a slower path. That holds even at high_precision=False, where the two
+    are otherwise equivalent. Shapes over the budget fall back to upstream anyway and rely on
+    wh_compat's state-write override to keep them off L1."""
     if is_blackhole():
         return False
     itemsize = 4 if high_precision else 2
@@ -203,77 +209,3 @@ def recurrent_gated_delta_rule_decode_wh(
 
     # o stays in the matmul's native [B,H,1,V]; both layouts flatten to the same b,(h,v) order, so the upstream leg needs no fixup.
     return o_t, h
-
-
-def recurrent_gated_delta_rule_decode_dispatch(*args, model_args=None, gqa_repeat=1, **kwargs):
-    """Blackhole -> the shared upstream function, unchanged. Wormhole -> the variant above.
-
-    Same dispatch shape as conv_fir_wh.causal_conv1d_fir_dispatch, so gdn/tp.py's call sites do not
-    branch. model_args is accepted and ignored; it is absorbed here rather than forwarded via
-    **kwargs.
-
-    The Wormhole gate is is_blackhole(), NOT a narrower device check. The upstream kernel OVERFLOWS
-    for this shape on Wormhole -- the recurrence output saturates, the following rms_norm
-    underflows, and every GDN decode returns zeros -- so the fallback is a correctness failure
-    there, not a perf one. This holds even at high_precision=False, where the two are otherwise
-    equivalent."""
-    # The fork materializes the full [B,H,K,V] outer product in L1, so take it only while that fits; widen the budget only with a measurement.
-    _q = args[0] if args else kwargs.get("q")
-    _v = args[2] if len(args) > 2 else kwargs.get("v")
-    # qk_fused carries q and k as one [B,1,2*Hq,K] tensor; q/k are then None on entry, so the
-    # budget check below reads its shape instead.
-    _qkf = kwargs.get("qk_fused")
-    _qshape = (
-        (_qkf.shape[0], 1, _qkf.shape[2] // 2, _qkf.shape[3])
-        if _qkf is not None
-        else (_q.shape if _q is not None else None)
-    )
-    _use_wh = not is_blackhole()
-    if _use_wh and _qshape is not None and _v is not None:
-        # _H is the V-head count the outer product is materialized at, so it takes the GQA
-        # expansion into account -- _q carries only Hq = H // gqa_repeat heads on entry.
-        _use_wh = wh_decode_fork_applies(
-            _qshape[0],
-            _qshape[2],
-            _qshape[3],
-            _v.shape[3],
-            gqa_repeat=gqa_repeat,
-            high_precision=kwargs.get("high_precision", False),
-        )
-    if not _use_wh:
-        if _qkf is not None:
-            # Undo the fusion for upstream; this dim-2 cut is the expensive mid-tile kind, but this leg is already the slow one.
-            _b, _hq, _k = _qkf.shape[0], _qkf.shape[2] // 2, _qkf.shape[3]
-            _qq = ttnn.slice(_qkf, (0, 0, 0, 0), (_b, 1, _hq, _k))
-            _kk = ttnn.slice(_qkf, (0, 0, _hq, 0), (_b, 1, 2 * _hq, _k))
-            ttnn.deallocate(_qkf)
-            kwargs.pop("qk_fused", None)
-            _a = list(args)
-            if len(_a) > 1:
-                _a[0], _a[1] = _qq, _kk
-                args = tuple(_a)
-            else:
-                kwargs["q"], kwargs["k"] = _qq, _kk
-        # Upstream has no GQA step, so expand here; keep this exact sequence -- it is also Blackhole's only path.
-        if gqa_repeat > 1:
-            _args = list(args)
-            _qk = {}
-            for _i, _name in ((0, "q"), (1, "k")):
-                _t = _args[_i] if len(_args) > _i else kwargs[_name]
-                _b, _hq, _k = _t.shape[0], _t.shape[2], _t.shape[3]
-                _t = ttnn.reshape(_t, (_b, _hq, _k))
-                _t = ttnn.repeat_interleave(_t, gqa_repeat, dim=1)
-                _t = ttnn.reshape(_t, (_b, 1, _hq * gqa_repeat, _k))
-                if len(_args) > _i:
-                    _args[_i] = _t
-                else:
-                    _qk[_name] = _t
-            args, kwargs = tuple(_args), {**kwargs, **_qk}
-        # upstream has no fold-weight kwargs; it does the multiplies itself. qk_fused goes too --
-        # unconditionally, since the caller passes it as None on this leg rather than omitting it.
-        kwargs.pop("q_norm_weight", None)
-        kwargs.pop("k_norm_weight", None)
-        kwargs.pop("qk_fused", None)
-        kwargs.pop("v_rowed", None)
-        return _recurrent_gated_delta_rule_decode_upstream(*args, **kwargs)
-    return recurrent_gated_delta_rule_decode_wh(*args, gqa_repeat=gqa_repeat, **kwargs)

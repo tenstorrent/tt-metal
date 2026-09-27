@@ -102,6 +102,7 @@ def chunk_gated_delta_rule_seq_adapter(
     valid_len=None,
     qkv_head_dims=None,  # (Hq,K,H,V): flat q/k/v [B,T,Hq*K]/[B,T,H*V]
     return_o_bh=False,  # True: return o as [BH,T,V], skip token-major relayout
+    out_dtype=None,  # forwarded to chunk_gated_delta_rule_seq; see its docstring
 ):
     """Drop-in for chunk_gated_delta_rule_ttnn using `gated_delta_attn_seq`.
 
@@ -185,6 +186,7 @@ def chunk_gated_delta_rule_seq_adapter(
         mesh_device=device,
         cached_masks=cached_masks,
         valid_len=valid_len,
+        out_dtype=out_dtype,
     )
 
     # o [BH,T,V] -> [B,T,H,V] (L1 shuffle, DRAM output). return_o_bh skips for caller-side fusion.
@@ -411,7 +413,7 @@ def chunk_gated_delta_rule_seq(
     Returns (output [BH,T,V], final_state [BH,K,V]) float32.
     valid_len: zero q/k/v/beta/g past valid_len (padding); identity state updates preserve recurrent state.
     out_dtype: dtype of the L1-resident output relayout below; defaults to float32. Callers whose L1
-    cannot hold the fp32 [BH,L,V] tensor pass bfloat16 (see qwen36/tt/wh_compat.py).
+    cannot hold the fp32 [BH,L,V] tensor pass bfloat16 (see qwen36/tt/tp_common.chunk_seq_out_dtype).
     """
     # Preprocessing matmuls: HiFi4 (matches block-inverse fidelity).
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
