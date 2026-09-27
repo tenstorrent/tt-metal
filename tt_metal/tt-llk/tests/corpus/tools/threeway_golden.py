@@ -86,6 +86,36 @@ def bf16_bitdistance(y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
     return np.abs(ref - approx).astype(np.float64)
 
 
+def numeric_comparison(
+    golden: np.ndarray, device: np.ndarray, atol: float, rtol: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return policy-defined bf16 ULP and within-tolerance masks.
+
+    Relative/absolute tolerance applies only to two finite values. Matching
+    NaNs (payload/sign agnostic) and same-sign infinities are accepted and
+    assigned ULP 0 because their payload/lattice distance is not a meaningful
+    numeric error. Every other pair involving a non-finite value is rejected
+    and assigned the maximum bf16 sentinel distance, 65535.
+    """
+    g = np.asarray(golden, dtype=np.float32).astype(np.float64)
+    d = np.asarray(device, dtype=np.float32).astype(np.float64)
+    both_finite = np.isfinite(g) & np.isfinite(d)
+    both_nan = np.isnan(g) & np.isnan(d)
+    both_inf = np.isinf(g) & np.isinf(d) & (np.signbit(g) == np.signbit(d))
+    with np.errstate(all="ignore"):
+        close = both_finite & (np.abs(d - g) <= (atol + rtol * np.abs(g)))
+    matching_special = both_nan | both_inf
+    within = close | matching_special
+    raw_ulp = bf16_bitdistance(g, d)
+    special_pair = ~both_finite
+    ulp = np.where(
+        matching_special,
+        0.0,
+        np.where(special_pair, 65535.0, raw_ulp),
+    )
+    return ulp.astype(np.float64), within
+
+
 def _fold_class_ulps(
     aggregate: dict[str, tuple[int, float]],
     ulp: np.ndarray,
@@ -529,22 +559,13 @@ class CorrectnessAccumulator:
             np.float32
         )
 
-        ulp = bf16_bitdistance(golden, dev)
+        ulp, within = numeric_comparison(golden, dev, self.spec.atol, self.spec.rtol)
         _fold_class_ulps(
             self.class_ulp,
             ulp,
             unary_input_classes(xin, self.spec.domain),
         )
-        # tolerance check on the (bf16) values, matching passed_test isclose + equal_nan.
-        g = golden.astype(np.float64)
-        d = dev.astype(np.float64)
-        both_nan = np.isnan(g) & np.isnan(d)
-        both_inf = np.isinf(g) & np.isinf(d) & (np.sign(g) == np.sign(d))
-        close = np.abs(d - g) <= (self.spec.atol + self.spec.rtol * np.abs(g))
-        within = close | both_nan | both_inf
-        out = ~within & np.isfinite(
-            ulp
-        )  # nonfinite golden handled by both_nan/both_inf
+        out = ~within
 
         # running max ULP + its input
         if ulp.size:
@@ -665,7 +686,7 @@ class BinaryPowAccumulator:
                 )
             dev = _bf16_bits_to_f32(dev16.astype(np.uint32)).astype(np.float32)
 
-            ulp = bf16_bitdistance(golden, dev)
+            ulp, within = numeric_comparison(golden, dev, self.atol, self.rtol)
             base_values = _bf16_bits_to_f32(base_arr)
             exp_values = _bf16_bits_to_f32(exp16.astype(np.uint32))
             _fold_class_ulps(
@@ -673,13 +694,7 @@ class BinaryPowAccumulator:
                 ulp,
                 binary_input_classes(base_values, exp_values),
             )
-            g = golden.astype(np.float64)
-            d = dev.astype(np.float64)
-            both_nan = np.isnan(g) & np.isnan(d)
-            both_inf = np.isinf(g) & np.isinf(d) & (np.sign(g) == np.sign(d))
-            close = np.abs(d - g) <= (self.atol + self.rtol * np.abs(g))
-            within = close | both_nan | both_inf
-            out = ~within & np.isfinite(ulp)
+            out = ~within
 
             i = int(np.nanargmax(np.where(np.isfinite(ulp), ulp, -1.0)))
             if ulp[i] > self.max_ulp:

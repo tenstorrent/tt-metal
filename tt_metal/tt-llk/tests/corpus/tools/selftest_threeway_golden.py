@@ -178,6 +178,27 @@ def case_fitter_ulp():
     )
 
 
+def case_special_numeric_policy():
+    print("case 2c: non-finite tolerance and ULP policy")
+    golden = np.array(
+        [np.inf, -np.inf, np.nan, np.inf, np.nan], dtype=np.float32
+    )
+    device = np.array(
+        [1.0, np.inf, 1.0, np.inf, np.float32(np.nan)], dtype=np.float32
+    )
+    ulp, within = tg.numeric_comparison(golden, device, 0.05, 0.05)
+    check(
+        "special-within-policy",
+        np.array_equal(within, np.array([False, False, False, True, True])),
+        str(within),
+    )
+    check(
+        "special-ulp-policy",
+        np.array_equal(ulp, np.array([65535.0, 65535.0, 65535.0, 0.0, 0.0])),
+        str(ulp),
+    )
+
+
 # ── case 3: known-correct ────────────────────────────────────────────────────
 def case_known_correct():
     print("case 3: golden bytes fed back -> 0 ULP, within contract")
@@ -371,6 +392,7 @@ def main():
     print("laneMR three-way golden selftest")
     case_faithful()
     case_fitter_ulp()
+    case_special_numeric_policy()
     case_known_correct()
     case_seeded_bug()
     case_domain()
