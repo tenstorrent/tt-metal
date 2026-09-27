@@ -12,6 +12,13 @@ Registry-model op file: the four declarations (INPUT_TAGGERS / SUPPORTED /
 EXCLUSIONS / validate) plus the public entry point.  The kernels and the
 ProgramDescriptor live in rms_norm_ttnn_program_descriptor.py + kernels/.
 
+THE SHIPPED OP IS THE C++ PORT.  `ttnn.bringup.rms_norm` is bound from
+rms_norm_ttnn.cpp / device/ (a device operation with a ProgramDescriptor factory
+and the program cache): the same kernels, program and refusals, at C++ launch
+cost.  This Python implementation stays importable for A/B comparison and is the
+reference tests/unit/test_rms_norm_ttnn_cpp_parity.py checks the C++ builder
+against, field by field.  A change to either builder must be made to both.
+
 DERIVATIVE OF THE DESIGNATED SEED `ttnn/ttnn/operations/rms_norm/`.  Every
 scheme, regime, knob, CB and kernel of the seed is preserved; this file adds
 capability at the seams (op_design.md's A1..A13 delta table):
