@@ -23,6 +23,9 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
   2D fabric). They go in `agents.rules` and appear in every brief.
 - **Dashboard style**: `standard` (the ERNIE look), `teletext` (a 90s teletext service on a CRT), or `both`. Goes in
   `dashboard.styles`.
+- **Prior bring-up**: has this checkpoint been brought up before in this repo (another mesh or configuration)? If so,
+  it becomes `prior`: the new bring-up shares its checkpoint download, goldens and CPU reference, and every step starts
+  from the prior's matching files. Name the new one with its variant, e.g. `<prior>_2x2`; the prior keeps its name.
 - **Retry policy**, only if they want to change it: per role, attempts (default 3) and whether it escalates to
   `ttnn-expert-debugger` (only implement and device fixes do; that agent is for TTNN ops, never CPU code).
 
@@ -46,6 +49,9 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
    what each field is): the interview answers, `hf.revision`, `hf.parity_seq` longer than any sliding window,
    `text.wrap`, `intake.smoke`, `agents.rules`, `agents.read` (HF modeling file for the reference role, similar repo
    models for plan and implement), `dashboard.styles`.
+   With a prior bring-up: `$B new --prior <prior slug> --mesh R,C` instead. It copies the prior's spec with `prior` set
+   and the new mesh, and writes hooks that reuse the prior's CPU side; the R.* tasks then pass on their first check
+   and the G.* tasks reuse the prior's goldens. Review every copied field (the box name, rules, reads).
 2. Validate: `python -c "from models.demos.common.bringup.core.spec import Spec; print(Spec.load('<spec>').validate())"`.
 3. Show the spec. Wait for an explicit yes. Then `$B approve intake --spec <spec>`.
 4. `python -m models.demos.common.bringup.plan.ledger_gen --spec <spec> --early --write` and `$B init-run run1 --spec <spec>`.
