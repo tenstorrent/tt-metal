@@ -372,7 +372,11 @@ ON_FLAGS = (
     # (delta = exactly the lane-proven TU sets); KNOB_MODES flipped
     # on-plus -> drop-one for all three (their tokens are now ON-set).
     "-mtt-tensix-optimize-window-pairing "
-    "-mtt-tensix-optimize-replay-record-hoist "
+    # Quarantined on GCC 28c31714 (2026-09-27): the full ON set hangs
+    # tanhderivative-fitted semantic performance on a freshly reset BH.
+    # Changing only this switch to OFF passes correctness + 3 perf repeats.
+    # Historical pin-26 promotion above does not certify the rebased compiler.
+    "-mno-tt-tensix-optimize-replay-record-hoist "
     "-mtt-tensix-optimize-lreg-alloc "
     # PROMOTED 2026-08-26 (knob promotion round 2, lane HE; same pin-29
     # binary f47f72b40b8a): the six silicon-proven wave knobs join the
@@ -1938,7 +1942,7 @@ KNOB_MODES = {
     # pipeline's regions, so the booking A/B is (ON + flag) vs plain ON.
     "delivery-shape": "on-plus",
     # record-hoist PROMOTED into the ON set 2026-08-23 — drop-one.
-    "record-hoist": "drop-one",
+    "record-hoist": "on-plus",  # quarantined from common ON; diagnostic only
     "prera": "on-plus",
     "round-interleave": "on-plus",
     "store-fold": "on-plus",
