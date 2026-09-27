@@ -165,10 +165,44 @@ class TT_CCL:
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Shared across sequential norm layers. Semaphore and stats scratch must
+        # alternate together to absorb inter-device skew at collective completion.
+        # Sequential layers with the same geometry share two semaphore/stats pairs.
+        # Keep resources alive until mesh teardown: traces may still reference them.
+        self.fused_rmsnorm_resources: dict[tuple, dict] = {}
+
         # One model-wide sparse-MLA overlap manager and external high-BW-gather semaphore pair.
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+        key = (
+            tuple(x.shape),
+            tuple(x.padded_shape),
+            x.dtype,
+            tuple(weight.shape),
+            weight.dtype,
+            cluster_axis,
+            num_links,
+        )
+        resources = self.fused_rmsnorm_resources.get(key)
+        if resources is None:
+            pairs = []
+            for _ in range(2):
+                semaphores = [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)]
+                stats = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                    x, cluster_axis, self.mesh_device, num_links=num_links, weight=weight
+                )
+                pairs.append((semaphores, stats))
+            # All chips must initialize their semaphores before any peer sends.
+            # This allocation happens during the first warmup, once per geometry.
+            ttnn.synchronize_device(self.mesh_device)
+            resources = {"pairs": pairs, "next": 0}
+            self.fused_rmsnorm_resources[key] = resources
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.

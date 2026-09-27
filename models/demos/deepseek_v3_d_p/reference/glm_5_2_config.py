@@ -20,6 +20,9 @@ import types
 class GLM52Config:
     """GLM 5.2 model dimensions."""
 
+    # Blackhole chunked prefill uses the fused distributed norm for both block norms.
+    USE_FUSED_PREFILL_RMSNORM = True
+
     # Core dimensions
     EMB_SIZE = 6144  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code

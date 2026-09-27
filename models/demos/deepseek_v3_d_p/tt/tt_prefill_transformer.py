@@ -183,6 +183,7 @@ class TtPrefillTransformer(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -284,6 +285,7 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
+                use_fused_rmsnorm=use_fused_rmsnorm,
             )
             self.layers.append(layer)
 
