@@ -10,8 +10,10 @@ LTX_CHECKPOINT=<same checkpoint>, and LTX_AUDIO_SUBMESH=4x8|1x8|1x4|1x1.
 Verify: python -m models.tt_dit.tests.models.ltx.test_audio_submesh \
     --verify <results.pt> --inputs <inputs.pt> [--baseline <full-mesh results.pt>]
 
-Collection success is not a quality gate. C03_PROFILE=1 collects an eager per-block
-drained profile, separate from traced latency; its output cannot pass the verifier.
+Collection success is not a quality gate. C03_PROFILE=1 collects an eager profile
+drained inside blocks, separate from traced latency; its output cannot pass the verifier.
+C03_PROFILE_SEGMENT=first_amp stops after the first main-vocoder AMP block and
+writes diagnostic-only JSON, with no full waveform or quality/timing verdict.
 Recipe capture exits skipped without writing waveforms, timings, or quality results.
 """
 
@@ -250,12 +252,7 @@ def test_audio_submesh_lifecycle(mesh_device, device_params, parent_topology, mo
 )
 def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
     import ttnn
-    from models.tt_dit.tests.models.ltx.test_audio_ltx import (
-        _PROF_FLUSH_TYPES,
-        _build_pipeline,
-        _flush_forward_after,
-        _walk_tt,
-    )
+    from models.tt_dit.tests.models.ltx.test_audio_ltx import _build_pipeline
     from models.tt_dit.utils.cache import source_id
     from models.tt_dit.utils.tracing import set_kernel_prewarm_capturing
 
@@ -275,6 +272,10 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
     assert os.environ.get("LTX_TIME_STAGES", "0") == "0", "stage syncs would contaminate timing"
     capture_only = bool(os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY"))
     profile = os.environ.get("C03_PROFILE", "0") == "1"
+    profile_segment = os.environ.get("C03_PROFILE_SEGMENT", "full")
+    assert profile_segment in ("full", "first_amp"), profile_segment
+    assert profile or profile_segment == "full", "segmentation is only valid for profiler diagnostics"
+    assert not capture_only or profile_segment == "full", "capture recipes for the complete decoder"
     repeats = int(os.environ.get("C03_REPEATS", "5"))
     assert repeats >= 5, "keep at least five independent warm samples"
     collect_memory = os.environ.get("C03_MEMORY", "0") == "1"
@@ -294,13 +295,7 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
     if collect_memory and not capture_only:
         allocator_views["after_pipeline_construct"] = _allocator_views(mesh_device, audio_device)
     outputs, times = {}, []
-    if profile and not capture_only:
-        # Warmup emits instrumented programs too; drain its blocks as well so it
-        # cannot overflow the profiler before the measured region even starts.
-        for root in (pipeline.tt_mel_decoder, pipeline.tt_vocoder_with_bwe):
-            for module in _walk_tt(root):
-                if isinstance(module, _PROF_FLUSH_TYPES):
-                    _flush_forward_after(module, audio_device)
+    drains = None
 
     def decode(label, name):
         out = pipeline.decode_audio(data["inputs"][name], FRAMES, fps=FPS)
@@ -309,6 +304,92 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
         return out
 
     try:
+        if profile and not capture_only:
+            from models.tt_dit.layers.audio_ops import (
+                Conv1dViaConv3d,
+                Conv2dViaConv3d,
+                ConvTranspose1dViaConv3d,
+                Snake,
+                SnakeBeta,
+            )
+            from models.tt_dit.layers.audio_resample import Activation1d, LowPassFilter1d, UpSample1d
+            from models.tt_dit.models.audio_vae.mel_decoder_ltx import PixelNorm
+            from models.tt_dit.models.audio_vae.vocoder_ltx import AMPBlock1
+            from models.tt_dit.tests.models.ltx.audio_profile_drains import ProfileDrains, ProfileSegmentComplete
+            from models.tt_dit.tests.models.ltx.test_audio_ltx import _PROF_FLUSH_TYPES
+
+            def audio_roots():
+                return (("mel", pipeline.tt_mel_decoder), ("vocoder_bwe", pipeline.tt_vocoder_with_bwe))
+
+            first_amp = pipeline.tt_vocoder_with_bwe.vocoder.resblocks[0]
+            assert isinstance(first_amp, AMPBlock1), "first main-vocoder residual block changed"
+            drain_types = _PROF_FLUSH_TYPES + (
+                Conv1dViaConv3d,
+                Conv2dViaConv3d,
+                ConvTranspose1dViaConv3d,
+                Activation1d,
+                LowPassFilter1d,
+                UpSample1d,
+                Snake,
+                SnakeBeta,
+                PixelNorm,
+                type(pipeline.tt_mel_decoder),
+                type(pipeline.tt_vocoder_with_bwe),
+                type(pipeline.tt_vocoder_with_bwe.vocoder),
+            )
+            # Draining only AMPBlock1 was too late: one block contains six
+            # anti-alias activation paths and six convolutions. Keep the same
+            # profiler buffers; measure the smaller intervals instead.
+            drains = ProfileDrains(
+                audio_roots(),
+                drain_types,
+                lambda: ttnn.ReadDeviceProfiler(audio_device),
+                ttnn._ttnn.get_device_operation_id,
+                output_path.parent,
+                stop_module=first_amp if profile_segment == "first_amp" else None,
+            )
+            pipeline._prepare_audio_decoder()
+            drains.assert_same_modules(audio_roots())
+            drains.drain("weights_prepared", force=True)
+            if profile_segment == "first_amp":
+                from tracy import signpost
+
+                segment_path = output_path.parent / "profile-segment.json"
+                assert not segment_path.exists(), f"refusing to overwrite {segment_path}"
+                drains.phase = "first_amp_prefix"
+                op0 = ttnn._ttnn.get_device_operation_id()
+                signpost("start")
+                try:
+                    decode("diagnostic_prefix", "a")
+                except ProfileSegmentComplete:
+                    assert drains.completed_segment is not None
+                else:
+                    raise AssertionError("first-AMP segment did not stop at the selected module")
+                finally:
+                    drains.drain("segment_end", force=True)
+                    signpost("stop")
+                op1 = ttnn._ttnn.get_device_operation_id()
+                assert op1 > op0 and not outputs and not times
+                metadata = {
+                    "schema": 1,
+                    "profile": True,
+                    "segment": "first_amp",
+                    "scope": "first eager mel decode through first main-vocoder AMP; no waveform, quality or latency evidence",
+                    "inputs_sha256": _sha256(inputs_path),
+                    "checkpoint_source_id": source_id(checkpoint),
+                    "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "harness_sha256": _sha256(Path(__file__)),
+                    "drain_helper_sha256": _sha256(Path(__file__).with_name("audio_profile_drains.py")),
+                    "parent_mesh": list(mesh_device.shape),
+                    "audio_mesh": list(audio_device.shape),
+                    "op_id_range": [op0, op1],
+                    "drains": drains.summary(),
+                }
+                segment_path.write_text(json.dumps(metadata, indent=2) + "\n")
+                print(f"C03_PROFILE_OPID_RANGE={op0},{op1}")
+                print(f"C03_PROFILE_SEGMENT_COLLECTED {segment_path}; dropped-marker validation still required")
+                return
+            drains.phase = "eager_a"
         decode("eager_a", "a")
         if capture_only:
             # Record eager + persistent-buffer variants in this disposable process.
@@ -317,7 +398,12 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
             set_kernel_prewarm_capturing(True)
             decode("recipe", "a")
             pytest.skip("kernel recipe capture only; no correctness or timing result")
+        if drains:
+            drains.drain("eager_a_end")
+            drains.phase = "eager_b"
         decode("eager_b", "b")
+        if drains:
+            drains.drain("eager_b_end")
         estimates = _resource_estimates(pipeline)
         if collect_memory:
             allocator_views["after_eager_warmup"] = _allocator_views(mesh_device, audio_device)
@@ -325,12 +411,13 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
             from tracy import signpost
 
             ttnn.synchronize_device(audio_device)
-            ttnn.ReadDeviceProfiler(audio_device)
+            drains.drain("measured_start", force=True)
+            drains.phase = "profile_a"
             op0 = ttnn._ttnn.get_device_operation_id()
             signpost("start")
             decode("profile_a", "a")
             ttnn.synchronize_device(audio_device)
-            ttnn.ReadDeviceProfiler(audio_device)
+            drains.drain("measured_end", force=True)
             signpost("stop")
             print(f"C03_PROFILE_OPID_RANGE={op0},{ttnn._ttnn.get_device_operation_id()}")
             if collect_memory:
@@ -360,6 +447,10 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
         metadata = {
             "schema": 1,
             "profile": profile,
+            "profile_drains": None if drains is None else drains.summary(),
+            "drain_helper_sha256": (
+                None if drains is None else _sha256(Path(__file__).with_name("audio_profile_drains.py"))
+            ),
             "capture_only": False,
             "inputs_sha256": _sha256(inputs_path),
             "checkpoint_source_id": source_id(checkpoint),
@@ -378,9 +469,15 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
         print(f"C03_CORRECTNESS_PENDING {output_path}")
         print(json.dumps(metadata, sort_keys=True))
     finally:
-        set_kernel_prewarm_capturing(False)
-        pipeline.release_traces()
-        pipeline.release_audio_submesh()
+        try:
+            if drains:
+                drains.close()
+        finally:
+            set_kernel_prewarm_capturing(False)
+            try:
+                pipeline.release_traces()
+            finally:
+                pipeline.release_audio_submesh()
 
 
 def _validate_result(result, inputs_sha):
