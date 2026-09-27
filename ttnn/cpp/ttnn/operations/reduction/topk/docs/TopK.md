@@ -243,7 +243,7 @@ The strategy consists of two phases:
 1. **Local Processing Phase**: Each core processes its width chunk using bitonic sort algorithms.
 2. **Global Aggregation Phase**: A final core performs bitonic merge on all local results to compute the global top K.
 
-#### Phase 1: Local Processing (Split Cores) - `topk_local.cpp`
+#### Phase 1: Local Processing (Split Cores) - `topk_local.cpp` (`topk_local_tree_merge.cpp` with the tree merge)
 
 1. **Width Splitting**:
    - The input width is divided among multiple cores.
@@ -270,7 +270,7 @@ The strategy consists of two phases:
      - Iteration n: Compare with distance 2^n → groups of 64*(2^(n+1)) elements
    - **Result Extraction**: Extract top Kt tiles (ceil(K/32)) containing locally optimal TopK elements
 
-3. **Tree Merge and Communication**:
+3. **Tree Merge and Communication** (Blackhole; other archs send every core's Kt tiles to the final core):
    - `log2(num_local_cores)` rounds: in round r, core i with `i % 2^(r+1) == 0` receives the Kt tiles of
      core `i + 2^r` into a landing slot next to its own Kt tiles and keeps the top Kt of the pair with one
      bitonic merge step (`process_iteration` on a 2×Kt row); the kept sequence's sort direction alternates so
@@ -305,8 +305,8 @@ The strategy consists of two phases:
 - **index_transposed_cb_index**: Transposed indices staging buffer (Wt_local tiles)
 - **values_cb_index**: Local TopK values output (Kt tiles for transmission to the parent or final core)
 - **output_ind_cb_index**: Local TopK indices output (Kt tiles for transmission to the parent or final core)
-- **landing_values_cb_index / landing_indices_cb_index**: Tree-merge landing slot ([own Kt | partner Kt] tiles, filled by the writer and the partner core's NoC write)
-- **merge_values_cb_index / merge_indices_cb_index**: Tree-merge in-place workspace (2×Kt tiles)
+- **landing_values_cb_index / landing_indices_cb_index** (tree merge only): Tree-merge landing slot ([own Kt | partner Kt] tiles, filled by the writer and the partner core's NoC write)
+- **merge_values_cb_index / merge_indices_cb_index** (tree merge only): Tree-merge in-place workspace (2×Kt tiles)
 
 #### Circular Buffers (Final Core):
 

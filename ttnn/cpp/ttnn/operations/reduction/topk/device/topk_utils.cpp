@@ -81,6 +81,7 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     uint32_t value_tile_size,
     uint32_t index_tile_size,
     uint32_t tile_width,
+    bool tree_merge,
     bool first_valid_only) {
     // Grid dimensions (inclusive coordinates). The multi-core layout places the local
     // cores in a (max_x x max_y) rectangle and the final gather core on the row below
@@ -118,6 +119,8 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     const uint32_t transposed_tile_size = std::max(value_tile_size, bf16_tile_size);
 
     // Search all power-of-2 split sizes and keep the one with the best modeled makespan:
+    //   T ~ kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final
+    // or, with the tree merge (Blackhole),
     //   T ~ kLocalCostFactor * Wt_local + kTreeRoundCostFactor * log2(num_cores) + kFinalCostFactor * Kt
     // Constants fitted on p150a silicon (4 configs across 8192/32768-wide k=64 cells,
     // <0.5% residual): a local tile costs ~3.5x a final tile — locals run full
@@ -156,7 +159,7 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
             shared_cost + 2 * value_tile_size + Wt_final * (transposed_tile_size + index_tile_size);
         const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value, c_10..c_13 tree-merge landing/workspace
             shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size +
-            4 * Kt * (transposed_tile_size + index_tile_size);
+            (tree_merge ? 4 * Kt * (transposed_tile_size + index_tile_size) : 0);
         const uint32_t per_core_cost = std::max(final_core_cost, local_core_cost);
 
         // Quick check: skip this configuration if it needs more cores than available
@@ -186,15 +189,17 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
             }
         }
 
+        // With the tree merge a local core has to reduce: a split no wider than k only moves the merge.
+        const bool local_reduces = !tree_merge || split_size > k;
+
         // Comprehensive validation: check all requirements for a valid configuration.
-        const bool valid =
-            num_cores <= max_cores &&      // Core count feasible
-            per_core_cost < l1_size &&     // Memory fits
-            num_cores > 1 &&               // Multi-core beneficial
-            split_size >= min_dim &&       // Hardware minimum met
-            split_size > k &&              // A local core has to reduce, a split no wider than k only moves the merge
-            contiguous_cores_available &&  // Can arrange cores
-            rem == 0;                      // Perfect division (no remainder)
+        const bool valid = num_cores <= max_cores &&      // Core count feasible
+                           per_core_cost < l1_size &&     // Memory fits
+                           num_cores > 1 &&               // Multi-core beneficial
+                           split_size >= min_dim &&       // Hardware minimum met
+                           local_reduces &&               // Tree merge: split wider than k
+                           contiguous_cores_available &&  // Can arrange cores
+                           rem == 0;                      // Perfect division (no remainder)
         if (!valid) {
             continue;
         }
@@ -220,7 +225,9 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
 
         // Only keep a config if it also beats the best modeled makespan so far.
         const uint32_t tree_rounds = std::bit_width(num_cores) - 1;
-        const uint32_t score = kLocalCostFactor * Wt_local + kTreeRoundCostFactor * tree_rounds + kFinalCostFactor * Kt;
+        const uint32_t score =
+            tree_merge ? kLocalCostFactor * Wt_local + kTreeRoundCostFactor * tree_rounds + kFinalCostFactor * Kt
+                       : kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final;
         if (score < best_score) {
             best_score = score;
             best_config = config;
@@ -239,9 +246,20 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     uint32_t l1_size,
     uint32_t value_tile_size,
     uint32_t index_tile_size,
+    bool tree_merge,
     uint32_t tile_width) {
     return find_topk_core_config_impl(
-        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width, false);
+        width,
+        min_dim,
+        max_dim,
+        k,
+        core_range,
+        l1_size,
+        value_tile_size,
+        index_tile_size,
+        tile_width,
+        tree_merge,
+        false);
 }
 
 /**
@@ -270,13 +288,24 @@ bool verify_multi_core_cost(
     uint32_t l1_size,
     uint32_t value_tile_size,
     uint32_t index_tile_size,
+    bool tree_merge,
     uint32_t tile_width) {
     // Existence is independent of the makespan score: any valid split proves
     // feasibility, so stop the sweep at the first valid config instead of paying
     // the full scored search (this runs on the host dispatch hot path from both
     // select_program_factory and validate_on_program_cache_miss).
     return find_topk_core_config_impl(
-               width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width, true)
+               width,
+               min_dim,
+               max_dim,
+               k,
+               core_range,
+               l1_size,
+               value_tile_size,
+               index_tile_size,
+               tile_width,
+               tree_merge,
+               true)
         .has_value();
 }
 
