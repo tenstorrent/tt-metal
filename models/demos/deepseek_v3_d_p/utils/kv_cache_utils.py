@@ -184,15 +184,13 @@ class MlaKvCache:
     def _pack_scaled_fp8(
         self, latent: ttnn.Tensor, rope: ttnn.Tensor, *, intermediates: dict[str, ttnn.Tensor] | None
     ) -> ttnn.Tensor:
-        latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
+        # Both kernels read TILE directly; the packer writes the physical ROW_MAJOR cache row.
         latent_fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
-            latent_rm, round_scale_to_power_of_two=True
+            latent, round_scale_to_power_of_two=True
         )
-        if latent_rm is not latent:
-            ttnn.deallocate(latent_rm)
-        rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
-        packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope_rm)
+        packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent_fp8, scales, rope)
         if intermediates is not None:
+            rope_rm = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
             reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
                 latent_fp8, scales, output_dtype=ttnn.bfloat16
             )
@@ -202,10 +200,10 @@ class MlaKvCache:
             intermediates["tt_kvpe_scales"] = ttnn.clone(scales)
             intermediates["tt_kvpe_rope"] = ttnn.clone(rope_rm)
             intermediates["tt_kvpe_packed"] = ttnn.clone(packed)
+            if rope_rm is not rope:
+                ttnn.deallocate(rope_rm)
         ttnn.deallocate(latent_fp8)
         ttnn.deallocate(scales)
-        if rope_rm is not rope:
-            ttnn.deallocate(rope_rm)
         return packed
 
     def unpack_host(self, physical: torch.Tensor) -> torch.Tensor:

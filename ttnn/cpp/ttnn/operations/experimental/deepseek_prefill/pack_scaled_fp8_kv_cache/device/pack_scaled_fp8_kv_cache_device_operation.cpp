@@ -23,10 +23,16 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& config) {
            config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
 
-void validate_input(const Tensor& tensor, const char* name, tt::tt_metal::DataType dtype, uint32_t width) {
+void validate_input(
+    const Tensor& tensor, const char* name, tt::tt_metal::DataType dtype, uint32_t width, bool allow_tile = false) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
-    TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
+    TT_FATAL(
+        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR ||
+            (allow_tile && tensor.layout() == tt::tt_metal::Layout::TILE),
+        "{} must be ROW_MAJOR{}",
+        name,
+        allow_tile ? " or TILE" : "");
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
     TT_FATAL(tensor.dtype() == dtype, "{} has the wrong dtype", name);
     TT_FATAL(!tensor.logical_shape().empty(), "{} must have at least one dimension", name);
@@ -47,7 +53,15 @@ void PackScaledFp8KvCacheDeviceOperation::validate_on_program_cache_miss(
         args.latent, "pack_scaled_fp8_kv_cache: latent", tt::tt_metal::DataType::FP8_E4M3, packed::LATENT_WIDTH);
     validate_input(
         args.scales, "pack_scaled_fp8_kv_cache: scales", tt::tt_metal::DataType::FLOAT32, packed::SCALE_WIDTH);
-    validate_input(args.rope, "pack_scaled_fp8_kv_cache: rope", tt::tt_metal::DataType::BFLOAT16, packed::ROPE_WIDTH);
+    validate_input(
+        args.rope, "pack_scaled_fp8_kv_cache: rope", tt::tt_metal::DataType::BFLOAT16, packed::ROPE_WIDTH, true);
+    if (args.rope.layout() == tt::tt_metal::Layout::TILE) {
+        const auto tile = args.rope.tensor_spec().tile();
+        TT_FATAL(tile.get_height() == 32 && tile.get_width() == 32, "tiled RoPE requires 32x32 tiles");
+        TT_FATAL(
+            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+            "tiled RoPE must use ordinary face order");
+    }
     TT_FATAL(
         is_dram_interleaved(attrs.output_memory_config), "pack_scaled_fp8_kv_cache: output must be DRAM interleaved");
     TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "pack_scaled_fp8_kv_cache requires Blackhole");
@@ -103,7 +117,7 @@ ttsl::hash::hash_t PackScaledFp8KvCacheDeviceOperation::compute_program_hash(
         attrs,
         args.latent.memory_config(),
         args.scales.memory_config(),
-        args.rope.memory_config(),
+        args.rope.tensor_spec(),
         args.latent.logical_shape());
 }
 

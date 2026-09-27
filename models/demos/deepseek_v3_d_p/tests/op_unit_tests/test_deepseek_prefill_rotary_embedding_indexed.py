@@ -690,6 +690,40 @@ def test_rotary_embedding_indexed_padded_default(device, use_metadata, expect_er
         rope(x, c, s, trans, start, 0, rotary_dim=96)
 
 
+@pytest.mark.parametrize("prefix_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_rotary_embedding_indexed_concat_prefix(device, prefix_memory_config, expect_error):
+    """The indexed writer must match a separate rotary plus concat, including mixed input memory configs."""
+    torch.manual_seed(42)
+
+    def upload(x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+        )
+
+    x = upload(torch.randn(1, 2, 32, 64, dtype=torch.bfloat16))
+    prefix = upload(torch.randn(1, 2, 32, 512, dtype=torch.bfloat16), prefix_memory_config)
+    cos = upload(torch.randn(1, 1, 32, 64, dtype=torch.bfloat16))
+    sin = upload(torch.randn(1, 1, 32, 64, dtype=torch.bfloat16))
+    trans = upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    rotated = rope(x, cos, sin, trans, 0, 0)
+    expected = ttnn.concat([prefix, rotated], dim=-1)
+    fused = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix)
+    assert torch.equal(ttnn.to_torch(fused), ttnn.to_torch(expected))
+    if prefix_memory_config == ttnn.DRAM_MEMORY_CONFIG:
+        transposed_prefix = ttnn.from_torch(
+            torch.randn(1, 2, 32, 512, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((32, 32), transpose_tile=True),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        with expect_error(RuntimeError, "ordinary face order"):
+            rope(x, cos, sin, trans, 0, 0, concat_prefix=transposed_prefix)
+
+
 @pytest.mark.parametrize("cos_width, sin_width", [(33, 64), (64, 33), (33, 33)])
 def test_rotary_embedding_indexed_logical_frequency_width(device, cos_width, sin_width, expect_error):
     """Explicit dimensions reject padded frequency columns even after warming the legacy program."""

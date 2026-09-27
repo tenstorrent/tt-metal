@@ -917,7 +917,12 @@ class ttMLA:
         )
 
     def _apply_rope_padded(
-        self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: int, metadata: Optional[ttnn.Tensor] = None
+        self,
+        t: ttnn.Tensor,
+        rope_tensors: dict,
+        kv_actual_isl: int,
+        metadata: Optional[ttnn.Tensor] = None,
+        concat_prefix: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
         block-cyclic-sharded cos/sin (built once via RotarySetup.get_rope_tensors_indexed); the op
@@ -935,6 +940,7 @@ class ttMLA:
                 rope_tensors["trans_matrix"],
                 metadata[1],  # actual_start = kv_actual_global (1-element tensor)
                 cluster_axis=self.sp_axis,
+                concat_prefix=concat_prefix,
             )
         return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             t,
@@ -943,6 +949,7 @@ class ttMLA:
             rope_tensors["trans_matrix"],
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
+            concat_prefix=concat_prefix,
         )
 
     def _apply_rope_none(
@@ -1145,7 +1152,7 @@ class ttMLA:
         metadata: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
-        → concat. Consumes qr (the indexer, if any, has already read it by this point)."""
+        → query assembly. Consumes qr (the indexer, if any, has already read it by this point)."""
         num_heads_local = self.num_heads // self.tp_factor
         tt_q = ttnn.linear(
             qr,
@@ -1171,10 +1178,16 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
-        tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata)
-
-        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
-        tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        if self._has_indexer:
+            # The indexed RoPE writer copies the absorbed channels into the same output.
+            tt_q = self._apply_rope_padded(
+                tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata, concat_prefix=tt_q_nope
+            )
+        else:
+            rotated_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl, metadata=metadata)
+            tt_q = ttnn.concat([tt_q_nope, rotated_q_rope], dim=-1)
+            if rotated_q_rope is not tt_q_rope:
+                ttnn.deallocate(rotated_q_rope)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
 

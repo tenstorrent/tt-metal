@@ -745,7 +745,9 @@ def _profile_untraced_host_ops(mesh_device, run_fn) -> dict:
         measured = []
         for _ in range(10):
             calls, result = one_run()
-            measured.append({name: {"count": len(times), "sum_ns": sum(times)} for name, times in calls.items()})
+            measured.append(
+                {name: {"count": len(times), "sum_ns": sum(times), "times_ns": times} for name, times in calls.items()}
+            )
             ttnn.deallocate(result)
     finally:
         FastOperation.__call__ = original_call
@@ -757,7 +759,10 @@ def _profile_untraced_host_ops(mesh_device, run_fn) -> dict:
         assert len(counts) == 1 and all(name in run for run in measured), f"unstable host op count: {name}"
         best = min(run[name]["sum_ns"] for run in measured)
         count = counts.pop()
-        rows.append({"operation": name, "count": count, "sum_ns": best, "avg_ns": best / count})
+        row = {"operation": name, "count": count, "sum_ns": best, "avg_ns": best / count}
+        if name in ("ttnn.to_layout", "ttnn.concat"):
+            row["per_call_min_ns"] = [min(run[name]["times_ns"][i] for run in measured) for i in range(count)]
+        rows.append(row)
     return {
         "method": "minimum per-operation sum across 10 measured forwards after 10 warmups",
         "rows": sorted(rows, key=lambda row: -row["sum_ns"]),
