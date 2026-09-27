@@ -140,6 +140,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
         channel carries no payload and can ignore it."""
 
+    def capture_trace(self, kv_cache) -> None:
+        """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
+        engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely.
+        Must be idempotent (no-op if already captured) since the engine does not track capture
+        state itself."""
+
     # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
     #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
     #     the runtime), not inline here. ---

@@ -43,6 +43,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import (
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
+    reshard_expert_weights_nd,
     _ISL_EXHAUSTIVE_MODELS,
     _ISL_EXHAUSTIVE_SWEEP,
     SINGLE_EXPERT_MODELS,
@@ -73,31 +74,57 @@ _KNEE_TOKENS = 512
 MAX_TOKENS = _ISL_ALLOCATED_TOKENS
 WEIGHT_SCALE = 0.02
 
-# Best-of-both device duration in ns per (model, active): median of 3 dispatches on a BH p150b.
-# Recalibrate on the perf runner (DDR-speed dependent): each case logs an "RT-CAL" line in this
-# dict's format, so one run regenerates the table. A case with no entry measures, logs its line and
-# skips rather than asserting -- an empty slot must not report green.
+# Best-of-both device duration in ns per (model, active): ONE sweep on a BH p150b (2026-09-15),
+# each case a median of _ITERS dispatches per op. Recalibrate on the perf runner (DDR-speed
+# dependent): each case logs an "RT-CAL" line in this dict's format. A case with no entry measures,
+# logs its line and skips rather than asserting -- an empty slot must not report green.
 #
 # Keyed without the winning op on purpose: at a crossover point the two ops are within noise of each
 # other, so the winner flips between runs while the minimum does not. The winner is logged per case
 # instead, against the one the model's threshold picks.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 2_965,
-    ("kimi_k2_7", 128): 95_313,
-    ("kimi_k2_7", 256): 118_266,
-    ("kimi_k2_7", 512): 162_779,
-    ("kimi_k2_7", 1024): 294_176,
-    ("kimi_k2_7", 2048): 579_393,
-    ("kimi_k2_7", 4096): 1_153_607,
-    ("kimi_k2_7", 5120): 1_440_341,
-    ("glm_51", 0): 3_082,
-    ("glm_51", 128): 85_105,
-    ("glm_51", 256): 111_663,
-    ("glm_51", 512): 145_656,
+    ("kimi_k2_7", 0): 3_027,
+    ("kimi_k2_7", 128): 94_711,
+    ("kimi_k2_7", 256): 116_901,
+    ("kimi_k2_7", 512): 161_644,
+    ("kimi_k2_7", 768): 224_481,
+    ("kimi_k2_7", 1024): 294_517,
+    ("kimi_k2_7", 2048): 580_342,
+    ("kimi_k2_7", 4096): 1_150_448,
+    ("kimi_k2_7", 5120): 1_435_379,
+    ("glm_51", 0): 3_055,
+    ("glm_51", 128): 85_743,
+    ("glm_51", 256): 108_096,
+    ("glm_51", 512): 143_664,
+    ("glm_51", 768): 196_770,
+    ("glm_51", 1024): 257_645,
+    ("glm_51", 2048): 507_790,
+    ("glm_51", 4096): 1_005_379,
+    ("glm_51", 5120): 1_258_299,
+}
+
+# Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded. Its own table because
+# the placement moves BOTH ops, so the minimum it gates is a different number -- and it moves them by
+# different amounts, which is the crossover itself shifting.
+_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
+    ("kimi_k2_7", 0): 3_000,
+    ("kimi_k2_7", 128): 85_495,
+    ("kimi_k2_7", 256): 106_977,
+    ("kimi_k2_7", 512): 156_427,
+    ("kimi_k2_7", 768): 225_476,
+    ("kimi_k2_7", 1024): 294_425,
+    ("kimi_k2_7", 2048): 579_184,
+    ("kimi_k2_7", 4096): 1_149_750,
+    ("kimi_k2_7", 5120): 1_437_132,
+    ("glm_51", 0): 3_048,
+    ("glm_51", 128): 77_648,
+    ("glm_51", 256): 97_732,
+    ("glm_51", 512): 138_846,
+    ("glm_51", 768): 198_238,
     ("glm_51", 1024): 257_887,
-    ("glm_51", 2048): 512_063,
-    ("glm_51", 4096): 1_009_867,
-    ("glm_51", 5120): 1_261_227,
+    ("glm_51", 2048): 506_324,
+    ("glm_51", 4096): 1_006_251,
+    ("glm_51", 5120): 1_257_201,
 }
 
 
@@ -121,8 +148,10 @@ def _margin_for(active: int) -> float:
 
 
 def _perf_params():
-    """Baseline and margin per (model, active) over the exhaustive ISL sweep, dims and threshold from
-    SINGLE_EXPERT_MODELS. No extended_model mark: the markers below already scope where these run."""
+    """Dims, threshold and margin per (model, active) over the exhaustive ISL sweep, from
+    SINGLE_EXPERT_MODELS. The baseline is not carried here -- it is keyed on the weight placement
+    too, so the test body picks the table. No extended_model mark: the markers below already scope
+    where these run."""
     params = []
     for name, config, _extended in SINGLE_EXPERT_MODELS:
         if name not in _ISL_EXHAUSTIVE_MODELS:
@@ -136,7 +165,6 @@ def _perf_params():
                     threshold,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    _EXPECTED_NS.get((name, active)),
                     _margin_for(active),
                     # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
                     id=f"{name}-isl-{active}-perf",
@@ -145,7 +173,7 @@ def _perf_params():
     return params
 
 
-def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation):
+def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation, weights_dram_sharded: bool = False):
     """Module and forward for one case, built OUTSIDE the measured callable so a profiled window
     carries forwards rather than weight uploads.
 
@@ -184,6 +212,10 @@ def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation
         activation=activation,
         hybrid_token_threshold=MAX_TOKENS,
     )
+    # Resharded once and read by both ops in turn, so the two are compared on one placement rather
+    # than each on its own.
+    if weights_dram_sharded:
+        reshard_expert_weights_nd(tt_expert, device)
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
@@ -243,10 +275,11 @@ def _gate_best_of_both(
     margin: float,
     label: str,
     activation=ttnn.RoutedExpertActivation.Silu,
+    weights_dram_sharded: bool = False,
 ) -> None:
     """Measure both ops standalone at this shape and count, gate the faster one, and report the
     winner against the one the model's threshold predicts."""
-    tt_expert, forward = _build(device, emb_dim, hidden_dim, active_tokens, activation)
+    tt_expert, forward = _build(device, emb_dim, hidden_dim, active_tokens, activation, weights_dram_sharded)
 
     durations = {}
     for op, op_threshold in (("fused", MAX_TOKENS), ("composite", None)):
@@ -288,9 +321,11 @@ def _gate_best_of_both(
     [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "model_name, active_tokens, threshold, emb_dim, hidden_dim, expected_ns, margin", _perf_params()
-)
+@pytest.mark.parametrize("model_name, active_tokens, threshold, emb_dim, hidden_dim, margin", _perf_params())
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Both placements are measured because the crossover is a property of the pair:
+# the placement can move the two ops by different amounts and so shift where they cross.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="the fused routed-expert path is Blackhole-only")
 @pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
@@ -303,17 +338,22 @@ def test_routed_expert_crossover_perf(
     threshold: Optional[int],
     emb_dim: int,
     hidden_dim: int,
-    expected_ns: Optional[int],
     margin: float,
+    weights_dram_sharded: bool,
 ):
     require_realtime_profiler("routed expert crossover perf checks")
+
+    table = _NDSHARD_EXPECTED_NS if weights_dram_sharded else _EXPECTED_NS
+    placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"
+
     _gate_best_of_both(
         mesh_device,
         emb_dim,
         hidden_dim,
         active_tokens,
         threshold,
-        expected_ns,
+        table.get((model_name, active_tokens)),
         margin,
-        label=f'("{model_name}", {active_tokens})',
+        label=f'{placement} ("{model_name}", {active_tokens})',
+        weights_dram_sharded=weights_dram_sharded,
     )

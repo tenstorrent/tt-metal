@@ -66,7 +66,7 @@ private:
     std::variant<RemoteDevice, T> value_;
 
     // Private constructor for RemoteDevice
-    explicit MaybeRemote(RemoteDevice);
+    explicit MaybeRemote(RemoteDevice /*remote*/);
     explicit MaybeRemote(T value);
 
     // Helper for throwing remote access errors
@@ -134,7 +134,7 @@ using MaybeRemoteDevice = MaybeRemote<IDevice*>;
 // ============================================================================
 
 template <typename T>
-MaybeRemote<T>::MaybeRemote(RemoteDevice) : value_(RemoteDevice{}) {}
+MaybeRemote<T>::MaybeRemote(RemoteDevice /*remote*/) : value_(RemoteDevice{}) {}
 
 template <typename T>
 MaybeRemote<T>::MaybeRemote(T value) : value_(std::move(value)) {}

@@ -7,6 +7,9 @@
 // KC strip's 32 rows. block_size>0: extract per-query block maxes from the pooled tiles' col 0, force each
 // query's own block to +inf, scatter (forced-local block / sparse_local_block).
 
+#include "indexer_score_runtime_args.hpp"
+#include "indexer_schedule.hpp"
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -195,21 +198,33 @@ inline void write_pooled_strip(
 }
 
 void kernel_main() {
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t schedule_blocks = get_named_compile_time_arg_val("schedule_blocks");
+    constexpr uint32_t schedule_cols = get_named_compile_time_arg_val("schedule_cols");
+    constexpr uint32_t schedule_groups = get_named_compile_time_arg_val("schedule_groups");
+    constexpr uint32_t schedule_group_rows = get_named_compile_time_arg_val("schedule_group_rows");
+    constexpr uint32_t schedule_ring_size = get_named_compile_time_arg_val("schedule_ring_size");
+    constexpr uint32_t schedule_rotate = get_named_compile_time_arg_val("schedule_rotate");
+    constexpr uint32_t schedule_units = get_named_compile_time_arg_val("schedule_units");
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(indexer_common::writer::Output);
     // Banded schedule (matches reader/compute): group-phase x band rectangle.
-    const uint32_t row_group0 = get_arg_val<uint32_t>(1);
-    const uint32_t group_stride = get_arg_val<uint32_t>(2);
-    const uint32_t num_groups = get_arg_val<uint32_t>(3);
-    const uint32_t band0 = get_arg_val<uint32_t>(4);
-    const uint32_t num_bands = get_arg_val<uint32_t>(5);
-    // [6] max_bands (unused). [7] kv_len_tiles caps columns written per cell (full when unset).
-    uint32_t kv_len_tiles = get_arg_val<uint32_t>(7);
-    // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
+    const uint32_t core_id = get_arg_val<uint32_t>(0);
+    constexpr uint32_t group_stride = schedule_group_rows;
+    constexpr uint32_t num_groups = schedule_groups;
+    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
+        core_id,
+        group_stride,
+        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+    const uint32_t row_group0 = schedule.row_group;
+    const uint32_t band0 = schedule.band_start;
+    const uint32_t num_bands = schedule.band_count;
+    // The common valid length caps columns written per cell (full when unset).
+    uint32_t kv_len_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::KvLength);
+    // Per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
-    // [9],[10] mid-slab boundary-chip forced-local block jump (tiles); both 0 off the boundary chip.
-    uint32_t chunk_start_tiles = get_arg_val<uint32_t>(8);
-    uint32_t straddle_q_tiles = get_arg_val<uint32_t>(9);
-    uint32_t straddle_jump_tiles_rt = get_arg_val<uint32_t>(10);
+    // Mid-slab boundary-chip forced-local block jump (tiles); both 0 off the boundary chip.
+    uint32_t chunk_start_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::ChunkStart);
+    uint32_t straddle_q_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::StraddleQ);
+    uint32_t straddle_jump_tiles_rt = get_common_arg_val<uint32_t>(indexer_common::writer::StraddleJump);
     if constexpr (chunk_start_from_metadata) {
         // Take the reader's derivation, do not re-derive: kv_len_tiles decides how many output columns this
         // kernel drains, and compute produced its strips against the reader's value. One derivation, two
@@ -251,13 +266,19 @@ void kernel_main() {
     constexpr uint32_t sq_rows = q_len_tiles * tt::constants::TILE_HEIGHT;  // rows per plane (Sq)
 
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
+        auto ring_schedule = indexer_ring_schedule::
+            for_lane<shard_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols, schedule_rotate>(
+                band0);
         const uint32_t group = row_group0 + phase * group_stride;
         for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
             uint32_t band = band_i;
             uint32_t k_tile0 = 0;
             uint32_t valid_w = 0;
             if constexpr (fused_ring_enabled) {
-                const uint32_t physical_start = get_arg_val<uint32_t>(11 + band_i);
+                uint32_t physical_start = 0;
+                ring_schedule.next(
+                    [](uint32_t shard) { return get_common_arg_val<uint32_t>(indexer_common::writer::Count + shard); },
+                    physical_start);
                 shard_span.set(group, physical_start, k_len_tiles / shard_physical_sp);
                 k_tile0 = physical_start;
                 valid_w = shard_span.k_tiles();

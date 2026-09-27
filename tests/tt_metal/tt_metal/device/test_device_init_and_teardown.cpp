@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -24,6 +26,7 @@
 #include "llrt/rtoptions.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -133,6 +136,55 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (auto& [id, device] : devices) {
         device->close();
     }
+}
+
+namespace {
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
+
+// Restores DISABLED for FabricConfig even if a mesh open throws an error, so later tests in this binary are not left with fabric on
+// from another test.
+struct ScopedFabricConfig {
+    explicit ScopedFabricConfig(tt::tt_fabric::FabricConfig config) {
+        tt::tt_fabric::SetFabricConfig(config);
+    }
+    ~ScopedFabricConfig() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED); }
+
+    ScopedFabricConfig(const ScopedFabricConfig&) = delete;
+    ScopedFabricConfig& operator=(const ScopedFabricConfig&) = delete;
+};
+
+}  // namespace
+
+// FabricFirmwareInitializer rejects a single-host open with fewer than two chips.
+TEST(DeviceInitFabric, RejectsSingleHost1ChipMesh) {
+    if (get_physical_architecture() == tt::ARCH::Invalid) {
+        GTEST_SKIP() << "No TT hardware detected";
+    }
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "Mock/emule skips the fabric launch-size guard";
+    }
+    if (*MetalContext::instance().global_distributed_context().size() > 1) {
+        GTEST_SKIP() << "Multi-host 1-local-chip meshes are allowed to launch fabric";
+    }
+    if (cluster.is_galaxy_cluster()) {
+        GTEST_SKIP() << "Galaxy opens the full cluster when fabric is enabled, so a 1x1 mesh never hits this guard";
+    }
+    if (cluster.mmio_chip_ids().size() != cluster.all_chip_ids().size()) {
+        GTEST_SKIP() << "Clusters with remote chips fatal earlier when fabric is launched on a subset of devices";
+    }
+
+    ScopedFabricConfig fabric(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    EXPECT_THAT(
+        [] {
+            auto mesh_device =
+                distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+            mesh_device->close();
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires at least 2 participating chips")));
 }
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";

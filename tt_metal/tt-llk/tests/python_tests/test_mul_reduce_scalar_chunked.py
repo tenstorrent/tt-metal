@@ -4,8 +4,8 @@
 """
 Chunked fused multiply + reduce-to-scalar LLK test (experimental, Blackhole only).
 
-This is the REVERTED "chunked" driver for the experimental ``mul_reduce_scalar``
-LLKs (promotion strategy §3, open-question #1). The non-chunked
+This is a legacy standalone chunked driver for the experimental ``mul_reduce_scalar``
+LLKs. The non-chunked
 ``mul_reduce_scalar_tile`` caps ``num_tiles`` at the DEST half-sync capacity
 (8 bf16 / 4 fp32) because every multiply product must be resident in DEST before
 the reduce phase consumes it. The chunked driver processes the tile stream in
@@ -23,11 +23,13 @@ Kernel B is held at 1.0 (matching the on-silicon gtest and
 ``fuser_config/fpu_reduce_scalar.yaml``), so A * B == A and the fused op reduces
 to ``sum(A)`` over all tiles/elements.
 
-XFAIL: on silicon the chunked result comes out ~5-30x too high. The suspected
-cause is the between-chunk DEST[0] restore (the running scalar in DEST[0] is
-clobbered / double-counted when the next chunk's multiply phase and fill sequence
-re-touch DEST[0]). See promotion strategy §3. The test is expected to COMPILE
-cleanly for Blackhole and to FAIL numerically at runtime.
+XFAIL: this standalone loop does not call the corrected compute-API
+``mul_reduce_scalar_chunked_tile`` in ``api/compute/experimental/rmsnorm.h``.
+That implementation clears reused product tiles while preserving a separate
+accumulator and restores initialization between chunks. This driver has not been
+updated to use that sequence and remains expected to fail numerically.
+The compute-API fix is covered by ``test_rmsnorm_chunked.cpp``; the targeted clear
+is also covered by ``test_rmsnorm_clear_product_tile.py``.
 """
 
 import pytest
@@ -84,10 +86,10 @@ def _num_tiles_for_format(formats):
 
 @pytest.mark.xfail(
     reason=(
-        "Reverted chunked mul_reduce_scalar driver (promotion strategy §3, "
-        "open-question #1): on-silicon result is ~5-30x too high, suspected the "
-        "between-chunk DEST[0] restore double-counts the running scalar. Kept as "
-        "a compile-clean placeholder until the driver is fixed."
+        "Legacy standalone chunk loop does not use the corrected compute-API "
+        "mul_reduce_scalar_chunked_tile sequence (targeted product clears, "
+        "separate accumulator, and per-chunk reinitialization). The compute-API "
+        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed."
     ),
     strict=False,
 )

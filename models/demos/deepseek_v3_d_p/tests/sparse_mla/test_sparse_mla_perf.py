@@ -198,7 +198,7 @@ def _profile_case_id(mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: boo
     if mode != "sparse":
         return mode
     case = f"{mode}-{_cache_format_id(cache_format)}"
-    return f"{case}-tp_sharded" if tp_shard_kv else case
+    return case  # one sparse layout now, so no -tp_sharded discriminator
 
 
 def _subdir(variant: str, mode: str, cache_format: MlaKvCacheFormat, tp_shard_kv: bool = False) -> str:
@@ -331,8 +331,6 @@ def _write_run_manifest(
             else None
         )
         case_filter = _profile_case_id(attn_mode, cache_format, tp_shard_kv)
-        if attn_mode == "sparse" and not tp_shard_kv:
-            case_filter = f"{case_filter} and not tp_sharded"
         reproducer = (
             f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
             f"{command} -k '{variant} and {scenario} and {case_filter}'"
@@ -346,7 +344,7 @@ def _write_run_manifest(
             "scenario": scenario,
             "attn_mode": attn_mode,
             "kv_cache_format": _cache_format_id(cache_format) if attn_mode == "sparse" else None,
-            "kv_shard": ("tp_sharded" if tp_shard_kv else "sp_only") if attn_mode == "sparse" else None,
+            "kv_shard": "tp_sharded" if attn_mode == "sparse" else None,
             "commit": head["commit"],
             "branch": head["branch"],
             "device": {
@@ -695,10 +693,8 @@ def _by_op(frame: pd.DataFrame, dur_col: str) -> pd.DataFrame:
 # The perf test — build the DSA ttMLA, profile the measured forward(s), report
 # ============================================================================
 PERF_CASES = [
-    pytest.param("sparse", MlaKvCacheFormat.BF16_RM, False, id="sparse-kv_bf16"),
-    pytest.param("sparse", MlaKvCacheFormat.BF16_RM, True, id="sparse-kv_bf16-tp_sharded"),
-    pytest.param("sparse", MlaKvCacheFormat.SCALED_FP8, False, id="sparse-kv_scaled_fp8"),
-    pytest.param("sparse", MlaKvCacheFormat.SCALED_FP8, True, id="sparse-kv_scaled_fp8-tp_sharded"),
+    pytest.param("sparse", MlaKvCacheFormat.BF16_RM, True, id="sparse-kv_bf16"),
+    pytest.param("sparse", MlaKvCacheFormat.SCALED_FP8, True, id="sparse-kv_scaled_fp8"),
     pytest.param("dense", MlaKvCacheFormat.BF16_RM, False, id="dense"),
 ]
 
@@ -803,7 +799,6 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         layer_num=1,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
         sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
-        tp_shard_kv=tp_shard_kv,
     )
 
     rope = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(total, chunk)

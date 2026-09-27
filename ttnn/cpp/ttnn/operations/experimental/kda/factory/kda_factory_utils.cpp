@@ -92,6 +92,15 @@ void check_interleaved(const Tensor& tensor, std::string_view operation_name, st
     TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", operation_name, tensor_name);
 }
 
+void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name) {
+    check_allocated_device_tensor(actual_start, operation_name, "actual_start");
+    check_layout(actual_start, tt::tt_metal::Layout::ROW_MAJOR, operation_name, "actual_start");
+    check_dtype(actual_start, tt::tt_metal::DataType::UINT32, operation_name, "actual_start");
+    check_interleaved(actual_start, operation_name, "actual_start");
+    check_same_device(reference, actual_start, operation_name, "actual_start");
+    TT_FATAL(actual_start.logical_shape().volume() == 1, "{}: actual_start must be a scalar", operation_name);
+}
+
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name) {
     TT_FATAL(
         !memory_config.is_sharded(),

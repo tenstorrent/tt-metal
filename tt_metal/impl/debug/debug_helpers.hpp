@@ -367,7 +367,7 @@ inline EnableSymbolsInfo get_enable_symbols_info(const Hal& hal, HalProgrammable
             info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
         }
         for (uint32_t i = 0; i < num; ++i) {
-            std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+            const std::string& abbrev = hal.get_processor_class_name(core_type, i, true);
             add_legacy_entry(abbrev, info.processor_names[i]);
         }
     } else if (core_type == HalProgrammableCoreType::DISPATCH) {
