@@ -231,7 +231,9 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
     return 96, 256, 1
 
 
-def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size, max_k_splits=1):
+def ring_prefill_program_config(
+    mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size, max_k_splits=1, matmul_math_fidelity=None
+):
     """SDPA program config for the ring path.
 
     The compute grid must exclude the CCL column that ``ccl_core_grid_offset``
@@ -248,6 +250,7 @@ def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
         max_k_splits=max_k_splits,
+        matmul_math_fidelity=matmul_math_fidelity,
     )
 
 
@@ -365,6 +368,8 @@ def _ring_prefill_setup(
             q_chunk_size=_q_chunk,
             k_chunk_size=_k_chunk,
             max_k_splits=_k_splits,
+            # Sliding attention gains nothing from LoFi, so it keeps HiFi2.
+            matmul_math_fidelity=None if sliding_window_size else ttnn.MathFidelity.LoFi,
         )
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
