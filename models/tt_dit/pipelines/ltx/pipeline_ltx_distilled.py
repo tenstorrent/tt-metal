@@ -24,6 +24,7 @@ from ...models.transformers.ltx.transformer_ltx import (
 )
 from ...models.vae.vae_ltx import upsample_latent
 from ...utils import walltime
+from ...utils.ltx_euler import EulerTail
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor, Tracer, traced_function
@@ -1201,25 +1202,46 @@ class LTXDistilledPipeline(LTXPipeline):
             # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
             # baked latent address holds across replays.
             dt = sigma_next - sigma
-            v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
-            ttnn.multiply_(v_vel, state.tt_video_pad_mask)
-            if image_cond:
-                # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
-                # pinned x0 (not overwriting the latent after) tracks the reference under partial
-                # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
-                x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
-                x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
-                v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
-                ttnn.add_(state.tt_video_lat, v_pin)
+            trace_euler = (
+                self._trace_euler_tail and traced and not image_cond and os.environ.get("LTX_DEBUG_STATS", "0") != "1"
+            )
+            if trace_euler:
+                producer = LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).get(trace_key)
+                # Recipe-only capture produces transient skipped-dispatch outputs:
+                # never retain them or create a tail owner before a real DiT trace.
+                trace_euler = producer is not None and producer.trace_captured
+            if trace_euler:
+                if state._euler_tail is None:
+                    state._euler_tail = EulerTail(self.mesh_device)
+                state._euler_tail(
+                    state.tt_video_lat,
+                    state.tt_audio_lat,
+                    v_out,
+                    a_out,
+                    state.tt_video_pad_mask,
+                    state.tt_audio_pad_mask,
+                    dt,
+                )
             else:
-                ttnn.multiply_(v_vel, dt)
-                ttnn.add_(state.tt_video_lat, v_vel)
-            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
-            a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
-            ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
-            ttnn.multiply_(a_vel, dt)
-            ttnn.add_(state.tt_audio_lat, a_vel)
-            ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
+                v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
+                ttnn.multiply_(v_vel, state.tt_video_pad_mask)
+                if image_cond:
+                    # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
+                    # pinned x0 (not overwriting the latent after) tracks the reference under partial
+                    # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
+                    x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
+                    x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
+                    v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
+                    ttnn.add_(state.tt_video_lat, v_pin)
+                else:
+                    ttnn.multiply_(v_vel, dt)
+                    ttnn.add_(state.tt_video_lat, v_vel)
+                ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
+                a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
+                ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
+                ttnn.multiply_(a_vel, dt)
+                ttnn.add_(state.tt_audio_lat, a_vel)
+                ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             # STEP_MS covers the step body only. A delta between successive log lines would fold the
             # host-side profiler drain into the step wall and corrupt the measurement.
             _step_ms = (time.perf_counter() - _t_step) * 1000.0

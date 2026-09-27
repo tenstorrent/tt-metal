@@ -118,6 +118,7 @@ class LTXTransformerState:
     """
 
     def __init__(self) -> None:
+        self._euler_tail = None
         self._tt_video_lat = StateTensor()
         self._tt_audio_lat = StateTensor()
         self._tt_timestep = StateTensor()
@@ -293,6 +294,7 @@ class LTXPipeline:
         # (one per fixed shape "s1"/"s2") live in the @traced_function cache on
         # LTXTransformerModel.inner_step, keyed per (transformer, trace_key); release_traces frees them.
         self._traced = traced
+        self._trace_euler_tail = os.environ.get("LTX_EULER_TAIL_TRACE", "0") == "1" and not dynamic_load
         # Per-stage (s1/s2) persistent trace I/O. A ttnn trace bakes absolute tensor addresses,
         # so static inputs are bound once and the latent/timestep buffers refreshed in place.
         self._trace_state: dict[str, LTXTransformerState] = {}
@@ -487,6 +489,10 @@ class LTXPipeline:
 
     def release_traces(self) -> None:
         """Release captured denoise traces and free their device trace memory."""
+        # Tail traces borrow the DiT producer's output buffers.
+        for state in self._trace_state.values():
+            if state._euler_tail is not None:
+                state._euler_tail.release()
         if self.transformer is not None:
             for tracer in LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).values():
                 tracer.release_trace()
