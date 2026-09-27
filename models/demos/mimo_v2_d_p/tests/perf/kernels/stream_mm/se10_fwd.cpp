@@ -35,7 +35,8 @@ void kernel_main() {
     constexpr uint32_t num_e = get_compile_time_arg_val(11);
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 1 + R, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
-    const uint32_t total = dyn.n_act * per_e;
+    const uint32_t total = dyn.n_load * per_e;  // gate/up loads, each into its ring region (se_dyn.hpp)
+    static_assert(get_compile_time_arg_val(5) == SE_GU_NREG * per_e);
 #else
     constexpr uint32_t total = get_compile_time_arg_val(8);
 #endif
@@ -66,7 +67,11 @@ void kernel_main() {
             }
             if (granted) {
                 const uint32_t src = cb_base + (issued % cb_slots) * slot_bytes;
+#ifdef SE_DYN
+                const uint32_t dst = landing + (dyn.region[issued / per_e] * per_e + issued % per_e) * blk_bytes;
+#else
                 const uint32_t dst = landing + (issued % slots) * blk_bytes;
+#endif
                 const uint32_t trid = 1 + issued % depth;
                 for (uint32_t j = 0; j < R; ++j) {
                     noc_async_write_one_packet_with_trid(src + j * blk_bytes, recv[j] | dst, blk_bytes, trid);

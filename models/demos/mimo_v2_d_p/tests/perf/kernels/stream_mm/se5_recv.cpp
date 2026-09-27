@@ -128,7 +128,7 @@ void kernel_main() {
     SeDyn dyn;
     se_dyn_load<num_e_dyn>(dyn, peer0, get_write_ptr(tt::CBIndex::c_7), mt * 32);
     se_dyn_publish(dyn, tt::CBIndex::c_6);
-    const uint32_t total_w = dyn.n_act * (total_w_ct / num_e_dyn);
+    const uint32_t total_w = dyn.n_load * (total_w_ct / num_e_dyn);  // gate/up loads
     const uint32_t num_v = dyn.num_v;
 #else
     constexpr uint32_t total_w = total_w_ct;

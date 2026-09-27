@@ -57,7 +57,8 @@ RELAY_CB = int(os.environ.get("MIMO_FL_RELAY_CB", "16"))  # x blocks buffered on
 D_CHAINS = int(os.environ.get("MIMO_FL_DOWN_CHAINS", "7"))
 H_PIECES = int(os.environ.get("MIMO_FL_H_PIECES", "32"))
 HBUF = int(os.environ.get("MIMO_FL_HBUF", "3"))
-DRING = float(os.environ.get("MIMO_FL_DRING", "1.5"))
+PIN = int(os.environ.get("MIMO_FL_PIN", "0"))  # dyn: pin the biggest expert's weights, chunks of >= PIN sub-blocks
+DRING = float(os.environ.get("MIMO_FL_DRING", "2" if PIN else "1.5"))  # pinning: two whole experts (pinned down)
 READ_BATCH = int(os.environ.get("MIMO_FL_READ_BATCH", "1"))
 X_BATCH = int(os.environ.get("MIMO_FL_X_BATCH", "4"))  # x blocks per relay read barrier
 STATS_PATH = Path(os.environ.get("MIMO_SE_STATS", "generated/mimo_stream_expert/cases.jsonl"))
@@ -203,7 +204,8 @@ def test_stream_expert_flat(device, m, wdtype):
     if RDOWN:
         kd_r = kd_of(pcd_r)
         nblk_r, slot_dr = It // kd_r, kd_r * pcd_r
-        ring_dr = int(round(float(os.environ.get("MIMO_FL_DRING_R", DRING)) * nblk_r))  # the reader tails' down ring
+        ring_dr = int(round(float(os.environ.get("MIMO_FL_DRING_R", DRING)) * nblk_r))
+        logger.info(f"ring_dr {ring_dr} nblk_r {nblk_r}")  # the reader tails' down ring
         out_tiles_r = MT * pcd_r
     nblk = It // kd
     slot_d = kd * pcd
@@ -257,7 +259,7 @@ def test_stream_expert_flat(device, m, wdtype):
         )
     )
     O_OFF = H_OFF + al(HBUF * h_tiles * H_TILE)
-    D_OFF = O_OFF + al(2 * out_tiles * 2048)
+    D_OFF = O_OFF + al(2 * out_tiles * (BF8_TILE if E2E else 2048))  # the output double buffer (bfp8 end to end)
     dn_bytes = D_OFF + 2048
     SMALL = bool(SMALL_T) and DYN and RDOWN
     if SMALL:  # small-M role split: the reader tails' columns in extra slices of PCX columns on the first down cores
@@ -273,14 +275,23 @@ def test_stream_expert_flat(device, m, wdtype):
         dn_bytes = XO_OFF + al(MT * pcx * BF8_TILE)  # one output slot (L1 is tight)
     tok_pad = -(-m // 32) * 32  # e2e: expert e's region starts at row e * tok_pad of the dispatch buffer
     # per-expert token counts (dynamic mode: read on device; the program is built for up to m per expert)
-    cnts = (
-        [int(c) for c in os.environ["MIMO_FL_COUNTS"].split(",")]
-        if DYN and os.environ.get("MIMO_FL_COUNTS")
-        else [m] * E
-    )
-    assert len(cnts) == E and max(cnts) <= m, cnts
+    # dynamic mode: one or more count vectors (MIMO_FL_COUNTS "a,b,..;c,d,.." or MIMO_FL_COUNTS_FILE, a json list of
+    # [label, counts]) run back to back on the one program, each with its own tag; regions packed like a real
+    # dispatch buffer (expert a's rows follow expert a-1's, 32-row aligned)
+    if DYN and os.environ.get("MIMO_FL_COUNTS_FILE"):
+        count_sets = [(str(lb), [int(c) for c in cs]) for lb, cs in json.load(open(os.environ["MIMO_FL_COUNTS_FILE"]))]
+    elif DYN and os.environ.get("MIMO_FL_COUNTS"):
+        count_sets = [
+            ("", [int(c) for c in cs.split(",")]) for cs in os.environ["MIMO_FL_COUNTS"].split(";") if cs.strip()
+        ]
+    else:
+        count_sets = [("", [m] * E)]
+    for _, cs in count_sets:
+        assert len(cs) == E and max(cs) <= m, cs
+    cnts = count_sets[0][1]
     band = [int(v) for v in os.environ.get("MIMO_FL_BAND", "1,1000000000").split(",")]
-    cap = E * tok_pad
+    pack_offs = lambda cs: [sum(-(-c // 32) * 32 for c in cs[:e]) for e in range(E)]
+    cap = max(32, max(sum(-(-c // 32) * 32 for c in cs) for _, cs in count_sets)) if DYN else E * tok_pad
     nsb = H // 1024  # e2e: super-blocks (32 K tiles) per row
     SB_OFF = al(RM_CHUNKS * 32 * 2048)
     assert RM_CHUNKS % XRD_BATCH == 0, "a read batch must not straddle the row-major CB's wrap"
@@ -296,13 +307,14 @@ def test_stream_expert_flat(device, m, wdtype):
 
     torch.manual_seed(0)
     Wg, Wu, Wd = torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02
-    xs = torch.randn(E, m_pad, H)
-    xs[:, m:] = 0
-    xs = xs.view(V, MT * 32, H)
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=w_dtype, layout=ttnn.TILE_LAYOUT)).float()
-    x_last = xs[(E - 1) * S :].reshape(m_pad, H)[:m]
-    ref = (torch.nn.functional.silu(x_last @ Wg) * (x_last @ Wu)) @ Wd
-    ref_q = (torch.nn.functional.silu(x_last @ q(Wg)) * (x_last @ q(Wu))) @ q(Wd)
+    if not DYN:  # (dynamic mode builds its x per count set, below)
+        xs = torch.randn(E, m_pad, H)
+        xs[:, m:] = 0
+        xs = xs.view(V, MT * 32, H)
+        x_last = xs[(E - 1) * S :].reshape(m_pad, H)[:m]
+        ref = (torch.nn.functional.silu(x_last @ Wg) * (x_last @ Wu)) @ Wd
+        ref_q = (torch.nn.functional.silu(x_last @ q(Wg)) * (x_last @ q(Wu))) @ q(Wd)
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
     Wg_t, Wu_t, Wd_t = tiles(Wg), tiles(Wu), tiles(Wd)
 
@@ -358,16 +370,24 @@ def test_stream_expert_flat(device, m, wdtype):
         wx_dev = _bank_sharded([xreg(d) for d in range(ND)], banks, w_dtype, device)
         wx_region = E * nblk_x * slot_x * w_tile
     # ---- x: blocks (v, K-block) of [128 x 256], block k in region k % 16 (bank-spread) ----
-    xblocks = [
-        xs[v][:, b * KBLK * 32 : (b + 1) * KBLK * 32].reshape(MT, 32, KBLK, 32).permute(0, 2, 1, 3).reshape(-1, 32, 32)
-        for v in range(V)
-        for b in range(nk_gu)
-    ]
     nreg = 2 * banks
-    assert len(xblocks) % nreg == 0
-    xregs = [torch.cat(xblocks[r::nreg]) for r in range(nreg)]
-    x_dev = _bank_sharded(xregs, banks, ttnn.bfloat8_b, device)
-    x_region = xregs[0].shape[0] * BF8_TILE
+    xblocks = (
+        []
+        if E2E
+        else [
+            xs[v][:, b * KBLK * 32 : (b + 1) * KBLK * 32]
+            .reshape(MT, 32, KBLK, 32)
+            .permute(0, 2, 1, 3)
+            .reshape(-1, 32, 32)
+            for v in range(V)
+            for b in range(nk_gu)
+        ]
+    )
+    if not E2E:
+        assert len(xblocks) % nreg == 0
+        xregs = [torch.cat(xblocks[r::nreg]) for r in range(nreg)]
+        x_dev = _bank_sharded(xregs, banks, ttnn.bfloat8_b, device)
+        x_region = xregs[0].shape[0] * BF8_TILE
     if PREPASS:  # the flat op's x layout is produced on device from the row-major dispatch buffer
         assert not E2E
         x_dev = _bank_sharded([torch.zeros_like(r_) for r_ in xregs], banks, ttnn.bfloat8_b, device)
@@ -427,11 +447,30 @@ def test_stream_expert_flat(device, m, wdtype):
             semaphores=[],
             cbs=[],  # the pre-pass borrows the flat op's arena (below its live state), filled in once it exists
         )
-    if E2E:  # the model's dispatch buffer: row-major bf16 [cap, H], expert e's m tokens at row e * tok_pad
+
+    def dyn_host(cs):  # one count set: its dispatch buffer, per-expert x, counts / regions rows
+        offs = pack_offs(cs)
+        disp_ = torch.zeros(cap, H)
+        xe = []
+        for e in range(E):
+            xe.append(torch.randn(cs[e], H))
+            disp_[offs[e] : offs[e] + cs[e]] = xe[e]
+        NG_ = 2 * E + 2
+        c_ = torch.full((1, NG_), 7777, dtype=torch.int32)
+        r_ = torch.full((1, NG_), 999999, dtype=torch.int32)
+        for e in range(E):
+            c_[0, 2 * e + 1] = cs[e]
+            r_[0, 2 * e + 1] = offs[e]
+        return disp_, xe, c_, r_, offs
+
+    if DYN:
+        disp, dyn_xe, c_host, r_host, dyn_offs = dyn_host(cnts)
+    if E2E and not DYN:  # the model's dispatch buffer: row-major bf16 [cap, H], expert e's m tokens at row e * tok_pad
         xs_e = xs.view(E, m_pad, H)
         disp = torch.zeros(cap, H)
         for e in range(E):
             disp[e * tok_pad : e * tok_pad + cnts[e]] = xs_e[e, : cnts[e]]
+    if E2E:
         x_dev = ttnn.from_torch(
             disp,
             dtype=ttnn.bfloat16,
@@ -484,11 +523,6 @@ def test_stream_expert_flat(device, m, wdtype):
     if DYN:  # the routing's outputs: per global expert token count and region row, local experts at odd global ids
         NG = 2 * E + 2
         gids = [2 * e + 1 for e in range(E)]
-        c_host = torch.full((1, NG), 7777, dtype=torch.int32)
-        r_host = torch.full((1, NG), 999999, dtype=torch.int32)
-        for e in range(E):
-            c_host[0, gids[e]] = cnts[e]
-            r_host[0, gids[e]] = e * tok_pad
         counts_dev = ttnn.from_torch(
             c_host,
             dtype=ttnn.uint32,
@@ -702,9 +736,25 @@ def test_stream_expert_flat(device, m, wdtype):
     FP = ttnn.KernelDescriptor.SourceType.FILE_PATH
     DYN_HALF = int(os.environ.get("MIMO_FL_DYN_HALF", "512"))  # >= 4 x global experts (the counts row)
     assert 4 * (2 * E + 2) <= DYN_HALF
-    dyn_def = ([("SE_DYN", "1"), ("SE_DYN_HALF", str(DYN_HALF))] if DYN else []) + (
-        [("SE_SMALL_T", str(SMALL_T))] if SMALL else []
+    # pinned down weights too when every down ring holds exactly NREG experts (MIMO_FL_DRING / _R = 2 with PIN)
+    dn_reg = (
+        DYN
+        and PIN
+        and all(dgrp(p_)["ring"] == (ring_g // nk_gu) * dgrp(p_)["nblk"] for p_ in dgroups)
+        and (not RDOWN or ring_dr == (ring_g // nk_gu) * nblk_r)
     )
+    # every kernel builds the same schedule: sub-block rows, gate/up ring regions, pinning (se_dyn.hpp)
+    assert not DYN or ring_g % nk_gu == 0, "dynamic schedule: the gate/up ring holds whole experts"
+    dyn_def = (
+        (
+            [("SE_DYN", "1"), ("SE_DYN_HALF", str(DYN_HALF)), ("SE_RPS", str(MT * 32))]
+            + [("SE_GU_NREG", str(ring_g // nk_gu))]
+            + ([("SE_PIN_MIN", str(PIN)), ("SE_PIN_SMALL", os.environ.get("MIMO_FL_PIN_SMALL", "2"))] if PIN else [])
+            + ([("SE_DN_REG", "1")] if dn_reg else [])
+        )
+        if DYN
+        else []
+    ) + ([("SE_SMALL_T", str(SMALL_T))] if SMALL else [])
     x_ct = [pcx, kd_x, slot_x, ring_x] if SMALL else []
     FWD = max(FWD_DEPTH, 2) if DYN else FWD_DEPTH  # dynamic counts use the pipelined forwarder
     e2e_def = [("SE_E2E", "1")] if E2E else []
@@ -819,55 +869,57 @@ def test_stream_expert_flat(device, m, wdtype):
                 )
             )
         kernels += [
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KDIR}/se_forward.cpp",
-                source_type=FP,
-                core_ranges=_crs(grp),
-                compile_time_args=[
-                    0,
-                    R,
-                    w_tile,
-                    R * slot,
-                    slot,
-                    ring_g,
-                    0,
-                    DATA,
-                    KBLK,
-                    nk_gu,
-                    0,
-                    1,
-                    E,
-                    READ_BATCH,
-                    0,
-                    1,
-                    slot,
-                    0,
-                ],
-                runtime_args=g_fw,
-                config=dm(ttnn.DataMovementProcessor.RISCV_1, fw_noc_),
-            )
-            if not FWD
-            else ttnn.KernelDescriptor(
-                kernel_source=f"{KDIR}/se10_fwd.cpp",
-                source_type=FP,
-                core_ranges=_crs(grp),
-                compile_time_args=[
-                    0,
-                    R,
-                    w_tile,
-                    R * slot,
-                    slot,
-                    ring_g,
-                    0,
-                    DATA,
-                    nk_gu if DYN else E * nk_gu,
-                    rd_slots,
-                    FWD,
-                    E,
-                ],
-                defines=dyn_def,
-                runtime_args=g_fw,
-                config=dm(ttnn.DataMovementProcessor.RISCV_1, fw_noc_),
+            (
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/se_forward.cpp",
+                    source_type=FP,
+                    core_ranges=_crs(grp),
+                    compile_time_args=[
+                        0,
+                        R,
+                        w_tile,
+                        R * slot,
+                        slot,
+                        ring_g,
+                        0,
+                        DATA,
+                        KBLK,
+                        nk_gu,
+                        0,
+                        1,
+                        E,
+                        READ_BATCH,
+                        0,
+                        1,
+                        slot,
+                        0,
+                    ],
+                    runtime_args=g_fw,
+                    config=dm(ttnn.DataMovementProcessor.RISCV_1, fw_noc_),
+                )
+                if not FWD
+                else ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/se10_fwd.cpp",
+                    source_type=FP,
+                    core_ranges=_crs(grp),
+                    compile_time_args=[
+                        0,
+                        R,
+                        w_tile,
+                        R * slot,
+                        slot,
+                        ring_g,
+                        0,
+                        DATA,
+                        nk_gu if DYN else E * nk_gu,
+                        rd_slots,
+                        FWD,
+                        E,
+                    ],
+                    defines=dyn_def,
+                    runtime_args=g_fw,
+                    config=dm(ttnn.DataMovementProcessor.RISCV_1, fw_noc_),
+                )
             ),
         ]
     kernels += (
@@ -1140,7 +1192,7 @@ def test_stream_expert_flat(device, m, wdtype):
     ):  # CB 6: the counts page a data-movement kernel hands its compute; CB 7: DM scratch (BRISC low / NCRISC high half)
         all_crs = _crs(arena_cores)
         cbs += [
-            ttnn.CBDescriptor(total_size=128, core_ranges=all_crs, format_descriptors=fmt(6, ttnn.uint32, 128)),
+            ttnn.CBDescriptor(total_size=512, core_ranges=all_crs, format_descriptors=fmt(6, ttnn.uint32, 512)),
             ttnn.CBDescriptor(
                 total_size=4 * DYN_HALF, core_ranges=all_crs, format_descriptors=fmt(7, ttnn.uint32, 4 * DYN_HALF)
             ),
@@ -1152,159 +1204,197 @@ def test_stream_expert_flat(device, m, wdtype):
         ]
     program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
 
-    tag = (
-        f"streamfl_H{H}_M{m}_E{E}_w{wdtype}"
-        + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
-        + ("_e2e" if E2E else "")
-        + ("_pp" if PREPASS else "")
-    )
-    tok_act = sum(c for c in cnts if c and band[0] <= c <= band[1]) if DYN else E * m  # tokens this program processes
-    if DYN:
-        tag += "_dyn" + "-".join(map(str, cnts)) + (f"_b{band[0]}-{band[1]}" if os.environ.get("MIMO_FL_BAND") else "")
-    w_bytes = E * 3 * H * I * w_tile / 1024
-    STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with STATS_PATH.open("a") as f:
-        f.write(
-            json.dumps(
-                {
-                    "tag": tag,
-                    "M": m,
-                    "E": E,
-                    "wdtype": wdtype,
-                    "weight_bytes": w_bytes,
-                    "flops": 6 * tok_act * H * I,
-                    "x_bytes": tok_act * H * 1.0625,
-                    "y_bytes": tok_act * H * 2,
-                }
-            )
-            + "\n"
+    for set_i, (label, cs) in enumerate(count_sets):
+        if DYN and set_i:  # same buffers (the program's addresses), new contents
+            cnts = cs
+            disp, dyn_xe, c_host, r_host, dyn_offs = dyn_host(cnts)
+            for h_, d_, dt_ in (
+                (disp, x_dev, ttnn.bfloat16),
+                (c_host, counts_dev, ttnn.uint32),
+                (r_host, regions_dev, ttnn.uint32),
+            ):
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(h_, dtype=dt_, layout=ttnn.ROW_MAJOR_LAYOUT), d_)
+        tag = (
+            f"streamfl_H{H}_M{m}_E{E}_w{wdtype}"
+            + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
+            + ("_e2e" if E2E else "")
+            + ("_pp" if PREPASS else "")
         )
-    if PREPASS:
+        tok_act = (
+            sum(c for c in cnts if c and band[0] <= c <= band[1]) if DYN else E * m
+        )  # tokens this program processes
+        if DYN:
+            tag += (
+                "_dyn"
+                + (label or "-".join(map(str, cnts)))
+                + (f"_b{band[0]}-{band[1]}" if os.environ.get("MIMO_FL_BAND") else "")
+            )
+        w_bytes = E * 3 * H * I * w_tile / 1024
+        STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with STATS_PATH.open("a") as f:
             f.write(
-                json.dumps({"tag": tag + "x", "M": m, "E": E, "wdtype": wdtype, "weight_bytes": 0, "flops": 0}) + "\n"
+                json.dumps(
+                    {
+                        "tag": tag,
+                        "M": m,
+                        "E": E,
+                        "wdtype": wdtype,
+                        "weight_bytes": w_bytes,
+                        "flops": 6 * tok_act * H * I,
+                        "tokens": tok_act,
+                        "counts": cnts,
+                        "x_bytes": tok_act * H * 1.0625,
+                        "y_bytes": tok_act * H * 2,
+                    }
+                )
+                + "\n"
             )
-    for it in range(1 + ITERS):
-        ttnn.copy_host_to_device_tensor(words_zero, words)  # relay freed words restart every launch
-        ttnn.synchronize_device(device)
         if PREPASS:
+            with STATS_PATH.open("a") as f:
+                f.write(
+                    json.dumps({"tag": tag + "x", "M": m, "E": E, "wdtype": wdtype, "weight_bytes": 0, "flops": 0})
+                    + "\n"
+                )
+        for it in range(1 + ITERS):
+            ttnn.copy_host_to_device_tensor(words_zero, words)  # relay freed words restart every launch
+            ttnn.synchronize_device(device)
+            if PREPASS:
+                if it:
+                    signpost(f"{tag}x_start")
+                ttnn.generic_op([disp_dev, x_dev, arena], pp_prog)
+                ttnn.synchronize_device(device)
+                if it:
+                    signpost(f"{tag}x_end")
             if it:
-                signpost(f"{tag}x_start")
-            ttnn.generic_op([disp_dev, x_dev, arena], pp_prog)
+                signpost(f"{tag}_start")
+            ttnn.generic_op(
+                [w_dev, wd_dev, x_dev, arena, y_dram, words]
+                + ([wr_dev] if RDOWN else [])
+                + ([wx_dev] if SMALL else []),
+                program,
+            )
             ttnn.synchronize_device(device)
             if it:
-                signpost(f"{tag}x_end")
-        if it:
-            signpost(f"{tag}_start")
-        ttnn.generic_op(
-            [w_dev, wd_dev, x_dev, arena, y_dram, words] + ([wr_dev] if RDOWN else []) + ([wx_dev] if SMALL else []),
-            program,
-        )
-        ttnn.synchronize_device(device)
-        if it:
-            signpost(f"{tag}_end")
-        if it == 0:
-            if E2E:  # every expert's rows at its region of the model-shaped output
-                yh = ttnn.to_torch(y_dram).float()
-                xs_e = xs.view(E, m_pad, H)
-                act = [e for e in range(E) if cnts[e] and band[0] <= cnts[e] <= band[1]]  # experts this program serves
-                qg, qu, qd = q(Wg), q(Wu), q(Wd)
-                refs_q = {
-                    e: (torch.nn.functional.silu(xs_e[e, : cnts[e]] @ qg) * (xs_e[e, : cnts[e]] @ qu)) @ qd for e in act
-                }
-                pccs = [comp_pcc(refs_q[e], yh[e * tok_pad : e * tok_pad + cnts[e]], 0.99) for e in act]
-                logger.info(f"e2e per-expert PCC {[round(float(p_[1]), 5) for p_ in pccs]}")
-                assert all(p_[0] for p_ in pccs) or os.environ.get("MIMO_FL_XRD_SKIP")
-                if DYN:
-                    logger.info(f"dyn: counts {cnts} band {band} -> active {act}")
-                    ok = True
-                    pcc_q = min(float(p_[1]) for p_ in pccs) if pccs else 1.0
-                got = yh[(E - 1) * tok_pad : (E - 1) * tok_pad + m]
-            else:
-                got = ttnn.to_torch(y_dram).float()[(E - 1) * S * MT * 32 :][:m]
-            if not DYN:
-                ok, pcc_q = comp_pcc(ref_q, got, 0.99)
-            if not ok and os.environ.get("MIMO_FL_DEBUG"):
-                yall = ttnn.to_torch(y_dram).float().view(V, MT * 32, H)
-                ar = (
-                    ttnn.to_torch(arena).view(torch.int16).reshape(len(arena_cores), arena_tiles * 32 * 32)
-                )  # untilized per 2 KB
-                xr = ar[:ngu, X_OFF // 2 : (X_OFF + X_SLOTS * x_bytes) // 2]
-                same = [int((xr[i] == xr[0]).all()) for i in range(ngu)]
+                signpost(f"{tag}_end")
+            if it == 0:
+                if E2E:  # every expert's rows at its region of the model-shaped output
+                    yh = ttnn.to_torch(y_dram).float()
+                    act = [
+                        e for e in range(E) if cnts[e] and band[0] <= cnts[e] <= band[1]
+                    ]  # experts this program serves
+                    qg, qu, qd = q(Wg), q(Wu), q(Wd)
+                    if DYN:  # check up to CHK rows at each end of every expert (host reference cost)
+                        CHK = int(os.environ.get("MIMO_FL_CHECK_ROWS", "160"))
+                        rows_ = {
+                            e: sorted(set(range(min(CHK, cnts[e]))) | set(range(max(0, cnts[e] - CHK), cnts[e])))
+                            for e in act
+                        }
+                        xin = {e: dyn_xe[e][rows_[e]] for e in act}
+                        yout = {e: yh[dyn_offs[e] : dyn_offs[e] + cnts[e]][rows_[e]] for e in act}
+                    else:
+                        xs_e = xs.view(E, m_pad, H)
+                        xin = {e: xs_e[e, : cnts[e]] for e in act}
+                        yout = {e: yh[e * tok_pad : e * tok_pad + cnts[e]] for e in act}
+                    refs_q = {e: (torch.nn.functional.silu(xin[e] @ qg) * (xin[e] @ qu)) @ qd for e in act}
+                    pccs = [comp_pcc(refs_q[e], yout[e], 0.99) for e in act]
+                    logger.info(f"e2e per-expert PCC {[round(float(p_[1]), 5) for p_ in pccs]}")
+                    assert all(p_[0] for p_ in pccs) or os.environ.get("MIMO_FL_XRD_SKIP")
+                    if DYN:
+                        logger.info(f"dyn: counts {cnts} band {band} -> active {act}")
+                        ok = True
+                        pcc_q = min(float(p_[1]) for p_ in pccs) if pccs else 1.0
+                    if not DYN:
+                        got = yh[(E - 1) * tok_pad : (E - 1) * tok_pad + m]
+                else:
+                    got = ttnn.to_torch(y_dram).float()[(E - 1) * S * MT * 32 :][:m]
+                if not DYN:
+                    ok, pcc_q = comp_pcc(ref_q, got, 0.99)
+                if not ok and os.environ.get("MIMO_FL_DEBUG"):
+                    yall = ttnn.to_torch(y_dram).float().view(V, MT * 32, H)
+                    ar = (
+                        ttnn.to_torch(arena).view(torch.int16).reshape(len(arena_cores), arena_tiles * 32 * 32)
+                    )  # untilized per 2 KB
+                    xr = ar[:ngu, X_OFF // 2 : (X_OFF + X_SLOTS * x_bytes) // 2]
+                    same = [int((xr[i] == xr[0]).all()) for i in range(ngu)]
 
-                def raw(core):  # re-tilize the untilized bf16 view back to the L1 bytes
-                    t = ar[core].view(-1, 32, 32)
-                    f = t.view(-1, 2, 16, 2, 16).permute(0, 1, 3, 2, 4).reshape(-1, 1024)
-                    return f.contiguous().view(torch.uint8).reshape(-1)
+                    def raw(core):  # re-tilize the untilized bf16 view back to the L1 bytes
+                        t = ar[core].view(-1, 32, 32)
+                        f = t.view(-1, 2, 16, 2, 16).permute(0, 1, 3, 2, 4).reshape(-1, 1024)
+                        return f.contiguous().view(torch.uint8).reshape(-1)
 
-                from ttnn._ttnn import bfp_utils
+                    from ttnn._ttnn import bfp_utils
 
-                order = ttnn.corerange_to_cores(_crs(arena_cores), None, True)
-                shard_of = {(c.x, c.y): i for i, c in enumerate(order)}
+                    order = ttnn.corerange_to_cores(_crs(arena_cores), None, True)
+                    shard_of = {(c.x, c.y): i for i, c in enumerate(order)}
 
-                def xblock(t):
-                    v, b = t // nk_gu, t % nk_gu
-                    return (
-                        xs[v][:, b * KBLK * 32 : (b + 1) * KBLK * 32]
-                        .reshape(MT, 32, KBLK, 32)
-                        .permute(0, 2, 1, 3)
-                        .reshape(-1, 32, 32)
-                    )
+                    def xblock(t):
+                        v, b = t // nk_gu, t % nk_gu
+                        return (
+                            xs[v][:, b * KBLK * 32 : (b + 1) * KBLK * 32]
+                            .reshape(MT, 32, KBLK, 32)
+                            .permute(0, 2, 1, 3)
+                            .reshape(-1, 32, 32)
+                        )
 
-                def packed(t):
-                    return torch.cat(
-                        [
-                            torch.from_numpy(
-                                bfp_utils.pack_bfp8(tl.reshape(-1).float().contiguous().numpy(), True)
-                            ).view(torch.uint8)
-                            for tl in xblock(t)
-                        ]
-                    )
+                    def packed(t):
+                        return torch.cat(
+                            [
+                                torch.from_numpy(
+                                    bfp_utils.pack_bfp8(tl.reshape(-1).float().contiguous().numpy(), True)
+                                ).view(torch.uint8)
+                                for tl in xblock(t)
+                            ]
+                        )
 
-                if os.environ.get("MIMO_FL_DUMP"):
-                    torch.save(
-                        {
-                            "ring": [raw(shard_of[(c.x, c.y)])[X_OFF : X_OFF + X_SLOTS * x_bytes].clone() for c in gu],
-                            "rect": [rect_of(c) for c in gu],
-                            "xs": xs,
-                            "nk_gu": nk_gu,
-                        },
-                        os.environ["MIMO_FL_DUMP"],
-                    )
-                exp = {t: packed(t) for t in range(total_x - X_SLOTS, total_x)}
-                logger.info(f"packed block bytes {exp[total_x - 1].numel()} vs x_bytes {x_bytes}")
-                for ci in (0, 1, 40, 63):
-                    rb = raw(shard_of[(gu[ci].x, gu[ci].y)])[X_OFF : X_OFF + X_SLOTS * x_bytes].view(X_SLOTS, x_bytes)
-                    res = []
-                    for k in range(X_SLOTS):
-                        t = next(t for t in exp if t % X_SLOTS == k)
-                        eq = (rb[k] == exp[t]).float().mean().item()
-                        tiles_ok = [
-                            (rb[k].view(x_blk, -1)[i] == exp[t].view(x_blk, -1)[i]).all().item() for i in range(x_blk)
-                        ]
-                        res.append((k, t, round(eq, 3), sum(tiles_ok)))
+                    if os.environ.get("MIMO_FL_DUMP"):
+                        torch.save(
+                            {
+                                "ring": [
+                                    raw(shard_of[(c.x, c.y)])[X_OFF : X_OFF + X_SLOTS * x_bytes].clone() for c in gu
+                                ],
+                                "rect": [rect_of(c) for c in gu],
+                                "xs": xs,
+                                "nk_gu": nk_gu,
+                            },
+                            os.environ["MIMO_FL_DUMP"],
+                        )
+                    exp = {t: packed(t) for t in range(total_x - X_SLOTS, total_x)}
+                    logger.info(f"packed block bytes {exp[total_x - 1].numel()} vs x_bytes {x_bytes}")
+                    for ci in (0, 1, 40, 63):
+                        rb = raw(shard_of[(gu[ci].x, gu[ci].y)])[X_OFF : X_OFF + X_SLOTS * x_bytes].view(
+                            X_SLOTS, x_bytes
+                        )
+                        res = []
+                        for k in range(X_SLOTS):
+                            t = next(t for t in exp if t % X_SLOTS == k)
+                            eq = (rb[k] == exp[t]).float().mean().item()
+                            tiles_ok = [
+                                (rb[k].view(x_blk, -1)[i] == exp[t].view(x_blk, -1)[i]).all().item()
+                                for i in range(x_blk)
+                            ]
+                            res.append((k, t, round(eq, 3), sum(tiles_ok)))
+                        logger.info(
+                            f"gu {ci} {(gu[ci].x, gu[ci].y)} rect {rect_of(gu[ci])}: (slot, block, byte-eq, tiles-eq) {res}"
+                        )
+                    for i in range(0, ngu, 5):
+                        logger.info(
+                            f"core {i} {(gu[i].x, gu[i].y)} slot nz {[round(float((xr[i].view(X_SLOTS, -1)[k] != 0).float().mean()), 2) for k in range(X_SLOTS)]}"
+                        )
                     logger.info(
-                        f"gu {ci} {(gu[ci].x, gu[ci].y)} rect {rect_of(gu[ci])}: (slot, block, byte-eq, tiles-eq) {res}"
+                        f"x ring equal to core 0: {sum(same)}/{ngu} {same}; nonzero frac {(xr != 0).float().mean():.3f}"
                     )
-                for i in range(0, ngu, 5):
+                    hr = ar[ngu:, H_OFF // 2 : (H_OFF + HBUF * h_tiles * H_TILE) // 2]
                     logger.info(
-                        f"core {i} {(gu[i].x, gu[i].y)} slot nz {[round(float((xr[i].view(X_SLOTS, -1)[k] != 0).float().mean()), 2) for k in range(X_SLOTS)]}"
+                        f"h_all equal across down: {[int((hr[i] == hr[0]).all()) for i in range(ND)]}; nonzero {(hr != 0).float().mean():.3f}"
                     )
-                logger.info(
-                    f"x ring equal to core 0: {sum(same)}/{ngu} {same}; nonzero frac {(xr != 0).float().mean():.3f}"
-                )
-                hr = ar[ngu:, H_OFF // 2 : (H_OFF + HBUF * h_tiles * H_TILE) // 2]
-                logger.info(
-                    f"h_all equal across down: {[int((hr[i] == hr[0]).all()) for i in range(ND)]}; nonzero {(hr != 0).float().mean():.3f}"
-                )
-                for v in range(V):
-                    xv = xs[v]
-                    rv = (torch.nn.functional.silu(xv @ q(Wg)) * (xv @ q(Wu))) @ q(Wd)
-                    logger.info(
-                        f"v{v}: |y| {yall[v].abs().mean():.4g} |ref| {rv.abs().mean():.4g} pcc {comp_pcc(rv, yall[v], 0)[1]}"
-                        f" nan {torch.isnan(yall[v]).sum()} cols-pcc {[round(float(comp_pcc(rv[:, d*256:(d+1)*256], yall[v][:, d*256:(d+1)*256], 0)[1]), 3) for d in range(0, ND, 7)]}"
-                    )
-            _, pcc = comp_pcc(ref, got, 0.0)
-            logger.info(f"{tag}: PCC {pcc_q} vs quantized-weight reference, {pcc} vs fp32")
-            assert ok or os.environ.get("MIMO_FL_XRD_SKIP"), pcc_q
-    logger.info(f"ran {tag}")
+                    for v in range(V):
+                        xv = xs[v]
+                        rv = (torch.nn.functional.silu(xv @ q(Wg)) * (xv @ q(Wu))) @ q(Wd)
+                        logger.info(
+                            f"v{v}: |y| {yall[v].abs().mean():.4g} |ref| {rv.abs().mean():.4g} pcc {comp_pcc(rv, yall[v], 0)[1]}"
+                            f" nan {torch.isnan(yall[v]).sum()} cols-pcc {[round(float(comp_pcc(rv[:, d*256:(d+1)*256], yall[v][:, d*256:(d+1)*256], 0)[1]), 3) for d in range(0, ND, 7)]}"
+                        )
+                pcc = comp_pcc(ref, got, 0.0)[1] if not DYN else "n/a"
+                logger.info(f"{tag}: PCC {pcc_q} vs quantized-weight reference, {pcc} vs fp32")
+                assert ok or os.environ.get("MIMO_FL_XRD_SKIP"), pcc_q
+        logger.info(f"ran {tag}")

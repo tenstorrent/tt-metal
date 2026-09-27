@@ -52,13 +52,13 @@ void kernel_main() {
     se_dyn_load<num_experts>(d, 4, get_write_ptr(tt::CBIndex::c_7), 1);
     const uint32_t chunk_bytes = gu_chunk_tiles * tile_bytes;
     const uint64_t base = src;
-    for (uint32_t a = 0; a < d.n_act; ++a) {
+    for (uint32_t l = 0; l < d.n_load; ++l) {  // gate/up loads (a pinned expert's weights come once)
         for (uint32_t c = 0; c < nk_gu; ++c) {
             if (in_batch == 0) {
                 cb_reserve_back(cb, slot_tiles * batch);
                 l1 = get_write_ptr(cb);
             }
-            noc_async_read(base + (d.eid[a] * nk_gu + c) * chunk_bytes, l1 + in_batch * slot_bytes, chunk_bytes);
+            noc_async_read(base + (d.load_eid[l] * nk_gu + c) * chunk_bytes, l1 + in_batch * slot_bytes, chunk_bytes);
             if (++in_batch == batch) {
                 noc_async_read_barrier();
                 cb_push_back(cb, slot_tiles * batch);

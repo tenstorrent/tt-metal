@@ -10,6 +10,7 @@
 // its S sub-blocks and are popped after the last one.
 //
 // CT: 0 MTG (row tiles per M-group), 1 G, 2 KT_D, 3 KBLK_D, 4 PCD, 5 NUM_EXPERTS, 6 S, 7 SLOT_TILES, 8 RING
+#include "se_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -60,6 +61,17 @@ FORCE_INLINE uint32_t wblock_x(uint32_t a) {
 }
 #endif
 
+#ifdef SE_DN_REG
+// Pinned schedule (se_dyn.hpp): load l's block j is stream block l * NBLK + j in ring slot region(l) * NBLK + j,
+// popped by count after its last use (as se3_compute.cpp's gate/up ring).
+FORCE_INLINE uint32_t wblock_dyn(uint32_t p, uint32_t phys) {
+    if (p + 1 > popped) {
+        cb_wait_front(in1_cb, (p + 1 - popped) * slot);
+    }
+    return static_cast<uint32_t>(static_cast<int32_t>(phys) - static_cast<int32_t>(popped % ring)) * slot;
+}
+#endif
+
 FORCE_INLINE uint32_t wblock(uint32_t a) {
     cb_wait_front(in1_cb, (a - popped + 1) * slot);
     return static_cast<uint32_t>(static_cast<int32_t>(a % ring) - static_cast<int32_t>(popped % ring)) * slot;
@@ -74,17 +86,28 @@ void kernel_main() {
     cb_wait_front(tt::CBIndex::c_6, 1);
     const uint32_t n_act = read_tile_value(tt::CBIndex::c_6, 0, 0);
     const uint32_t num_v = read_tile_value(tt::CBIndex::c_6, 0, 1);
-    uint32_t e = 0, s = 0, subs_e = n_act ? read_tile_value(tt::CBIndex::c_6, 0, 2) : 0;
+    uint32_t e = 0, s = 0, subs_e = n_act ? read_tile_value(tt::CBIndex::c_6, 0, SE_META_SUBS) : 0;
 #ifdef SE_SMALL_T
-    // the meta page's `small` sits at 2 + SE_MAX_E (se_dyn.hpp, SE_MAX_E = 16)
-    const bool xs = read_tile_value(tt::CBIndex::c_6, 0, 18) != 0 && get_arg_val<uint32_t>(0) != 0;
+    const bool xs = read_tile_value(tt::CBIndex::c_6, 0, SE_META_SMALL) != 0 && get_arg_val<uint32_t>(0) != 0;
 #endif
+#ifdef SE_DN_REG
+    static_assert(ring == SE_GU_NREG * nblk);
+    uint32_t gw = n_act ? read_tile_value(tt::CBIndex::c_6, 0, SE_META_GU) : 0;
+#endif
+    uint32_t lmt = n_act ? read_tile_value(tt::CBIndex::c_6, 0, SE_META_LMT) : mt;
     for (uint32_t v = 0; v < num_v; ++v) {
+        const uint32_t rows = s + 1 == subs_e ? lmt : mt;  // row tiles holding tokens (the rest: never written out)
+#ifdef SE_DN_REG
+        const bool last_sub = s + 1 == subs_e && ((gw >> 16) & 1);  // the load's last use: its weights go
+        const uint32_t ld = gw & 0xFF, ph0 = ((gw >> 8) & 0xFF) * nblk;
+#else
         const bool last_sub = s + 1 == subs_e;
+#endif
 #else
     for (uint32_t v = 0; v < num_experts * sub; ++v) {
         const uint32_t e = v / sub;
         const bool last_sub = v % sub == sub - 1;
+        constexpr uint32_t rows = mt;
 #endif
         {
 #ifdef SE_ZONES
@@ -96,19 +119,23 @@ void kernel_main() {
         DeviceZoneScopedN("SE_DOWN");
 #endif
         cb_reserve_back(out_cb, mt * pcd);
-        for (uint32_t r = 0; r < mt; ++r) {
+        for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
             tile_regs_acquire();
             uint32_t w = 0;
             for (uint32_t kk = 0; kk < kt_d; ++kk) {
                 if (kk % kblk_d == 0) {
+#ifdef SE_DN_REG
+                    w = wblock_dyn(ld * nblk + kk / kblk_d, ph0 + kk / kblk_d);
+#else
                     w = wblock(e * nblk + kk / kblk_d);
+#endif
                 }
                 matmul_block(h_all_cb, in1_cb, h0 + kk * mtg, w + (kk % kblk_d) * pcd, 0, false, pcd, 1, hk);
 #ifdef SE_EARLY_POP
                 // The expert's last row: each weight block goes as soon as it is used, so the next expert's blocks
                 // stream into the ring while this row still runs.
-                if (last_sub && r == mt - 1 && kk % kblk_d == kblk_d - 1) {
+                if (last_sub && r == rows - 1 && kk % kblk_d == kblk_d - 1) {
                     cb_pop_front(in1_cb, slot);
                     ++popped;
                 }
@@ -125,7 +152,7 @@ void kernel_main() {
         if (xs) {
             matmul_block_init(h_all_cb, x_cb, false, pcx, 1, hk);
             cb_reserve_back(xo_cb, mt * pcx);
-            for (uint32_t r = 0; r < mt; ++r) {
+            for (uint32_t r = 0; r < rows; ++r) {
                 const uint32_t h0 = (r / mtg) * group_tiles + r % mtg;
                 tile_regs_acquire();
                 uint32_t w = 0;
@@ -162,7 +189,11 @@ void kernel_main() {
         if (++s == subs_e) {
             s = 0;
             ++e;
-            subs_e = e < n_act ? read_tile_value(tt::CBIndex::c_6, 0, 2 + e) : 0;
+            subs_e = e < n_act ? read_tile_value(tt::CBIndex::c_6, 0, SE_META_SUBS + e) : 0;
+            lmt = e < n_act ? read_tile_value(tt::CBIndex::c_6, 0, SE_META_LMT + e) : mt;
+#ifdef SE_DN_REG
+            gw = e < n_act ? read_tile_value(tt::CBIndex::c_6, 0, SE_META_GU + e) : 0;
+#endif
         }
 #endif
     }

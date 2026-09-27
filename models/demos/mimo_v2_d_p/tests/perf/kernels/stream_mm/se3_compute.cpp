@@ -17,6 +17,7 @@
 //     only: the weight stream comes in consumption order gu(0), gu(1), d(0), gu(2), d(1), ... and every block is freed
 //     right after its (only) use, in stream order), 12 RING_SLOTS (in1 ring capacity in blocks; 0: one expert)
 // Define SE_GU_ONLY for the spatially pipelined variant: gate/up only (KT_D = 0, down runs on other cores).
+#include "se_meta.hpp"
 #include <cstdint>
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -89,6 +90,19 @@ FORCE_INLINE uint32_t wblock(uint32_t a) {
     return static_cast<uint32_t>(static_cast<int32_t>(a % ring) - static_cast<int32_t>(popped % ring)) * slot;
 }
 
+#ifdef SE_DYN
+// Dynamic schedule (se_dyn.hpp): load l's block b is stream block l * NK_GU + b and sits in ring slot
+// region(l) * NK_GU + b; blocks are popped by count right after their last use (a pinned load retires after later
+// loads), and the receiver grants slots by count, so the read pointer is just popped % ring.
+uint32_t d_popped = 0;
+FORCE_INLINE uint32_t wblock_dyn(uint32_t p, uint32_t phys) {
+    if (p + 1 > d_popped) {  // else it has landed already (popped <= pushed)
+        cb_wait_front(in1_cb, (p + 1 - d_popped) * slot);
+    }
+    return static_cast<uint32_t>(static_cast<int32_t>(phys) - static_cast<int32_t>(d_popped % ring)) * slot;
+}
+#endif
+
 FORCE_INLINE void pop_used() {
     if constexpr (pipe) {
         while (popped < consumed) {
@@ -109,12 +123,18 @@ FORCE_INLINE void pop_used() {
     }
 }
 
-FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last) {
+// ROWS: row tiles of the sub-block that hold tokens (dynamic counts: the last sub-block of an entry may hold fewer;
+// the rest of the block is neither computed nor packed, its rows are never written out).
+FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, uint32_t rows = mt) {
     {
 #ifdef SE_ZONES
         DeviceZoneScopedN("SE_GU_MM");
 #endif
-        set_mm(gw, mt);
+        if (rows != cur_rt || cur_ct != gw) {  // (x is in0 here: re-init against x_cb)
+            matmul_block_init(x_cb, in1_cb, false, gw, rows, kblk);
+            cur_ct = gw;
+            cur_rt = rows;
+        }
         tile_regs_acquire();
         for (uint32_t b = 0; b < nk_gu; ++b) {
 #ifdef SE_WAITZ
@@ -130,24 +150,35 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last) {
             }
 #endif
             cb_wait_front(x_cb, mt * kblk);
+#ifdef SE_DYN
+            const uint32_t w = wblock_dyn(e * nk_gu + b, ph0 + b);
+#else
             const uint32_t w = wblock(pos_gu(e, b));
+#endif
             for (uint32_t k = 0; k < kblk; ++k) {
-                matmul_block(x_cb, in1_cb, k, w + k * gw, 0, false, gw, mt, kblk);
+                matmul_block(x_cb, in1_cb, k, w + k * gw, 0, false, gw, rows, kblk);
             }
             cb_pop_front(x_cb, mt * kblk);
             if (last) {  // free the block for the next expert as soon as possible
+#ifdef SE_DYN
+                cb_pop_front(in1_cb, slot);
+                ++d_popped;
+#else
                 gu_last = b + 1;
                 ++consumed;
                 pop_used();
+#endif
             }
         }
         tile_regs_commit();
     }
+#ifndef SE_DYN
     if (last) {
         ++gu_done;
         gu_last = 0;
         pop_used();
     }
+#endif
     {
 #ifdef SE_ZONES
         DeviceZoneScopedN("SE_GU_ACT_PACK");
@@ -156,10 +187,10 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last) {
         tile_regs_wait();
 #ifndef SE_NO_ACT
         PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-        for (uint32_t t = 0; t < mt * gw; t += 2) {
+        for (uint32_t t = 0; t < rows * gw; t += 2) {
             silu_tile_pack(t);
         }
-        for (uint32_t t = 0; t < mt * gw; t += 2) {
+        for (uint32_t t = 0; t < rows * gw; t += 2) {
             PACK((SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
@@ -175,8 +206,8 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last) {
         pack_reconfig_data_format(out_cb, h_local_cb);
 #ifdef SE_GU_ONLY
         for (uint32_t p = 0; p < np; ++p) {  // [p][m]: K-tile-major, one contiguous run on the down cores
-            for (uint32_t m = 0; m < mt; ++m) {
-                pack_tile(m * gw + 2 * p, h_local_cb);
+            for (uint32_t m = 0; m < mt; ++m) {  // (rows past ROWS: whatever DST holds, never used)
+                pack_tile(m < rows ? m * gw + 2 * p : 2 * p, h_local_cb);
             }
         }
 #else
@@ -201,7 +232,7 @@ FORCE_INLINE void down(uint32_t v) {
     }
     {
 #ifdef SE_ZONES
-        DeviceZoneScopedN("SE_DOWN");
+        DeviceZoneScopedN("SE_DOWN3");
 #endif
         set_mm(pcd, rt_d);
         cb_reserve_back(out_cb, mt * pcd);
@@ -256,14 +287,18 @@ void kernel_main() {
     // Pipelined order: gate/up of v + 1 before down of v hides the h exchange of v.
 #ifdef SE_GU_ONLY
 #ifdef SE_DYN
-    // Dynamic counts: CB 6 holds [n_act, num_v, subs of each active expert] (from se5_recv.cpp); the weight stream
-    // holds only the active experts, so an active expert's index is its place in the stream.
+    // Dynamic counts: CB 6 holds the schedule (se_meta.hpp layout, from se5_recv.cpp): per entry its sub-blocks and
+    // its gate/up load (stream place), that load's ring region and whether this is the load's last use.
     cb_wait_front(tt::CBIndex::c_6, 1);
     const uint32_t n_act = read_tile_value(tt::CBIndex::c_6, 0, 0);
     for (uint32_t a = 0, v = 0; a < n_act; ++a) {
-        const uint32_t subs = read_tile_value(tt::CBIndex::c_6, 0, 2 + a);
+        const uint32_t subs = read_tile_value(tt::CBIndex::c_6, 0, SE_META_SUBS + a);
+        const uint32_t gu = read_tile_value(tt::CBIndex::c_6, 0, SE_META_GU + a);
+        const uint32_t ld = gu & 0xFF, ph0 = ((gu >> 8) & 0xFF) * nk_gu;
+        const bool last_use = (gu >> 16) & 1;
+        const uint32_t lmt = read_tile_value(tt::CBIndex::c_6, 0, SE_META_LMT + a);
         for (uint32_t s = 0; s < subs; ++s, ++v) {
-            gate_up(v, a, s + 1 == subs);
+            gate_up(v, ld, last_use && s + 1 == subs, ph0, s + 1 == subs ? lmt : mt);
         }
     }
     cb_pop_front(tt::CBIndex::c_6, 1);

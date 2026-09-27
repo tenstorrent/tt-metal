@@ -41,18 +41,36 @@ void kernel_main() {
     constexpr uint32_t per_e = blocks / num_e;
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, 1);  // NCRISC: upper half of CB 7
-    const uint32_t total = dyn.n_act * per_e;
-    auto blk = [&](uint32_t b) { return dyn.eid[b / per_e] * per_e + b % per_e; };
+#ifdef SE_DN_REG
+    // Pinned schedule (se_dyn.hpp): one read per gate/up load, into that load's ring region (the ring holds
+    // SE_GU_NREG experts); the compute pops by count after each block's last use.
+    const uint32_t total = dyn.n_load * per_e;
+    const uint32_t ring_base = get_write_ptr(cb);  // nothing pushed yet
+    auto dst = [&](uint32_t b, uint32_t) {
+        return ring_base + (dyn.region[b / per_e] * per_e + b % per_e) * slot * tile_bytes;
+    };
+#else
+    const uint32_t total = dyn.n_act * per_e;  // every schedule entry (a pinned expert's chunks re-read)
+    auto dst = [&](uint32_t, uint32_t i) { return get_write_ptr(cb) + i * slot * tile_bytes; };
+#endif
+    auto blk = [&](uint32_t b) {
+#ifdef SE_DN_REG
+        return dyn.load_eid[b / per_e] * per_e + b % per_e;
+#else
+        return dyn.eid[b / per_e] * per_e + b % per_e;
+#endif
+    };
 #else
     constexpr uint32_t total = blocks;
     auto blk = [](uint32_t b) { return b; };
+    auto dst = [&](uint32_t, uint32_t i) { return get_write_ptr(cb) + i * slot * tile_bytes; };
 #endif
     for (uint32_t b = 0; b < total; b += batch) {
         const uint32_t n = total - b < batch ? total - b : batch;
         uint32_t l1[batch];
         for (uint32_t i = 0; i < n; ++i) {
             cb_reserve_back(cb, (i + 1) * slot);
-            l1[i] = get_write_ptr(cb) + i * slot * tile_bytes;
+            l1[i] = dst(b + i, i);
         }
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_read(src + blk(b + i) * slot * tile_bytes, l1[i], slot * tile_bytes);

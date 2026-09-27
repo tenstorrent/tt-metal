@@ -21,6 +21,9 @@
 #ifdef SE_DYN
 #include "se_dyn.hpp"
 #endif
+#if defined(SE_DN_REG) && !defined(SE9_TRID)
+#error "pinned down ring needs the trid reader (SE9_TRID)"
+#endif
 
 void kernel_main() {
     constexpr uint32_t gu_cb = get_compile_time_arg_val(0);
@@ -84,16 +87,13 @@ void kernel_main() {
 #else
     constexpr bool small = false;
 #endif
-    {
-        SeDyn pub = dyn;
-        if (small) {
-            pub.n_act = 0;
-            pub.num_v = 0;
-        }
-        se_dyn_publish(pub, tt::CBIndex::c_6);
-    }
-    const uint32_t gu_chunks = dyn.n_act * gu_per_e;
+    se_dyn_publish(dyn, tt::CBIndex::c_6, small);
+    const uint32_t gu_chunks = dyn.n_load * gu_per_e;  // gate/up loads (a pinned expert's weights come once)
+#ifdef SE_DN_REG
+    const uint32_t d_blocks = small ? 0 : dyn.n_load * d_per_e, num_v = small ? 0 : dyn.num_v;  // pinned: per load
+#else
     const uint32_t d_blocks = small ? 0 : dyn.n_act * d_per_e, num_v = small ? 0 : dyn.num_v;
+#endif
     const uint64_t gu_base = gu_src, d_base = d_src;
     uint32_t y_a = 0, y_s = 0;
 #else
@@ -118,7 +118,8 @@ void kernel_main() {
             while (gu_iss < gu_chunks && gu_iss - gu_read < gu_depth &&
                    cb_pages_reservable_at_back(gu_cb, (gu_iss - gu_read + 1) * gu_slot)) {
 #ifdef SE_DYN
-                const uint64_t src = gu_base + (dyn.eid[gu_iss / gu_per_e] * gu_per_e + gu_iss % gu_per_e) * gu_bytes;
+                const uint64_t src =
+                    gu_base + (dyn.load_eid[gu_iss / gu_per_e] * gu_per_e + gu_iss % gu_per_e) * gu_bytes;
 #else
                 const uint64_t src = gu_src + gu_iss * gu_bytes;
 #endif
@@ -129,12 +130,20 @@ void kernel_main() {
             while (d_iss < d_blocks && d_iss - d_read < d_depth &&
                    cb_pages_reservable_at_back(d_cb, (d_iss - d_read + 1) * d_slot)) {
 #ifdef SE_DYN
-                const uint64_t src = d_base + (dyn.eid[d_iss / d_per_e] * d_per_e + d_iss % d_per_e) * d_bytes;
+#ifdef SE_DN_REG
+                static_assert(d_ring == SE_GU_NREG * d_per_e);
+                const uint64_t src = d_base + (dyn.load_eid[d_iss / d_per_e] * d_per_e + d_iss % d_per_e) * d_bytes;
+                const uint32_t d_dst = d_l1 + (dyn.region[d_iss / d_per_e] * d_per_e + d_iss % d_per_e) * d_bytes;
 #else
+                const uint64_t src = d_base + (dyn.eid[d_iss / d_per_e] * d_per_e + d_iss % d_per_e) * d_bytes;
+                const uint32_t d_dst = d_l1 + (d_iss % d_ring) * d_bytes;
+#endif
+#else
+                const uint32_t d_dst = d_l1 + (d_iss % d_ring) * d_bytes;
                 const uint64_t src = d_src + d_iss * d_bytes;
 #endif
                 noc_async_read_set_trid(8 + d_iss % d_depth);
-                noc_async_read(src, d_l1 + (d_iss % d_ring) * d_bytes, d_bytes);
+                noc_async_read(src, d_dst, d_bytes);
                 ++d_iss;
             }
             while (gu_read < gu_iss && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + gu_read % gu_depth)) {
@@ -157,7 +166,7 @@ void kernel_main() {
 #endif
 #ifdef SE_DYN
         if (rd_gu) {
-            gu_src = gu_base + (dyn.eid[gu_read / gu_per_e] * gu_per_e + gu_read % gu_per_e) * gu_bytes;
+            gu_src = gu_base + (dyn.load_eid[gu_read / gu_per_e] * gu_per_e + gu_read % gu_per_e) * gu_bytes;
         }
         if (rd_d) {
             d_src = d_base + (dyn.eid[d_read / d_per_e] * d_per_e + d_read % d_per_e) * d_bytes;
