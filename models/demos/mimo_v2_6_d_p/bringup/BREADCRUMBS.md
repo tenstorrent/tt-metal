@@ -1210,3 +1210,12 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Next levers in attention: qkv and o_proj matmuls (45 ms, HiFi4 bf16, left alone per the brief). For the full SDPA, a
   bf8 KV cache (half the traffic, untried) or k256 once L1 allows it.
 - Re-run: the brief's gate command with `PYTHONPATH=$PWD`. Compare with `MIMO_SDPA_CFG=base`.
+
+## X.3 fix, attempt 1 (2026-09-27)
+- Failure was only `MISSING prefill_ms_full`; every PCC passed (layers >= 0.9984, state min 0.9963, pos_chunk 5120).
+- Cause: `testing/profile.py:full_prefill` returns None unless the device layers are all `num_layers` (48). This spec runs
+  layers 0-5, so the metric is never recorded. No module is wrong; nothing in `tt/` was changed (outside this step's paths anyway).
+- Re-ran the gate: rc=0, all three tests PASS (profile chunk [51200,56320) wall 227 ms, device 225 ms), no "full prefill" line.
+- Needs a framework change (findings `X3-full-prefill-layer-subset`): subset-aware full_prefill (like F41's
+  `contract.py:served_layers`) or drop `prefill_ms_full` from X.3 in `plan/ledger_gen.py` for subset specs.
+- Re-run: the brief's gate command with `PYTHONPATH=$PWD`.
