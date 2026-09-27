@@ -97,6 +97,34 @@ it. Anything timing this path has to warm the program cache first.
 The one real cost is startup: zeroing 27.9 GiB per chip takes **157 s**, against 0.2 s for two
 slots. A serving front end pays it once, but it belongs in a boot budget.
 
+## If the KV has to migrate, reserve the destinations
+
+The shared prefill migration driver sends slot `src` to `src + dst_slot_offset` and defaults that
+offset to the producer's live-user count, so a loopback migration wants a table twice the live set:
+`[0, n)` hold sequences and `[n, 2n)` receive them. MiniMax M3 and GPT-OSS both encode this as a
+4-slot runner table against a 2-user producer, and the driver rejects an out-of-range destination
+with "Grow `PREFILL_NUM_USERS` or pick a smaller dst" — which is the one thing a count already at the
+DRAM limit cannot do. Taking every slot DRAM allows is therefore precisely the count that cannot
+migrate.
+
+`max_user_slots(..., slots_per_user=MIGRATION_SLOTS_PER_USER)` rounds the count down to an even
+number, so half of it is the live set and half are destinations:
+
+| Capacity | Slots | Live sequences with a destination each |
+| ---: | ---: | ---: |
+| 2,048 | 6,726 | 3,363 |
+| 4,096 | 3,362 | 1,681 |
+| 8,192 | 1,680 | 840 |
+| 16,384 | 840 | 420 |
+| 32,768 | 420 | 210 |
+| 65,536 | 208 | 104 |
+| 131,072 | 104 | 52 |
+
+The right-hand column is the left-hand column one row down, and that is not a coincidence: a live
+sequence plus its destination is two slots, which is what one slot of twice the context costs.
+Reserving a migration destination for every sequence costs exactly what doubling the context would.
+Only 64K pays anything extra, losing one slot to the rounding because 209 is odd.
+
 ## Why the division needs two corrections
 
 **Contiguity, not bytes, is what fails first.** Each cache is a single multi-GiB buffer that has to
@@ -135,3 +163,21 @@ path, which types `num_users` as an int in `PrefillRunParams`, resolve the numbe
 Taking everything leaves ~1.2 GiB/chip free, which is enough to prefill but not enough for anything
 else that may want DRAM later -- tracing, a wider head, a second resident model. `reserve_bytes`
 raises the floor for those cases, and each GiB withheld costs 60 slots at 8K or 15 at 32K.
+
+Anything already carved out needs no reserve, because the count is a reading of free DRAM rather
+than of total DRAM. The shared runner's `PREFILL_USE_TRACE=1` takes a 256 MiB trace region as a
+`trace_region_size` at device open, before any of this runs, so it is simply absent from what
+`max_user_slots` divides. The reserve is only for what gets allocated *after* the cache.
+
+If the deployment migrates KV between slots, ask for the destinations at the same time:
+
+```python
+cache = allocate_kv_cache(
+    mesh_device,
+    mesh_config,
+    num_users="max",
+    max_seq_len=max_seq_len,
+    slots_per_user=MIGRATION_SLOTS_PER_USER,
+)
+live_users = cache.num_users // MIGRATION_SLOTS_PER_USER  # slots [live_users, num_users) are the dsts
+```
