@@ -5,9 +5,10 @@
 
     routing as dense [S, 256] (8 nonzeros per row) or (idx [S, 8], weights [S, 8])
       -> masked_bincount + offset_cumsum -> TtDispatchModule (1-chip dispatch group, local dispatch)
-      -> per local expert: extract -> down(silu(x @ gate) * (x @ up)) via ttnn.linear (fp32 dest) -> insert
-         (mode 'loop', default: bf16 input, fp32 intermediates, HiFi4 from the hooks; 'unified' =
-         unified_routed_expert_moe Silu, which the factory forces to LoFi and packs activations to bfp8)
+      -> mode 'unified' (default): one unified_routed_expert_moe over every local expert with high_precision=True
+         (the factory honours the fidelity / fp32 dest for Silu, keeps x, intermediates and output bf16, fp32 partials);
+         'loop': per local expert extract -> down(silu(x @ gate) * (x @ up)) via ttnn.linear (fp32 dest) -> insert;
+         'unified_lofi': the op without high_precision (LoFi, bf16 dest, bf8 x / output)
       -> TtCombineModule -> TtReduceModule (fused weighted top-k sum over this chip's experts)
       -> all_reduce (cluster_axis=1) -> experts_out [1, 1, S, H] replicated
 
@@ -73,15 +74,17 @@ class TtExperts:
         weights_dtype=ttnn.bfloat8_b,
         cache: bool = True,
         math_fidelity=ttnn.MathFidelity.HiFi2,
-        mode: str = "loop",
+        mode: str = "unified",
         loop_act_dtype=ttnn.bfloat16,
         loop_mid_dtype=ttnn.float32,
     ):
         """torch_weights: sequence (len E) of {'gate_proj' [I, H], 'up_proj' [I, H], 'down_proj' [H, I]}, or None to
-        load a complete cache. mode 'loop' (default): per local expert extract -> ttnn.linear SwiGLU at math_fidelity
-        with fp32 dest -> insert; 'unified': unified_routed_expert_moe (Silu is forced to LoFi + bf16 dest by the
-        factory: rel 0.019, norm ratio [0.963, 1.054] on the layer-1 golden, fails); 'fused': moe_fused_swiglu for every
-        expert (rel 0.030, ratio [0.961, 1.055], fails)."""
+        load a complete cache. mode 'unified' (default): unified_routed_expert_moe with high_precision=True at
+        math_fidelity + fp32 dest (layer 5 at HiFi4: rel 0.0071, ratio [0.987, 1.021]; HiFi2 fails the ratio);
+        'loop': per local expert extract -> ttnn.linear SwiGLU at math_fidelity with fp32 dest -> insert (10x slower);
+        'unified_lofi': the op without high_precision (LoFi + bf16 dest + bf8 x: rel 0.019, norm ratio [0.963, 1.054]
+        on the layer-1 golden, fails); 'fused': moe_fused_swiglu for every expert (rel 0.030, ratio [0.961, 1.055],
+        fails)."""
         n = mesh.get_num_devices()
         E = len(torch_weights) if torch_weights is not None else 256
         assert tuple(mesh.shape) == (1, n) and E % n == 0
@@ -119,7 +122,7 @@ class TtExperts:
             finally:
                 fast_cache_checker._checker = None
         assert torch_weights is not None or cache, "no weights and no cache"
-        assert mode in ("unified", "fused", "loop"), mode
+        assert mode in ("unified", "unified_lofi", "fused", "loop"), mode
         self.mode = mode
         # Loop mode keeps the expert input in bf16: layer 5's MoE input has outlier channels (|x| up to 131, median
         # 0.009) and bfp8 x (one exponent per 16 values) flushes their neighbours (rel 0.045, see known issues).
@@ -143,7 +146,7 @@ class TtExperts:
             weights_dtype=weights_dtype,
             weight_cache_path=cache_path,
             cache_name_prefix=prefix,
-            # unified_routed_expert_moe honours this for GeluTanh only (Silu runs LoFi + bf16 dst, see known issues);
+            # Used by mode 'unified_lofi' (TtRoutedExpert.__call__, no high_precision: Silu runs LoFi + bf16 dst);
             # moe_fused_swiglu (mode 'fused') takes math_fidelity with fp32_dest / packer_l1_acc cleared.
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -225,6 +228,8 @@ class TtExperts:
         # ROW_MAJOR bf16 buffer -> the unified op's fused path (tilize + bf8 pack inside the kernel, fresh output).
         if self.mode == "loop":
             out = self._loop_experts(buf2, counts, region_offsets, S)
+        elif self.mode == "unified":
+            out = self._unified_experts(buf2, counts, region_offsets)
         else:
             out = self.routed(buf2, counts, region_offsets)
         ttnn.deallocate(buf2)
@@ -237,6 +242,25 @@ class TtExperts:
             ttnn.deallocate(t)
         red = ttnn.to_layout(red, ttnn.TILE_LAYOUT)
         return ttnn.reshape(red, (1, 1, S, self.H))
+
+    def _unified_experts(self, buf, counts, region_offsets):
+        """One fused unified_routed_expert_moe over every local expert with high_precision=True: the factory honours
+        loop_cfg (fidelity, fp32 dest) for Silu and keeps x, intermediates and the output in bf16 (layer 5's outlier
+        channels fail with a bf8 x). buf is ROW_MAJOR bf16; returns a fresh TILE bf16 buffer."""
+        r = self.routed
+        return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            buf,
+            region_offsets,
+            counts,
+            r.global_expert_idx_table,
+            r.gate_projs,
+            r.up_projs,
+            r.down_projs,
+            max_dispatched_tokens_per_expert=r.max_tokens,
+            compute_kernel_config=self.loop_cfg,
+            activation=ttnn.RoutedExpertActivation.Silu,
+            high_precision=True,
+        )
 
     def _ffn(self, x, wg, wu, wd):
         """down(silu(x @ wg) * (x @ wu)) with ttnn.linear (auto program config) at loop_cfg; x [M, H] TILE."""
