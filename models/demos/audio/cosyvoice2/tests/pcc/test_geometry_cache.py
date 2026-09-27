@@ -208,9 +208,9 @@ def test_release_caches_then_reuse_stays_correct(device):
 
     conv = TtConv1d(device, w, b, stride=1, padding=1, dtype=ttnn.float32)
     x = torch.randn(1, length, in_ch, generator=g) * 0.5
-    want = torch.nn.functional.conv1d(x.transpose(1, 2).double(), w.double(), b.double(), stride=1, padding=1).transpose(
-        1, 2
-    )
+    want = torch.nn.functional.conv1d(
+        x.transpose(1, 2).double(), w.double(), b.double(), stride=1, padding=1
+    ).transpose(1, 2)
     x_dev = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     out, out_len = conv(x_dev, length, 1)

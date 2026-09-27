@@ -76,11 +76,15 @@ def test_device_hift_decode_matches_torch_reference_real_checkpoint(device, mel_
     hift_sd = load_checkpoint_file("hift.pt")
     ref = TorchHiFTDecodeRef.from_checkpoint(hift_sd)
 
-    trace = shape_trace(mel_frames, ref.conv_pre.out_channels, ref.upsample_rates, (16, 11, 7), ref.n_fft, ref.hop_len, 80)
+    trace = shape_trace(
+        mel_frames, ref.conv_pre.out_channels, ref.upsample_rates, (16, 11, 7), ref.n_fft, ref.hop_len, 80
+    )
 
     torch.manual_seed(mel_frames)
     mel_t = torch.randn(1, 80, mel_frames) * 0.5
-    s_t = torch.randn(1, 1, trace["audio_length"]) * 0.1  # excitation-scale noise, matches test_hift_decode.py's own convention
+    s_t = (
+        torch.randn(1, 1, trace["audio_length"]) * 0.1
+    )  # excitation-scale noise, matches test_hift_decode.py's own convention
 
     with torch.no_grad():
         want = ref.decode(mel_t, s_t)

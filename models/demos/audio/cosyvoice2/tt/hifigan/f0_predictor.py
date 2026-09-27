@@ -150,7 +150,9 @@ class TtConvRNNF0Predictor:
                 ttnn.deallocate(x)
             x = ttnn.elu(nxt, alpha=1.0)
             ttnn.deallocate(nxt)
-        logits = ttnn.linear(ttnn.typecast(x, self.classifier_weight.dtype), self.classifier_weight, bias=self.classifier_bias)
+        logits = ttnn.linear(
+            ttnn.typecast(x, self.classifier_weight.dtype), self.classifier_weight, bias=self.classifier_bias
+        )
         if x is not mel:
             ttnn.deallocate(x)
         f0 = ttnn.abs(logits)
