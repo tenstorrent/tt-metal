@@ -265,16 +265,45 @@ def served_reference_canvases() -> tuple[tuple[int, int], ...]:
     return tuple(by_area[area] for area in sorted(by_area))
 
 
-def served_envelope(task: str) -> Iterator:
+def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
+    """One `(n_keyframes, canvas)` per vision-tower program set an fl2va request can reach.
+
+    A keyframe's canvas depends only on its aspect ratio, so holding the long side at the maximum and
+    sweeping the short side covers every canvas. The tower pads the patch count to `patch_alignment`.
+    It runs ring attention only for one keyframe that needs no pad; everything else is windowed, and
+    windowed programs depend only on the padded size (the window count is kept out of the key).
+    """
+    long_side = MINIMAX_H3_KEYFRAME_MAX_SIDE
+    short_min = max(MINIMAX_H3_KEYFRAME_MIN_SIDE, -(-long_side // 4))
+    canvases = set()
+    for short in range(short_min, long_side + 1):
+        canvases.add(resolve_canvas_size(long_side, short))
+        canvases.add(resolve_canvas_size(short, long_side))
+    multiple = MINIMAX_H3_CANVAS_MULTIPLE
+
+    def patches(canvas: tuple[int, int]) -> int:
+        return 4 * (canvas[0] // multiple) * (canvas[1] // multiple)
+
+    by_key: dict[tuple[int, bool], tuple[int, tuple[int, int]]] = {}
+    for n_keyframes in (1, 2):
+        for canvas in sorted(canvases, key=lambda canvas: (patches(canvas), canvas)):
+            total = n_keyframes * patches(canvas)
+            padded = -(-total // patch_alignment) * patch_alignment
+            by_key.setdefault((padded, n_keyframes == 1 and padded == total), (n_keyframes, canvas))
+    return tuple(by_key[key] for key in sorted(by_key))
+
+
+def served_envelope(task: str, *, patch_alignment: int | None = None) -> Iterator:
     """The vision-layout warm units a deployment must compile.
 
-    t2va yields `(n_keyframes, canvas)`; ref2va yields `(canvas, image_size)`.
+    t2va yields `(n_keyframes, canvas)` and needs the vision tower's `patch_alignment`
+    (`sp_factor * TILE_SIZE`); ref2va yields `(canvas, image_size)`.
     """
     if task == "t2va":
+        if patch_alignment is None:
+            raise ValueError("served_envelope('t2va') needs patch_alignment")
         yield 0, None
-        for canvas in served_canvases():
-            yield 1, canvas
-            yield 2, canvas
+        yield from served_keyframe_layouts(patch_alignment)
         return
     if task != "ref2va":
         raise NotImplementedError(f"served_envelope is not defined for task {task!r}")
