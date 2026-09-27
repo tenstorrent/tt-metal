@@ -26,7 +26,9 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn
+# The op under test is the C++ binding; the Python builder is its parity reference
+# (test_rms_norm_ttnn_cpp_parity.py).
+rms_norm_ttnn = ttnn.bringup.rms_norm
 
 # PCC keyed by dtype — the same thresholds the golden suite uses.
 PCC = {

@@ -45,7 +45,8 @@ from pathlib import Path
 
 import pytest
 
-KERNEL_DIR = Path(__file__).resolve().parents[5] / "ttnn" / "ttnn" / "operations" / "rms_norm_ttnn" / "kernels"
+# The op's own kernels (<op>/tests/unit/ -> <op>/kernels).
+KERNEL_DIR = Path(__file__).resolve().parents[2] / "kernels"
 
 #: Exactly the sites `perf_instrumentation.hpp`'s macro expands.
 _ZONE_RE = re.compile(r'\bMaybeDeviceZoneScope\("([^"]+)"\)')
@@ -168,7 +169,7 @@ def test_hash16_matches_the_profiler_implementation(text, expected):
 # exact condition that crashes a run — a 16-bit collision among the strings actually
 # registered.  It is a pre-flight check on the machine, not on the source, so it
 # skips when the log is absent.
-_ZONE_LOG = Path(__file__).resolve().parents[5] / "generated" / "profiler" / ".logs" / "zone_src_locations.log"
+_ZONE_LOG = Path(__file__).resolve().parents[6] / "generated" / "profiler" / ".logs" / "zone_src_locations.log"
 _ZONE_LOG_DELIM = "'#pragma message: "
 
 
