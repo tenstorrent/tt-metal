@@ -189,7 +189,14 @@ def global_ring_prefill_attention(
     if program_config is None:
         q_chunk, k_chunk, k_splits = ring_sdpa_chunk_sizes(tt_q.shape[-2], sliding=False)
         program_config = ring_prefill_program_config(
-            mesh_device, ccl_manager, GLOBAL_HEAD_DIM, q_chunk_size=q_chunk, k_chunk_size=k_chunk, max_k_splits=k_splits
+            mesh_device,
+            ccl_manager,
+            GLOBAL_HEAD_DIM,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            max_k_splits=k_splits,
+            # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
+            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
         )
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
     # logical_n survives a 2-chunk run and then fails "gather dim 2 too small".
@@ -244,7 +251,9 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
     return 96, 256, 1
 
 
-def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size, max_k_splits=1):
+def ring_prefill_program_config(
+    mesh_device, ccl_manager, head_dim, q_chunk_size, k_chunk_size, max_k_splits=1, matmul_math_fidelity=None
+):
     """SDPA program config for the ring path.
 
     The compute grid must exclude the CCL column that ``ccl_core_grid_offset``
@@ -261,6 +270,7 @@ def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
         max_k_splits=max_k_splits,
+        matmul_math_fidelity=matmul_math_fidelity,
     )
 
 
