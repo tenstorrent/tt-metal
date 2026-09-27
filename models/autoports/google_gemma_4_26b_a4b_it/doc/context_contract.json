@@ -423,6 +423,7 @@
       "datatype_sweep/selected_trace_batch32.json",
       "datatype_sweep/selected/source_manifest.json"
     ],
-    "review": "datatype_sweep/stage_review.md"
+    "review": "datatype_sweep/stage_review.md",
+    "implementation_commit": "e9d0a0a5f9584060e4b4b905c1f2c6621086815d"
   }
 }

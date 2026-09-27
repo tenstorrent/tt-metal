@@ -223,3 +223,12 @@ actual runtime policy/source propagation, default token-out, chat controls,
 full capacity, memory accounting, plots and the exact-template local telemetry
 packet. All observed anomalies are classified. Stage08 is ready for local
 checkpoint; no vLLM work and no push.
+
+
+Local implementation/evidence checkpoint: repository `/workspace/tt-metal`,
+branch `gemma-4-26b-a4b-it`, commit **`e9d0a0a5f9584060e4b4b905c1f2c6621086815d`**.
+All commit-time pre-commit hooks pass. The required CSV is explicitly tracked
+despite the repository's general CSV ignore rule. No unrelated changes are
+included and nothing was pushed. This provenance-only follow-up records that
+checkpoint; its final HEAD is logged with both SHAs in the local telemetry packet
+and run-level `datatype_sweep_checkpoints.json` (under the telemetry directory).
