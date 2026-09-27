@@ -896,6 +896,9 @@ def _audit_rows(cfg_name: str, real_len: int, extent_rows: int) -> list:
         "hca_unified": W + -(-real_len // HCA),
     }.get(cfg_name, W)
     rows = set(range(0, min(W, extent_rows), C)) if cfg_name in ("swa_window", "hca_unified", "csa_unified") else set()
+    if os.environ.get("PREFILL_MIGRATION_SRC_HASH_ALL", "0") == "1":
+        R = -(-(W + real_len // CSA) // C) * C  # the driver's single row range, every config
+        rows.update(range(0, min(extent_rows, R + 512), C))
     rows.update(range(0, b, 8 * C))
     rows.update(range(max(0, b - 256), min(extent_rows, b + 512), C))
     return sorted(r for r in rows if r + C <= extent_rows)
