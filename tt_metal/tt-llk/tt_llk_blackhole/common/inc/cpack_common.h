@@ -335,6 +335,8 @@ inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
     // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
+    // Accumulating writes are bank atomics; with the fast tile end drain the lockstep packer ports can settle into a slow rate.
+    cfg_reg_rmw_tensix<PACK_GLOBAL_CFG_CTL_pack_disable_fast_tile_end_drain_RMW>(pack_l1_acc ? 1 : 0);
 }
 
 /**
