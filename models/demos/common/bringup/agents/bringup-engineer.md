@@ -37,7 +37,9 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    first: if the op is already forked, call the fork (`ttnn.bringup.<op>`) and extend it, with any new behaviour behind
    an option whose default keeps the fork's current behaviour. Otherwise fork it with `ttnn/ttnn/bringup/fork_op.py`.
    Record every change in the fork's `CHANGELOG.md` (what, why, model and task, files), keep the `INDEX.md` row
-   current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests.
+   current, build (`./build_metal.sh`, fix any build errors), and run the fork's tests. When you extend an existing
+   fork, run its whole test suite before the change and again after it with the new option off: the results must
+   match (the recipe in the skill, section 3).
 7. Precision (owner rule). Run every matmul at HiFi4, in every role. Use bfp4 weights only where the HF checkpoint
    itself stores them in 4 bits; otherwise never use bfp4 (the owner tries that, not an agent).
 8. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
