@@ -44,6 +44,9 @@ perf: |
   The gate re-runs an accuracy rung and the warm profile; it passes only if every accuracy threshold still holds and
   the measured time drops below its threshold. Keep the previous behaviour selectable (a named setting or an env var,
   recorded in the profile's settings) so the two can be compared. Do not change thresholds, goldens or frozen tests.
+  Precision (owner rule): lower matmul fidelity from HiFi4 to HiFi2 one group of matmuls at a time (a group that fails
+  accuracy at HiFi2 stays at HiFi4), then lower weight precision step by step (e.g. bf16 -> bfp8). Never bfp4 unless
+  the HF checkpoint stores those weights in 4 bits. Do not change activation precision.
 assemble: |
   Role: assemble. Every step of every block type has passed on the device, but through the hybrid harness
   (`$model_dir/bringup/hooks.py`: the CPU reference with host in / host out around each device step). Build the model
