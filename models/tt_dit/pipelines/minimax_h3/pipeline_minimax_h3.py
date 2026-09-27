@@ -2212,7 +2212,7 @@ class MiniMaxH3Pipeline:
         warm_image = Image.new("RGB", (64, 64), (127, 127, 127))
         before = self.mesh_device.num_program_cache_entries()
 
-        for n_keyframes, canvas in served_envelope(self.task):
+        for n_keyframes, canvas in served_envelope(self.task, patch_alignment=alignment):
             if canvas is None:
                 keyframes: list[Image.Image] = []
                 vision_len = 0
