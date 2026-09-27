@@ -437,6 +437,10 @@ class TtKimiK3Transformer(LightweightModule):
         rope_tensors=None,
         padding_side: Optional[str] = None,
         layer_tap: Optional[Callable] = None,
+        mtp_union=None,
+        on_mtp_complete: Optional[Callable] = None,
+        input_is_embedded: bool = False,
+        provided_levels: int = 0,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 
@@ -456,6 +460,8 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
+        if mtp_union is not None or on_mtp_complete is not None or input_is_embedded or provided_levels:
+            raise ValueError("Kimi-K3 has no MTP predictor; MTP forward arguments must be left at their defaults")
         # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
         # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
         # here made a `padding_side="left"` model mask the wrong end of every chunk.
