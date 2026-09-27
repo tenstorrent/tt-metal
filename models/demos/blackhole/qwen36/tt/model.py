@@ -3256,7 +3256,8 @@ class Qwen36Model:
             _dev_copy = 0
         # QWEN36_PREFILL_LOGITS_FAST=1: read the [1, vocab] logits row from ONE device instead of all replicas.
         _fast_logits = os.environ.get("QWEN36_PREFILL_LOGITS_FAST", "0") == "1"
-        # QWEN36_PLAIN_GDN_SLOT_FAST (default 1; host round-trip path only, i.e. _dev_copy == 0): the same slot write
+        # QWEN36_PLAIN_GDN_SLOT_FAST (unset = on at TP=2 only, "1" forces on at any TP, "0" off; host round-trip path only,
+        # i.e. _dev_copy == 0): the same slot write
         # without moving the fp32 recurrent state through the host. Measured at TP=2 (lane Q, opt_round4): the host
         # path costs ~175 ms per admission (snapshot 43 ms + write_slot 130 ms: 2 x 75 MB of fp32 state per device over
         # PCIe with host untilize/tilize, a slice/concat/copy rewrite of each 50 MB [B, Nv, Dk, Dv] buffer, and
@@ -3266,8 +3267,16 @@ class Qwen36Model:
         #   * conv taps: one host read of every layer's taps (device concat) feeds the packed-history repack (no per-row
         #     read back); the step's last user writes device clones of its taps, earlier users upload their rows.
         # The final batched state (rec_state, conv_states, conv_hist_packed) is bit-identical to the host path's
-        # (tests/test_gdn_slot_write_fast_tp2_scratch.py). =0 restores the host round trip byte-for-byte.
-        _fast_slot = (not _dev_copy) and os.environ.get("QWEN36_PLAIN_GDN_SLOT_FAST", "1") == "1"
+        # (tests/test_gdn_slot_write_fast_tp2_scratch.py, incl. batched decode steps between admissions). =0 restores
+        # the host round trip byte-for-byte. Validated on a (1,2) mesh only, so the default is scoped to TP=2 (the
+        # trace-replay aliasing hazard of the tap clones depends on the trace intermediates' memory layout).
+        # Not atomic across users: user u's recurrent row is written into the live decode buffer inside the prefill
+        # loop (fill_cache), its conv taps + packed history only after unbind. An exception between the two leaves
+        # slot u with a new recurrent row and stale taps. The exception propagates to the caller; the slot must not be
+        # decoded before it is admitted again (a re-admission rewrites the recurrent row, every tap and the packed
+        # history of that slot, so it repairs the state).
+        _fsenv = os.environ.get("QWEN36_PLAIN_GDN_SLOT_FAST")
+        _fast_slot = (not _dev_copy) and ((self.num_devices == 2) if _fsenv is None else (_fsenv == "1"))
         _t0 = _tp()
         prev = self._bind_gdn_prefill_scratch()
         _t["bind"] += _tp() - _t0
@@ -3276,6 +3285,7 @@ class Qwen36Model:
         per_user_rec = []
         per_user_conv = []
         per_user_conv_dev = []  # QWEN36_PLAIN_GDN_SLOT_FAST: device clones of the scratch conv taps
+        _loop_ok = False
         try:
             for u in range(N):
                 toks = token_ids_list[u]
@@ -3434,12 +3444,17 @@ class Qwen36Model:
                 _t["prefill"] += _t2 - _t1
                 _t["logits"] += _t3 - _t2
                 _t["snapshot"] += _t4 - _t3
+            _loop_ok = True
         finally:
             # Always rebind the batched decode buffers (a mid-loop assert must not leave GDN on scratch).
             # Does NOT free the scratch — it persists for the next request and keeps the trace valid.
             _t5 = _tp()
             self._unbind_gdn_prefill_scratch(prev)
             _t["unbind"] += _tp() - _t5
+            if not _loop_ok:
+                self._free_conv_dev(
+                    per_user_conv_dev
+                )  # the fast path's tap clones are consumed only by the write below
 
         if _dev_copy and os.environ.get("QWEN36_GDN_HIST_FIX", "1") == "1":
             # The device-side slot write above rewrote row `slot` of the K conv taps but NOT the fused plain-decode
@@ -3455,14 +3470,20 @@ class Qwen36Model:
         # Write each user's snapshot into its decode slot, preserving the other live rows.
         _t6 = _tp()
         if not _dev_copy:
-            for u in range(N):
-                self._write_gdn_slot(
-                    int(empty_slots[u]),
-                    per_user_rec[u],
-                    per_user_conv[u],
-                    hist_from_snapshot=_fast_slot,
-                    conv_dev=per_user_conv_dev[u] if _fast_slot else None,  # None for all but the last user
-                )
+            try:
+                for u in range(N):
+                    conv_dev = per_user_conv_dev[u] if _fast_slot else None  # None for all but the last user
+                    if _fast_slot:
+                        per_user_conv_dev[u] = None  # write_slot consumes it
+                    self._write_gdn_slot(
+                        int(empty_slots[u]),
+                        per_user_rec[u],
+                        per_user_conv[u],
+                        hist_from_snapshot=_fast_slot,
+                        conv_dev=conv_dev,
+                    )
+            finally:
+                self._free_conv_dev(per_user_conv_dev)  # users not reached after an exception (no-op otherwise)
         _t["write_slot"] += _tp() - _t6
         if _timing:
             lens = [int(v) for v in valid_lens] if valid_lens is not None else [int(t.shape[1]) for t in token_ids_list]
@@ -3580,6 +3601,21 @@ class Qwen36Model:
                 ttnn.deallocate(new)
                 if src is not dn.conv_states[m]:
                     ttnn.deallocate(src)
+
+    @staticmethod
+    def _free_conv_dev(per_user_conv_dev):
+        """Deallocate the QWEN36_PLAIN_GDN_SLOT_FAST tap clones still held in per_user_conv_dev (entries: None or a
+        per-layer list of per-tap device tensors); clears the entries."""
+        for i, taps in enumerate(per_user_conv_dev):
+            if taps is None:
+                continue
+            for layer_taps in taps:
+                for c in layer_taps:
+                    try:
+                        ttnn.deallocate(c)
+                    except Exception:  # already consumed / freed
+                        pass
+            per_user_conv_dev[i] = None
 
     def _write_gdn_slot(self, slot, rec_snap, conv_snap, sync_hist=True, hist_from_snapshot=False, conv_dev=None):
         """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
@@ -3912,14 +3948,18 @@ class Qwen36Model:
             else None
         )
         _cap = getattr(self, "_capture_layer", None)
-        # QWEN36_EAGER_FULL_CHUNK_UNMASKED (default 1): a FULL eager chunk (valid_len == bucket, e.g. every 2048-token
-        # chunk of the tp2-dflash2 eager prompt prefill, _prefill_for_spec_b1) runs its GDN layers unmasked
+        # QWEN36_EAGER_FULL_CHUNK_UNMASKED (unset = on at TP=2 only; "1" forces on at any TP, "0" off): a FULL eager
+        # long-prompt chunk (valid_len == bucket and bucket >= 2048, i.e. the 2048-token chunks of the tp2-dflash2 eager
+        # prompt prefill _prefill_for_spec_b1 and of _prefill_chunked_eager_tp) runs its GDN layers unmasked
         # (valid_len=None), i.e. exactly the traced chunk's ops: fused KDA conv instead of the masked FIR conv + host-built
         # one-hot carry select (an all-ones scan mask is bit-identical to no mask; the carry is the same last K-1 rows).
         # The eager prompt prefill thereby computes the same numerics as the plain tp2 traced chunk, and drops the FIR
-        # chain (~65 ms per 2048-token chunk at TP=2, lane Q). =0 restores the masked FIR full chunk.
+        # chain (~65 ms per 2048-token chunk at TP=2, lane Q). Exact short buckets (128..1024) are never affected, and
+        # TP=4 / TP=1 keep the masked FIR (their identity corpora were not re-validated). =0 restores the masked FIR.
         _gdn_valid_len = valid_len
-        if valid_len == bucket and not gdn_recurrent and os.environ.get("QWEN36_EAGER_FULL_CHUNK_UNMASKED", "1") == "1":
+        _efcu = os.environ.get("QWEN36_EAGER_FULL_CHUNK_UNMASKED")
+        _efcu_on = (self.num_devices == 2) if _efcu is None else (_efcu == "1")
+        if _efcu_on and valid_len == bucket and bucket >= 2048 and not gdn_recurrent:
             _gdn_valid_len = None
         if self._dflash_tap:
             # DFlash2 prompt/seed taps (eager path only; gated OFF by default). Fresh list per

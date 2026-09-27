@@ -458,6 +458,11 @@ class TPGatedDeltaNet:
         if _mode == "agmm" and args.num_devices != 4 and os.environ.get("QWEN36_GDN_OUT_AGMM_ANY_TP", "0") != "1":
             logger.warning("QWEN36_GDN_OUT_MODE=agmm is validated at TP=4 only; using ag_mm")
             _mode = "ag_mm"
+        elif _mode == "agmm" and args.num_devices != 4:
+            logger.warning(
+                f"QWEN36_GDN_OUT_AGMM_ANY_TP=1: fused AGMM GDN out-proj at TP={args.num_devices} "
+                "(experiment; validated at TP=4 only, numerics unverified here)"
+            )
         self._gdn_out_mode = _mode
         self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and _mode == "mmrs_fp32"
         # QWEN36_GDN_CONV=kda: fused depthwise causal conv1d + SiLU + q/k/v split
@@ -994,7 +999,8 @@ class TPGatedDeltaNet:
         if conv_sel is not None:
             new_state = ttnn.matmul(conv_sel, xp, memory_config=_dram)
         else:
-            assert isinstance(valid_len, int), "masked KDA conv: scalar valid_len only (single sequence)"
+            if not isinstance(valid_len, int):
+                raise ValueError(f"masked KDA conv: scalar int valid_len only (single sequence), got {type(valid_len)}")
             sel = torch.zeros(1, K - 1, (K - 1) + T, dtype=torch.float32)
             for j in range(K - 1):
                 sel[:, j, valid_len + j] = 1.0

@@ -10,6 +10,7 @@ Weights interleaved per device; x replicated in, output reduce-scattered on dim=
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -194,6 +195,14 @@ class TPAttention:
         # Default 256 at TP=2 only (the measured case); 0 = follow QWEN36_SDPA_Q_CHUNK (the previous behaviour).
         _q_long_default = "256" if getattr(args, "num_devices", 0) == 2 else "0"
         self._sdpa_q_chunk_long = int(os.environ.get("QWEN36_SDPA_Q_CHUNK_LONG", _q_long_default) or 0)
+        if self._sdpa_q_chunk_long and self._sdpa_k_chunk < self._sdpa_q_chunk_long:
+            # Bit-exactness needs K chunk >= the long Q chunk already (model_config's setdefault gives K = 256). With a
+            # smaller K chunk, q_long would drag k up with it (k = max(q, K)) and change the numerics: fall back.
+            logger.warning(
+                f"QWEN36_SDPA_Q_CHUNK_LONG={self._sdpa_q_chunk_long} ignored: QWEN36_SDPA_K_CHUNK={self._sdpa_k_chunk} "
+                f"< it (would change SDPA numerics); full chunks keep q_chunk {self._sdpa_q_chunk}"
+            )
+            self._sdpa_q_chunk_long = 0
         self._sdpa_compute_cfg = self.compute_cfg
         # QWEN36_SDPA_BF16_DEST=1: bf16 DEST accumulation for the chunked SDPA (8 dest tiles -> 2x4 subblocks; numerics change,
         # gate on long-context PCC). QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en (8 fp32 dest tiles).
