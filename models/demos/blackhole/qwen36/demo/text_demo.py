@@ -201,18 +201,30 @@ def _blocks_for(seqlen, max_generated_tokens):
     return min(MAX_BLOCK_BUDGET, blocks)
 
 
-def _skip_unsupported_on_wormhole():
-    """Wormhole runs the sparse-MoE Qwen3.6-35B-A3B on N150x4 only.
+# Largest batch x ISL whose paged KV cache fits beside the 35B-A3B weights on a 12 GB Wormhole chip
+# (measured on the WH LoudBox: batched_32k_b8 = 262,144 tokens fits; batched_64k_b8 = 524,288 runs
+# out of DRAM allocating the bf16 KV cache).
+_WH_MAX_BATCHED_KV_TOKENS = 8 * 32768
+
+
+def _skip_unsupported_on_wormhole(seqlen, batch):
+    """Wormhole runs the sparse-MoE Qwen3.6-35B-A3B on N150x4 only, within its DRAM budget.
 
     The 9B / 27B checkpoints are Blackhole-only: their program configs and memory budget were
     tuned for a P150 (32 GB, 11x10 grid) and neither has been brought up or validated on a
-    Wormhole n150 (12 GB, 8x8). Skip rather than run something unvalidated. Blackhole is
-    unaffected — this returns immediately there."""
+    Wormhole n150 (12 GB, 8x8). Batched cases whose paged KV cache (batch x ISL tokens) exceeds
+    what fits beside the weights are skipped too. Skip rather than run something unvalidated.
+    Blackhole is unaffected — this returns immediately there."""
     if is_blackhole():
         return
     hf_model = os.environ.get("HF_MODEL", "")
     if "A3B" not in hf_model:
         pytest.skip(f"Wormhole supports only the Qwen3.6-35B-A3B (MoE) checkpoint here; HF_MODEL={hf_model!r}")
+    if batch > 1 and batch * seqlen > _WH_MAX_BATCHED_KV_TOKENS:
+        pytest.skip(
+            f"batch {batch} x ISL {seqlen} needs a paged KV cache larger than a 12 GB Wormhole chip holds "
+            f"beside the weights (limit {_WH_MAX_BATCHED_KV_TOKENS} tokens)"
+        )
 
 
 @run_for_wormhole_b0_or_blackhole()
@@ -260,7 +272,7 @@ def test_demo_text(
     repeat_batches,
 ):
     """E2e text generation: prefill + decode."""
-    _skip_unsupported_on_wormhole()
+    _skip_unsupported_on_wormhole(seqlen, batch)
     from transformers import AutoTokenizer
 
     device = mesh_device

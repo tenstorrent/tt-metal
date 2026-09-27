@@ -120,9 +120,9 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and 
 
 ### Supported range
 
-Batch-1 prefill runs up to and including the `traced_128k` case (a 103,351-token prompt). The
-`traced_256k` case and batched cases with prompts longer than 128 tokens have not been run on
-Wormhole.
+Batch-1 prefill runs up to and including the `traced_128k` case (a 103,351-token prompt); `traced_256k`
+has not been run on Wormhole. Batched cases run up to 8 users x 32k tokens (`batched_32k_b8`);
+`batched_64k_b8` does not fit its KV cache in a 12 GB chip and is skipped on Wormhole.
 
 ### Validated results
 
@@ -143,6 +143,9 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s --timeout=5000 \
 | `traced_128k`     | 103,351 | 120.89 s | 21.51 tok/s | PASSED |
 | `batched_128_b8`  | 128 × 8  | 16.69 s | 20.12 tok/s/user (161.0 aggregate) | PASSED |
 | `batched_128_b32` | 128 × 32 | 7.59 s  | 9.37 tok/s/user (299.9 aggregate)  | PASSED |
+| `batched_8k_b8`   | 8,192 × 8  | 71.73 s  | 18.67 tok/s/user (149.3 aggregate) | PASSED |
+| `batched_16k_b8`  | 16,384 × 8 | 139.36 s | 17.68 tok/s/user (141.4 aggregate) | PASSED |
+| `batched_32k_b8`  | 32,768 × 8 | 281.78 s | 15.90 tok/s/user (127.2 aggregate) | PASSED |
 
 `traced_4k` uses a 2,642-token prompt, and `traced_128k` runs the whole Frankenstein text, which
 is 103,351 tokens (its KV block budget is sized for 128k).
