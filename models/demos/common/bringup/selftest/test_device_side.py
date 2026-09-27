@@ -208,3 +208,45 @@ def test_contract_serves_the_layer_subset(fx, monkeypatch):
     assert contract.served_layers(Spec.load(fx())) == (0, 3)
     with pytest.raises(ValueError, match="contiguous"):
         contract.served_layers(Spec.load(fx(layers=[0, 2])))
+
+
+def test_full_prefill_times_a_prefix_subset(fx, monkeypatch):
+    """F42: MiMo layers 0-5 of 48 recorded no prefill_ms_full; a prefix subset is timed (no final norm), a gapped one
+    is not, the full stack still ends with the final norm."""
+    import torch
+
+    from models.demos.common.bringup.testing import profile
+
+    rec = {}
+    monkeypatch.setattr(profile.metrics, "record", lambda k, v: rec.__setitem__(k, v))
+
+    class Fake:
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, t):
+            return "h"
+
+        def layer(self, i, h, s0, st):
+            self.calls.append(i)
+            return "h"
+
+        def final_norm(self, h):
+            self.calls.append("norm")
+            return "h"
+
+        def free(self, h):
+            pass
+
+        def sync(self):
+            pass
+
+    rung = {"seq": 256, "chunk": 128}
+    tokens = torch.zeros(256, dtype=torch.long)
+    m = Fake()
+    assert profile.full_prefill(Spec.load(fx(layers=[0, 1])), m, None, [0, 1], rung, tokens) is not None
+    assert "norm" not in m.calls and rec["prefill_layers"] == 2 and rec["prefill_ms_full"] >= 0
+    assert profile.full_prefill(Spec.load(fx(layers=[0, 2])), Fake(), None, [0, 2], rung, tokens) is None
+    m = Fake()
+    profile.full_prefill(Spec.load(fx()), m, None, [0, 1, 2], rung, tokens)
+    assert m.calls.count("norm") == 3  # compile pass, timed pass, per-chunk pass
