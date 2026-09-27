@@ -8,6 +8,7 @@ $title
 $role_text
 
 $rules
+$prior
 ## Read first
 - `models/demos/common/bringup/knowledge/repo_map.md`
 - `models/demos/common/bringup/knowledge/known_issues.md`

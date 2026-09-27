@@ -103,6 +103,41 @@ INFRA_FAILURES = re.compile(
 )
 # The prefill engine the contract step plugs a model into; its agent may change it (owner, F29).
 CONTRACT_SHARED = "models/demos/common/prefill"
+# A spec's ``prior`` (an earlier bring-up of the same checkpoint on another mesh or configuration): per role, the prior's
+# files each brief lists (relative to the prior's model dir; a folder means its contents), and what to do with them.
+PRIOR_READS = {
+    "reference": ["bringup/hooks.py", "reference/"],
+    "plan": ["bringup/plan.md", "bringup/plan.yaml", "bringup/components.yaml", "bringup/findings.yaml"],
+    "test": ["tests/bringup/"],
+    "implement": ["tt/", "bringup/BREADCRUMBS.md"],
+    "assemble": ["tt/model.py", "bringup/hooks.py"],
+    "fix": ["tt/", "bringup/BREADCRUMBS.md"],
+    "contract": ["tt/runners/"],
+    "perf": ["bringup/opportunities.md", "bringup/tasks.yaml", "bringup/results/X.3_profile.json"],
+    "optests": ["bringup/results/fork_calls.json"],
+}
+PRIOR_TEXT = {
+    "reference": "The CPU reference is the prior's: this model's hooks call the prior's `reference` (and tokenizer / "
+    "HF hooks). Do not copy it; change it there only for a bug, which then applies to both.",
+    "plan": "Start from the prior's plan and re-plan for this mesh ({mesh}, the prior ran {prior_mesh}). For each "
+    "component say what changes (sharding, collectives and their axes, MoE dispatch groups, memory per chip) and why, "
+    "and what carries over unchanged. A collective or op the new layout needs that TTNN lacks or cannot do goes through "
+    "agent rule 6 (a fork or a new op in ttnn/ttnn/bringup), never an edit of an existing op.",
+    "test": "The prior's frozen test for the same component is a reference for comparison modes and thresholds; the "
+    "golden is the same, so its limits are a good starting point.",
+    "implement": "Start from the prior's module for the same component (in its `tt/`): copy it into this model's "
+    "`tt/` and change what this plan changes. Do not import from the prior's `tt/`: each bring-up's device code "
+    "stands alone.",
+    "assemble": "The prior's `tt/model.py` shows how its validated modules were assembled; do the same here.",
+    "fix": "The prior's module for the component that broke, and its breadcrumbs, show what worked on {prior_mesh}; "
+    "the difference is usually the new layout.",
+    "contract": "The prior's runners show the adapter and KV layout for {prior_mesh}; the address table and layout "
+    "change with the mesh.",
+    "perf": "The prior's opportunities, perf picks (P.* in its tasks.yaml) and final profile show what paid off on "
+    "{prior_mesh}; measure before assuming the same here.",
+    "optests": "The prior's fork_calls.json shows which forks it used; this model may need different ones, or none.",
+}
+
 # Forked TTNN ops of bring-ups (agent rule 6): every step that writes code may fork or extend one there.
 BRINGUP_OPS = "ttnn/ttnn/bringup"
 # A test killed by pytest-timeout ran out of time, it did not fail a check: an agent cannot fix that from the log.
@@ -348,6 +383,17 @@ class Orchestrator:
         # spec agents.read.<role>: files every brief of that role lists (e.g. the HF modeling code for the reference role)
         reads = list(task.get("tests") or []) + list(extra_read) + list(brief.get("read") or [])
         reads += [r for r in (s.get(f"agents.read.{role}") or []) if r not in reads]
+        vals["prior"] = ""
+        if s.prior:
+            ps, pdir = s.prior_spec(), rel(s, s.prior)
+            reads += [f"{pdir}/{r}" for r in PRIOR_READS.get(role, []) if (s.prior / r).exists()]
+            text = PRIOR_TEXT.get(role, "").format(
+                mesh="x".join(map(str, s.mesh)), prior_mesh="x".join(map(str, ps.mesh))
+            )
+            vals["prior"] = (
+                f"## Prior bring-up\nThis checkpoint was brought up before as `{pdir}` (mesh "
+                f"{'x'.join(map(str, ps.mesh))}). Its goldens and CPU reference are shared with this one. {text}\n"
+            )
         vals["read_list"] = "\n".join(f"- `{r}`" for r in reads)
         rules = s.get("agents.rules") or []
         vals["rules"] = (
