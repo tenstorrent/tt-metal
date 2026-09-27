@@ -883,10 +883,9 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
         }
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
-    } else if (cluster_type == tt::tt_metal::ClusterType::N150 && arch == tt::ARCH::WORMHOLE_B0) {
-        // Single-card N150: dedicated 1x1 config so placement never depends on the generic default.
-        arch_cluster_filename = "wh_n150_physical_grouping_descriptor.textproto";
     }
+    // Single-card N150 intentionally has no dedicated PGD: a 1x1 mesh backs out to the MGD placement
+    // fallback (identity), so it never needs a physical grouping descriptor.
     if (arch_cluster_filename.has_value()) {
         if (auto loaded = load_from_grouping_dirs(*arch_cluster_filename)) {
             return loaded;
