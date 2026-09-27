@@ -46,3 +46,5 @@ was changed. Operator-owned PIPELINE_INTERVENTIONS.md and vllm/ are untouched.
 Check results: {"evidence_check": {"exit_code": 1, "log": "evidence_check.log"}, "context_check": {"exit_code": 0, "log": "context_check.log"}}.
 
 Initial checker raised AttributeError on null generator_module; omitted that unknown optional field and reran. Final evidence check exit2 correctly reports missing generated implementation identity; context check exit0. Initial failure retained.
+
+Local evidence commit: `93f3f7dfb88d1147a83781f57295b19ed419ac0a`. Commit hooks passed; no push. Initial commit command lacked author identity; retry used the established prior-stage Codex identity via per-command Git configuration.
