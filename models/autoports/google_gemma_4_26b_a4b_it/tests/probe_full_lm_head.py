@@ -65,11 +65,11 @@ def capture(args, mesh):
         gen.teardown()
 
 
-def upload(mesh, value, memory=ttnn.DRAM_MEMORY_CONFIG, sharded=False):
+def upload(mesh, value, memory=ttnn.DRAM_MEMORY_CONFIG, sharded=False, dtype=ttnn.bfloat16):
     return ttnn.from_torch(
         value,
         device=mesh,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=memory,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1) if sharded else ttnn.ReplicateTensorToMesh(mesh),
@@ -89,9 +89,12 @@ def benchmark(args, mesh):
     del embedding
     x = upload(mesh, xhost)
     compute = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        math_fidelity=getattr(ttnn.MathFidelity, args.fidelity),
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     )
-    baseline_weight = upload(mesh, weight_host, sharded=True)
+    baseline_weight = upload(mesh, weight_host, sharded=True, dtype=getattr(ttnn, args.weight_dtype))
     baseline_pc = _get_lm_head_program_config(mesh, xhost.shape[-2], k, local_n)
 
     def baseline():
@@ -113,8 +116,8 @@ def benchmark(args, mesh):
         fixture=str(args.fixture),
         fixture_sha256=digest(args.fixture),
         scope="Isolated complete TP4 LM head, actual reduced-model terminal input; no sampler or stack",
-        dtype="BF16",
-        fidelity="HiFi4",
+        dtype=args.weight_dtype,
+        fidelity=args.fidelity,
         fp32_dest_acc_en=True,
         mesh=[1, 4],
         cases=[],
@@ -287,6 +290,8 @@ def benchmark(args, mesh):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--capture", action="store_true")
+    parser.add_argument("--weight-dtype", choices=["bfloat16", "bfloat8_b", "bfloat4_b"], default="bfloat16")
+    parser.add_argument("--fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="HiFi4")
     parser.add_argument("--interleaved-only", action="store_true")
     parser.add_argument("--grids", nargs="+", default=["11x10"])
     parser.add_argument("--fixture", type=Path, required=True)
@@ -297,6 +302,8 @@ def main():
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--replays", type=int, default=10)
     args = parser.parse_args()
+    if args.weight_dtype != "bfloat16" and not (args.interleaved_only or args.capture):
+        parser.error("Reduced-precision geometry sweep currently requires --interleaved-only")
     torch.set_num_threads(8)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.fixture.parent.mkdir(parents=True, exist_ok=True)

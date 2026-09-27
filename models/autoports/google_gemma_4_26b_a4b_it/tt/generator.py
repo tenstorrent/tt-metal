@@ -30,10 +30,13 @@ class Gemma4Generator(Generator):
         layer_indices=None,
         host_sampling=False,
         trace_debug=False,
+        precision_config=None,
     ):
         self.mesh = mesh_device
         self.trace_debug = trace_debug
-        self.model = Gemma4Model(mesh_device, max_seq_len=max_seq_len, layer_indices=layer_indices)
+        self.model = Gemma4Model(
+            mesh_device, max_seq_len=max_seq_len, layer_indices=layer_indices, precision_config=precision_config
+        )
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
         self.host_sampling = host_sampling
         self.sampled_mode = False

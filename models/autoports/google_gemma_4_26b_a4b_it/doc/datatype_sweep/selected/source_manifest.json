@@ -1,0 +1,28 @@
+{
+  "config_id": "head4_inner_all4_shared_down4",
+  "selected_policy_exactly_matches_candidate": true,
+  "runtime_sources_exactly_match_candidate": true,
+  "runtime_source_sha256": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/generator.py": "ba5b5f16f54513ac1658f198e86eb2c61e1e6d5a45ff23cbb19f061d80cb5e31",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/model.py": "2b7d9701fd38262a168fe144823d229ef5c3713aa7e0ea7b531c3108fed39b2c",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "f9bd79d74b8c7c5f093e0e8d72d95773dcbfdaf6f99f51ed4b1b62ebf10921b3",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672"
+  },
+  "policy_sha256": "9af37c1309a8cfd3b6018b7cbade031a11646dc46d3282cd2be1a4d018fba3b5",
+  "branch": "gemma-4-26b-a4b-it",
+  "starting_commit": "0cfab7802b734e9cb36f0500271e589519ba0679",
+  "hardware": "4 Blackhole P300c ASICs",
+  "mesh": [
+    1,
+    4
+  ],
+  "token_out_command": "OMP_NUM_THREADS=8 timeout 1800 python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_optimized_full_model --output-dir models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected",
+  "precision_override_supplied": false
+}

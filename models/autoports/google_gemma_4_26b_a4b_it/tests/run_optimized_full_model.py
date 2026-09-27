@@ -37,6 +37,7 @@ def main():
     gen = None
     try:
         gen = build_generator(None, mesh, max_seq_len=8192)
+        write(dest / "precision_runtime.json", gen.model.precision_summary())
         if not args.performance_only:
             refpath = ROOT / "readiness_aime24_chat.refpt"
             reference = load_reference(refpath)
@@ -49,7 +50,11 @@ def main():
             report["decode"] = [_run_one_entry(generator=gen, acc=acc, entry_idx=i) for i in range(acc.num_entries)]
             report["decode_metrics"] = dict(gen.metrics)
             write(dest / "readiness.json", report)
-            assert all(r["top5"] >= 0.98 and r["top100"] == 1 for p in ("prefill", "decode") for r in report[p])
+            assert all(
+                r["top1"] >= 0.90 and r["top5"] >= 0.98 and r["top100"] == 1
+                for p in ("prefill", "decode")
+                for r in report[p]
+            )
             controls = json.loads((ROOT / "doc/full_model/qualitative_hf.json").read_text())
             rows = []
             for row in controls["prompts"]:
@@ -103,6 +108,7 @@ def main():
             print("PERFORMANCE", label, results[label], flush=True)
             write(dest / "performance_comparison.json", results)
         assert sequences["streaming"] == sequences["buffered"]
+        write(dest / "precision_runtime.json", gen.model.precision_summary())
         final = results["buffered"]
         write(
             dest / "performance.json",

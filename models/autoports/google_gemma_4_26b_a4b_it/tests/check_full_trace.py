@@ -174,6 +174,7 @@ def main():
                 feedback=True,
                 inactive_cache_unchanged=True if batch == 3 else None,
             )
+        report["precision_runtime"] = gen.model.precision_summary()
         report["layer_count"] = len(gen.model.layers)
         report["counters"] = gen.counters
         args.output.write_text(json.dumps(report, indent=2) + "\n")
