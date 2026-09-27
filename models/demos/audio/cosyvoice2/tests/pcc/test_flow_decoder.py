@@ -612,3 +612,81 @@ def test_cfm_trace_cache_capacity_other_than_one_is_refused(expect_error):
         with expect_error(ValueError, "capacity must be 1"):
             TtCausalConditionalCFM(None, None, noise, cfm_ref)
     assert TtCausalConditionalCFM(None, None, noise, cfm_ref)._trace_capacity == 1
+
+
+# Fused-SDPA estimator vs the torch reference at T = 449, random weights: measured PCC 0.99952, max|diff|
+# 0.148 (2026-09-27, N150); the harness control (1e30 in a logical K/V row) moves the output by 3.1.
+SDPA_T1MOD32_MAX_ABS = 0.5
+
+
+@needs_l1_small
+def test_device_decoder_fused_sdpa_ignores_tile_padding_at_t_1_mod_32(device, monkeypatch):
+    """tt-metal #57608 regression guard. On Blackhole, fused SDPA (non-causal, no mask) lets large values in
+    K/V's implicit tile padding reach the output when T is not a multiple of 32 (PCC ~0, silent); CosyVoice1
+    hit it through conv1d leaving garbage in that padding at T = 1 mod 32. The non-streaming estimator
+    runs fused SDPA exactly that way at arbitrary T. Measured on Wormhole/N150 (2026-09-27): not
+    reproducible -- 1e30 planted in K/V padding leaves SDPA's output bit-identical at the op level, and the
+    real-weight estimator matched torch at every T = 1 mod 32 from 161 to 1537 with fused SDPA and the
+    explicit chain alike. At T = 449 (= 1 mod 32) this checks, on whatever hardware runs it:
+      * fused-SDPA estimator vs the torch reference (PCC and max|diff|);
+      * padding immunity: 1e30 planted in K/V's padding on every SDPA call changes nothing;
+      * harness control: 1e30 planted in the last *logical* K/V row must change the output -- proves the
+        plant reaches SDPA's inputs, so the immunity check cannot pass vacuously."""
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import (
+        CausalConditionalDecoderRef,
+        TtCausalConditionalDecoder,
+        flow_fused_sdpa,
+    )
+
+    assert flow_fused_sdpa(), "COSYVOICE2_FLOW_SDPA must be on (the default) for this test"
+    torch.manual_seed(449)
+    b, t_len = 2, 449
+    assert t_len % 32 == 1
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    x, mu, cond = (torch.randn(b, t_len, 80) * 0.1 for _ in range(3))
+    spks, mask, t = torch.randn(b, 80) * 0.1, torch.ones(b, t_len, 1), torch.rand(b)
+    with torch.no_grad():
+        want = dec(x, mask, mu, t, spks, cond)
+
+    tt_dec = TtCausalConditionalDecoder(device, dec)
+
+    def run():
+        dev = lambda a: ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        out = tt_dec(dev(x), dev(mask), dev(mu), t, dev(spks.unsqueeze(1)), dev(cond), t_len, b)
+        return ttnn.to_torch(out).float().reshape(want.shape)
+
+    real_sdpa = ttnn.transformer.scaled_dot_product_attention
+
+    def plant_padding(q, k, v, **kw):
+        return real_sdpa(q, ttnn.fill_implicit_tile_padding(k, 1e30), ttnn.fill_implicit_tile_padding(v, 1e30), **kw)
+
+    def plant_last_row(q, k, v, **kw):
+        def last_row_big(x):
+            h = ttnn.to_torch(x)
+            h[..., -1, :] = 1e30
+            return ttnn.from_torch(h, dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+        return real_sdpa(q, last_row_big(k), last_row_big(v), **kw)
+
+    clean = run()
+    with monkeypatch.context() as m:
+        m.setattr(ttnn.transformer, "scaled_dot_product_attention", plant_padding)
+        padded = run()
+    with monkeypatch.context() as m:
+        m.setattr(ttnn.transformer, "scaled_dot_product_attention", plant_last_row)
+        control = run()
+
+    passed, pcc = comp_pcc(want, clean, GATE_BF16)
+    max_abs = (want - clean).abs().max().item()
+    pad_diff = (clean - padded).abs().max().item()
+    ctl_diff = (clean - control).abs().max().item()
+    print(
+        f"\n  T={t_len}: fused SDPA vs torch PCC {pcc} max|diff| {max_abs:.4g}; planted K/V padding changes "
+        f"the output by {pad_diff:.4g}; planted last logical row (control) by {ctl_diff:.4g}"
+    )
+    assert passed, pcc
+    assert max_abs <= SDPA_T1MOD32_MAX_ABS, max_abs
+    assert pad_diff == 0.0, f"K/V tile padding reached the output (#57608): max|diff| {pad_diff}"
+    assert not (ctl_diff <= SDPA_T1MOD32_MAX_ABS), f"harness control did not change the output: {ctl_diff}"
