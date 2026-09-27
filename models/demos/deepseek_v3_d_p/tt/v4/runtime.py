@@ -25,6 +25,25 @@ from models.demos.deepseek_v3_d_p.tt.v4.transformer import TtV4PrefillTransforme
 
 
 @dataclass
+def _clear_export_caches(kv_caches, why: str) -> None:
+    """DS4F-0271 (launch 20/21c audit): the compile warm-up and the capture warm chunk run a token-0 chunk through every layer
+    AND its export writes, so the migration caches hold non-zero "token-0 text" rows up to max_seq before the first request;
+    the driver's row range then exports whatever sits past a prompt's real rows (the HCA config is copied whole). Zero every
+    export cache on device (the allocation-time kernel, no host transfer) once the warm-ups are done. Never inside a capture.
+    """
+    if kv_caches is None:
+        return
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import DRAMZeroFill
+
+    n = 0
+    for name in ("swa_window", "hca_unified", "csa_unified", "csa_index_k", "csa_pending", "hca_pending"):
+        t = getattr(kv_caches, name, None)
+        if t is not None:
+            DRAMZeroFill.op(t)
+            n += 1
+    logger.info(f"[v4 runtime] export caches zeroed ({n} tensors) after {why}")
+
+
 class TtV4PrefillRuntimeConfig:
     chunk_size: int
     max_seq_len: int
@@ -123,6 +142,7 @@ class TtV4PrefillRuntime:
             )
         for layer in self.model.layers:
             layer.reset_slot(0)
+        _clear_export_caches(kv_caches, "the compile warm-up")
         ttnn.synchronize_device(self.mesh_device)
         self._compiled = True
         self._trace_captured = False
@@ -149,6 +169,7 @@ class TtV4PrefillRuntime:
         self._trace_captured = True
         # warm the traced path once (the islands' copy / reshape programs compile here, not on the first request)
         self.prefill_chunk(x, kv_caches, slot_id=0, actual_start=0, actual_end=c.chunk_size, warmup=True)
+        _clear_export_caches(kv_caches, "the capture warm chunk")
         for layer in self.model.layers:
             layer.reset_slot(0)
         ttnn.deallocate(x)

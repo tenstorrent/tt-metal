@@ -1211,11 +1211,43 @@ class TtHCA(_TtHCABase):
         )
         return q, sliding_kv, new_entries, mask_block, cos, sin
 
+    # DS4F-0271 (launch 20/21c audit): a ragged FINAL chunk on the islands computes the padded chunk's entries; without this,
+    # the rows past ceil(real_len / 128) -- real-text pad tokens -- were written to the working cache and EXPORTED (the migration
+    # copies the whole HCA extent). One persistent [1, 1, chunk_entries, 1] 0/1 row mask per (device, width), pushed per chunk
+    # (value-cached), multiplied in EAGERLY here only when the chunk is ragged (full chunks pay nothing).
+    _SHARED_ENTRY_MASK: dict = {}
+
+    def _entry_row_mask(self, width: int):
+        key = (id(self.device), int(width))
+        ent = TtHCA._SHARED_ENTRY_MASK.get(key)
+        if ent is None:
+            buf = self._from_torch(torch.ones(1, 1, int(width), 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ent = SharedScalar(buf)
+            ent.value = int(width)
+            TtHCA._SHARED_ENTRY_MASK[key] = ent
+        return ent
+
+    def _masked_entries(self, new_entries, n_new: int):
+        width = int(new_entries.shape[2])
+        if int(n_new) >= width:
+            return new_entries
+        ent = self._entry_row_mask(width)
+        if ent.value != int(n_new):
+            t = torch.zeros(1, 1, width, 1)
+            t[:, :, : int(n_new)] = 1.0
+            host = self._from_torch(t, dtype=ent.buf.dtype, layout=ent.buf.layout, on_device=False)
+            ttnn.copy_host_to_device_tensor(host, ent.buf)
+            ent.value = int(n_new)
+        m = ent.buf if ent.buf.dtype == new_entries.dtype else ttnn.typecast(ent.buf, new_entries.dtype)
+        return ttnn.multiply(new_entries, m)
+
     def glue_chunk(self, state, outs, real_len: int, export=None) -> None:
         if self.compressor is None:
             return
         _q, _kv, new_entries, _m, _c, _s = outs
-        merged, tile_start = self._write_compressed(state, new_entries, real_len // self.compressor.compress_rate)
+        n_new = real_len // self.compressor.compress_rate
+        new_entries = self._masked_entries(new_entries, n_new)
+        merged, tile_start = self._write_compressed(state, new_entries, n_new)
         if export is not None:
             self._export_entries(export, merged, tile_start)
 
@@ -1279,6 +1311,8 @@ class TtHCA(_TtHCABase):
         """Build the export ring's one-hot select matrix and slab-window index pair for a full chunk (k_prev = 0) at
         allocation time: created lazily on the first export they could otherwise be allocated after a trace capture
         and be overwritten by that trace's replay (DS4F-0262 class)."""
+        if self.compressor is not None:
+            self._entry_row_mask(int(chunk) // self.compressor.compress_rate)  # DS4F-0271: the ragged-chunk entry mask
         sw = self.sliding_window
         if chunk < sw:
             return
