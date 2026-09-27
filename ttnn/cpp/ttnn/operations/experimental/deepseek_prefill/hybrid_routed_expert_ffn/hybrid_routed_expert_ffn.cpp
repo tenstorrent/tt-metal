@@ -31,8 +31,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
     uint32_t combine_axis,
     uint32_t combine_num_links,
     uint32_t num_experts_per_tok,
-    uint32_t seq_len_per_chip,
-    std::optional<tt::tt_metal::DataType> output_dtype) {
+    uint32_t seq_len_per_chip) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -84,24 +83,18 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const bool fused_half_runs = hybrid_token_threshold > 0;
     const bool overlap_combine = dispatched_metadata.has_value();
     ttnn::Tensor output = dispatched_buffer;
+    // Overlapped, combine's untilizers take the bfloat8_b tiles the row-major path writes, the same handoff the
+    // two ops make back to back; a TILE x would be written back in place, where combine could not tell which
+    // rows are already output.
     TT_FATAL(
-        !output_dtype.has_value() || x_is_row_major,
-        "output_dtype applies only to a ROW_MAJOR dispatched_buffer; a TILE one is written back in its own dtype");
-    if (overlap_combine) {
-        // Combine reads bfloat16 tiles, and a TILE x is bfloat8_b, so the tilized row-major path is the one
-        // that can produce them.
-        TT_FATAL(
-            x_is_row_major &&
-                output_dtype.value_or(tt::tt_metal::DataType::BFLOAT16) == tt::tt_metal::DataType::BFLOAT16,
-            "overlapped with combine, dispatched_buffer must be ROW_MAJOR and the output bfloat16 (got {} {})",
-            dispatched_buffer.dtype(),
-            dispatched_buffer.layout());
-        output_dtype = tt::tt_metal::DataType::BFLOAT16;
-    }
+        !overlap_combine || x_is_row_major,
+        "overlapped with combine, dispatched_buffer must be ROW_MAJOR (got {} {})",
+        dispatched_buffer.dtype(),
+        dispatched_buffer.layout());
     if (x_is_row_major) {
         output = ttnn::empty(
             dispatched_buffer.logical_shape(),
-            output_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B),
+            tt::tt_metal::DataType::BFLOAT8_B,
             tt::tt_metal::Layout::TILE,
             dispatched_buffer.device(),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});

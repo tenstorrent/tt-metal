@@ -133,10 +133,12 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         hyb_cmbf2d::FORWARDING_METADATA_SIZE,
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(
-        buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. BFLOAT8_B needs a dequantise the "
-        "untilizer cores do not do.",
-        buf.dtype());
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            (buf.dtype() == tt::tt_metal::DataType::BFLOAT8_B && buf.layout() == tt::tt_metal::Layout::TILE),
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16, or BFLOAT8_B TILE for the untilizers to "
+        "dequantise; got {} {}",
+        buf.dtype(),
+        buf.layout());
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
 

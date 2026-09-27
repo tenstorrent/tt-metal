@@ -203,7 +203,7 @@ def _build_case(mesh_device, device_params, threshold_id):
 
     ep_mapper = get_ep_mesh_mapper(mesh_device)
     counts_mapper = get_expert_token_counts_mesh_mapper(mesh_device)
-    # ROW_MAJOR bf16: the tilized path is the one that writes the bf16 tiles combine reads.
+    # ROW_MAJOR bf16: the tilized path is the one that writes the bf8 tiles combine reads.
     tt_x = ttnn.from_torch(
         dispatched_buffer, mesh_mapper=ep_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
@@ -259,10 +259,14 @@ def _build_case(mesh_device, device_params, threshold_id):
             **overlap,
         )
 
+    # Solo, the routed expert writes the same bfloat8_b tiles it hands combine inside the overlap.
     def solo_routed_expert():
-        return routed_expert(output_dtype=ttnn.bfloat16)
+        return routed_expert()
 
     def combine(re_output):
+        # The standalone op takes bfloat16 only; bfloat8_b widens exactly, so this is the bytes the
+        # overlap's untilizers produce.
+        re_output = ttnn.typecast(re_output, ttnn.bfloat16)
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
             re_output,
             tt_metadata,
