@@ -186,6 +186,14 @@ class TPAttention:
         # bucket size, so chunk_start % q_chunk == 0 holds). Default 128 = the previous literal. Experiment knob: at TP=1
         # 256 was 30% faster on the diagonal chunk, not measured over the full chunk range (laneA_RESULTS.md 5).
         self._sdpa_q_chunk = int(os.environ.get("QWEN36_SDPA_Q_CHUNK", "128"))
+        # QWEN36_SDPA_Q_CHUNK_LONG: Q chunk of the same FLEXIBLE path for FULL chunks (S >= 2048), where the K chunk is
+        # already max(q, QWEN36_SDPA_K_CHUNK = 256): q 128 -> 256 keeps every query row's k-chunk sequence and
+        # partitioning, so the output is bit-identical (measured TP=2, lane Q: 64-layer logits torch.equal at 2047 /
+        # 2048 / 8000 / 8192 / 32768 tokens) while the longer Q chunk halves the K/V re-reads: 32k TTFT 8.08 -> 7.68 s.
+        # Masked buckets (S < 2048) keep QWEN36_SDPA_Q_CHUNK (there k == q, so a larger q would change k and numerics).
+        # Default 256 at TP=2 only (the measured case); 0 = follow QWEN36_SDPA_Q_CHUNK (the previous behaviour).
+        _q_long_default = "256" if getattr(args, "num_devices", 0) == 2 else "0"
+        self._sdpa_q_chunk_long = int(os.environ.get("QWEN36_SDPA_Q_CHUNK_LONG", _q_long_default) or 0)
         self._sdpa_compute_cfg = self.compute_cfg
         # QWEN36_SDPA_BF16_DEST=1: bf16 DEST accumulation for the chunked SDPA (8 dest tiles -> 2x4 subblocks; numerics change,
         # gate on long-context PCC). QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en (8 fp32 dest tiles).
@@ -1295,7 +1303,7 @@ class TPAttention:
         # chunk_start_idx % q_chunk_size == 0; FLEXIBLE path uses one program per trace.
         # q/k_chunk=128 is valid (chunk_start always divisible by 2048) and faster than 64/256.
         if chunk_start_idx_tensor is not None:
-            qk_chunk = self._sdpa_q_chunk
+            qk_chunk = self._sdpa_q_chunk_long if (S >= 2048 and self._sdpa_q_chunk_long) else self._sdpa_q_chunk
         else:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)

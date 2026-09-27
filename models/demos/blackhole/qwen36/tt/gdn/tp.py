@@ -455,7 +455,7 @@ class TPGatedDeltaNet:
                 "QWEN36_GDN_OUT_MODE set after the weights were loaded without tw['out_col']; using mmrs_fp32"
             )
             _mode = "mmrs_fp32"
-        if _mode == "agmm" and args.num_devices != 4:
+        if _mode == "agmm" and args.num_devices != 4 and os.environ.get("QWEN36_GDN_OUT_AGMM_ANY_TP", "0") != "1":
             logger.warning("QWEN36_GDN_OUT_MODE=agmm is validated at TP=4 only; using ag_mm")
             _mode = "ag_mm"
         self._gdn_out_mode = _mode
@@ -475,6 +475,15 @@ class TPGatedDeltaNet:
         # requiring a ROW_MAJOR gather, which removes the ~85 us full-chunk untilize per layer. The carry still
         # comes back as TILE [1,K-1,C], so every other piece of conv state bookkeeping is unchanged.
         self._kda_tile_in = self._gdn_conv_kda and os.environ.get("QWEN36_KDA_TILE_IN") == "1"
+        # QWEN36_GDN_MASKED_KDA=1: masked-bucket prefill (traced gdn_masks bucket or eager int valid_len) takes the fused
+        # KDA conv for q/k/v too, instead of the multiply/addcmul FIR (_causal_conv1d_fir); the decode conv window /
+        # carry keeps the FIR path's exact one-hot select over [carry ; x], so only the conv OUTPUT arithmetic changes
+        # (KDA silu on the fp32 DEST sum + FPU mul/add vs FIR SFPU FMA + silu on the bf16 sum -- the same arithmetic
+        # an exact 2048-token chunk already uses). Numerics change on masked buckets -> identity-gated (lane Q).
+        # Needs the TILE-input KDA (QWEN36_KDA_TILE_IN=1, a serving default) and the flat q/k/v adapter.
+        self._gdn_masked_kda = (
+            self._kda_tile_in and self._gdn_flat_qkv and os.environ.get("QWEN36_GDN_MASKED_KDA", "0") == "1"
+        )
         # QWEN36_GDN_DECODE_KDA=1: decode recurrence through the fused KDA chunk ops on a 32-row chunk (token in
         # row 0, beta/g zero on the padding rows -> t_inv is the identity and the chunk math reduces exactly to
         # the single-step delta rule). Replaces the ~35-op ttnn recurrent step. Constants built lazily.
@@ -967,6 +976,68 @@ class TPGatedDeltaNet:
             ttnn.deallocate(t)
         return (q, k, v), new_state
 
+    def _conv1d_prefill_kda_masked(self, qkv, T, conv_state, conv_sel=None, valid_len=None):
+        """Masked-bucket conv: fused KDA conv + SiLU + q/k/v split for the conv output, and the decode conv window /
+        carry selected exactly as _causal_conv1d_fir does for a masked bucket (one-hot [1, K-1, K-1+T] matmul over
+        [conv_state ; x]: rows valid_len .. valid_len+K-2). Rows >= valid_len of the conv output are padding garbage
+        either way (the scan masks them). conv_sel: the traced bucket's persistent one-hot (gdn_masks); else the
+        eager int valid_len builds it on host (as the FIR's valid_len branch does). Returns ((q,k,v), new_state)."""
+        C, K = self.qkv_dim_tp, self.K
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        if conv_state is not None:
+            x_padded = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
+        else:
+            pad = ttnn.zeros([1, K - 1, C], device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            x_padded = ttnn.concat([pad, qkv], dim=1, memory_config=_dram)
+            ttnn.deallocate(pad)
+        xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
+        if conv_sel is not None:
+            new_state = ttnn.matmul(conv_sel, xp, memory_config=_dram)
+        else:
+            assert isinstance(valid_len, int), "masked KDA conv: scalar valid_len only (single sequence)"
+            sel = torch.zeros(1, K - 1, (K - 1) + T, dtype=torch.float32)
+            for j in range(K - 1):
+                sel[:, j, valid_len + j] = 1.0
+            sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh)
+            new_state = ttnn.matmul(sel_tt, xp, memory_config=_dram)
+            ttnn.deallocate(sel_tt)
+        if xp is not x_padded:
+            ttnn.deallocate(xp)
+        ttnn.deallocate(x_padded)
+        hist = conv_state
+        if hist is None:
+            if self._kda_zero_hist is None:
+                self._kda_zero_hist = ttnn.from_torch(
+                    torch.zeros(1, K - 1, C, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh,
+                    memory_config=_dram,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                )
+            hist = self._kda_zero_hist
+        taps = self.tw["conv_taps"]
+        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            qkv,
+            hist,
+            taps[0],
+            taps[1],
+            taps[2],
+            taps[3],
+            self.key_dim_tp,
+            self.key_dim_tp,
+            self.value_dim_tp,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=self._kda_chunk),
+            memory_config=_dram,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+        return (q, k, v), new_state
+
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
@@ -1148,6 +1219,16 @@ class TPGatedDeltaNet:
         if self._gdn_conv_kda and valid_len is None and gdn_masks is None and self._gdn_flat_qkv:
             # Fused depthwise conv1d + SiLU + q/k/v split in ONE program (no conv2d/halo relayout chain).
             _kda_qkv, conv_new_state = self._conv1d_prefill_kda(qkv, T, _cstate)
+            conv = None
+        elif (
+            self._gdn_masked_kda
+            and T % tpc.TILE_SIZE == 0
+            and (gdn_masks is not None or (isinstance(valid_len, int) and not return_state))
+        ):
+            # QWEN36_GDN_MASKED_KDA=1: masked bucket through the fused conv; FIR-exact decode window select.
+            _kda_qkv, conv_new_state = self._conv1d_prefill_kda_masked(
+                qkv, T, _cstate, conv_sel=_conv_sel, valid_len=valid_len
+            )
             conv = None
         elif self._gdn_conv1d and valid_len is None and gdn_masks is None:
             # Native depthwise ttnn.conv1d (masked buckets keep the MAC FIR: valid_len new_state differs)
