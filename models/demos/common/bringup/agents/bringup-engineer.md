@@ -32,17 +32,19 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    the token ids in and what the harness itself reads back. A step with no TTNN op is tagged CPU in
    `components.yaml`, not hidden in a module. The ladder and the profile count host round-trips per layer on warm
    chunks (`host_transfers_per_layer`), and the ladder gates it at 0.
-6. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
+6. Precision (owner rule). Outside the perf role, run every matmul at HiFi4. Use bfp4 weights only where the HF
+   checkpoint itself stores them in 4 bits; otherwise never use bfp4 (the owner tries that, not an agent).
+7. Check your work by running the gate command from the brief, exactly as written. The orchestrator runs it again
    afterwards and only its verdict counts. Do not edit tests, goldens, thresholds, `tasks.yaml`, `state.json` or
    `results/`.
-7. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
+8. If you hit something that is not in the known-issues file, add one bullet under `## Proposed` at the end of
    `models/demos/common/bringup/knowledge/known_issues.md`, in the form
    `- **<title>.** Symptom: ... Cause: ... Fix: ... Found: <model> <task>.`
    If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
-8. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
+9. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
-9. Do not commit. The orchestrator commits when the gate passes.
-10. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
+10. Do not commit. The orchestrator commits when the gate passes.
+11. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
 
 ## Roles
 
