@@ -106,7 +106,10 @@ Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenario
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
 generated/profiler/{variant}_{mode}_mla_perf/), DS_PERF_RT_TIMEOUT (realtime-profiler record drain
-ceiling in seconds, default 30). DS_PERF_CHUNK is the Galaxy-global target chunk; smaller boxes scale
+ceiling in seconds, default 30), DS_PERF_HOST_COMPARE=1 (warm scenario only: 10 warmups and 10
+host-timed forwards each for traced and untraced execution), DS_PERF_HOST_OPS=1 (warm scenario only:
+exclusive TTNN host-call durations in 10 measured untraced forwards after 10 warmups). DS_PERF_CHUNK is
+the Galaxy-global target chunk; smaller boxes scale
 BOTH the measured chunk and the cache by SP/8; cache must stay a whole chunk multiple. DS_PERF_VARIANT /
 DS_PERF_SCENARIO / DS_PERF_ATTN_MODE remain as the module-level defaults used for mesh-shape detection,
 but the test itself sweeps the full matrix via parametrization.
@@ -124,6 +127,7 @@ import datetime
 import json
 import os
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 
 import pandas as pd
@@ -185,6 +189,8 @@ RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 # one device-collapsed row per program per forward, ordered by start tick — the input a per-call graph
 # attribution (parse_percall) needs. Off by default (the summary CSVs are the normal output).
 RT_OPS_DUMP = os.environ.get("DS_PERF_RT_OPS_DUMP", "") not in ("", "0", "false")
+HOST_COMPARE = os.environ.get("DS_PERF_HOST_COMPARE", "") not in ("", "0", "false")
+HOST_OPS = os.environ.get("DS_PERF_HOST_OPS", "") not in ("", "0", "false")
 
 
 def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
@@ -592,7 +598,7 @@ def _profile_forward(mesh_device, run_fn) -> dict:
         host_duration_ns = time.perf_counter_ns() - start_ns
         return result
 
-    _, records = profile_realtime_program(
+    result, records = profile_realtime_program(
         mesh_device, measured_run, collect_all=True, record_timeout_seconds=RT_RECORD_TIMEOUT_S
     )
     per_program: dict = {}
@@ -607,7 +613,7 @@ def _profile_forward(mesh_device, run_fn) -> dict:
         else:
             current["duration_ns"] = max(current["duration_ns"], duration_ns)
     assert per_program, "real-time profiler returned no valid program records for the measured forward"
-    return {"programs": per_program, "host_duration_ns": host_duration_ns}
+    return {"programs": per_program, "host_duration_ns": host_duration_ns, "result": result}
 
 
 def _profile_traced_forward(mesh_device, mla, run_fn) -> dict:
@@ -640,9 +646,19 @@ def _profile_traced_forward(mesh_device, mla, run_fn) -> dict:
         # registering the measured callback. The controller performs the final synchronization, so
         # _profile_forward's additional sync is an already-drained no-op.
         _profile_forward(mesh_device, controller.replay)
+        if HOST_COMPARE:
+
+            def timed_run(fn):
+                start_ns = time.perf_counter_ns()
+                result = fn()
+                ttnn.synchronize_device(mesh_device)
+                elapsed_ns = time.perf_counter_ns() - start_ns
+                return elapsed_ns, result
+
+            traced_warm_ns = [timed_run(controller.replay)[0] for _ in range(10)]
+            traced_ns = [timed_run(controller.replay)[0] for _ in range(10)]
         measured = _profile_forward(mesh_device, controller.replay)
         measured["trace_segments"] = controller.num_segments
-        return measured
     finally:
         if capture_started and not capture_ended:
             try:
@@ -659,6 +675,93 @@ def _profile_traced_forward(mesh_device, mla, run_fn) -> dict:
                 ttnn.deallocate(capture_out)
             if compile_out is not None:
                 ttnn.deallocate(compile_out)
+
+    if HOST_COMPARE:
+        # Count the programs in one eager forward, then time steady-state forwards without profiler
+        # callback registration or record draining inside the host interval.
+        eager_profile = _profile_forward(mesh_device, run_fn)
+        ttnn.deallocate(eager_profile["result"])
+        eager_warm_ns = []
+        eager_ns = []
+        for samples in (eager_warm_ns, eager_ns):
+            for _ in range(10):
+                elapsed_ns, result = timed_run(run_fn)
+                samples.append(elapsed_ns)
+                ttnn.deallocate(result)
+        measured["host_compare"] = {
+            "traced_warm_ns": traced_warm_ns,
+            "traced_ns": traced_ns,
+            "untraced_warm_ns": eager_warm_ns,
+            "untraced_ns": eager_ns,
+            "rt_program_count": len(eager_profile["programs"]),
+        }
+    return measured
+
+
+def _profile_untraced_host_ops(mesh_device, run_fn) -> dict:
+    """Measure exclusive Python host time inside each untraced TTNN operation call.
+
+    Keep the normal fast-runtime path: wrapping FastOperation.__call__ adds only two clock reads and
+    accounting around each invocation. Child TTNN calls are subtracted from their parent's duration,
+    so the per-operation sums do not double-count nested calls. Device synchronization and output
+    deallocation happen outside the per-operation timers.
+    """
+    from ttnn.decorators import FastOperation
+
+    original_call = FastOperation.__call__
+    current = None
+    stack = []
+
+    def timed_call(operation, *args, **kwargs):
+        if current is None:
+            return original_call(operation, *args, **kwargs)
+        started = time.perf_counter_ns()
+        frame = [started, 0]
+        stack.append(frame)
+        try:
+            return original_call(operation, *args, **kwargs)
+        finally:
+            elapsed = time.perf_counter_ns() - started
+            stack.pop()
+            if stack:
+                stack[-1][1] += elapsed
+            current[operation.python_fully_qualified_name].append(elapsed - frame[1])
+
+    def one_run():
+        nonlocal current
+        current = defaultdict(list)
+        try:
+            result = run_fn()
+            ttnn.synchronize_device(mesh_device)
+            return current, result
+        finally:
+            current = None
+
+    FastOperation.__call__ = timed_call
+    try:
+        for _ in range(10):
+            _, result = one_run()
+            ttnn.deallocate(result)
+        measured = []
+        for _ in range(10):
+            calls, result = one_run()
+            measured.append({name: {"count": len(times), "sum_ns": sum(times)} for name, times in calls.items()})
+            ttnn.deallocate(result)
+    finally:
+        FastOperation.__call__ = original_call
+
+    names = set().union(*(run.keys() for run in measured))
+    rows = []
+    for name in names:
+        counts = {run[name]["count"] for run in measured if name in run}
+        assert len(counts) == 1 and all(name in run for run in measured), f"unstable host op count: {name}"
+        best = min(run[name]["sum_ns"] for run in measured)
+        count = counts.pop()
+        rows.append({"operation": name, "count": count, "sum_ns": best, "avg_ns": best / count})
+    return {
+        "method": "minimum per-operation sum across 10 measured forwards after 10 warmups",
+        "rows": sorted(rows, key=lambda row: -row["sum_ns"]),
+    }
 
 
 def _programs_to_frame(forward: dict, dur_col: str) -> pd.DataFrame:
@@ -722,6 +825,8 @@ PERF_CASES = [
 def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, tp_shard_kv, config_only):
     if PERF_SKIP_REASON:
         pytest.skip(PERF_SKIP_REASON)
+    if (HOST_COMPARE or HOST_OPS) and scenario != "warm":
+        pytest.skip("host timing modes measure the warm scenario only")
 
     # Workload is variant-specific (head counts differ); the mesh/SP is shared. Resolve per parametrized
     # variant so labels + head counts match the variant under test (module-level VARIANT may differ).
@@ -886,6 +991,32 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
     for start in starts:
         ttnn.synchronize_device(mesh_device)  # drain prior programs so only this forward contributes records
         forwards.append(_profile_traced_forward(mesh_device, mla, lambda start=start: _one_forward(start)))
+
+    if HOST_COMPARE:
+        comparison = forwards[0]["host_compare"]
+        traced_min = min(comparison["traced_ns"])
+        untraced_min = min(comparison["untraced_ns"])
+        # The two restricted-subdevice overlap programs (local top-k and KV gather) do not appear in
+        # realtime-profiler records. They are each one device operation in the eager forward.
+        overlap_op_count = 2 if mla._sparse_mla_overlap is not None else 0
+        op_count = comparison["rt_program_count"] + overlap_op_count
+        comparison["untraced_op_count"] = op_count
+        comparison["incremental_host_us_per_op"] = (untraced_min - traced_min) / op_count / 1e3
+        comparison["untraced_host_us_per_op"] = untraced_min / op_count / 1e3
+        comparison["traced_min_ns"] = traced_min
+        comparison["untraced_min_ns"] = untraced_min
+        print("HOST_COMPARE " + json.dumps(comparison, sort_keys=True))
+        comparison_path = _contained(os.path.join(_output_dir(subdir), f"host_compare_{scenario}.json"))
+        with open(comparison_path, "w") as f:
+            json.dump(comparison, f, indent=2, sort_keys=True)
+
+    if HOST_OPS:
+        assert scenario == "warm", "DS_PERF_HOST_OPS measures the warm scenario only"
+        host_ops = _profile_untraced_host_ops(mesh_device, lambda: _one_forward(cache))
+        print("HOST_OPS " + json.dumps(host_ops, sort_keys=True))
+        host_ops_path = _contained(os.path.join(_output_dir(subdir), f"host_ops_{scenario}.json"))
+        with open(host_ops_path, "w") as f:
+            json.dump(host_ops, f, indent=2, sort_keys=True)
 
     dur_col = "DEVICE KERNEL DURATION [ns]"  # realtime-profiler op duration; kept for downstream compatibility
     frame = pd.concat([_programs_to_frame(forward, dur_col) for forward in forwards], ignore_index=True)
