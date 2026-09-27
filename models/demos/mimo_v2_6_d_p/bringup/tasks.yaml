@@ -26,7 +26,8 @@ tasks:
   deps:
   - R.1
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf --seq 2048
+    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf
+      --seq 2048
     metrics:
       revision_ok: == 1
       text_top1_acc: '>= 0.4'
@@ -1376,7 +1377,8 @@ tasks:
   deps:
   - L.s56320
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
@@ -1404,17 +1406,21 @@ tasks:
   - models/demos/mimo_v2_6_d_p/bringup/hooks.py
   - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
   brief:
-    details: 'Baseline (X.1): 1122 ms device / 1280 ms wall for the last 5120-token chunk on the 51200-token golden prefix; experts 958.6 ms (85%). The experts run
-      MIMO_EXPERTS_MODE=loop (per local expert extract -> ttnn.linear -> insert, ~148 ms/layer) because unified_routed_expert_moe forces LoFi and a bf16 dest for
-      Silu (known issues: ''The fused Silu expert kernel fails the norm-ratio check''; unified scored ~14 ms/layer but ratio [0.963, 1.054]). Extend the program factory''s
-      GeluTanh handling (commit ce75b1f0d7f: honour math_fidelity and fp32_dest_acc_en, config in the program-cache key) to the Silu variant, so a caller''s compute_kernel_config
-      is used. Keep the behaviour of existing callers that pass no compute_kernel_config unchanged (LoFi, bf16 dest), so ERNIE/DeepSeek are not affected; if routed_expert_ffn''s
-      subblocks do not fit an fp32 dest, size them for it (<= 4 tiles with fp32 dest). Rebuild with ./build_metal.sh (host C++ change). Then make MIMO_EXPERTS_MODE=unified
-      with HiFi2 + fp32 dest the default (keep loop selectable) and record it in perf_settings(). The frozen experts tests (norm ratio included) must pass unchanged.
-      Run the op''s existing unit tests if there are any under tests/ttnn for unified_routed_expert_moe/ffn and say which.'
+    details: 'Baseline (X.1): 1122 ms device / 1280 ms wall for the last 5120-token chunk on the 51200-token golden prefix;
+      experts 958.6 ms (85%). The experts run MIMO_EXPERTS_MODE=loop (per local expert extract -> ttnn.linear -> insert, ~148
+      ms/layer) because unified_routed_expert_moe forces LoFi and a bf16 dest for Silu (known issues: ''The fused Silu expert
+      kernel fails the norm-ratio check''; unified scored ~14 ms/layer but ratio [0.963, 1.054]). Extend the program factory''s
+      GeluTanh handling (commit ce75b1f0d7f: honour math_fidelity and fp32_dest_acc_en, config in the program-cache key) to
+      the Silu variant, so a caller''s compute_kernel_config is used. Keep the behaviour of existing callers that pass no
+      compute_kernel_config unchanged (LoFi, bf16 dest), so ERNIE/DeepSeek are not affected; if routed_expert_ffn''s subblocks
+      do not fit an fp32 dest, size them for it (<= 4 tiles with fp32 dest). Rebuild with ./build_metal.sh (host C++ change).
+      Then make MIMO_EXPERTS_MODE=unified with HiFi2 + fp32 dest the default (keep loop selectable) and record it in perf_settings().
+      The frozen experts tests (norm ratio included) must pass unchanged. Run the op''s existing unit tests if there are any
+      under tests/ttnn for unified_routed_expert_moe/ffn and say which.'
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_experts.py
-      && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_experts.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/mimo_v2_6_d_p/tests/bringup/test_c_full_moe_experts.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
       TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_experts_L01: '>= 0.99'
@@ -1437,16 +1443,19 @@ tasks:
   - models/demos/mimo_v2_6_d_p/tt
   - models/demos/mimo_v2_6_d_p/bringup/hooks.py
   brief:
-    details: 'Baseline (X.1): attention 142.2 ms of 1122 ms device for the last 5120-token chunk on the 51200 golden prefix (P.1 changes only the experts). Apply
-      the SDPA settings that took ERNIE''s 50k->55k SDPA from 1328 to 203 ms and Gemma-4''s attention from 381 ms (commit e35159e2651, models/demos/ernie45_d_p/tt/attention.py:
-      sdpa_settings): compute kernel config math_fidelity=HiFi2, fp32_dest_acc_en=False (fp32 dest acc disables SDPA''s streaming kernel on Blackhole, sdpa_program_factory.cpp:75),
-      packer_l1_acc=False, math_approx_mode=False; SDPAProgramConfig exp_approx_mode=True, q_chunk_size=256, k_chunk_size=512, full compute grid. Apply it to both
-      the full-attention (chunked, paged-shaped cache) and the sliding-window SDPA with attention sinks (head_dim 192, V padded to 192); if a chunk size does not
-      fit L1 or the sink/window path rejects a setting, use the largest that works and say so. Keep the bring-up config selectable (env MIMO_SDPA_CFG=base) and record
-      the active preset in perf_settings(). Leave the other matmuls as they are.'
+    details: 'Baseline (X.1): attention 142.2 ms of 1122 ms device for the last 5120-token chunk on the 51200 golden prefix
+      (P.1 changes only the experts). Apply the SDPA settings that took ERNIE''s 50k->55k SDPA from 1328 to 203 ms and Gemma-4''s
+      attention from 381 ms (commit e35159e2651, models/demos/ernie45_d_p/tt/attention.py: sdpa_settings): compute kernel
+      config math_fidelity=HiFi2, fp32_dest_acc_en=False (fp32 dest acc disables SDPA''s streaming kernel on Blackhole, sdpa_program_factory.cpp:75),
+      packer_l1_acc=False, math_approx_mode=False; SDPAProgramConfig exp_approx_mode=True, q_chunk_size=256, k_chunk_size=512,
+      full compute grid. Apply it to both the full-attention (chunked, paged-shaped cache) and the sliding-window SDPA with
+      attention sinks (head_dim 192, V padded to 192); if a chunk size does not fit L1 or the sink/window path rejects a setting,
+      use the largest that works and say so. Keep the bring-up config selectable (env MIMO_SDPA_CFG=base) and record the active
+      preset in perf_settings(). Leave the other matmuls as they are.'
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
-      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py
+      && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
@@ -1461,12 +1470,30 @@ tasks:
   deps:
   - P.2
   gate:
-    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1 TT_METAL_DEVICE_PROFILER=1
-      TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
-      && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
       prefill_ms_full: '> 0'
       pos_chunk: '>= 1'
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/mimo_v2_6_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/mimo_v2_6_d_p/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
   device: true
