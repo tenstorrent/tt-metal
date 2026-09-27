@@ -1372,6 +1372,10 @@ def _signal_quality_gate(demo_dir: Path):
 
 # How the `--batch` request reaches the gate's own process (e2e_mcp reads it back by this name).
 E2E_MCP_BATCH_ENV = "E2E_MCP_BATCH"
+# Where the gate streams its tests' output. The out-of-band gate check supervises THIS FILE for
+# forward progress instead of guessing a duration, so both sides must agree on the path: the caller
+# names it, the gate writes there. Unset (any other caller) -> the gate picks its own, as before.
+E2E_GATE_LOG_ENV = "E2E_GATE_LOG"
 
 
 def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
@@ -1543,7 +1547,11 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     # and no wall is typed here at all -- the caller's budget is the only number, as a fuse.
     from models.experimental.perf_automation.agent import probes as _pr
 
-    _gate_log = Path(tempfile.mkdtemp(prefix="e2e_gate_")) / "gate.log"
+    # The caller may name the log so it can watch the run progress; otherwise keep our own temp dir.
+    # Either way this function owns the file and its directory, including the keep-on-failure below.
+    _caller_log = os.environ.get(E2E_GATE_LOG_ENV)
+    _gate_log = Path(_caller_log) if _caller_log else Path(tempfile.mkdtemp(prefix="e2e_gate_")) / "gate.log"
+    _gate_log.parent.mkdir(parents=True, exist_ok=True)
 
     def _e2e_once():
         _gate_log.unlink(missing_ok=True)  # each attempt is judged on its own output
@@ -2043,10 +2051,14 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     pybin = str(repo_root / "python_env" / "bin" / "python")
     if not Path(pybin).is_file():
         pybin = sys.executable
+    # One agreed path for the gate's live output: the gate writes it, this caller watches it grow.
+    # Made here (not in the gate) because the watcher has to know it before the gate starts.
+    _gate_progress_log = Path(tempfile.mkdtemp(prefix="e2e_gate_")) / "gate.log"
     mcp_env = {
         "E2E_MCP_DEMO_DIR": str(demo_dir),
         "E2E_MCP_PCC": str(pcc),
         "E2E_MCP_TIMEOUT": str(timeout_s),
+        E2E_GATE_LOG_ENV: str(_gate_progress_log),
         E2E_MCP_BATCH_ENV: str(int(batch or 1)),
         "E2E_MODEL_ID": model_id,
         "E2E_ALL_TASKS": _os.environ.get("E2E_ALL_TASKS", "0"),
@@ -2070,8 +2082,13 @@ def _run_emit_e2e_cc(*, model_id, demo_dir, pcc, timeout_s, agent_bin, max_round
     def gate_fn():
         # The gate's OWN budget is the floor: this call wraps the gate, so a tighter limit here
         # kills honest work and reports nothing. `timeout_s` is the same value handed to the server
-        # as its per-pytest timeout above, so the two layers cannot disagree.
-        return cc_harness.gate_status(pybin, thp_dir, "e2e_mcp", mcp_env, repo_root, timeout_s=timeout_s)
+        # as its per-pytest timeout above, so the two layers cannot disagree. It is only a BACKSTOP
+        # now -- the check is supervised on the gate's own log, so a long-but-working gate (a first
+        # run that must build its reference, say) is judged on progress rather than on a duration
+        # nobody can know in advance.
+        return cc_harness.gate_status(
+            pybin, thp_dir, "e2e_mcp", mcp_env, repo_root, timeout_s=timeout_s, progress_log=_gate_progress_log
+        )
 
     prompt = _build_cc_fix_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
     allowed = ["mcp__e2e-mcp__termination_check", "Read", "Edit", "Write", "Bash", "Grep", "Glob"]
