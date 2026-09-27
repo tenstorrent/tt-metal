@@ -1,7 +1,7 @@
 # mcast_topology — 1-D multicasts vs. redundant per-core DRAM reads on a 2-D work split
 
 **Difficulty:** ⭐⭐ T2  ·  **Concept(s):** Tensix↔Tensix multicast topology on a 2-D core grid
-**First profiled on:** `bh-49-special-mstaletovic-for-reservation-60064` · BH · 2026-08-13 · `45770842250`
+**First profiled on:** `bh-49-special-mstaletovic-for-reservation-60064` · BH P150b · 2026-08-13 · `45770842250`
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -85,7 +85,12 @@ python -m ttnn.operations.examples.mcast_topology --variant mcast_1d_pair
 
 ## Measured result
 
-*Illustrative — see the **First profiled on** stamp above; re-run the CLI for your box.*
+*Illustrative — re-run the CLI for your box. The same 11×10 worker grid does not imply the same
+DRAM configuration: P150b and P100a boards can expose different enabled GDDR counts.*
+
+### P150b reference
+
+The original run did not record busy AICLK, enabled GDDR count, or firmware.
 
 ```
 mcast_topology  box=bh-49-...  arch=BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32t K=4t
@@ -94,11 +99,25 @@ mcast_topology  box=bh-49-...  arch=BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32
   mcast_1d_pair  split=8x8  cores=64/110 (58%)  2x Mcast1D (PerRow + PerColumn)   4450 ns ±1.1%  ✓  → 1.91×
 ```
 
-**Reading of the result:** delivering the same operands to the same 64 cores is **1.91× faster**
-when each slice is read once per line and broadcast. The DRAM tile-read count drops `1280 → 160`
-(**8×**) — 64 cores × (4 A-tiles + 16 B-tiles) versus 8 row-senders × 4 + 8 column-senders × 16.
+### P100a, seven enabled GDDR banks
 
-The device-time win (1.91×) is much smaller than the read-count reduction (8×), and that gap is the
+`bh-43-special-sjovic-for-reservation-97381` · 1350 MHz busy AICLK · firmware 19.12.0 · 2026-09-23
+
+```
+mcast_topology  box=bh-43-...  arch=BLACKHOLE  grid=11x10 (110 cores)  M=8t N=32t K=4t
+                delivery only (no compute)   N=5 (median of 5-launch windows)
+  per_core_dram  split=8x8  cores=64/110 (58%)  per-core DRAM reads              10958 ns ±0.7%  ✓
+  mcast_1d_pair  split=8x8  cores=64/110 (58%)  2x Mcast1D (PerRow + PerColumn)   4683 ns ±0.4%  ✓  → 2.34×
+```
+
+**Reading of the results:** delivering the same operands to the same 64 cores is **1.91× faster on
+P150b and 2.34× faster on this seven-bank P100a** when each slice is read once per line and
+broadcast. The DRAM tile-read count is unchanged across boards and drops `1280 → 160` (**8×**) — 64
+cores × (4 A-tiles + 16 B-tiles) versus 8 row-senders × 4 + 8 column-senders × 16. The P100a's
+redundant-DRAM baseline is 28.7% slower than the P150b result while its multicast path is only 5.2%
+slower, consistent with the baseline putting much more pressure on this seven-bank DRAM system.
+
+The device-time win is much smaller than the read-count reduction (8×), and that gap is the
 honest part of the result: each line's sender reads its slice **serially** before broadcasting, and
 the bytes still have to cross the NoC. Expect the win to grow with the line length (a longer row or
 column shares one read further) and to shrink toward nothing as the slices get small enough that the
