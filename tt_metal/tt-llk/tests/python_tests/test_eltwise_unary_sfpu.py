@@ -1479,7 +1479,9 @@ _TT_POLY_FP32_DEST = {
     "erfc": (),
     "exp2": (),
     "expm1": (),
+    "hardsigmoid": (),
     "relu": (),
+    "sigmoid": (),
 }
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ()
@@ -1604,7 +1606,25 @@ class _TTPolyGeneratedBF16(TemplateParameter):
             "None",
             "ckernel_sfpu_expm1.h",
         ),
+        (
+            MathOperation.Hardsigmoid,
+            "hardsigmoid",
+            True,
+            False,
+            32,
+            "None",
+            "ckernel_sfpu_activations.h",
+        ),
         (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
+        (
+            MathOperation.Sigmoid,
+            "sigmoid",
+            True,
+            True,
+            8,
+            "RC",
+            "ckernel_sfpu_sigmoid.h",
+        ),
     ],
 )
 def test_tt_poly_generated_bf16_llk(
