@@ -421,5 +421,7 @@ gh workflow run "(Tier 2) Models End-To-End Tests" --ref <branch> -f model=qwen3
 
 The Wormhole runners read the checkpoint from `/mnt/MLPerf/huggingface` with the HF hub offline, and
 the shared tensor cache is mounted read-only by default. A first Wormhole run therefore needs the
-checkpoint on that share and `-f mlperf-write-access=true`, so it can write the Wormhole tensor cache
-(kept separate from Blackhole's: the cache path includes the device name).
+checkpoint on that share and write access, so it can write the Wormhole tensor cache (kept separate
+from Blackhole's: the cache path includes the device name). The Tier 2 workflows take
+`-f mlperf-read-only=false` for that (the Tier 1 ones take `-f mlperf-write-access=true`); a
+read-only first run fails with `OSError: [Errno 30] Read-only file system`.
