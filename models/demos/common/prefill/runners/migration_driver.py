@@ -882,6 +882,79 @@ def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: d
     return True
 
 
+_AUDIT_CFG_NAMES = ("swa_window", "hca_unified", "csa_unified", "csa_index_k", "csa_pending", "hca_pending")
+
+
+def _audit_rows(cfg_name: str, real_len: int, extent_rows: int) -> list:
+    """DS4F-0271 mechanism-2 audit: the chunk-start ROWS both sides hash for a prompt of ``real_len`` tokens -- the window
+    ring, every 8th chunk below the real-entry boundary, +-256/512 rows around it (mirrors the decode-side reader,
+    prefill_recipes/e2e on the tt-blaze side)."""
+    W, CSA, HCA, C = 128, 4, 128, 32
+    b = {
+        "csa_unified": W + real_len // CSA,
+        "csa_index_k": real_len // CSA,
+        "hca_unified": W + -(-real_len // HCA),
+    }.get(cfg_name, W)
+    rows = set(range(0, min(W, extent_rows), C)) if cfg_name in ("swa_window", "hca_unified", "csa_unified") else set()
+    rows.update(range(0, b, 8 * C))
+    rows.update(range(max(0, b - 256), min(extent_rows, b + 512), C))
+    return sorted(r for r in rows if r + C <= extent_rows)
+
+
+def _hash_src_rows(table, triples: list, round_idx: int, out_path: str) -> None:
+    """DS4F-0271 mechanism-2 audit (PREFILL_MIGRATION_SRC_HASH=1): after a round's migrate, read this galaxy's SOURCE slot
+    rows over UMD -- the exact bytes the engine copied -- at the audit rows of every config / layer and append one JSON
+    line per chunk (round, config, layer kind-rank, row, sha1, size) to ``out_path``; the decode-side reader hashes the
+    destination the same way, and a differing sha1 at a (config, layer, row) names the defect (addressing / DMA)."""
+    import hashlib
+    import json as _json
+
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    device_map = producer._read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+    if not device_map or table is None:
+        logger.warning("[migration_driver][audit] no device map / table; source hashes skipped")
+        return
+    read_umd = ttnn.experimental.disaggregation.read_dram_umd
+    n, t0 = 0, time.perf_counter()
+    with open(out_path, "a") as out:
+        for src, dst, real_len in triples:
+            for cfg_id in range(table.num_configs()):
+                tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+                name = _AUDIT_CFG_NAMES[cfg_id] if cfg_id < len(_AUDIT_CFG_NAMES) else f"cfg{cfg_id}"
+                extent = int(tcfg.max_sequence_length)
+                for layer in range(int(tcfg.num_layers)):
+                    for row in _audit_rows(name, int(real_len), extent):
+                        loc = table.lookup(layer, row, src, cfg_id)
+                        try:
+                            uid = producer._resolve_unique_id(
+                                table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                            )
+                        except KeyError:
+                            continue
+                        raw = bytes(read_umd(uid, loc.noc_addr, loc.size_bytes))
+                        out.write(
+                            _json.dumps(
+                                dict(
+                                    round=round_idx,
+                                    src_slot=src,
+                                    dst_slot=dst,
+                                    S=int(real_len),
+                                    config=name,
+                                    kind_rank=layer,
+                                    row=row,
+                                    size=len(raw),
+                                    sha1=hashlib.sha1(raw).hexdigest()[:12],
+                                )
+                            )
+                            + "\n"
+                        )
+                        n += 1
+    logger.info(
+        f"[migration_driver][audit] round {round_idx}: {n} source chunk hashes in {time.perf_counter() - t0:.1f} s -> {out_path}"
+    )
+
+
 def _verify_migrated_slots(
     mode: str, *, table, triples, slot_traces, layers, migrated_layers, threshold, cross_endpoint
 ) -> bool:
@@ -1256,6 +1329,10 @@ def main() -> None:
         )
         if trace_spec is not None:
             round_summaries.append((round_idx, trace_spec, stats.wall_s, driver.last_migrate_ms, migrate_ok))
+            if os.environ.get("PREFILL_MIGRATION_SRC_HASH", "0") == "1" and triples:
+                _hash_src_rows(
+                    kv_table, triples, round_idx, os.environ.get("PREFILL_MIGRATION_SRC_HASH_OUT", "src_hashes.jsonl")
+                )
             logger.success(
                 f"[migration_driver] ROUND {round_idx} DONE: {trace_spec} prefill wall={stats.wall_s:.3f}s "
                 f"migrate={driver.last_migrate_ms:.1f}ms ok={migrate_ok} round wall={time.perf_counter() - t_round0:.3f}s"
