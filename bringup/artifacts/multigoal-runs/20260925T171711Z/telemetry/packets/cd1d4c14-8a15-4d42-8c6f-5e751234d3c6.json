@@ -23,7 +23,8 @@
     "evidence": [
       "models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/setup_inventory.json",
       "f6c796a2beba4421ad4daba8ee7b9c4808a9009a",
-      "93f3f7dfb88d1147a83781f57295b19ed419ac0a"
+      "93f3f7dfb88d1147a83781f57295b19ed419ac0a",
+      "45da007fb7b9134226c59ec6cd57cf94af3455f6"
     ]
   },
   "accuracy": [],
