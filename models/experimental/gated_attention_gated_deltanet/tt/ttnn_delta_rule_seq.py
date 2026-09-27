@@ -404,11 +404,14 @@ def chunk_gated_delta_rule_seq(
     mesh_device=None,
     cached_masks=None,
     valid_len=None,
+    out_dtype=None,
 ):
     """Chunked gated delta rule via C++ sequential scan (Path A).
 
     Returns (output [BH,T,V], final_state [BH,K,V]) float32.
     valid_len: zero q/k/v/beta/g past valid_len (padding); identity state updates preserve recurrent state.
+    out_dtype: dtype of the L1-resident output relayout below; defaults to float32. Callers whose L1
+    cannot hold the fp32 [BH,L,V] tensor pass bfloat16 (see qwen36/tt/wh_compat.py).
     """
     # Preprocessing matmuls: HiFi4 (matches block-inverse fidelity).
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
@@ -735,9 +738,10 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(L_inv_4d)
 
     _out_l1 = ttnn.L1_MEMORY_CONFIG
+    _out_dtype = ttnn.float32 if out_dtype is None else out_dtype
     # No memory_config: kernel output is already TILE, so it'd be a no-op that warns; the reshape below places it in L1.
     out_4d = ttnn.to_layout(
-        ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1) if out_4d.dtype != ttnn.float32 else out_4d,
+        ttnn.typecast(out_4d, _out_dtype, memory_config=_out_l1) if out_4d.dtype != _out_dtype else out_4d,
         ttnn.TILE_LAYOUT,
     )
     o = ttnn.reshape(out_4d, [BH, L, V], memory_config=_out_l1)

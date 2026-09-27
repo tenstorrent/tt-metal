@@ -15,8 +15,8 @@ Three adjustments, all no-ops on Blackhole:
 
 1. ``_seq_memory_config`` -> DRAM. Upstream keeps short sequences in L1; on Wormhole those
    activations no longer fit beside the chunk-seq kernel's circular buffers.
-2. ``chunk_gated_delta_rule_seq`` -> the bf16 variant in ``chunk_seq_wh.py``, halving an
-   L1-resident fp32 relayout that does not otherwise fit.
+2. ``chunk_gated_delta_rule_seq`` -> called with ``out_dtype=bfloat16``, halving an L1-resident
+   fp32 relayout that does not otherwise fit.
 3. ``fused_decay_and_write_ttnn`` -> DRAM for the [B,H,K,V] state-write intermediates once they
    exceed the L1 budget. See that override for why upstream cannot do B=32 in L1.
 
@@ -35,44 +35,22 @@ and push the dtype/memory-config choice into the shared module as a per-caller p
 pytest in particular -- one session collecting two such models shares an interpreter, and
 collection-time imports alone would let test order decide which kernels run.
 """
-import inspect
 
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops as _shared_ops
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq as _shared_seq
 import models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet as _shared
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.blackhole.qwen36.tt.chunk_seq_wh import chunk_gated_delta_rule_seq_dispatch
 
 # Largest [B,H,K,V] state tensor this model will keep L1-resident on Wormhole. Mirrors
 # recurrent_decode_wh._OUTER_L1_BUDGET_BYTES, which gates the same tensor on the fork side.
 _STATE_L1_BUDGET_BYTES = 8 << 20
-
-# chunk_seq_wh.py is a verbatim copy of this upstream function with one dtype change. If
-# upstream edits it, the copy is stale -- fail loudly, not run old kernels.
-_UPSTREAM_ANCHOR = "ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1)"
-
-
-def _check_fork_is_current():
-    try:
-        upstream_src = inspect.getsource(_shared_seq.chunk_gated_delta_rule_seq)
-    except (OSError, TypeError):  # source unavailable (zipimport etc.) -- skip the check
-        return
-    if _UPSTREAM_ANCHOR not in upstream_src:
-        raise RuntimeError(
-            "models/demos/blackhole/qwen36/tt/chunk_seq_wh.py is a copy of "
-            "chunk_gated_delta_rule_seq() from ttnn_delta_rule_seq.py, and upstream has changed: "
-            f"the anchor {_UPSTREAM_ANCHOR!r} is gone. Re-copy that function into chunk_seq_wh.py "
-            "and re-apply the single bf16 edit (marked 'THE ONE CHANGE vs upstream')."
-        )
 
 
 def apply():
     """Install the Wormhole GDN adjustments on the shared module. Idempotent."""
     if getattr(_shared, "_qwen36_wh_compat_applied", False):
         return
-
-    _check_fork_is_current()
 
     # --- 1. chunk-seq activations: DRAM on Wormhole -------------------------------------- #
     _orig_seq_memory_config = _shared._seq_memory_config
@@ -98,9 +76,32 @@ def apply():
 
     _shared._seq_memory_config = _seq_memory_config
 
-    # --- 2. chunk-seq kernel wrapper: bf16 output relayout on Wormhole -------------------- #
+    # --- 2. chunk-seq output relayout: bf16 on the Wormhole configs that need it --------- #
     # The adapter calls this as a module global, so rebinding it here takes effect.
-    _shared_seq.chunk_gated_delta_rule_seq = chunk_gated_delta_rule_seq_dispatch
+    _orig_chunk_seq = _shared_seq.chunk_gated_delta_rule_seq
+
+    def _chunk_gated_delta_rule_seq(*args, **kwargs):
+        """Ask upstream for a bf16 output relayout instead of the default fp32.
+
+        Upstream relayouts the kernel output as an L1-resident [BH,L,V] tensor. At fp32 that does
+        not fit Wormhole's smaller L1 and dies with "Out of Memory"; bf16 halves it and costs
+        nothing measurable (logit PCC 0.9998-1.0000).
+
+        Blackhole absorbs the fp32, so it keeps the default. A 8-device T3K also keeps it: its
+        per-chip head count makes the tensor smaller than the config that first needed the fix, and
+        the fp32 path was measured to fit there. N150 KEEPS the fix -- at TP=1 it holds the full
+        head count on one chip, twice N300's per-chip size, so it needs it more than N300, not
+        less. T3K is detected via the mesh_device kwarg the adapter always passes.
+        """
+        if is_blackhole():
+            return _orig_chunk_seq(*args, **kwargs)
+        mesh = kwargs.get("mesh_device")
+        if mesh is not None and mesh.get_num_devices() == 8:
+            return _orig_chunk_seq(*args, **kwargs)
+        kwargs.setdefault("out_dtype", ttnn.bfloat16)
+        return _orig_chunk_seq(*args, **kwargs)
+
+    _shared_seq.chunk_gated_delta_rule_seq = _chunk_gated_delta_rule_seq
 
     # --- 3. decode state write: DRAM for the [B,H,K,V] tensors that do not fit L1 --------- #
     # recurrent_gated_delta_rule_decode_ttnn calls this as a module global, so rebinding takes
