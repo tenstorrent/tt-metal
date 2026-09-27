@@ -2,8 +2,12 @@
 # run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses one flock PER CARD (scripts/lib/tt_device_pool.sh) so independent jobs can
-# run on independent cards concurrently. By default a run takes the lowest free
-# card; --device N pins a card; --mesh takes every card for multi-device tests.
+# run on independent cards concurrently. By default a run takes EVERY card (the
+# whole box, as one mesh, exactly as before the pool); --device auto takes the
+# lowest free card; --device N pins a card. TTPOOL_DEFAULT_SELECTOR=auto|N|mesh
+# changes the no-flag default. Pool jobs also hold the legacy /tmp/tt-device.lock
+# (shared per card, exclusive for the whole box), so runners that only know that
+# lock never overlap them.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
 # dispatch layer (does not penalize setup/compilation time).
 # Automatically resets the card(s) it held after hangs, ensuring the next runner
@@ -27,18 +31,21 @@
 # -k/-m filters, ::nodeids, ...) is forwarded to pytest verbatim, in the order given.
 #
 # Options:
-#   --device N|auto  Which card to run on. DEFAULT is auto: the lowest FREE card is
-#                    taken (card 0 if free, else 1, ...); if all are busy the run waits
-#                    and re-scans every second, still lowest-first. --device N waits for
+#   --device N|auto  Run on ONE card. auto: the lowest FREE card is taken (card 0 if
+#                    free, else 1, ...); if all are busy the run waits and re-scans
+#                    every second, still lowest-first. --device N waits for
 #                    that specific card. N is the UMD logical id (`tt-smi -ls`, same as
 #                    tt-smi -r / TT_VISIBLE_DEVICES), NOT /dev/tenstorrent/<n>. A single
 #                    integer already in $TT_VISIBLE_DEVICES is honoured as --device N.
 #                    The run sees its card as device 0; logs, triage report and profiler
-#                    output go under generated/dev<N>/.
-#   --mesh           Take EVERY card (multi-device / CCL tests). Waits for the cards in
-#                    ascending order, holding each as it frees up, so a mesh job steadily
-#                    drains the pool. All cards visible; logs under generated/mesh/; a hang
-#                    resets all cards. Mutually exclusive with --device.
+#                    output go under generated/dev<N>/. A hang resets only that card.
+#   --mesh           Take EVERY card (multi-device / CCL tests). This is the DEFAULT when
+#                    neither flag is given (override with TTPOOL_DEFAULT_SELECTOR). Waits
+#                    for the cards in ascending order, holding each as it frees up, so a
+#                    mesh job steadily drains the pool. Legacy layout: all cards visible,
+#                    logs / triage under generated/ as before; a hang resets the whole box
+#                    (tt-smi -r). Mutually exclusive with --device.
+#                    TTPOOL_ACQUIRE_TIMEOUT=<s> bounds the wait for card(s) (exit 3).
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
 #                    sanitization), lightweight ebreak asserts, and auto-triage
 #                    on hang with full triage + watcher log dump.
@@ -85,9 +92,10 @@
 #   2 - Hang detected (dispatch timeout fired)
 #   3 - Setup error (missing args, etc.)
 #
-# Hang triage report: generated/dev<N>/tt-triage/triage.txt (or generated/mesh/...),
-# printed as "SAFE_PYTEST: triage report: <path>". The legacy path
-# generated/tt-triage/triage.txt is kept as a symlink to the most recent hang report.
+# Hang triage report: generated/tt-triage/triage.txt for whole-box runs, or
+# generated/dev<N>/tt-triage/triage.txt for --device runs, printed as
+# "SAFE_PYTEST: triage report: <path>". After a per-card hang the legacy path
+# generated/tt-triage/triage.txt is a symlink to that report.
 #
 # Total runtime:
 #   Always prints SAFE_PYTEST_TOTAL_RUNTIME as the very last line (on every exit path).
@@ -114,8 +122,8 @@ TRACY_PORT_ARGS=()
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
-# Card selection (DEVICE_SELECTOR / MESH_MODE): auto (default, lowest free card), a UMD id,
-# or mesh (every card). Validated by ttrun_resolve_selector after parsing.
+# Card selection (DEVICE_SELECTOR / MESH_MODE): mesh (default: every card), auto (lowest free
+# card) or a UMD id. Validated by ttrun_resolve_selector after parsing.
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
 # Precompile (inline, see scripts/lib/tt_safe_run.sh): defaults + the JIT endpoint from
@@ -183,7 +191,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- Validate card selection (auto | N | mesh, honours a single-int TT_VISIBLE_DEVICES) ---
+# --- Validate card selection (mesh default | auto | N, honours TT_VISIBLE_DEVICES) ---
 ttrun_resolve_selector || exit 3
 
 # --- Validate --sim-workers ---
@@ -283,7 +291,7 @@ emit_profiler_csv() {
 ttrun_on_exit ttrun_print_total_runtime
 
 # --- Acquire a card (hardware only; no-op on sim) ---
-# auto = lowest free card; N = that card; mesh = every card. Exports the per-card env,
+# mesh (default) = every card; auto = lowest free card; N = that card. Exports the per-card env,
 # re-points the triage / watcher paths, resets the card if a previous run left it dirty.
 ttrun_acquire_card || exit 3
 if [[ "$SIM_MODE" == false ]]; then
