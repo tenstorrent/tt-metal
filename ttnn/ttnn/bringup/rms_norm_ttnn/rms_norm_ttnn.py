@@ -166,8 +166,21 @@ def normalize_compute_kernel_config(cfg) -> "ttnn.ComputeConfigDescriptor":
 # ---------------------------------------------------------------------------
 
 
-def torch_rms_norm_ttnn(input_tensor, *, epsilon: float = 1e-12, weight=None, bias=None, residual_input_tensor=None):
+def torch_rms_norm_ttnn(
+    input_tensor,
+    *,
+    epsilon: float = 1e-12,
+    weight=None,
+    bias=None,
+    residual_input_tensor=None,
+    return_residual_sum: bool = False,
+):
     """The five stages, in fp32, in order, returned in the input's dtype.
+
+    With ``return_residual_sum`` (the C++ op's option of the same name) the result is
+    ``(y, t)``, ``t = input_tensor + residual_input_tensor`` in fp32 rounded to the input's
+    dtype (torch's round-to-nearest-even; the device's FPU add rounds its own way, see
+    tests/unit/test_rms_norm_ttnn_residual_output.py).
 
     A reference that accepts an operand and drops it reports agreement for a
     call it never modelled, so every operand this op takes is consumed here:
@@ -183,14 +196,18 @@ def torch_rms_norm_ttnn(input_tensor, *, epsilon: float = 1e-12, weight=None, bi
     t = input_tensor.to(torch.float32)
     if residual_input_tensor is not None:
         t = t + residual_input_tensor.to(torch.float32)
+    if return_residual_sum and residual_input_tensor is None:
+        raise ValueError("return_residual_sum=True needs residual_input_tensor")
     if t.numel() == 0:
-        return t.to(original_dtype)
+        return (t.to(original_dtype), t.to(original_dtype)) if return_residual_sum else t.to(original_dtype)
     mean_sq = t * t if t.dim() == 0 else torch.mean(t * t, dim=-1, keepdim=True)
     y = t / torch.sqrt(mean_sq + epsilon)
     if weight is not None:
         y = y * weight.to(torch.float32).reshape(-1)
     if bias is not None:
         y = y + bias.to(torch.float32).reshape(-1)
+    if return_residual_sum:
+        return y.to(original_dtype), t.to(original_dtype)
     return y.to(original_dtype)
 
 
