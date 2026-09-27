@@ -49,7 +49,7 @@ import ttnn
 from eval.sharding import auto_shard_config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
 
 EPSILON = 1e-5
 

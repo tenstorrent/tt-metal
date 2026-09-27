@@ -161,7 +161,7 @@ def test_hash16_matches_the_profiler_implementation(text, expected):
 #     session, purge:
 #
 #       find built -path '*/kernels/rms_norm_ttnn_*' \( -name '*.ii' -o -name '*.o.log' \) \
-#            ! -newer ttnn/ttnn/operations/rms_norm_ttnn/kernels/perf_instrumentation.hpp -delete
+#            ! -newer ttnn/ttnn/bringup/rms_norm_ttnn/kernels/perf_instrumentation.hpp -delete
 #       # and drop the op's rows from generated/profiler/.logs/*zone_src_locations.log
 #
 # This test reads the ACCUMULATED log the profiler loads at startup and fails on the

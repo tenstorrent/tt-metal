@@ -125,12 +125,12 @@
      requested in `verification_report.md`.
 
 - **Tests added**:
-  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_precision_baseline.py`
+  - `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_precision_baseline.py`
     (32 cells — PCC / abs / relative-RMS **and the got/true ratio spread**, with an explicit
     assertion against a uniform scale error)
-  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_invalid_audit.py`
+  - `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_invalid_audit.py`
     (16 cells over the five capability regions the golden suite structurally cannot reach)
-  - `ttnn/ttnn/operations/rms_norm_ttnn/perf_target_ranking.py` (ranks the `perf` loose group by
+  - `ttnn/ttnn/bringup/rms_norm_ttnn/perf_target_ranking.py` (ranks the `perf` loose group by
     measured device-ns / clock-scaled ceiling — the same ranking the trailing perf pass uses)
   - `scripts/verifier_golden_shards.sh` + `scripts/verifier_merge_golden_shards.py` (the
     sharded golden-run harness the 121 438-cell cartesian requires)
@@ -272,7 +272,7 @@
   is why the gate keeps it flat and why *no arity* wins at `G = 28`.
 
 - **Tests added**:
-  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_combine_knobs.py`
+  - `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_combine_knobs.py`
     (132 cells) — the measured arity per group size, the two kernel-side tree invariants
     swept over every group 2..120, the `CB_R_DEPTH` byte-identical default, and that the
     combine's NoC choice is a swap of *both* kernels gated on a resident x. All host-side;
@@ -530,13 +530,13 @@
      spec that derives `SQ_BLK` from it (one source of truth, so the definition moves
      rather than being duplicated), and `RES_FUSE` after `X_RESIDENT`.
 - Tests added:
-  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_dataflow_knobs.py`
+  - `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_dataflow_knobs.py`
     (**292 cells**) — the five knobs' shipped values, that each is still LIVE (flipping the
     module constant must move the CT arg), the packed transaction word's byte-identity at
     the default, the `TXN_ROWS | BLOCK_ROWS` straddle invariant swept over every block size
     1..40 × seven caps, and that a forced face-row trim on `bfloat8_b` falls back to the
     half page rather than issuing a truncated read. All host-side; nothing dispatches.
-  - `tests/ttnn/unit_tests/operations/rms_norm_ttnn/probes/bench_r3.py` — the reusable
+  - `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/probes/bench_r3.py` — the reusable
     14-case A/B harness (6 interleaved-prefill targets, 2 STREAM, 6 guards) every number
     above came from.
   - Whole unit directory after the change: **601 passed, 1 skipped**.
@@ -656,7 +656,7 @@
      `test_program_is_structurally_the_seeds` by construction. Packed into index 2 instead,
      which is the file's own established idiom.
 
-- Tests added: `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_ragged_width.py`
+- Tests added: `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_ragged_width.py`
   (174 cases) — `_width_chunk`'s covering/cap/no-worse-than-D1 contract over a
   width × cap grid, both knobs proven live, the cliff proven gone on every chunked
   prime-`Wt` build in both layouts, reader/writer pad-count agreement, the `PARTIAL_W != 0`
@@ -735,7 +735,7 @@
      65 536 slots for one op; the birthday budget is now asserted (`<= 128` including the
      firmware markers).
 
-- Tests added: `tests/ttnn/unit_tests/operations/rms_norm_ttnn/test_rms_norm_ttnn_zone_hashes.py`
+- Tests added: `ttnn/ttnn/bringup/rms_norm_ttnn/tests/unit/test_rms_norm_ttnn_zone_hashes.py`
   (6 cases) — re-implements the profiler's `hash32CT`/`hash16CT` (pinned against two
   clone-path-independent fixtures), asserts no two of the op's CURRENT zone source locations
   collide in 16 bits, asserts the zone population stays under the birthday budget, guards that

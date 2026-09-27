@@ -11,7 +11,7 @@
   least ``model`` and ``sig``: the model that made the call, and the captured signature the case reproduces.
 - Uncovered: a call this model makes that no case of its fork carries (same model, same sig).
 - ``--run-tests``: runs ``scripts/run_safe_pytest.sh --run-all`` on the tests of every fork the model uses, every
-  model's cases included.
+  model's cases included (the top-level tests/test_*.py; a fork's own unit suite in tests/unit/ is not run).
 Records forks_used, fork_calls, fork_calls_uncovered and fork_tests_failed (a gate wants 0 of each of the last two)
 and prints what is missing.
 """
@@ -32,11 +32,20 @@ BIND = re.compile(r'bind_function<\s*"(\w+)"\s*,\s*"ttnn\.bringup\."\s*>')
 
 
 def op_to_fork() -> dict[str, str]:
-    """ttnn.bringup.<op> -> fork folder, from each fork's nanobind sources."""
+    """ttnn.bringup.<op> -> fork folder: the C++ forks from their nanobind sources, the Python forks from PYTHON_OPS in
+    ttnn/ttnn/bringup/__init__.py."""
+    import ast
+
     out = {}
     for f in sorted(FORKS.glob("*/*_nanobind.cpp")):
         for op in BIND.findall(f.read_text()):
             out[f"ttnn.bringup.{op}"] = f.parent.name
+    init = FORKS / "__init__.py"
+    if init.exists():
+        for node in ast.parse(init.read_text()).body:
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "PYTHON_OPS" for t in node.targets):
+                for name, (folder, _fn) in ast.literal_eval(node.value).items():
+                    out[f"ttnn.bringup.{name}"] = folder
     return out
 
 
@@ -69,10 +78,14 @@ def check(capture: Path, model: str) -> tuple[dict, dict[str, list[dict]]]:
 
 
 def run_tests(forks: list[str]) -> int:
-    dirs = [str((FORKS / f / "tests").relative_to(REPO)) for f in forks if (FORKS / f / "tests").is_dir()]
-    if len(dirs) < len(forks):
-        print(f"forks without tests/: {sorted(set(forks) - {Path(d).parent.name for d in dirs})}")
+    """The model-case tests of each fork: the top-level tests/test_*.py (an op's own unit suite in tests/unit/ is not
+    part of the pass)."""
+    files = {f: sorted((FORKS / f / "tests").glob("test_*.py")) for f in forks}
+    missing = sorted(f for f, v in files.items() if not v)
+    if missing:
+        print(f"forks without tests/test_*.py: {missing}")
         return 1
+    dirs = [str(p.relative_to(REPO)) for v in files.values() for p in v]
     if not dirs:
         return 0
     # --no-precompile: the up-front collect pass would run each test's host-side input building a second time.
