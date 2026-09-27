@@ -1185,3 +1185,28 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   high_precision.
 - Re-run: the brief's gate command, with `PYTHONPATH=$PWD`. Compare with `MIMO_EXPERTS_MODE=loop` (baseline) or
   `MIMO_EXPERTS_FIDELITY=HiFi3`.
+
+## P.2 perf: SDPA config A (attempt 2), 2026-09-27
+- Attempt 1 changed nothing: full attention already ran preset A (q256/k256) since C.full_dense.attention, and sliding ran
+  "base". Attention stayed at 142 ms.
+- Added profiler sub-sections inside attention (`_sp`, env MIMO_ATTN_SIGNPOSTS=0 turns them off). They are no-ops unless
+  the bring-up profiler is on. Breakdown before the change (2 full layers, 4 sliding): sdpa 67.8, qkv 24.1, o_proj 20.8,
+  sliding_sdpa 19.7, ccl 5.2, rope 3.2, kv_tail 0.9 ms.
+- Full SDPA sweep (config A, 51k->56k, 2 layers): q256/k256 67.8, q512/k128 54.3, q512/k64 75.3 ms; q512/k256 and
+  q1024/k64 exceed L1 (1.78 / 1.91 MB > 1.57 MB). HiFi4 at q512/k128 (fp32 dest off) takes 88.6 ms, so this SDPA is
+  compute-bound and full layers keep HiFi2 + approx exp. Preset A is now q512/k128.
+- Sliding: config A fails the frozen `test_c_sliding_moe_attention.py` (row norm ratio 1.0504 > 1.05). Variants with fp32
+  dest off: HiFi4/exact exp passes (rel 0.0136, ratio [0.964, 1.046]); HiFi4/approx passes too, and HiFi2/exact is
+  marginal (ratio 1.0497). All take 2.5 ms against 19.7 ms at base, so streaming is the whole gain. The new preset "S"
+  (HiFi4, fp32 dest off, exact exp, q128/k128; the window caps both chunks at 128) is the sliding default.
+- Selectable: MIMO_SDPA_CFG=base restores the bring-up config on both layer types. MIMO_SLIDING_SDPA_CFG=base|A|S sets
+  sliding alone, and MIMO_[SLIDING_]SDPA_Q/_K override chunk sizes. perf_settings() records sdpa_full_cfg,
+  sdpa_sliding_cfg and both chunk pairs.
+- Accuracy cost: ladder worst layer 0.9996 -> 0.9984, pcc_chunk_out 0.99971 -> 0.99841, pcc_state_min 0.99941 -> 0.99928.
+  The cause is k128 on the full layers: q256/k128 also gives 0.9984, and q256/k256 gives 0.9996. Sliding S alone does not
+  move the ladder. The component tests all pass (L00 0.999988 / rel 0.0061, L05 0.999991 / rel 0.0043, L01 as above).
+- Gate: PASS. Ladder all layers >= 0.99841, pcc_state_min 0.99928, host_transfers_per_layer 0. Profile: device_ms_attention
+  111.2 (sdpa 54.2, qkv 24.1, o_proj 20.8, ccl 5.3, rope 3.2, sliding_sdpa 2.5), device total 225.6 ms, chunk wall 226.5 ms.
+- Next levers in attention: qkv and o_proj matmuls (45 ms, HiFi4 bf16, left alone per the brief). For the full SDPA, a
+  bf8 KV cache (half the traffic, untried) or k256 once L1 allows it.
+- Re-run: the brief's gate command with `PYTHONPATH=$PWD`. Compare with `MIMO_SDPA_CFG=base`.

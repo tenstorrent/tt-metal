@@ -464,6 +464,8 @@ class MiMoDeviceModel:
         return {
             "sdpa_full_cfg": full["name"],
             "sdpa_sliding_cfg": sl["name"],
+            "sdpa_full_chunks": list(full["chunks"]),
+            "sdpa_sliding_chunks": list(sl["chunks"]),
             "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", EXPERTS_MODE_DEFAULT),
             "experts_fidelity": os.environ.get("MIMO_EXPERTS_FIDELITY", EXPERTS_FIDELITY_DEFAULT),
             "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),

@@ -26,30 +26,57 @@ import os
 import torch
 
 import ttnn
+from models.demos.common.bringup.testing import profiler
 
 NUM_CHIPS = 4
 TILE = 32
 KV_BLOCK = 64  # page size of the paged-shaped cache (identity page table)
 
-# SDPA presets (env MIMO_SDPA_CFG). "A" is the streaming Blackhole config (ernie45_d_p / gemma4_a4b_d_p preset A:
-# HiFi2, fp32 dest acc off, approx exp); head dim 192 fits q256/k256 in L1 (known issue: L1 at large head_dim).
-# "base" is HiFi4 + fp32 dest acc (non-streaming kernel), exact exp.
+# SDPA presets (env MIMO_SDPA_CFG / MIMO_SLIDING_SDPA_CFG). fp32 dest acc turns off the streaming SDPA kernel on
+# Blackhole (sdpa_program_factory.cpp:75); every preset except "base" keeps it off.
+#   "base": the bring-up config, HiFi4 + fp32 dest acc (non-streaming kernel), exact exp, q128/k128.
+#   "A":    config A of ernie45_d_p / gemma4_a4b_d_p: HiFi2, fp32 dest off, approx exp. Full layers use q512/k128: the
+#           chunked causal SDPA gets no KV chain forwarding, so every Q chunk streams the whole prefix from DRAM, and the
+#           larger Q chunk halves that traffic (51k prefix: q256/k256 67.8 ms, q512/k128 54.3 ms, q512/k64 75.3 ms for 2
+#           layers). q512/k256 (1.78 MB) and q1024/k64 (1.91 MB) exceed L1 (1.57 MB) at head_dim 192.
+#   "S":    the sliding (sink) layers: streaming kernel with HiFi4 and exact exp. Config A fails the frozen sliding
+#           component test (row norm ratio 1.0504 > 1.05); S passes (rel 0.0136, ratio [0.964, 1.046]; base 0.0086,
+#           [0.975, 1.021]) and is as fast as A there (4 layers: 2.5 ms vs 19.7 ms base). The kernel's only speed
+#           lever at window 128 is streaming; fidelity and approx exp do not change the time.
 SDPA_PRESETS = {
     "base": dict(fidelity="HiFi4", fp32=True, exp_approx=False, chunks=(128, 128)),
-    "A": dict(fidelity="HiFi2", fp32=False, exp_approx=True, chunks=(256, 256)),
+    "A": dict(fidelity="HiFi2", fp32=False, exp_approx=True, chunks=(512, 128)),
+    "S": dict(fidelity="HiFi4", fp32=False, exp_approx=False, chunks=(128, 128)),
 }
 
 
+# Profile sub-sections inside attention (qkv, rope, kv_write, kv_tail, sdpa, o_proj, ccl). signpost is a no-op unless
+# the bring-up profiler is enabled. MIMO_ATTN_SIGNPOSTS=0 makes attention one profile section again.
+ATTN_SIGNPOSTS = os.environ.get("MIMO_ATTN_SIGNPOSTS", "1") != "0"
+
+
+def _sp(name: str) -> None:
+    if ATTN_SIGNPOSTS:
+        profiler.signpost(f"attention.{name}")
+
+
 def sdpa_settings(sliding: bool = False) -> dict:
-    """Full layers: env MIMO_SDPA_CFG (default "A"). Sliding layers: env MIMO_SLIDING_SDPA_CFG (default "base"):
-    with the sink ~28 logits above the row max, the output scales like exp(max - sink), so any relative error in the
-    QK scores is amplified. HiFi2 (norms biased toward zero) and bf16 dest (scores ~-450 unscaled rounded to steps
-    of 2-4) put the per-head output ratio off by 3-6%; HiFi4 + fp32 acc gives rel 0.005 (C.sliding_moe.attention)."""
+    """Full layers: env MIMO_SDPA_CFG (default "A"). Sliding layers: env MIMO_SLIDING_SDPA_CFG (default "S", or "base"
+    when MIMO_SDPA_CFG=base, so that one variable restores the whole bring-up config). With the sink ~28 logits above
+    the row max, the sliding output scales like exp(max - sink), so any relative error in the QK scores is amplified:
+    bf16 dest is most of S's extra error over base, HiFi2 on top pushes the norm ratio to the limit.
+    Env MIMO_[SLIDING_]SDPA_Q / _K override the chunk sizes (sweeps)."""
     if sliding:
-        name = os.environ.get("MIMO_SLIDING_SDPA_CFG", "base")
+        full = os.environ.get("MIMO_SDPA_CFG", "A")
+        name = os.environ.get("MIMO_SLIDING_SDPA_CFG", "base" if full == "base" else "S")
     else:
         name = os.environ.get("MIMO_SDPA_CFG", "A")
-    return dict(SDPA_PRESETS[name], name=name)
+    c = dict(SDPA_PRESETS[name], name=name)
+    pre = "MIMO_SLIDING_SDPA" if sliding else "MIMO_SDPA"
+    env = os.environ.get
+    if env(f"{pre}_Q") or env(f"{pre}_K"):  # chunk-size overrides for sweeps
+        c["chunks"] = (int(env(f"{pre}_Q", c["chunks"][0])), int(env(f"{pre}_K", c["chunks"][1])))
+    return c
 
 
 def _sdpa_compute_config(sliding: bool = False):
@@ -278,12 +305,14 @@ class TtFullAttention:
         seq = x.shape[-2]
         assert start % KV_BLOCK == 0 and seq % KV_BLOCK == 0 and start + seq <= self.max_seq
 
+        _sp("qkv")
         qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=self.nq, num_kv_heads=1, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
 
+        _sp("rope")
         r = self.rope_dim
         cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, start + seq, r])
         sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, start + seq, r])
@@ -295,12 +324,14 @@ class TtFullAttention:
         ttnn.deallocate(sin)
         q, k = qr, kr
 
+        _sp("kv_write")
         if kv_sink is not None:
             kv_sink(k, v)
         pt = cache.chunk_page_table(start, seq)
         ttnn.experimental.paged_fill_cache(cache.k, k, pt, batch_idx=0)
         ttnn.experimental.paged_fill_cache(cache.v, v, pt, batch_idx=0)
 
+        _sp("sdpa")
         prog = self._sdpa_program_config(seq, start)
         if start == 0:
             attn = ttnn.transformer.scaled_dot_product_attention(
@@ -326,10 +357,12 @@ class TtFullAttention:
         for t in (q, k, v):
             ttnn.deallocate(t)
 
+        _sp("o_proj")
         a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*192]
         ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(a)
+        _sp("ccl")
         out = ttnn.all_reduce(o, cluster_axis=1)
         ttnn.deallocate(o)
         return out
@@ -461,12 +494,14 @@ class TtSlidingAttention(TtFullAttention):
         D, nq, nkv = self.d, self.nq, self.nkv
         assert start % TILE == 0 and seq % TILE == 0 and start + seq <= min(self.max_seq, cache.max_seq)
 
+        _sp("qkv")
         qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=nq, num_kv_heads=nkv, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
 
+        _sp("rope")
         r = self.rope_dim
         cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, start + seq, r])
         sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, start + seq, r])
@@ -478,11 +513,13 @@ class TtSlidingAttention(TtFullAttention):
         ttnn.deallocate(sin)
         q, k = qr, kr
 
+        _sp("kv_write")
         if kv_sink is not None:
             kv_sink(k, v)
         ttnn.fill_cache(cache.k, k, batch_idx=0, update_idx=start)
         ttnn.fill_cache(cache.v, v, batch_idx=0, update_idx=start)
 
+        _sp("kv_tail")
         hist = min(-(-self.window // TILE) * TILE, start)
         if hist:
             k_tail = ttnn.slice(cache.k, [0, 0, start - hist, 0], [1, nkv, start, D])
@@ -499,6 +536,7 @@ class TtSlidingAttention(TtFullAttention):
         else:
             q_cat, k_cat, v_cat = q, k, v
 
+        _sp("sliding_sdpa")
         full = ttnn.transformer.scaled_dot_product_attention(
             q_cat,
             k_cat,
@@ -518,10 +556,12 @@ class TtSlidingAttention(TtFullAttention):
         else:
             attn = full
 
+        _sp("o_proj")
         a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*192]
         ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(a)
+        _sp("ccl")
         out = ttnn.all_reduce(o, cluster_axis=1)
         ttnn.deallocate(o)
         return out
