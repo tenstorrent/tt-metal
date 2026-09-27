@@ -413,6 +413,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_clamped_affine.h
+    inc/api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
 )
