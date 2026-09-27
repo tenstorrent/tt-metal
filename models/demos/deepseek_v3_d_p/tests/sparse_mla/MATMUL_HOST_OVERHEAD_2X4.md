@@ -42,6 +42,33 @@ The third pair used identical 10-warmup/10-measured minima for both execution mo
 
 The current branch therefore retains about **1.04 ms** of traced/untraced E2E gap for this warm GLM-5.2 FP8 layer on the LoudBox. The traced minima differ by only 15 µs between revisions; that is within the observed run-to-run spread and should not be attributed to the matmul changes.
 
+## Where the remaining gap goes
+
+A follow-up diagnostic on the rebased branch (`2e618c20fcd`, 2026-09-27) used the same 2×4 workload and 10-warmup/10-measured protocol, with `DS_PERF_HOST_BREAKDOWN=1`. It split the clean E2E timer at the return from `mla.forward`, then used separate instrumented passes to time TTNN calls and trace replay phases. All figures below are medians; the E2E minimum in this run was 4.130 ms untraced versus 3.004 ms traced.
+
+| Phase | Untraced | Traced |
+| --- | ---: | ---: |
+| Host forward / trace submissions and manager work | 2.609 ms | ~0.043 ms |
+| Final device synchronization | 1.546 ms | 2.913 ms |
+| Complete E2E | 4.150 ms | 3.055 ms |
+
+The traced phase numbers come from a separate replay pass: its three `execute_trace` calls took 22 µs combined, other replay work including two manager transitions took 21 µs, and the final synchronization took 2.913 ms. The longer traced wait means that much of eager's host work overlaps device execution. **Inference:** roughly 1.1 ms of eager dispatch pacing remains exposed on the E2E critical path; the full 2.6 ms host-forward interval is not added on top of device time.
+
+An instrumented eager pass counted **67 TTNN calls** per forward. Their inclusive host-call times summed to 2.216 ms median, with another 0.518 ms in Python/model control and other work outside those calls in that instrumented pass. The largest groups were:
+
+| Host call group | Calls | Median combined time |
+| --- | ---: | ---: |
+| `linear` | 9 | 382 µs |
+| `reduce_scatter_minimal_async` | 4 | 311 µs |
+| `rotary_embedding_indexed` | 4 | 217 µs |
+| `deallocate` | 20 | 180 µs |
+| `high_bw_all_gather` | 5 | 170 µs |
+| `to_layout` | 4 | 136 µs |
+| `all_to_all_async_generic` | 2 | 98 µs |
+| `matmul` | 2 | 82 µs |
+
+Matmul plus linear account for about 0.46 ms of host-call time, and other calls plus model control account for more than 2 ms. These call times are measured in a separate wrapper pass and include any waits inside a call; they identify places to investigate, not additive contributions to the 1.1 ms E2E gap. Device realtime-profiler timestamps are per program/core and cannot be combined into a trustworthy cross-core E2E span, so this analysis uses host intervals for the traced/untraced comparison.
+
 ## Host call duration by operation instance
 
 The forward invokes two `ttnn.matmul` and nine `ttnn.linear` calls. Instance numbers are in call order within each operation type. Values below are the per-instance minima in µs from the separate host-call pass in the first two pairs.

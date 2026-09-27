@@ -112,6 +112,9 @@ their minimum. A separate 10-forward pass times each ttnn.matmul/linear Python c
 device completion; its wrappers do not affect the end-to-end samples. It then captures the same
 forward as segmented traces and measures 10 warm plus 10 traced replays under the same host timer.
 Other cases are skipped.
+Set DS_PERF_HOST_BREAKDOWN=1 alongside DS_PERF_UNTRACED_HOST=1 to add separate timed passes for
+all FastOperation calls and trace submission/synchronization. These diagnostic wrappers do not
+affect the reported E2E samples.
 
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
@@ -197,6 +200,7 @@ RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 # attribution (parse_percall) needs. Off by default (the summary CSVs are the normal output).
 RT_OPS_DUMP = os.environ.get("DS_PERF_RT_OPS_DUMP", "") not in ("", "0", "false")
 UNTRACED_HOST_BENCH = os.environ.get("DS_PERF_UNTRACED_HOST", "") == "1"
+HOST_BREAKDOWN = os.environ.get("DS_PERF_HOST_BREAKDOWN", "") == "1"
 
 
 def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
@@ -909,11 +913,17 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             ttnn.synchronize_device(mesh_device)
 
         e2e_ns = []
+        forward_ns = []
+        completion_ns = []
         for _ in range(measured_runs):
             start_ns = time.perf_counter_ns()
             _one_forward(cache)
+            forward_end_ns = time.perf_counter_ns()
             ttnn.synchronize_device(mesh_device)
-            e2e_ns.append(time.perf_counter_ns() - start_ns)
+            end_ns = time.perf_counter_ns()
+            forward_ns.append(forward_end_ns - start_ns)
+            completion_ns.append(end_ns - forward_end_ns)
+            e2e_ns.append(end_ns - start_ns)
 
         # Measure each Python operation call in a separate pass so wrapper bookkeeping
         # cannot affect the reported end-to-end samples. Device completion stays outside
@@ -949,10 +959,39 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             samples = [run[index][1] for run in op_runs]
             per_op.append({"name": name, "instance": kind_indices[name], "samples_ns": samples, "min_ns": min(samples)})
 
+        all_op_runs = []
+        if HOST_BREAKDOWN:
+            current_all_ops = []
+            original_fast_call = ttnn.decorators.FastOperation.__call__
+            fast_call_depth = 0
+
+            def timed_fast_call(operation, *args, **kwargs):
+                nonlocal fast_call_depth
+                if fast_call_depth:
+                    return original_fast_call(operation, *args, **kwargs)
+                start_ns = time.perf_counter_ns()
+                fast_call_depth += 1
+                try:
+                    return original_fast_call(operation, *args, **kwargs)
+                finally:
+                    duration_ns = time.perf_counter_ns() - start_ns
+                    fast_call_depth -= 1
+                    current_all_ops.append((operation.python_fully_qualified_name, duration_ns))
+
+            with patch.object(ttnn.decorators.FastOperation, "__call__", timed_fast_call):
+                for _ in range(measured_runs):
+                    current_all_ops = []
+                    start_ns = time.perf_counter_ns()
+                    _one_forward(cache)
+                    all_op_forward_ns = time.perf_counter_ns() - start_ns
+                    ttnn.synchronize_device(mesh_device)
+                    all_op_runs.append({"forward_ns": all_op_forward_ns, "ops": current_all_ops})
+
         controller = SubDeviceTraceController(mesh_device)
         compile_out = capture_out = None
         capture_started = capture_ended = False
         traced_e2e_ns = []
+        trace_phase_runs = []
         trace_segments = 0
         mla.set_trace_controller(controller)
         try:
@@ -976,6 +1015,35 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
                 controller.replay()
                 ttnn.synchronize_device(mesh_device)
                 traced_e2e_ns.append(time.perf_counter_ns() - start_ns)
+
+            if HOST_BREAKDOWN:
+                current_trace_phases = []
+                original_execute_trace = ttnn.execute_trace
+                original_synchronize = ttnn.synchronize_device
+
+                def timed_execute_trace(*args, **kwargs):
+                    start_ns = time.perf_counter_ns()
+                    result = original_execute_trace(*args, **kwargs)
+                    current_trace_phases.append(("execute_trace", time.perf_counter_ns() - start_ns))
+                    return result
+
+                def timed_synchronize(*args, **kwargs):
+                    start_ns = time.perf_counter_ns()
+                    result = original_synchronize(*args, **kwargs)
+                    current_trace_phases.append(("synchronize_device", time.perf_counter_ns() - start_ns))
+                    return result
+
+                with (
+                    patch.object(ttnn, "execute_trace", timed_execute_trace),
+                    patch.object(ttnn, "synchronize_device", timed_synchronize),
+                ):
+                    for _ in range(measured_runs):
+                        current_trace_phases = []
+                        start_ns = time.perf_counter_ns()
+                        controller.replay()
+                        trace_phase_runs.append(
+                            {"total_ns": time.perf_counter_ns() - start_ns, "phases": current_trace_phases}
+                        )
             trace_segments = controller.num_segments
         finally:
             if capture_started and not capture_ended:
@@ -1006,12 +1074,16 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             "warmups": warmups,
             "measured_runs": measured_runs,
             "e2e_samples_ns": e2e_ns,
+            "forward_samples_ns": forward_ns,
+            "completion_samples_ns": completion_ns,
             "e2e_min_ns": min(e2e_ns),
             "traced_execution": "segmented_trace_replay",
             "trace_segments": trace_segments,
             "traced_e2e_samples_ns": traced_e2e_ns,
             "traced_e2e_min_ns": min(traced_e2e_ns),
+            "trace_phase_runs": trace_phase_runs,
             "per_op": per_op,
+            "all_op_runs": all_op_runs,
         }
         out_dir = _output_dir("glm52_untraced_matmul_host")
         report_path = os.path.join(out_dir, f"{(head['commit'] or 'unknown')[:12]}_warm.json")
