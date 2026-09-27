@@ -18,8 +18,11 @@ namespace {
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
+        case UnaryOpType::TT_POLY_FACTOR_SOFTSHRINK_BW: return "TT_POLY_FACTOR_SOFTSHRINK_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW: return "TT_POLY_FACTOR_HARDTANH_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "TT_POLY_BACKWARD_HARDSIGMOID_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_FACTOR_HARDSHRINK_BW: return "TT_POLY_FACTOR_HARDSHRINK_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "TT_POLY_BACKWARD_ERF_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_ELU_BW: return "TT_POLY_BACKWARD_ELU_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "TT_POLY_BACKWARD_CELU_BW_INCLUDE";
@@ -801,10 +804,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 std::pair<std::string, std::string> get_op_init_and_func_default(
     UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
+        case UnaryOpType::TT_POLY_FACTOR_SOFTSHRINK_BW:
+            TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
+            return {
+                "softshrink_bw_tt_poly_bf16_tile_init();", fmt::format("softshrink_bw_tt_poly_bf16_tile({});", idst)};
+        case UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW:
+            TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
+            return {"hardtanh_bw_tt_poly_bf16_tile_init();", fmt::format("hardtanh_bw_tt_poly_bf16_tile({});", idst)};
         case UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
+        case UnaryOpType::TT_POLY_FACTOR_HARDSHRINK_BW:
+            TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
+            return {
+                "hardshrink_bw_tt_poly_bf16_tile_init();", fmt::format("hardshrink_bw_tt_poly_bf16_tile({});", idst)};
         case UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_BACKWARD_ELU_BW:
