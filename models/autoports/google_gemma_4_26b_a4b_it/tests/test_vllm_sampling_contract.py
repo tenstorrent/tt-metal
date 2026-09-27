@@ -14,7 +14,7 @@ from vllm_tt_plugin.model_input import TTModelInput, TTSamplingParams
 from vllm_tt_plugin.model_runner import TTModelRunner
 
 import ttnn
-from models.autoports.google_gemma_4_26b_a4b_it.tt.generator import Gemma4Generator
+from models.autoports.google_gemma_4_26b_a4b_it.tt.generator import Gemma4Generator, _Gemma4SamplingGenerator
 from models.autoports.google_gemma_4_26b_a4b_it.tt.generator_vllm import AutoportGemma4ForCausalLM
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, _hash_request_seed_to_device_seed
 from models.common.sampling.tt_penalties import TTPenalties
@@ -347,6 +347,99 @@ def test_generator_capture_and_replay_only_sample_in_token_mode(monkeypatch, ret
     execute_trace.assert_called_once_with(gen.mesh, 17, cq_id=0, blocking=False)
 
 
+@pytest.mark.parametrize("host_sampling", [False, True])
+def test_decode_formats_public_tokens_eagerly_only_for_host_sampling(host_sampling):
+    gen = Gemma4Generator.__new__(Gemma4Generator)
+    gen.trace_id = 17
+    gen._trace_returns_logits = False
+    gen.host_sampling = host_sampling
+    gen.batch = 2
+    gen.active_slots = (0, 1)
+    gen.cache = object()
+    gen.table = torch.arange(8, dtype=torch.int32).reshape(2, 4)
+    gen.table_host = gen.table.clone()
+    gen.public_tokens_view = object()
+    gen._replay = Mock()
+    gen._format_tokens = Mock()
+    output = gen.decode_forward(
+        None,
+        torch.tensor([33, 65]),
+        page_table=gen.table,
+        kv_cache=gen.cache,
+        device_feedback=True,
+    )
+    assert output is gen.public_tokens_view
+    gen._replay.assert_called_once_with()
+    assert gen._format_tokens.call_count == int(host_sampling)
+
+
+def test_sampler_trace_formats_public_output_after_canonical_sampling_and_penalties(monkeypatch):
+    sampler = _Gemma4SamplingGenerator.__new__(_Gemma4SamplingGenerator)
+    sampler.mesh_device = object()
+    sampler.cq_id = 0
+    sampler._penalties_active = True
+    sampler._log_probs_active = False
+    sampler.seed_manager = SimpleNamespace(has_active_request_seed=lambda: False)
+    key, slot = (True, False, False), {"id": None, "input": None, "output": None}
+    sampler._trace_slot = lambda *args: (key, slot)
+    sampler._trace_states = {key: slot}
+    sampler._active_trace_bucket = object()
+    tokens = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
+    public = torch.zeros(1, 1, 1, 3, dtype=torch.int32)
+    sampler.bind_public_tokens(tokens, public)
+    logits, log_probs = object(), object()
+    events = []
+
+    def sample(value, *, tt_out_tok):
+        assert value is logits and tt_out_tok is tokens
+        events.append("sample")
+        tokens.flatten()[:3] = torch.tensor([7, 11, 13])
+        return tokens, log_probs
+
+    sampler.tt_sampling = Mock(side_effect=sample, force_argmax_sampling=False)
+    sampler.tt_penalties = SimpleNamespace(
+        apply=Mock(side_effect=lambda value: events.append("apply_penalties") or value),
+        update_output_tokens=Mock(side_effect=lambda value: events.append("count_token")),
+    )
+
+    def copy_tokens(value, *, starts, ends, steps, output_tensor):
+        assert value is tokens and output_tensor is public
+        assert starts == (0, 0, 0, 0) and ends == (1, 1, 1, 3) and steps == (1, 1, 1, 1)
+        events.append("public_copy")
+        output_tensor.copy_(value[..., :3])
+
+    monkeypatch.setattr(ttnn, "slice", copy_tokens)
+    monkeypatch.setattr(ttnn, "begin_trace_capture", lambda *args, **kwargs: events.append("begin") or 17)
+    monkeypatch.setattr(ttnn, "end_trace_capture", lambda *args, **kwargs: events.append("end"))
+    monkeypatch.setattr(ttnn, "synchronize_device", Mock())
+    monkeypatch.setattr("models.common.sampling.generator._mark_trace_buffers_corruptible", Mock())
+    output = sampler.capture_trace(logits, tt_out_tok=tokens, skip_precompile=True)
+    assert events == ["begin", "apply_penalties", "sample", "count_token", "public_copy", "end"]
+    assert output[0] is tokens and output[1] is log_probs
+    torch.testing.assert_close(public.flatten(), torch.tensor([7, 11, 13], dtype=torch.int32))
+    sampler.tt_penalties.update_output_tokens.assert_called_once_with(tokens)
+    events.clear()
+    execute = Mock(side_effect=lambda *args, **kwargs: events.append("replay"))
+    monkeypatch.setattr(ttnn, "execute_trace", execute)
+    assert sampler.sample(logits, tt_out_tok=tokens, enable_trace=True) is output
+    assert events == ["replay"]
+    execute.assert_called_once_with(sampler.mesh_device, 17, cq_id=0, blocking=False)
+
+
+@pytest.mark.parametrize("output_binding", ["none", "other", "bound"])
+def test_sampler_prefill_formats_only_explicit_bound_output(monkeypatch, output_binding):
+    sampler = _Gemma4SamplingGenerator.__new__(_Gemma4SamplingGenerator)
+    tokens, public, logits, result = object(), object(), object(), object()
+    sampler.bind_public_tokens(tokens, public)
+    canonical = Mock(return_value=result)
+    monkeypatch.setattr(SamplingGenerator, "_run_sampling", canonical)
+    sampler.format_public_tokens = Mock()
+    output_tensor = {"none": None, "other": object(), "bound": tokens}[output_binding]
+    assert sampler._run_sampling(logits, penalties_on=False, tt_out_tok=output_tensor, count_tokens=False) is result
+    canonical.assert_called_once_with(logits, penalties_on=False, tt_out_tok=output_tensor, count_tokens=False)
+    assert sampler.format_public_tokens.call_count == int(output_binding == "bound")
+
+
 @pytest.mark.parametrize("tokens,feedback", [(None, False), (torch.zeros(1, 1), True)])
 def test_generator_logits_mode_requires_scheduler_feedback(tokens, feedback, expect_error):
     gen = Gemma4Generator.__new__(Gemma4Generator)
@@ -412,7 +505,7 @@ def test_generator_logits_decode_refreshes_scheduler_state_and_recaptures_on_mod
     assert gen._bind.call_count == 2
     assert gen._capture.call_args.kwargs == {"return_logits": False}
     assert gen.sampler.sample.call_count == 1
-    assert gen._format_tokens.call_count == 1
+    gen._format_tokens.assert_not_called()
     gen._read_logits.assert_not_called()
 
 

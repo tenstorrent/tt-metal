@@ -1,0 +1,22 @@
+{
+  "shared_runner_exit_code": 0,
+  "command": "final_checks_command.json",
+  "sampling_profile": "full",
+  "sampling_passed": 72,
+  "sampling_skipped": 1,
+  "sampling_failed": 0,
+  "sampling_duration_s": 1119.96,
+  "skip_reason": "Shared all-vocabulary chat logprobs test skips for configured max_logprobs cap20",
+  "sampling_log": "after/sampling_tests.log",
+  "qualitative": "after/vllm_qualitative_outputs.json",
+  "degeneracy_exit_code": 0,
+  "context_gate_exit_code": 0,
+  "primary_benchmark": "after/vllm_benchmark.json",
+  "ci_serving_benchmark": "after/vllm_ci_serving_benchmark.json",
+  "source_manifest": "candidate_source_manifest.json",
+  "queued_async_reads": "adapter_queued_reads.json",
+  "watcher": "batch_cache_watcher.json",
+  "watcher_limit": "ACTIVE_ETH instrumentation disabled after config buffer capacity error",
+  "requests": "requests_final.json",
+  "cleanup": "cleanup.json"
+}

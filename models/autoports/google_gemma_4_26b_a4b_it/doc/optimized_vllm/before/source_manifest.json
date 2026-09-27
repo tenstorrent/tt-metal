@@ -1,0 +1,15 @@
+{
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/generator.py": "a342dffd8a60515c895e1584e861ae736edaab2b2ece43d4ca5bf958d68fde07",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/decode_attention.py": "fd67ca281493097d4c7da60cbe52d5fe29581370b9fc62c4a9829baf69044b96",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py": "f9bd79d74b8c7c5f093e0e8d72d95773dcbfdaf6f99f51ed4b1b62ebf10921b3",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/precision_ops.py": "52f0bad533c4d421b5c807914ad0d101533da3eb012b734e3e9c55bceefe23ef",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/fused_decoder.py": "0c8892be32e04202fdbddd2b06850848c63ae57660c49d03c4d149a5a88b041c",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/model.py": "5bf24a3a3680a1aeb9cb881993fac4e6583efc8aa50633a7b61eb0199a70680f",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/precision_policy.py": "67fd21539e3bf629bc767c145bd8c5d9fe2b980ce5ac957b5478b78032e9aa3f",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/functional_decoder.py": "d19667d70e42650a5a241fa334dd57a396a564a2dca0cf8ab2a1a6573156b3a3",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/optimized_decoder.py": "2d2e52e029bb840e47e9ea17b7684c5bd6c807f1c56b38f647801a75977d7d55",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/routing_precision.py": "1237d3eb7b90563b4032b1ba1fa42606aca5cb2db93ba557f7603d5355ff6672",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/precise_attention.py": "688c0526ccad6e2f02be4bb532f914fc2ad5b08398fa398e6cf6aa0c4d9f6f65",
+  "models/autoports/google_gemma_4_26b_a4b_it/tt/generator_vllm.py": "e8fc6f7f98552af64b10370e786b422bf71d9500cd0a32fd2854da50ad1f0533",
+  "models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected_precision_config.json": "9af37c1309a8cfd3b6018b7cbade031a11646dc46d3282cd2be1a4d018fba3b5"
+}

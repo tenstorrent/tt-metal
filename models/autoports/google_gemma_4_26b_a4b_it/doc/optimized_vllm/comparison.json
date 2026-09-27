@@ -1,0 +1,87 @@
+{
+  "before": {
+    "primary": {
+      "completed": 1,
+      "total_input_tokens": 4096,
+      "total_output_tokens": 128,
+      "median_ttft_ms": 2642.792697995901,
+      "p99_ttft_ms": 2642.792697995901,
+      "mean_tpot_ms": 19.66698174401531,
+      "p99_tpot_ms": 19.66698174401531,
+      "mean_itl_ms": 19.666982932001588,
+      "median_itl_ms": 19.597341306507587,
+      "p99_itl_ms": 24.301964100450263,
+      "output_throughput": 24.898760242609605,
+      "decode_tps": 50.84664301904391,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "requests": 1,
+        "client_max_concurrency": 1
+      }
+    },
+    "ci_burst": {
+      "completed": 32,
+      "total_input_tokens": 3200,
+      "total_output_tokens": 3200,
+      "median_ttft_ms": 14702.596602961421,
+      "p99_ttft_ms": 14703.810855671763,
+      "mean_tpot_ms": 681.2891693167844,
+      "p99_tpot_ms": 752.4636347428192,
+      "mean_itl_ms": 681.2891701122892,
+      "median_itl_ms": 677.22362652421,
+      "p99_itl_ms": 729.3254504259676,
+      "output_throughput": 39.11114986130277,
+      "decode_tps": 1.4678055149516431,
+      "workload": {
+        "input_tokens": 100,
+        "output_tokens": 100,
+        "requests": 32,
+        "client_max_concurrency": null
+      }
+    }
+  },
+  "after": {
+    "primary": {
+      "completed": 1,
+      "total_input_tokens": 4096,
+      "total_output_tokens": 128,
+      "median_ttft_ms": 2498.2848800718784,
+      "p99_ttft_ms": 2498.2848800718784,
+      "mean_tpot_ms": 19.74742150476833,
+      "p99_tpot_ms": 19.74742150476833,
+      "mean_itl_ms": 19.74742363141043,
+      "median_itl_ms": 19.598357379436493,
+      "p99_itl_ms": 27.10376335307954,
+      "output_throughput": 25.56651788561269,
+      "decode_tps": 50.63952272242399,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "requests": 1,
+        "client_max_concurrency": 1
+      }
+    },
+    "ci_burst": {
+      "completed": 32,
+      "total_input_tokens": 3200,
+      "total_output_tokens": 3200,
+      "median_ttft_ms": 14511.986676137894,
+      "p99_ttft_ms": 14513.015143778175,
+      "mean_tpot_ms": 681.786750224266,
+      "p99_tpot_ms": 752.3760645392568,
+      "mean_itl_ms": 681.7867509159965,
+      "median_itl_ms": 677.2427097894251,
+      "p99_itl_ms": 735.9729483071715,
+      "output_throughput": 39.1776491362297,
+      "decode_tps": 1.4667342826346528,
+      "workload": {
+        "input_tokens": 100,
+        "output_tokens": 100,
+        "requests": 32,
+        "client_max_concurrency": null
+      }
+    }
+  },
+  "interpretation": "Warmed decode effectively flat; TTFT lower in this run. First-use TPOT/ITL mismatch excluded from speedup claims. One primary request per side; no statistical significance claim."
+}

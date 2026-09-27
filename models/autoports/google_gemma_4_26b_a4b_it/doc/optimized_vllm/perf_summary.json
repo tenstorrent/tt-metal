@@ -1,0 +1,21 @@
+{
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 4096,
+    "gen_len": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "source": "vllm",
+  "ttft_ms": 2498.2848800718784,
+  "decode_tps": 50.63952272242399,
+  "decode_ms_per_token_e2e": 19.74742150476833,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "named_limitations": [
+    "vllm_serving_profiler_disabled_to_protect_hardware",
+    "single_measured_primary_request_per_side",
+    "decode_latency_effectively_flat"
+  ],
+  "evidence": "after/vllm_result.json"
+}

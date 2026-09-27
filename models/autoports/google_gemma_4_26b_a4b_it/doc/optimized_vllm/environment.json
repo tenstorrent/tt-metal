@@ -1,0 +1,24 @@
+{
+  "available_device_nodes": [
+    "/dev/tenstorrent/0",
+    "/dev/tenstorrent/1",
+    "/dev/tenstorrent/2",
+    "/dev/tenstorrent/3"
+  ],
+  "mesh": [
+    1,
+    4
+  ],
+  "sku": "P300x2",
+  "architecture": "Blackhole",
+  "evidence": [
+    "before/server.log",
+    "adapter_changed_pages_retry.log",
+    "batch_cache_watcher_retry.log"
+  ],
+  "tt_smi": "not installed in serving image; no reset was required; actual mesh open/close passed",
+  "runtime_home": "/home/container_app_user/tt-metal",
+  "runtime_library_path": "/home/container_app_user/tt-metal/build/lib",
+  "checkout": "/workspace/tt-metal",
+  "profiler_collection": false
+}
