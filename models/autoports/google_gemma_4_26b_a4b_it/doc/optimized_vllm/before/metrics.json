@@ -1,0 +1,28 @@
+{
+  "primary": {
+    "completed": 1,
+    "total_input_tokens": 4096,
+    "total_output_tokens": 128,
+    "median_ttft_ms": 2642.792697995901,
+    "p99_ttft_ms": 2642.792697995901,
+    "mean_tpot_ms": 19.66698174401531,
+    "p99_tpot_ms": 19.66698174401531,
+    "median_itl_ms": 19.597341306507587,
+    "p99_itl_ms": 24.301964100450263,
+    "output_throughput": 24.898760242609605,
+    "decode_tps": 50.84664301904391
+  },
+  "ci_burst": {
+    "completed": 32,
+    "total_input_tokens": 3200,
+    "total_output_tokens": 3200,
+    "median_ttft_ms": 14702.596602961421,
+    "p99_ttft_ms": 14703.810855671763,
+    "mean_tpot_ms": 681.2891693167844,
+    "p99_tpot_ms": 752.4636347428192,
+    "median_itl_ms": 677.22362652421,
+    "p99_itl_ms": 729.3254504259676,
+    "output_throughput": 39.11114986130277,
+    "decode_tps": 1.4678055149516431
+  }
+}

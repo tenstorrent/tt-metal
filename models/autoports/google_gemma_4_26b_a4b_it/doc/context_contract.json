@@ -425,5 +425,21 @@
     ],
     "review": "datatype_sweep/stage_review.md",
     "implementation_commit": "e9d0a0a5f9584060e4b4b905c1f2c6621086815d"
+  },
+  "optimized_vllm": {
+    "status": "clean-pass",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "persistent_tensor_payload_delta_bytes": 0,
+    "trace_change": "Existing public-token slice captured after canonical sampling within sampler trace; same persistent token and output tensors, no new trace replay.",
+    "trace_region_size": 1000000000,
+    "evidence": [
+      "optimized_vllm/final_validation.json",
+      "optimized_vllm/adapter_queued_reads.json",
+      "optimized_vllm/batch_cache_watcher.json",
+      "optimized_vllm/requests_final.json"
+    ]
   }
 }

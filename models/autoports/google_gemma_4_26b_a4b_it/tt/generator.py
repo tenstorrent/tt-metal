@@ -21,6 +21,34 @@ from models.common.sampling.generator import (
 )
 
 
+class _Gemma4SamplingGenerator(SamplingGenerator):
+    """Include the public-token copy in the canonical sampling trace."""
+
+    _feedback_tokens = None
+    _public_tokens = None
+
+    def bind_public_tokens(self, tokens, public_tokens):
+        self._feedback_tokens = tokens
+        self._public_tokens = public_tokens
+
+    def format_public_tokens(self):
+        ttnn.slice(
+            self._feedback_tokens,
+            starts=(0, 0, 0, 0),
+            ends=tuple(self._public_tokens.shape),
+            steps=(1, 1, 1, 1),
+            output_tensor=self._public_tokens,
+        )
+
+    def _run_sampling(self, logits, *, penalties_on, tt_out_tok, count_tokens=True):
+        output = super()._run_sampling(
+            logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
+        )
+        if tt_out_tok is not None and tt_out_tok is self._feedback_tokens:
+            self.format_public_tokens()
+        return output
+
+
 class Gemma4Generator(Generator):
     def __init__(
         self,
@@ -59,7 +87,7 @@ class Gemma4Generator(Generator):
                 }
             },
         )
-        self.sampler = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=get_tt_ccl(mesh_device))
+        self.sampler = _Gemma4SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=get_tt_ccl(mesh_device))
         self.sampler.reset_sampling_params(
             format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
         )
@@ -341,15 +369,10 @@ class Gemma4Generator(Generator):
             torch.zeros(1, 1, 1, batch, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
         )
         self.public_tokens_view = ttnn.reshape(self.public_tokens, (batch,))
+        self.sampler.bind_public_tokens(self.tokens, self.public_tokens)
 
     def _format_tokens(self):
-        ttnn.slice(
-            self.tokens,
-            starts=(0, 0, 0, 0),
-            ends=(1, 1, 1, self.batch),
-            steps=(1, 1, 1, 1),
-            output_tensor=self.public_tokens,
-        )
+        self.sampler.format_public_tokens()
 
     def _capture(self, *, return_logits=False):
         self._trace_returns_logits = return_logits
@@ -439,7 +462,8 @@ class Gemma4Generator(Generator):
         output = self._replay()
         if return_logits:
             return output
-        self._format_tokens()
+        if self.host_sampling:
+            self._format_tokens()
         return self.public_tokens_view
 
     def _replay(self):
