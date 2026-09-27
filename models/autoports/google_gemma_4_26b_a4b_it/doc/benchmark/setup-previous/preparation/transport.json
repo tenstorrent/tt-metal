@@ -1,0 +1,54 @@
+{
+  "scope": "Synthetic local HTTP only; no model inference, live server, benchmark score, or measured token counts.",
+  "benchmark_module": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/runtime/benchmark_stage/__init__.py",
+  "lm_eval_version": "0.4.13",
+  "transformers_version": "4.57.6",
+  "backend_source": "/home/mvasiljevic/.venvs/gemma4-benchmark/lib/python3.10/site-packages/lm_eval/models/openai_completions.py",
+  "generation": {
+    "max_gen_toks": 4096,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 64,
+    "do_sample": true,
+    "until": [],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "logprobs": true,
+    "top_logprobs": 0
+  },
+  "captured_payload": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Synthetic example: what is one plus one?"
+      },
+      {
+        "role": "assistant",
+        "content": "Two."
+      },
+      {
+        "role": "user",
+        "content": "Synthetic probe: what is two plus two?"
+      }
+    ],
+    "model": "google/gemma-4-26B-A4B-it",
+    "max_tokens": 4096,
+    "temperature": 1.0,
+    "stop": [],
+    "seed": 1234,
+    "top_p": 0.95,
+    "top_k": 64,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "logprobs": true,
+    "top_logprobs": 0
+  },
+  "synthetic_response_parsed": [
+    "Four."
+  ],
+  "client_template": "structured JSON messages only; no native template rendered client-side",
+  "native_render_scope": "Server rendering is separately checked by benchmark_tokenizer_check.py in the compatible server environment.",
+  "assertions_passed": true
+}

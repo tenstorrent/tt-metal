@@ -27,6 +27,10 @@ class AutoportGemma4ForCausalLM:
         self._sampling_on_host = None
         self._decode_batch = None
         self.allow_host_sampling = os.environ.get("GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING") == "1"
+        if control_path := os.environ.get("GEMMA4_BENCHMARK_CONTROL"):
+            from models.autoports.google_gemma_4_26b_a4b_it.tools.benchmark_runtime import install
+
+            install(self, control_path)
 
     def embed_input_ids(self, input_ids):
         return self.generator.model.embed(input_ids)

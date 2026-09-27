@@ -1,4 +1,0 @@
-$ python -m benchmark_stage.check --model-dir models/autoports/google_gemma_4_26b_a4b_it --hf-model google/gemma-4-26B-A4B-it
-imported generator is not inside the target autoport
-
-exit=2

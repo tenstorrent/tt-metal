@@ -102,3 +102,28 @@ no-dependency-install instruction before execution can proceed.
 All measurements remain unavailable. The timed runner has never been invoked,
 so no under-one-hour completion claim is made. No hardware command, installation,
 process stop, benchmark, profiling or push occurred during this audit.
+
+## Operator-provisioned client recovery
+
+After the blocked audit, the user authorized recovery. The operator provisioned
+an external client at `/home/mvasiljevic/.venvs/gemma4-benchmark` and exposed it
+as `EVAL_PYTHON`. It contains `lm-eval[api,ifeval]==0.4.13` and Transformers
+4.57.6 while reusing the serving image's already-provisioned PyTorch, datasets,
+and vLLM packages. NLTK `punkt_tab` is available under the external mounted
+cache. Both `EVAL_PYTHON -m lm_eval --help` and the vLLM 0.26 `bench serve`
+help command exit 0. The repository and serving Python environment were not
+modified. The original Stage 11 thread can now resume; these setup validations
+are prerequisites, not benchmark results.
+
+## Resumed execution preparation
+
+The operator-provisioned client resolves the prior blocker. All prior run/ files
+are preserved under setup-previous/; historical paths above refer there.
+The fresh runner will create run/ and include the first32-slot server launch.
+No supplied server remains alive. Stage10 startup was approximately190seconds
+(candidate_server_runner.log); its settings are inherited with explicit pinned
+model/tokenizer revisions. Hardware is the enclosing local run’s exposed four
+Blackhole devices; no external reservation was acquired or released.
+Setup records, client transport proof and frozen task settings are separate
+from timed inference. Native top64 accuracy uses the existing host logits sampler;
+greedy performance uses device sampling. No live device profiler is enabled.
