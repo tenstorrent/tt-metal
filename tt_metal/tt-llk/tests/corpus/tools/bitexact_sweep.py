@@ -11,7 +11,7 @@ row's format can deliver through L1.
 Method (per row):
   probe     one sim run per leg (sem/hand) on the row's REGISTERED corr node
             and stimuli, dumping the raw L1 input/result bytes
-            (LANEJN_DUMP hook in test_sfpu_unary.py + helpers/stimuli_config.py).
+            (SFPU_DUMP hook in test_sfpu_unary.py + helpers/stimuli_config.py).
   anchor    the same two nodes run on SILICON with the same dump hook —
             the device-golden truth anchors (device use = validation only).
   validate  the executor (pinned craq-sim libttsim, in-process harness) must
@@ -21,7 +21,7 @@ Method (per row):
   sweep     enumerate the row's ENTIRE input bit-pattern space (16-bit
             formats: all 65,536 patterns, NaN payloads and denormals
             included), inject the raw patterns directly into L1
-            (LANEJN_RAW_A — bypasses the host float pack path, which
+            (SFPU_RAW_A — bypasses the host float pack path, which
             canonicalizes NaN payloads), run BOTH compiled kernels on every
             chunk in the validated simulator, and compare raw result bytes.
   verdict   BIT-EXACT-ALL-INPUTS / DIVERGENT (with a divergence
@@ -95,7 +95,7 @@ FMT_BYTES = {
 FMT_SPACE = {2: 1 << 16, 4: 1 << 32}
 
 # Arity / harness classification by the sem corr node's test file.  Only
-# test_sfpu_unary.py rows are instrumented (the LANEJN_* hooks); everything
+# test_sfpu_unary.py rows are instrumented (the SFPU_DUMP/SFPU_RAW_A hooks); everything
 # else is refused with a per-class reason, never silently dropped.
 UNARY_HOOKED_FILES = {"test_sfpu_unary.py"}
 FILE_CLASS = {
@@ -105,7 +105,7 @@ FILE_CLASS = {
     "test_sfpu_coverage.py": (
         "unary-unhooked",
         "coverage-census row; separate harness not instrumented with the "
-        "LANEJN hooks this run",
+        "dump hooks this run",
     ),
     "test_sfpu_binary.py": (
         "binary",
@@ -202,11 +202,11 @@ def run_node_sim(ctx, node, runner_temp, dump, raw_a=None, skip_assert=False, lo
     Path(runner_temp).mkdir(parents=True, exist_ok=True)
     env = base_env(ctx, runner_temp)
     env["TT_METAL_SIMULATOR"] = str(ctx.sim)
-    env["LANEJN_DUMP"] = str(dump)
+    env["SFPU_DUMP"] = str(dump)
     if raw_a is not None:
-        env["LANEJN_RAW_A"] = str(raw_a)
+        env["SFPU_RAW_A"] = str(raw_a)
     if skip_assert:
-        env["LANEJN_SKIP_ASSERT"] = "1"
+        env["SFPU_SKIP_ASSERT"] = "1"
     cmd = [
         ctx.python,
         "-m",
@@ -243,7 +243,7 @@ def run_node_device(ctx, node, runner_temp, dump, log):
     Path(runner_temp).mkdir(parents=True, exist_ok=True)
     env = base_env(ctx, runner_temp)
     env.pop("TT_METAL_SIMULATOR", None)
-    env["LANEJN_DUMP"] = str(dump)
+    env["SFPU_DUMP"] = str(dump)
     inner = (
         f"rm -rf {shlex.quote(str(LLK / 'perf_data'))} && "
         f"cd {shlex.quote(str(PYDIR))} && "

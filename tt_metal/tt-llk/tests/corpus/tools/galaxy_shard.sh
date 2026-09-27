@@ -129,7 +129,7 @@ for k in $(seq 0 $((NPAR-1))); do
   [ -d "$RT/tt-llk-build/sources" ] || { mkdir -p "$RT"; cp -a "$BUILD/tt-llk-build" "$RT/"; }
   start=$(( k * SLICE ))
   sdir="$OUT/slice-$k"
-  ( LANEMK_WAIT_TIMEOUT="${LANEMK_WAIT_TIMEOUT:-600}" \
+  ( SFPU_WAIT_TIMEOUT="${SFPU_WAIT_TIMEOUT:-600}" \
     "$VENV" "$STREAMER" \
       --op "$OP-s$k" --sem-node "$SEM" --hand-node "$HAND" \
       --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" --runner-temp "$RT" \

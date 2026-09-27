@@ -18,7 +18,7 @@
 #           required for SWEEP=fp32, optional for SWEEP=binary
 #   BUILD   a dir containing tt-llk-build/ with both legs' prebuilt ELFs
 #   GOLDEN  0 turns OFF the ULP/golden leg (default on).  The leg RIDES this
-#           pass -- the streamer exports LANEMR_GOLDEN, the device test folds
+#           pass -- the streamer exports SFPU_GOLDEN, the device test folds
 #           every streamed chunk through threeway_golden.py and writes a .corr
 #           sidecar, and the sweep turns those into <op>-CORRECTNESS-LEDGER.tsv.
 #           No extra device time, no extra retention; never affects the verdict.
@@ -51,7 +51,7 @@ idmap_args=()
 golden_args=()
 [ "${GOLDEN:-1}" = 1 ] && golden_args=(--golden "$op")
 
-LANEMK_WAIT_TIMEOUT="${LANEMK_WAIT_TIMEOUT:-600}" \
+SFPU_WAIT_TIMEOUT="${SFPU_WAIT_TIMEOUT:-600}" \
 "$VENV" "$(dirname "$0")/$STREAMER" \
   --op "$op" --sem-node "$sem" --hand-node "$hand" \
   --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" --runner-temp "$RT" \

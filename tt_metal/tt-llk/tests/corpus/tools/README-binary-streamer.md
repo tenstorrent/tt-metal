@@ -1,7 +1,7 @@
 # laneMQ — the two-operand 2^32 sem-vs-hand silicon streamer
 
 The laneMK galaxy streamer (`fp32_stream_lib.py` / `fp32_stream_sweep.py` /
-`LANEMK_STREAM` in `test_sfpu_unary.py`) proves single-input fp32/int32 ops
+`SFPU_STREAM` in `test_sfpu_unary.py`) proves single-input fp32/int32 ops
 bit-exact-equal on silicon by streaming the entire 2^32 raw-uint32 space through
 both certified corpus legs and comparing per-leg SHA-256. This is that tool
 **widened by exactly one dimension** so it can close a genuinely two-operand op —
@@ -72,7 +72,7 @@ but laneMO's separate-buffer binary ops can adopt it.
 | `binary_stream_lib.py` | device-independent core: joint enumeration, interleaved-payload packing, coverage checksums, per-leg digest, band verdict (reuses laneMK `first_divergence` + `texthash_gate`) |
 | `binary_stream_sweep.py` | orchestrator: resume-safe band sweep, one band-leg per pytest invocation on a flocked chip, `.text` identity gate, coverage assert, VERDICT |
 | `selftest_binary_stream.py` | mandated device-independent selftest (enumeration, payload+full-cover, known-equal, divergent+witness, text-gate) |
-| `LANEMK_STREAM_BINARY` hook in `test_sfpu_binary.py::_lanemk_run_binary_stream` | the device leg (persistent session; per dispatch inject interleaved A, clear Res, run, read, fold SHA) |
+| `SFPU_STREAM_BINARY` hook in `test_sfpu_binary.py::_lanemk_run_binary_stream` | the device leg (persistent session; per dispatch inject interleaved A, clear Res, run, read, fold SHA) |
 | `lanejn_raw_b` path in `helpers/stimuli_config.py` | reusable raw-B (separate-buffer) inject path, additive + inert |
 
 ## Run
@@ -95,4 +95,4 @@ python binary_stream_sweep.py --op binarypow \
 `--array` submitter mirror the laneMK galaxy model when running on the exabox
 galaxies. The DIFF bands of a `DIVERGENT` verdict are narrowed by re-running that
 band at a smaller `--band-bits`; a first-witness input is then sim-confirmed on the
-pinned instrument (`formal_equiv.py` / `LANEJO_SRC_OVERRIDE`).
+pinned instrument (`formal_equiv.py` / `SFPU_SRC_OVERRIDE`).

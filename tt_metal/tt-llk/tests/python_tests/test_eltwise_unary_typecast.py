@@ -309,7 +309,7 @@ def test_eltwise_unary_typecast(
     # env-gated contract as test_sfpu_unary.py's eltwise_unary_sfpu.
     import os as _os
 
-    _lanejn_raw_a = _os.environ.get("LANEJN_RAW_A")
+    _lanejn_raw_a = _os.environ.get("SFPU_RAW_A")
     if _lanejn_raw_a:
         from pathlib import Path as _Path
 
@@ -317,7 +317,7 @@ def test_eltwise_unary_typecast(
 
     res_from_L1 = configuration.run().result
 
-    _lanejn_dump = _os.environ.get("LANEJN_DUMP")
+    _lanejn_dump = _os.environ.get("SFPU_DUMP")
     if _lanejn_dump:
         import numpy as _np
 
@@ -353,7 +353,7 @@ def test_eltwise_unary_typecast(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    if _os.environ.get("LANEJN_SKIP_ASSERT") == "1":
+    if _os.environ.get("SFPU_SKIP_ASSERT") == "1":
         return
 
     assert passed_test(

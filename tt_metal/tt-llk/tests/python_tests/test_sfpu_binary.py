@@ -417,7 +417,7 @@ def _lanemk_run_binary_stream(configuration, spec):
     dispatch injects an interleaved buffer_A payload (even tile = base, odd tile =
     exponent) through the validated laneJN raw-A L1 path -- the SFPU binary ABI keeps
     both operands in buffer_A, so no separate raw-B write is needed here. Emits one
-    LANEMK_STREAM_BINARY_RESULT line (per-leg output SHA + joint sum64/xor32 coverage
+    SFPU_STREAM_BINARY_RESULT line (per-leg output SHA + joint sum64/xor32 coverage
     checksums + measured wall/per-dispatch). Env-gated; never runs in a normal test.
 
     spec = "start,count,outfile" (start, count are joint indices, both multiples of the
@@ -451,12 +451,12 @@ def _lanemk_run_binary_stream(configuration, spec):
 
     import os
 
-    _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
+    _wait_to = int(os.environ.get("SFPU_WAIT_TIMEOUT", "60"))
 
     # laneMR three-way correctness leg (env-gated, additive, inert when unset).
-    # LANEMR_GOLDEN="binarypow,<leg>" folds a host-side torch.pow golden over the EVEN
+    # SFPU_GOLDEN="binarypow,<leg>" folds a host-side torch.pow golden over the EVEN
     # result tiles (device pow output) with NO retention; writes a "<outfile>.corr".
-    _gold = os.environ.get("LANEMR_GOLDEN")
+    _gold = os.environ.get("SFPU_GOLDEN")
     _bacc = None
     if _gold and _gold.split(",", 1)[0] == "binarypow":
         import threeway_golden as _tgm
@@ -496,7 +496,7 @@ def _lanemk_run_binary_stream(configuration, spec):
             _fh.write(_corr + "\n")
 
     line = (
-        "LANEMK_STREAM_BINARY_RESULT,"
+        "SFPU_STREAM_BINARY_RESULT,"
         f"start={start},count={joints},runs={runs},joint_per_dispatch={joint_per},"
         f"pairs={pairs},wall_s={dt:.3f},per_run_ms={(1000.0 * dt / runs) if runs else 0:.3f},"
         f"sum64=0x{sum64:016x},xor32=0x{xor32:08x},"
@@ -525,12 +525,12 @@ def sfpu_binary(
     # depending on the draw -- an unreproducible failure. eltwise_unary_sfpu seeds too.
     torch.manual_seed(0)
 
-    # laneJO witness-check hook (see the LANEJO_* block at the end of this
+    # witness-check hook (see the SFPU_DUMP/SFPU_SRC_OVERRIDE block at the end of this
     # function): replay a solver witness input through the existing
     # src_A_override plumbing.
     import os as _lanejo_os
 
-    _lanejo_src = _lanejo_os.environ.get("LANEJO_SRC_OVERRIDE")
+    _lanejo_src = _lanejo_os.environ.get("SFPU_SRC_OVERRIDE")
     if _lanejo_src and src_A_override is None:
         src_A_override = torch.load(_lanejo_src)
 
@@ -673,10 +673,10 @@ def sfpu_binary(
     # laneMQ two-operand 2^32 streamer hook (env-gated, inert otherwise): stream the
     # certified kernel over a band of the joint bf16 x bf16 space in one open device
     # session and emit a per-leg output SHA + coverage line. Object identity is preserved
-    # (same `configuration`, same ELF). LANEMK_STREAM_BINARY="start,count,outfile".
+    # (same `configuration`, same ELF). SFPU_STREAM_BINARY="start,count,outfile".
     import os as _lanemk_os
 
-    _lanemk_stream_binary = _lanemk_os.environ.get("LANEMK_STREAM_BINARY")
+    _lanemk_stream_binary = _lanemk_os.environ.get("SFPU_STREAM_BINARY")
     if _lanemk_stream_binary:
         _lanemk_run_binary_stream(configuration, _lanemk_stream_binary)
         return
@@ -688,19 +688,19 @@ def sfpu_binary(
 
     # laneJO formal-equivalence witness-check hook (corpus/tools/formal_equiv.py),
     # env-gated and inert otherwise:
-    #   LANEJO_SRC_OVERRIDE=<file.pt>  torch tensor used as src_A_override
+    #   SFPU_SRC_OVERRIDE=<file.pt>  torch tensor used as src_A_override
     #                                  (whole tile pairs: even tile = in0,
     #                                  odd tile = in1) so a solver witness
     #                                  input can be replayed on the sim/device;
-    #   LANEJO_DUMP=<file.pt>          dump {"src_A","result"} tensors;
-    #   LANEJO_SKIP_ASSERT=1           skip the golden assert (witness inputs
+    #   SFPU_DUMP=<file.pt>          dump {"src_A","result"} tensors;
+    #   SFPU_SKIP_ASSERT=1           skip the golden assert (witness inputs
     #                                  deliberately leave the stimuli domain).
     import os as _lanejo_os
 
-    _lanejo_dump = _lanejo_os.environ.get("LANEJO_DUMP")
+    _lanejo_dump = _lanejo_os.environ.get("SFPU_DUMP")
     if _lanejo_dump:
         torch.save({"src_A": src_A, "result": res_tensor}, _lanejo_dump)
-    if _lanejo_os.environ.get("LANEJO_SKIP_ASSERT") == "1":
+    if _lanejo_os.environ.get("SFPU_SKIP_ASSERT") == "1":
         return
 
     assert len(res_tensor) == len(

@@ -68,7 +68,7 @@ def _lanemk_run_fp32_stream(configuration, spec):
     [start, start+count) band of the raw-uint32 space in ONE open device session,
     folding each chunk's raw result bytes into a streaming SHA-256. The chunk size
     is the config's own capacity (tile_count_A * 1024 patterns). Emits one
-    LANEMK_STREAM_RESULT line (per-leg output SHA + input sum64/xor32 coverage
+    SFPU_STREAM_RESULT line (per-leg output SHA + input sum64/xor32 coverage
     checksums + measured wall/per-run). Env-gated; never runs in a normal test.
 
     spec = "start,count,outfile".
@@ -89,15 +89,15 @@ def _lanemk_run_fp32_stream(configuration, spec):
 
     # Per-dispatch Math-done wait timeout (seconds). The harness default (2 s) is too tight
     # for a cold first dispatch / slower debug-bus on some galaxy hosts; override generously.
-    _wait_to = int(os.environ.get("LANEMK_WAIT_TIMEOUT", "60"))
+    _wait_to = int(os.environ.get("SFPU_WAIT_TIMEOUT", "60"))
 
     # laneMR three-way correctness leg (env-gated, additive, inert when unset).
-    # LANEMR_GOLDEN="<op-key>,<leg>" turns on a host-side TRUE-MATH golden + bf16
+    # SFPU_GOLDEN="<op-key>,<leg>" turns on a host-side TRUE-MATH golden + bf16
     # ULP-contract fold that rides along on this exact device pass with NO retention:
     # per chunk we also compare the device bytes against torch.<op> and fold running
     # max-ULP / out-of-tolerance / first-witness. Object identity is unchanged (same
     # certified ELF). Writes a "<outfile>.corr" sidecar; never affects the SHA verdict.
-    _gold = os.environ.get("LANEMR_GOLDEN")
+    _gold = os.environ.get("SFPU_GOLDEN")
     _acc = None
     _corr_note = ""
     if _gold:
@@ -160,7 +160,7 @@ def _lanemk_run_fp32_stream(configuration, spec):
             _corr = _acc.result_line(_leg_id)
         else:
             _corr = (
-                f"LANEMR_CORRECTNESS,leg={_leg_id},op={_gold.split(',',1)[0]},"
+                f"SFPU_CORRECTNESS,leg={_leg_id},op={_gold.split(',',1)[0]},"
                 f"patterns={patterns},status=UNCHECKED,reason={_corr_note!r}"
             )
         print(_corr, flush=True)
@@ -168,7 +168,7 @@ def _lanemk_run_fp32_stream(configuration, spec):
             _fh.write(_corr + "\n")
 
     line = (
-        "LANEMK_STREAM_RESULT,"
+        "SFPU_STREAM_RESULT,"
         f"start={start},count={patterns},runs={runs},per_run_patterns={per_run},"
         f"wall_s={dt:.3f},per_run_ms={(1000.0 * dt / runs) if runs else 0:.3f},"
         f"sum64=0x{sum64:016x},xor32=0x{xor32:08x},"
@@ -1051,7 +1051,7 @@ def eltwise_unary_sfpu(
     # COUNT is a runtime arg (TILE_COUNT/NUM_BLOCKS/NUM_TILES_IN_BLOCK), so the math
     # .text is invariant to it — larger tiles amortize the fixed per-dispatch overhead
     # without changing the certified object (asserted separately by the .text gate).
-    _lanemk_dim = os.environ.get("LANEMK_TILE_DIM")
+    _lanemk_dim = os.environ.get("SFPU_TILE_DIM")
     if _lanemk_dim:
         input_dimensions = [int(v) for v in _lanemk_dim.split(",")]
 
@@ -1076,10 +1076,10 @@ def eltwise_unary_sfpu(
     )
 
     # laneJO formal-equivalence witness-check hook (see test_sfpu_binary.py):
-    # LANEJO_SRC_OVERRIDE holds a tensor replayed verbatim as src_A.
+    # SFPU_SRC_OVERRIDE holds a tensor replayed verbatim as src_A.
     import os as _lanejo_os
 
-    _lanejo_src = _lanejo_os.environ.get("LANEJO_SRC_OVERRIDE")
+    _lanejo_src = _lanejo_os.environ.get("SFPU_SRC_OVERRIDE")
     if _lanejo_src:
         _lanejo_t = torch.load(_lanejo_src).to(src_A.dtype).flatten()
         src_A = _lanejo_t.repeat(src_A.numel() // _lanejo_t.numel())
@@ -1146,31 +1146,31 @@ def eltwise_unary_sfpu(
 
     # laneJN bit-exact sweep hook (corpus/tools/bitexact_sweep.py), env-gated
     # and inert otherwise:
-    #   LANEJN_RAW_A=<file>  inject these exact per-tile packed payload bytes
+    #   SFPU_RAW_A=<file>  inject these exact per-tile packed payload bytes
     #                        as operand A (bypasses the host float pack path so
     #                        every input bit pattern is deliverable);
-    #   LANEJN_DUMP=<file>   dump the raw L1 input/result bytes + metadata;
-    #   LANEJN_SKIP_ASSERT=1 skip the golden assert (the golden is computed
+    #   SFPU_DUMP=<file>   dump the raw L1 input/result bytes + metadata;
+    #   SFPU_SKIP_ASSERT=1 skip the golden assert (the golden is computed
     #                        from the generated stimuli, which raw injection
     #                        deliberately replaces).
-    _lanejn_raw_a = os.environ.get("LANEJN_RAW_A")
+    _lanejn_raw_a = os.environ.get("SFPU_RAW_A")
     if _lanejn_raw_a:
         configuration.variant_stimuli.lanejn_raw_a = Path(_lanejn_raw_a).read_bytes()
 
     # laneMK persistent-session fp32 streaming hook (corpus/tools/fp32_stream_sweep.py),
-    # env-gated and inert otherwise. LANEMK_STREAM="start,count,outfile[,anchorfile]" runs
+    # env-gated and inert otherwise. SFPU_STREAM="start,count,outfile[,anchorfile]" runs
     # the certified kernel over a [start,start+count) raw-uint32 band in ONE open device
     # session (prepare once; per chunk of tile_count_A*1024 patterns: inject raw A, clear
     # Res, run_elf_files, wait, read Res, fold into a streaming SHA-256), then emits the
     # per-leg producer line. Object identity is preserved: same `configuration`, same ELF.
-    _lanemk_stream = os.environ.get("LANEMK_STREAM")
+    _lanemk_stream = os.environ.get("SFPU_STREAM")
     if _lanemk_stream:
         _lanemk_run_fp32_stream(configuration, _lanemk_stream)
         return
 
     res_from_L1 = configuration.run().result
 
-    _lanejn_dump = os.environ.get("LANEJN_DUMP")
+    _lanejn_dump = os.environ.get("SFPU_DUMP")
     if _lanejn_dump:
         import numpy as _np
 
@@ -1208,13 +1208,13 @@ def eltwise_unary_sfpu(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # laneJO witness-check hook (paired with LANEJO_SRC_OVERRIDE above).
-    _lanejo_dump = _lanejo_os.environ.get("LANEJO_DUMP")
+    # laneJO witness-check hook (paired with SFPU_SRC_OVERRIDE above).
+    _lanejo_dump = _lanejo_os.environ.get("SFPU_DUMP")
     if _lanejo_dump:
         torch.save({"src_A": src_A, "result": res_tensor}, _lanejo_dump)
-    if os.environ.get("LANEJN_SKIP_ASSERT") == "1":
+    if os.environ.get("SFPU_SKIP_ASSERT") == "1":
         return
-    if _lanejo_os.environ.get("LANEJO_SKIP_ASSERT") == "1":
+    if _lanejo_os.environ.get("SFPU_SKIP_ASSERT") == "1":
         return
 
     assert passed_test(

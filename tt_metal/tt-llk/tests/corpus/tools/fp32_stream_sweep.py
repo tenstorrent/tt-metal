@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """laneMK — orchestrator for the sound 2^32 sem-vs-hand streaming sweep (one op).
 
-Drives the certified corpus kernel's persistent-session streamer (the LANEMK_STREAM
+Drives the certified corpus kernel's persistent-session streamer (the SFPU_STREAM
 hook in test_sfpu_unary.py) over [0, 2^32) in resume-safe bands, one band-leg per
 pytest invocation, on a flocked device. Per band: run sem + hand, compare output SHA.
 Verdict = BIT-EXACT-ALL-INPUTS iff every band's sem_sha == hand_sha (full contiguous
@@ -27,12 +27,12 @@ _RUNS_RE = re.compile(r"runs=(\d+)")
 
 
 def parse_corr(corr_file):
-    """Parse a per-band .corr sidecar (LANEMR_CORRECTNESS,k=v,...) into a dict, or None."""
+    """Parse a per-band .corr sidecar (SFPU_CORRECTNESS,k=v,...) into a dict, or None."""
     p = Path(corr_file)
     if not p.exists():
         return None
     line = p.read_text().strip().splitlines()
-    if not line or "LANEMR_CORRECTNESS" not in line[0]:
+    if not line or "SFPU_CORRECTNESS" not in line[0]:
         return None
     d = {}
     for kv in line[0].split(","):
@@ -60,15 +60,15 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         LLK_HOME=args.llk_home,
         RUNNER_TEMP=args.runner_temp,
         PYTHONUNBUFFERED="1",
-        LANEMK_TILE_DIM=args.tile_dim,
+        SFPU_TILE_DIM=args.tile_dim,
         # Map --chip to the physical device (per-chip parallelism: TT_VISIBLE_DEVICES=n +
         # flock /tmp/tt-dev-n.lock lets N orchestrators run concurrently on N chips).
         TT_VISIBLE_DEVICES=str(args.chip),
-        LANEMK_STREAM=f"{start},{count},{out_sha_file}",
+        SFPU_STREAM=f"{start},{count},{out_sha_file}",
     )
     if args.golden and leg:
         # host-side TRUE-MATH golden + bf16 ULP-contract leg rides along on this pass.
-        env["LANEMR_GOLDEN"] = f"{args.golden},{leg}"
+        env["SFPU_GOLDEN"] = f"{args.golden},{leg}"
     inner = (
         # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
         # toolchain (galaxy hosts have none). The ELFs must be compiled beforehand

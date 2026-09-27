@@ -31,8 +31,8 @@ re-implementation.
   The work-stealing fleet this section used to describe (`lanemk_worker.sh`,
   `lanemk_fleet.sh`, `lanemk_submit.sh`) was retired 2026-09-04 and deleted.
 - The device leg is the env-gated hook in `python_tests/test_sfpu_unary.py`
-  (`LANEMK_STREAM` runs the in-session chunk loop; `LANEMK_TILE_DIM` sizes the dispatch;
-  `LANEMK_WAIT_TIMEOUT` the per-dispatch Math wait) — additive and inert when unset.
+  (`SFPU_STREAM` runs the in-session chunk loop; `SFPU_TILE_DIM` sizes the dispatch;
+  `SFPU_WAIT_TIMEOUT` the per-dispatch Math wait) — additive and inert when unset.
 
 ## Object identity (the whole point — do not skip)
 A verdict is only meaningful on the exact certified pin-59 kernel. `.text` is
@@ -48,7 +48,7 @@ Mac, `SSH_AUTH_SOCK=$HOME/.ssh/qz-exabox-agent.sock ssh nkapre@slurm-login.exabo
 Two-stage rsync (quietbox→mac-relay:staging→exabox:/data). Etiquette: idle glx only, only
 as many as needed, NEVER touch drain/reserved/customer nodes or kill others' jobs, BH reset
 = `tt-smi -r` never `glx_reset`. Known-poisoned rack: `glx-110-c` (bh_sc36_5) — salloc there
-times out; the fleet excludes it by default (`LANEMK_NODE_EXCLUDE`).
+times out; the fleet excludes it by default (`SFPU_NODE_EXCLUDE`).
 
 ## One-op re-run (quietbox, one chip)
 ```
@@ -65,9 +65,9 @@ python3 fp32_stream_sweep.py --op sign --sem-node '<sem>' --hand-node '<hand>' \
 Stage the tree (with the hook) + the prebuilt shared ELF build to `/data`, write the ops
 that lack a verdict one-per-line to `remaining.txt`, then submit ONE array:
 
-    export LANEMK_OPS_LIST=.../remaining.txt LANEMK_RUN_OP=.../lanemk_run_op.sh \
+    export OPS_LIST=.../remaining.txt \
            OPS_TSV=... IDMAP=... BUILD=... VENV=... LLK_HOME=... PYDIR=... OUT=... \
-           LANEMK_WAIT_TIMEOUT=600
+           SFPU_WAIT_TIMEOUT=600
     sbatch --array=1-$(wc -l < remaining.txt) --requeue --export=ALL -J lanemk_op \
            -p <glx-partitions> --time=720 lanemk_array.sh
 
@@ -95,7 +95,7 @@ bands) on quietbox and reproduced byte-identically on an exabox glx host (cross-
 ## Gotchas banked
 - Sharing one `RUNNER_TEMP` on NFS races on conftest `order_records` mkdir → node-local
   per-host RUNNER_TEMP (workers copy the prebuilt ELFs local).
-- Galaxy hosts need a generous `LANEMK_WAIT_TIMEOUT` (harness default 2 s times out on a
+- Galaxy hosts need a generous `SFPU_WAIT_TIMEOUT` (harness default 2 s times out on a
   cold first dispatch); band-0 (all-denormal patterns) is slow-or-hangs for a few ops
   (softplus/hardshrink/add1/softshrink) even at 120 s — investigate per-op, don't force.
 - The mac relay is flaky (laptop sleep). The fleet runs detached (`setsid nohup`) and

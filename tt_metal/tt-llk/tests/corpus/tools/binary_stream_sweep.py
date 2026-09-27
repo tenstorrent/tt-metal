@@ -2,7 +2,7 @@
 """laneMQ — orchestrator for the sound 2^32 sem-vs-hand TWO-operand streaming sweep.
 
 The laneMK single-operand sweep (fp32_stream_sweep.py) widened by one dimension: drives
-the certified binary kernel's persistent-session streamer (the LANEMK_STREAM_BINARY hook
+the certified binary kernel's persistent-session streamer (the SFPU_STREAM_BINARY hook
 in test_sfpu_binary.py) over the joint bf16 x bf16 space [0, 2^32) in resume-safe bands,
 one band-leg per pytest invocation, on a flocked device. Per band: run sem + hand,
 compare output SHA. Verdict = BIT-EXACT-ALL-INPUTS iff every band's sem_sha == hand_sha
@@ -30,12 +30,12 @@ _RUNS_RE = re.compile(r"runs=(\d+)")
 
 
 def parse_corr(corr_file):
-    """Parse a per-band .corr sidecar (LANEMR_CORRECTNESS,k=v,...) into a dict, or None."""
+    """Parse a per-band .corr sidecar (SFPU_CORRECTNESS,k=v,...) into a dict, or None."""
     p = Path(corr_file)
     if not p.exists():
         return None
     lines = p.read_text().strip().splitlines()
-    if not lines or "LANEMR_CORRECTNESS" not in lines[0]:
+    if not lines or "SFPU_CORRECTNESS" not in lines[0]:
         return None
     return dict(kv.split("=", 1) for kv in lines[0].split(",") if "=" in kv)
 
@@ -61,11 +61,11 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         # Map --chip to the physical device (per-chip parallelism: TT_VISIBLE_DEVICES=n +
         # flock /tmp/tt-dev-n.lock lets N orchestrators run concurrently on N chips).
         TT_VISIBLE_DEVICES=str(args.chip),
-        LANEMK_STREAM_BINARY=f"{start},{count},{out_sha_file}",
+        SFPU_STREAM_BINARY=f"{start},{count},{out_sha_file}",
     )
     if args.golden and leg:
         # host-side torch.pow TRUE-MATH golden + bf16 ULP-contract leg rides along.
-        env["LANEMR_GOLDEN"] = f"{args.golden},{leg}"
+        env["SFPU_GOLDEN"] = f"{args.golden},{leg}"
     inner = (
         # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
         # toolchain (galaxy hosts have none). The ELFs must be compiled beforehand

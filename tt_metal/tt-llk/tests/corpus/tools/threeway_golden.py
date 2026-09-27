@@ -464,7 +464,7 @@ class CorrectnessAccumulator:
             else ""
         )
         return (
-            f"LANEMR_CORRECTNESS,leg={leg},op={self.spec.op},patterns={self.patterns},"
+            f"SFPU_CORRECTNESS,leg={leg},op={self.spec.op},patterns={self.patterns},"
             f"max_bf16_ulp={self.max_ulp:.0f},max_ulp_input=0x{max(self.max_ulp_input_u32,0):08x},"
             f"n_out_of_tol={self.n_out_of_tol},"
             f"within_contract={self.n_out_of_tol == 0},"
@@ -574,7 +574,7 @@ class BinaryPowAccumulator:
     def result_line(self, leg: str) -> str:
         w = max(self.first_witness_joint, 0)
         return (
-            f"LANEMR_CORRECTNESS,leg={leg},op=binarypow,joints={self.joints},"
+            f"SFPU_CORRECTNESS,leg={leg},op=binarypow,joints={self.joints},"
             f"max_bf16_ulp={self.max_ulp:.0f},max_ulp_joint=0x{max(self.max_ulp_joint,0):08x},"
             f"n_out_of_tol={self.n_out_of_tol},within_contract={self.n_out_of_tol == 0},"
             f"first_witness=0x{w:08x},first_witness_class={self.first_witness_class or '-'},"
