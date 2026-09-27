@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -390,6 +391,47 @@ def test_formal_refuses_identical_compiled_objects() -> None:
         assert result["sem_elf"]["text_sha256"] == result["hand_elf"]["text_sha256"]
 
 
+def test_formal_row_wrapper_refuses_unsafe_artifacts_and_environment() -> None:
+    wrapper = HERE / "formal_equiv_row.sh"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        unsafe_out = root / "unsafe"
+        result = subprocess.run(
+            ["bash", str(wrapper), "../escape", str(unsafe_out)],
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 3
+        assert "safe artifact slug" in result.stderr
+        assert not unsafe_out.exists()
+
+        occupied = root / "occupied"
+        occupied.mkdir()
+        sentinel = occupied / "keep.txt"
+        sentinel.write_text("do not delete\n")
+        result = subprocess.run(
+            ["bash", str(wrapper), "safe-row", str(occupied)],
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 3
+        assert "output is not empty" in result.stderr
+        assert sentinel.read_text() == "do not delete\n"
+
+        clean = root / "clean"
+        inherited = dict(os.environ, TTSIM_TRACE_SFPU_STREAM="0")
+        result = subprocess.run(
+            ["bash", str(wrapper), "safe-row", str(clean)],
+            env=inherited,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 3
+        assert "correctness-altering environment" in result.stderr
+        assert "TTSIM_TRACE_SFPU_STREAM" in result.stderr
+        assert not clean.exists()
+
+
 if __name__ == "__main__":
     test_resume_provenance()
     test_partial_tolerance_coverage_refuses()
@@ -400,4 +442,5 @@ if __name__ == "__main__":
     test_failed_dispatch_output_is_not_accepted()
     test_proof_cache_is_provenance_bound()
     test_formal_refuses_identical_compiled_objects()
+    test_formal_row_wrapper_refuses_unsafe_artifacts_and_environment()
     print("SELFTEST: campaign fail-closed gates PASS")

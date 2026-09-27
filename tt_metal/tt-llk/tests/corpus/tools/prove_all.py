@@ -62,6 +62,9 @@ JO_INSTRUMENT = Path(os.environ.get(
     "CRAQ_JO_INSTRUMENT",
     HOME / "laneKS-evidence-20260901/simstage-trace-old/libttsim.so"))
 EXPECT_JO_SHA = "ba23c3f169126425998b53b0202a10a81e35fba0692ed4eca5964f073ec31113"
+EXPECT_JO_DESCRIPTOR_SHA = (
+    "2aa71c2d4321c186d2958ee05a82db4c4c405c4420ed31c1d592f490994942ef"
+)
 BITEXACT_SIM = Path(os.environ.get(
     "CRAQ_BITEXACT_SIM",
     HOME / "laneJN-simstage/libttsim.so"))  # plain pinned craq-sim 1c47e9cd
@@ -252,8 +255,18 @@ def provenance_gate(strict=True):
             problems.append(
                 f"JO instrument sha {s[:12]} != expected {EXPECT_JO_SHA[:12]}"
             )
-        if not (JO_INSTRUMENT.parent / "soc_descriptor.yaml").exists():
+        descriptor = JO_INSTRUMENT.parent / "soc_descriptor.yaml"
+        if not descriptor.exists():
             problems.append("soc_descriptor.yaml missing next to JO instrument")
+        else:
+            descriptor_sha = sha256(descriptor)
+            prov["shas"]["jo_soc_descriptor"] = descriptor_sha
+            prov["jo_soc_descriptor_path"] = str(descriptor)
+            if descriptor_sha != EXPECT_JO_DESCRIPTOR_SHA:
+                problems.append(
+                    "JO descriptor sha "
+                    f"{descriptor_sha[:12]} != expected {EXPECT_JO_DESCRIPTOR_SHA[:12]}"
+                )
 
     if not BITEXACT_SIM.exists():
         problems.append(f"bitexact pinned sim missing: {BITEXACT_SIM}")

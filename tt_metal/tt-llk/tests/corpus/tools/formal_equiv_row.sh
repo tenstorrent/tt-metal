@@ -15,8 +15,39 @@
 #   JO_FLAGS     exact candidate compiler flags (recorded; empty means defaults)
 set -euo pipefail
 
+if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+    echo "Usage: $0 <row> <out_dir> [sem_node] [hand_node]" >&2
+    exit 2
+fi
 ROW="$1"; OUT="$2"
 SEM_NODE="${3:-}"; HAND_NODE="${4:-}"
+[[ "$ROW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+    echo "REFUSED: row is not a safe artifact slug: $ROW" >&2; exit 3; }
+[ ! -L "$OUT" ] || {
+    echo "REFUSED: evidence output must not be a symlink: $OUT" >&2; exit 3; }
+if [ -e "$OUT" ]; then
+    [ -d "$OUT" ] || {
+        echo "REFUSED: evidence output exists and is not a directory: $OUT" >&2; exit 3; }
+    [ -z "$(find "$OUT" -mindepth 1 -maxdepth 1 -print -quit)" ] || {
+        echo "REFUSED: evidence output is not empty: $OUT" >&2; exit 3; }
+fi
+
+# The wrapper owns every correctness-affecting test and simulator setting.
+# Refuse inherited hooks rather than silently producing evidence under a
+# caller-specific pytest, lane, simulator, or LLK configuration.
+while IFS= read -r name; do
+    case "$name" in
+        LLK_TEST_SEED|PYTHONOPTIMIZE|PYTHONPATH|PYTEST_ADDOPTS|PYTEST_PLUGINS|\
+        PYTEST_XDIST_WORKER|TT_LLK_DISABLE_ASSERTS|TT_LLK_MUL_INT32_GENERATED|\
+        TT_METAL_DISABLE_SFPLOADMACRO|TT_METAL_SIMULATOR|TT_UMD_SIMULATOR_PATH|\
+        TT_LLK_EXTRA_COMPILER_OPTIONS|RUNNER_TEMP|CHIP_ARCH|LLK_HOME|\
+        SFPU_*|LANE*|TTSIM_*)
+            echo "REFUSED: correctness-altering environment is set: $name" >&2
+            exit 3
+            ;;
+    esac
+done < <(compgen -e)
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS="${JO_TESTS:-$(cd "$HERE/../.." && pwd)}"
 SIM="${JO_SIM:?set JO_SIM to the instrumented libttsim.so}"
@@ -29,11 +60,16 @@ SIM="${JO_SIM:?set JO_SIM to the instrumented libttsim.so}"
 # A different simulator is not a current-toolchain experiment; it is an
 # unvalidated semantics change and must use a separately reviewed executor.
 EXPECTED_SIM_SHA=ba23c3f169126425998b53b0202a10a81e35fba0692ed4eca5964f073ec31113
+EXPECTED_DESCRIPTOR_SHA=2aa71c2d4321c186d2958ee05a82db4c4c405c4420ed31c1d592f490994942ef
 SIM_SHA="$(sha256sum "$SIM" | cut -d' ' -f1)"
 [ "$SIM_SHA" = "$EXPECTED_SIM_SHA" ] || {
     echo "REFUSED: JO simulator sha $SIM_SHA != transcribed $EXPECTED_SIM_SHA" >&2; exit 3; }
-[ -f "$(dirname "$SIM")/soc_descriptor.yaml" ] || {
+DESCRIPTOR="$(dirname "$SIM")/soc_descriptor.yaml"
+[ -f "$DESCRIPTOR" ] || {
     echo "REFUSED: soc_descriptor.yaml missing beside JO simulator" >&2; exit 3; }
+DESCRIPTOR_SHA="$(sha256sum "$DESCRIPTOR" | cut -d' ' -f1)"
+[ "$DESCRIPTOR_SHA" = "$EXPECTED_DESCRIPTOR_SHA" ] || {
+    echo "REFUSED: descriptor sha $DESCRIPTOR_SHA != pinned $EXPECTED_DESCRIPTOR_SHA" >&2; exit 3; }
 
 mapfile -t CC1S < <(find "$TESTS/sfpi/compiler/libexec/gcc/riscv-tt-elf" \
     -name cc1plus -type f 2>/dev/null | grep -v '/\.pin-backup/')
@@ -71,14 +107,18 @@ fi
 run_leg() { # leg node
     local leg="$1" node="$2"
     local rt="$OUT/rt-$ROW-$leg"
-    rm -rf "$rt"; mkdir -p "$rt"
-    rm -f "$OUT/trace-$ROW-$leg.log"
+    local trace="$OUT/trace-$ROW-$leg.log"
+    [ ! -e "$rt" ] && [ ! -L "$rt" ] || {
+        echo "REFUSED: leg runtime path already exists: $rt" >&2; return 1; }
+    [ ! -e "$trace" ] && [ ! -L "$trace" ] || {
+        echo "REFUSED: leg trace path already exists: $trace" >&2; return 1; }
+    mkdir "$rt"
     ( cd "$TESTS" && \
       RUNNER_TEMP="$rt" CHIP_ARCH=blackhole TT_METAL_SIMULATOR="$SIM" \
       TT_LLK_EXTRA_COMPILER_OPTIONS="$FLAGS" \
-      TTSIM_TRACE_SFPU_STREAM=1 TTSIM_TRACE_SFPU_FILE="$OUT/trace-$ROW-$leg.log" \
+      TTSIM_TRACE_SFPU_STREAM=1 TTSIM_TRACE_SFPU_FILE="$trace" \
       LLK_HOME="$(dirname "$TESTS")" \
-      .venv/bin/python -m pytest -q -s --run-simulator "python_tests/$node" \
+      .venv/bin/python -m pytest -q -s -o addopts= --run-simulator "python_tests/$node" \
       > "$OUT/pytest-$ROW-$leg.log" 2>&1 ) || {
         echo "ERROR: $leg leg pytest failed; tail:" >&2
         tail -5 "$OUT/pytest-$ROW-$leg.log" >&2
@@ -118,6 +158,8 @@ cc1plus_path	${CC1S[0]}
 cc1plus_sha256	$CC1_SHA
 jo_sim_path	$SIM
 jo_sim_sha256	$SIM_SHA
+soc_descriptor_path	$DESCRIPTOR
+soc_descriptor_sha256	$DESCRIPTOR_SHA
 flags_sha256	$FLAGS_SHA
 flags	$FLAGS
 sem_node	$SEM_NODE
