@@ -68,4 +68,37 @@ CASES = [
         "seed": 0,
         "exact": True,
     },
+    {
+        # ERNIE-4.5 (21B-A3B) routed experts, EP=4 on a 1x4 mesh: dispatch groups are the 4 columns, each a single
+        # chip. The model opens its mesh with FABRIC_1D_RING (models/demos/ernie45_d_p/tt/common.py DEVICE_PARAMS).
+        # The expert-output buffer is BFLOAT8_B (unified_routed_expert_moe's output); combine unpacks it to bf16.
+        "id": "ernie45_d_p-1x4-dgs1-s5120-h2560-e64-k6-bfp8",
+        "model": "ernie45_d_p",
+        "task": "O.1",
+        "sig": "e0cf1f2a07",
+        "mesh": [1, 4],
+        "device_params": {"fabric_config": "FABRIC_1D_RING", "l1_small_size": 24576},
+        "seq_len_per_chip": 5120,
+        "emb_dim": 2560,
+        "num_routed_experts": 64,  # counts / regions are [1, 64] (global expert ids)
+        "num_experts_per_tok": 6,
+        "experts_per_chip": 16,
+        "dispatch_group_size": 1,
+        "max_dispatch_buffer_token_size": 31200,
+        "metadata_len": 3,
+        # buffer [1, 1, 31200, 2560] BFLOAT8_B TILE; metadata [1, 1, 31200, 3] INT32 ROW_MAJOR;
+        # counts, regions [1, 64] UINT32 ROW_MAJOR; all DRAM interleaved
+        "buffer": {"dtype": "BFLOAT8_B", "layout": "TILE"},
+        "metadata": {"dtype": "INT32", "layout": "ROW_MAJOR"},
+        "counts": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "regions": {"dtype": "UINT32", "layout": "ROW_MAJOR"},
+        "cluster_axis": 0,
+        "num_links": 1,
+        "topology": "Linear",
+        "memory_config": "DRAM",
+        "init_zeros": True,
+        "use_fp8_combine": False,
+        "seed": 0,
+        "exact": True,
+    },
 ]
