@@ -1,0 +1,233 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "fixture": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/terminal_input.pt",
+  "fixture_sha256": "f27d52cb4c47b14fe7877dd3410346b75c76748901635fa6032ccc7c089e92c7",
+  "scope": "Isolated complete TP4 LM head, actual reduced-model terminal input; no sampler or stack",
+  "dtype": "BF16",
+  "fidelity": "HiFi4",
+  "fp32_dest_acc_en": true,
+  "mesh": [
+    1,
+    4
+  ],
+  "cases": [
+    {
+      "name": "baseline",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        957.8024968504906,
+        955.3041774779558,
+        955.079821869731,
+        955.8857884258032,
+        954.4184897094965
+      ],
+      "median_host_replay_us": 955.3041774779558,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g8x8_b4",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        0.9999999998615848,
+        0.9999999997661505,
+        0.9999999984157126,
+        0.9999999988191999
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.5,
+        0.5,
+        1.0,
+        1.0
+      ],
+      "host_replay_us": [
+        1053.2536543905735,
+        1053.738547489047,
+        1051.9581846892834,
+        1053.9499577134848,
+        1052.5583755224943
+      ],
+      "median_host_replay_us": 1053.2536543905735,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g8x8_b8",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-8,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=32,per_core_M=1,per_core_N=32,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        1085.8772322535515,
+        1083.3804961293936,
+        1083.8934686034918,
+        1083.7491601705551,
+        1084.5296550542116
+      ],
+      "median_host_replay_us": 1083.8934686034918,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g8x10_b4",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=26,per_core_M=1,per_core_N=26,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        0.9999999998615848,
+        0.9999999997661505,
+        0.9999999984157126,
+        0.9999999988191999
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.5,
+        0.5,
+        1.0,
+        1.0
+      ],
+      "host_replay_us": [
+        1041.1540977656841,
+        1041.5658820420504,
+        1040.3911583125591,
+        1039.3021162599325,
+        1039.0180628746748
+      ],
+      "median_host_replay_us": 1040.3911583125591,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g8x10_b8",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=26,per_core_M=1,per_core_N=26,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        1060.8591604977846,
+        1060.5910792946815,
+        1061.2854268401861,
+        1061.3601189106703,
+        1061.0925499349833
+      ],
+      "median_host_replay_us": 1061.0925499349833,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b4",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        0.9999999998615848,
+        0.9999999997661505,
+        0.9999999984157126,
+        0.9999999988191999
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.5,
+        0.5,
+        1.0,
+        1.0
+      ],
+      "host_replay_us": [
+        937.9917290061712,
+        936.8455968797207,
+        937.6601316034794,
+        935.7259143143892,
+        935.3206492960453
+      ],
+      "median_host_replay_us": 936.8455968797207,
+      "status": "passed"
+    },
+    {
+      "name": "interleaved_g11x10_b8",
+      "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+      "pcc_baseline_per_device": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "top1_equal_per_device": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "max_abs_diff_per_device": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "host_replay_us": [
+        956.8707086145878,
+        954.1661012917757,
+        954.1104547679424,
+        954.0523402392864,
+        954.2973712086678
+      ],
+      "median_host_replay_us": 954.1661012917757,
+      "status": "passed"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+2026-09-27 08:10:17.079 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-27 08:10:18.437 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-27 08:10:18.437 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-27 08:10:18.437 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-27 08:10:18.437 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-27 08:10:18.442 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-27 08:10:18.442 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-27 08:10:18.520 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-27 08:10:18.520 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-27 08:10:18.520 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-27 08:10:18.520 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-27 08:10:18.522 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-27 08:10:18.791 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-27 08:10:18.915 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-27 08:10:18.915 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-27 08:10:18.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-27 08:10:18.915 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-27 08:10:18.915 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-27 08:10:18.958 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-27 08:10:18.981 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-27 08:10:18.981 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:325)
+2026-09-27 08:10:21.296 | INFO     | tracy:signpost:49 - LM_HEAD_baseline
+2026-09-27 08:10:21.324 | INFO     | tracy:signpost:49 - LM_HEAD_baseline_END
+{"name": "baseline", "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)", "pcc_baseline_per_device": [1.0, 1.0, 1.0, 1.0], "top1_equal_per_device": [true, true, true, true], "max_abs_diff_per_device": [0.0, 0.0, 0.0, 0.0], "host_replay_us": [956.5887041389942, 957.3881514370441, 956.6637687385082], "median_host_replay_us": 956.6637687385082, "status": "passed"}
+2026-09-27 08:10:21.680 | INFO     | tracy:signpost:49 - LM_HEAD_interleaved_b4
+2026-09-27 08:10:21.709 | INFO     | tracy:signpost:49 - LM_HEAD_interleaved_b4_END
+{"name": "interleaved_b4", "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)", "pcc_baseline_per_device": [0.9999999998615848, 0.9999999997661505, 0.9999999984157126, 0.9999999988191999], "top1_equal_per_device": [true, true, true, true], "max_abs_diff_per_device": [0.5, 0.5, 1.0, 1.0], "host_replay_us": [937.9971772432327, 937.164667993784, 937.5683963298798], "median_host_replay_us": 937.5683963298798, "status": "passed"}
+2026-09-27 08:10:21.718 | INFO     | tracy:signpost:49 - LM_HEAD_interleaved_b8
+2026-09-27 08:10:21.747 | INFO     | tracy:signpost:49 - LM_HEAD_interleaved_b8_END
+{"name": "interleaved_b8", "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)", "pcc_baseline_per_device": [1.0, 1.0, 1.0, 1.0], "top1_equal_per_device": [true, true, true, true], "max_abs_diff_per_device": [0.0, 0.0, 0.0, 0.0], "host_replay_us": [956.3300758600235, 953.1931951642036, 955.17598092556], "median_host_replay_us": 955.17598092556, "status": "passed"}
+2026-09-27 08:10:22.111 | INFO     | tracy:signpost:49 - LM_HEAD_interleaved_b11
+2026-09-27 08:10:22.140 | INFO     | tracy:signpost:49 - LM_HEAD_interleaved_b11_END
+{"name": "interleaved_b11", "program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=11,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=19,per_core_M=1,per_core_N=19,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)", "pcc_baseline_per_device": [0.999999999442833, 0.99999999998766, 0.9999999999040499, 0.9999999988093087], "top1_equal_per_device": [true, true, true, true], "max_abs_diff_per_device": [1.0, 0.125, 0.25, 1.0], "host_replay_us": [963.7392126023769, 965.46346321702, 962.6311250030994], "median_host_replay_us": 963.7392126023769, "status": "passed"}
+2026-09-27 08:10:22.486 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-8] grow to 2030592 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-27 08:10:22.837 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-8] grow to 3832832 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-27 08:10:23.175 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 10-8] grow to 3832832 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+2026-09-27 08:10:23.954 | info     |    BuildKernels | JIT cache stats: 61/91 hits (67.0%) [61 cached, 18 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-27 08:10:23.954 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-27 08:10:23.966 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-27 08:10:23.966 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+2026-09-27 08:10:24.484 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1227)
+2026-09-27 08:10:24.485 | info     |             UMD | Cluster destructor started. (cluster.cpp:933)
+2026-09-27 08:10:24.485 | info     |             UMD | Cluster destructor completed. (cluster.cpp:936)

@@ -360,5 +360,30 @@
     "capacity_evidence": "full_model/capacity.json",
     "nonaligned_prompt_validated": 262143,
     "final_supported_position_decode_validated": 262143
+  },
+  "optimized_full_model": {
+    "status": "validated_clean_pass",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "logical_length_alignment_required": false,
+    "decoder_policy": "optimized_multichip_decoder/README.md",
+    "persistent_output_buffer": "uint32 [(generated_tokens-1),1,1,32], replicated over TP4; captured indexed_fill scratch same size",
+    "output_history_logical_bytes_per_device_at_128_tokens": 32512,
+    "output_history_logical_bytes_per_device_upper_bound": 67108352,
+    "allocation_accounting": "History and captured scratch fit within inherited 2GiB trace/activation reserve; no weight/cache/RoPE allocation change. Row alignment and trace metadata also consume that reserve. Capacity increase releases traces before allocation.",
+    "evidence": [
+      "optimized_full_model/buffered_extended_watcher.json",
+      "optimized_full_model/trace_full_batch32.json",
+      "optimized_full_model/trace_mixed_slots.json",
+      "optimized_full_model/trace_page_tables.json",
+      "optimized_full_model/performance.json",
+      "optimized_full_model/final_perf_findings.md"
+    ],
+    "inherited_full_model_max_context_evidence": "full_model/capacity.json",
+    "review": "optimized_full_model/stage_review.md"
   }
 }

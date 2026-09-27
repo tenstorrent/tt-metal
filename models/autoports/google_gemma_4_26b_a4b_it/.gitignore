@@ -10,3 +10,16 @@ doc/full_model/profile_terminal/reports/
 doc/full_model/profile_terminal/.logs/
 doc/full_model/profile_terminal/.tracy/
 !doc/full_model/profile_terminal/decode_perf_report*.csv
+# Optimized full-model raw captures and recorded terminal tensors remain local.
+doc/optimized_full_model/*.pt
+doc/optimized_full_model/profile/reports/
+doc/optimized_full_model/profile/.logs/
+doc/optimized_full_model/profile/.tracy/
+!doc/optimized_full_model/terminal_lm_head_candidates.csv
+!doc/optimized_full_model/profile/*_perf_report*.csv
+!doc/optimized_full_model/*.log
+!doc/optimized_full_model/baseline/*.log
+!doc/optimized_full_model/profile/*_perf_report*.log
+# Preserve exact bulky/advice tables compressed for repository size/whitespace hooks.
+doc/optimized_full_model/profile/*_perf_report.txt
+doc/optimized_full_model/profile/prefill_perf_report.csv

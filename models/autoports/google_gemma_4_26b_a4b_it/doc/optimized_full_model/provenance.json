@@ -1,0 +1,20 @@
+{
+  "starting_commit": "941b23a758",
+  "branch": "gemma-4-26b-a4b-it",
+  "model": "google/gemma-4-26B-A4B-it",
+  "mesh": [
+    1,
+    4
+  ],
+  "files": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/generator.py": "90e3bb5d36ac933447f65771254c86bfbbd346d66d25af9639960f7d39e26b28",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/model.py": "1b0f45ba362b47c5411451ef588878b23a08bee76c8b94c11c10e62b7ddddb20",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/run_optimized_full_model.py": "f9c9c188431d1a9f3145b09dc9a85b06e0d0416d64c3c6282bc43c71cd6a4c07",
+    "models/autoports/google_gemma_4_26b_a4b_it/tests/profile_optimized_full_model.py": "d6b79c90a1cf8910d6ee6b5886ef0545c88adc765147659c75b0b664d9950435",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/performance.json": "56bad9e7ebd038f293123b31fe2bc3d73fbbf6cdb5603d3b5fa91b1395db73fc",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/performance_comparison.json": "48712c84aec04db2da4bea9fd6d1609f67f1c4ca7fb507e49eff7bcce26ea0e2",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/readiness.json": "c8eb2724124546c6ff1adbbd6f2716141266009e2bab31fc788aa8a614b9d65e",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/summary.json": "c9ec9d53cca2bb9d5113ced1ef0b749da33ffd3c00559860df90a78ce7522451"
+  },
+  "note": "Hashes tie final implementation and runner artifacts together. Whole-model device metrics are unavailable; reduced profile scope is explicit."
+}

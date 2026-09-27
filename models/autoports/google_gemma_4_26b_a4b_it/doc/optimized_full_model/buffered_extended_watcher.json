@@ -1,0 +1,136 @@
+{
+  "baseline_metrics": {
+    "ttft_ms": 92295.22289149463,
+    "trace_setup_ms": 42521.60010300577,
+    "reused_request_trace": false,
+    "generation_wall_ms": 94831.80022891611,
+    "decode_tps": 2.7596293948022494,
+    "input_tokens": 33,
+    "output_tokens": 8,
+    "batch": 1,
+    "source": "autoregressive",
+    "reduced_probe": true,
+    "host_sampling": false,
+    "buffered_token_output": false,
+    "counters": {
+      "model_replays": 7,
+      "sampling_replays": 7,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 7,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0
+    }
+  },
+  "recorder_warm_and_capture_runtime_audit": true,
+  "buffered_metrics": {
+    "ttft_ms": 660.6230940669775,
+    "trace_setup_ms": 623.3023712411523,
+    "reused_request_trace": false,
+    "generation_wall_ms": 4483.632096089423,
+    "decode_tps": 1.8310204991312553,
+    "input_tokens": 33,
+    "output_tokens": 8,
+    "batch": 1,
+    "source": "autoregressive",
+    "reduced_probe": true,
+    "host_sampling": false,
+    "buffered_token_output": true,
+    "counters": {
+      "model_replays": 7,
+      "sampling_replays": 7,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 7
+    }
+  },
+  "same_tokens_repeated_and_resized": true,
+  "zero_and_single_token": true,
+  "capacity_growth_recaptures": true,
+  "buffered_replay_runtime_audit": true,
+  "reset_restores_positions_after_extra_replays": true,
+  "changed_prompt_contents_no_cross_request_leakage": true,
+  "sampled_counters": {
+    "model_replays": 7,
+    "sampling_replays": 7,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "cache_position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 1,
+    "full_logits_readbacks": 0,
+    "teacher_forcing_token_refreshes": 0,
+    "output_replays": 7
+  },
+  "seeded_topk_topp_and_greedy_alternation": true,
+  "sampled_tokens": [
+    399,
+    399,
+    459,
+    428,
+    510,
+    430,
+    319,
+    478
+  ],
+  "prompt_boundaries": [
+    {
+      "prompt_length": 31,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 32,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 33,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 127,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 129,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 1023,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 1024,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 1025,
+      "tokens_equal": true
+    },
+    {
+      "prompt_length": 4097,
+      "tokens_equal": true
+    }
+  ],
+  "tokens": [
+    366,
+    269,
+    264,
+    267,
+    4,
+    269,
+    266,
+    4
+  ],
+  "all_layers": false,
+  "status": "pass"
+}
