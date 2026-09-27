@@ -48,7 +48,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     _SITU_BETA_UP,
     _TORCH_ACTIVATION,
     _isl_params,
-    reshard_expert_weights_nd,
 )
 
 pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
@@ -173,9 +172,8 @@ def run_hybrid_routed_expert(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
         activation=activation,
+        weights_dram_nd_sharded=weights_dram_sharded,
     )
-    if weights_dram_sharded:
-        reshard_expert_weights_nd(tt_expert, device)
 
     # ROW_MAJOR is bf16 and tilized inside the op; TILE is consumed directly as bf8. Pair the
     # dtype with the layout so each variation drives its real device path.
