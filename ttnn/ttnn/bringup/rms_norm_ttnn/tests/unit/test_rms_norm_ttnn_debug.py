@@ -40,7 +40,7 @@ import torch
 
 import ttnn
 
-from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
 
 LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 
