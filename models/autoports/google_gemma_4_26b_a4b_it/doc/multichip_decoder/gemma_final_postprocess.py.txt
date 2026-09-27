@@ -1,0 +1,59 @@
+import csv,gzip,hashlib,json,subprocess,sys,collections
+from pathlib import Path
+root=Path('/workspace/tt-metal');p=root/'models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder'
+for kind in sys.argv[1:] or ['sliding','full']:
+ out=p/f'profile_final_{kind}';native=next((out/'reports').rglob('ops_perf_results*.csv'))
+ commands=[]
+ for phase in ['prefill','decode']:
+  common=[str(root/'python_env/bin/tt-perf-report'),str(native),'--start-signpost','PERF_'+phase.upper(),'--end-signpost','PERF_'+phase.upper()+'_END']
+  if phase=='decode':common+=['--tracing-mode','--active-experts','8']
+  for suffix,extra in [('csv.log',['--csv',str(out/f'{phase}_perf_report.csv')]),('table.txt',['--no-summary'])]:
+   cmd=common+extra;commands.append(cmd)
+   with (out/f'{phase}_{suffix}').open('w') as f:subprocess.run(cmd,cwd=root,stdout=f,stderr=subprocess.STDOUT,check=True)
+ cmd=[str(root/'python_env/bin/python'),'-m','models.autoports.google_gemma_4_26b_a4b_it.tests.summarize_multichip_perf',str(native),'--layer-type',kind+'_attention','--steps','128','--precision-policy','selected_policy_audit.md; actual dtypes/configs preserved in native rows','--output',str(out/'whole_layer.json')]
+ commands.append(cmd)
+ with (out/'accounting.log').open('w') as f:subprocess.run(cmd,cwd=root,stdout=f,stderr=subprocess.STDOUT,check=True)
+ phase=None;groups=collections.defaultdict(list);signposts=[];invalid=[];allrows=collections.Counter()
+ for row in csv.DictReader(native.open()):
+  code=row['OP CODE']
+  if code in ['PERF_PREFILL','PERF_DECODE']:
+   phase=code.removeprefix('PERF_').lower();signposts.append(code)
+  elif code in ['PERF_PREFILL_END','PERF_DECODE_END']:
+   signposts.append(code);phase=None
+  elif row['OP TYPE']=='tt_dnn_device':
+   allrows[row['DEVICE ID']]+=1
+   if phase:
+    session=row['METAL TRACE REPLAY SESSION ID'] if phase=='decode' else 'prefill'
+    groups[phase,row['DEVICE ID'],session].append(row)
+    try:
+     assert float(row['DEVICE FW END CYCLE'])>float(row['DEVICE FW START CYCLE'])
+    except (ValueError,AssertionError):invalid.append(row['GLOBAL CALL COUNT'])
+ devices={}
+ for device in ['0','1','2','3']:
+  dec=[rs for (ph,d,s),rs in groups.items() if ph=='decode' and d==device]
+  sets=[[(r['OP CODE'],r['GLOBAL CALL COUNT']) for r in rs] for rs in dec]
+  assert len(dec)==128 and len({len(rs) for rs in dec})==1
+  assert all(s==sets[0] for s in sets)
+  devices[device]=dict(prefill_programs=len(groups['prefill',device,'prefill']),decode_replay_sessions=len(dec),programs_per_decode_replay=len(dec[0]),same_op_set_all_replays=True,all_native_rows=allrows[device])
+ assert not invalid
+ (out/'capture_integrity.json').write_text(json.dumps(dict(source=str(native.relative_to(root)),signposts=signposts,per_device=devices,invalid_fw_spans=invalid,passed=True),indent=2)+'\n')
+ accounting={}
+ for phase in ['prefill','decode']:
+  byop=collections.Counter();matmuls=[]
+  for row in csv.DictReader((out/f'{phase}_perf_report.csv').open()):
+   try:duration=float(row['Device Time'])/(128 if phase=='decode' else 1)
+   except (ValueError,KeyError):continue
+   byop[row['OP Code']]+=duration
+   if 'Matmul' in row['OP Code'] and (phase=='prefill' and len(matmuls)<12 or phase=='decode' and len(matmuls)<10):matmuls.append(row)
+  accounting[phase]=dict(tool_selected_device_op_sum_us=sum(byop.values()),by_op_tool_selected_device_us=dict(byop.most_common()),sample_matmul_rows=matmuls)
+ accounting['limitation']='Tool op subtotals omit gaps and are diagnostic only; whole_layer.json supplies roofline denominators.'
+ (out/'op_accounting.json').write_text(json.dumps(accounting,indent=2)+'\n')
+ (out/'perf_report_commands.json').write_text(json.dumps(dict(commands=commands),indent=2)+'\n')
+ files=[native,out/'run.json',out/'whole_layer.json',out/'whole_layer.windows.csv',out/'capture_integrity.json',out/'op_accounting.json',out/'capture_command.json',p/f'profile_final_{kind}.log']
+ for phase in ['prefill','decode']:
+  for name in [f'{phase}_perf_report.csv',f'{phase}_table.txt']:
+   path=out/name
+   with gzip.open(str(path)+'.gz','wb') as f:f.write(path.read_bytes())
+   files += [path,Path(str(path)+'.gz')]
+ (out/'perf_report_provenance.json').write_text(json.dumps(dict(algorithm='SHA256',files=[dict(path=str(f.relative_to(root)),bytes=f.stat().st_size,sha256=hashlib.sha256(f.read_bytes()).hexdigest()) for f in files]),indent=2)+'\n')
+ print(kind,'DONE',flush=True)

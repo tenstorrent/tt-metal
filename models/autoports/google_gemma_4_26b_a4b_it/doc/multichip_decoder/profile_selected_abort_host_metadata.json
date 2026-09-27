@@ -1,0 +1,69 @@
+{
+  "source": "profile_selected_sliding/.logs/tracy_ops_data.csv",
+  "per_device": {
+    "3": {
+      "metadata_device_ops": 5632,
+      "metadata_ops_outside_capture": 5506,
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "metadata_ops_in_capture": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1,
+      "estimated_program_submissions": 21634
+    },
+    "2": {
+      "metadata_device_ops": 5632,
+      "metadata_ops_outside_capture": 5506,
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "metadata_ops_in_capture": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1,
+      "estimated_program_submissions": 21634
+    },
+    "1": {
+      "metadata_device_ops": 5632,
+      "metadata_ops_outside_capture": 5506,
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "metadata_ops_in_capture": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1,
+      "estimated_program_submissions": 21634
+    },
+    "0": {
+      "metadata_device_ops": 5632,
+      "metadata_ops_outside_capture": 5506,
+      "TT_METAL_TRACE_BEGIN": 1,
+      "TT_METAL_TRACE_ENQUEUE_PROGRAM": 126,
+      "metadata_ops_in_capture": 126,
+      "TT_METAL_TRACE_END": 1,
+      "TT_METAL_TRACE_REPLAY": 128,
+      "TT_METAL_TRACE_RELEASE": 1,
+      "estimated_program_submissions": 21634
+    }
+  },
+  "signposts": [
+    {
+      "message": "TT_SIGNPOST: PERF_PREFILL",
+      "total_ns": 58544017464
+    },
+    {
+      "message": "TT_SIGNPOST: PERF_PREFILL_END",
+      "total_ns": 58879825805
+    },
+    {
+      "message": "TT_SIGNPOST: PERF_DECODE",
+      "total_ns": 85493456101
+    },
+    {
+      "message": "TT_SIGNPOST: PERF_DECODE_END",
+      "total_ns": 85707004755
+    }
+  ],
+  "malformed_metadata": [],
+  "limitation": "Host-side metadata; cannot prove completeness of device marker buffers."
+}

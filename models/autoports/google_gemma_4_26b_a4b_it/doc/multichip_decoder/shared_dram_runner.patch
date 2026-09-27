@@ -1,0 +1,49 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
+@@ -30,6 +30,7 @@
+     parser.add_argument("--expert-parallel", action="store_true")
+     parser.add_argument("--fused-tail", action="store_true")
+     parser.add_argument("--optimized-shared", action="store_true")
++    parser.add_argument("--shared-dram", action="store_true")
+     parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=0)
+     parser.add_argument("--grouped-moe-reduce", action="store_true")
+     parser.add_argument("--hybrid-experts", action="store_true")
+@@ -43,6 +44,10 @@
+     parser.add_argument("--fused-agmm", action="store_true")
+     parser.add_argument("--output", type=Path, required=True)
+     args = parser.parse_args()
++    if args.shared_dram and not args.optimized_shared:
++        parser.error("--shared-dram requires --optimized-shared")
++    if args.shared_dram and args.shared_geometry:
++        parser.error("--shared-dram requires --shared-geometry 0")
+     if not 0 <= args.steps <= 128:
+         parser.error("--steps must be between0 and128 for the recorded fixture")
+     if args.profile and not args.steps:
+@@ -118,6 +123,7 @@
+                         "topology": ttnn.Topology.Ring if args.ring else ttnn.Topology.Linear,
+                         "fused_tail": args.fused_tail,
+                         "optimized_shared": args.optimized_shared,
++                        "shared_dram": args.shared_dram,
+                         "shared_geometry": args.shared_geometry,
+                         "grouped_moe_reduce": args.grouped_moe_reduce,
+                         "hybrid_experts": args.hybrid_experts,
+@@ -160,6 +166,11 @@
+                     current_weights += shared_plan[
+                         "extra_sliding_layer_bytes" if kind == "sliding_attention" else "extra_full_layer_bytes"
+                     ]
++                if args.shared_dram:
++                    extra_tiles = decoder.layer.shared_mlp.extra_decode_weight_tiles
++                    extra_bytes = {"sliding_attention": extra_tiles * 1088, "full_attention": extra_tiles * 576}
++                    resident += sum(extra_bytes[layer_type] for layer_type in config.layer_types)
++                    current_weights += extra_bytes[kind]
+                 # Reserve other layers, tied embeddings, and shared per-kind RoPE.
+                 # Leave the independent 2 GiB workspace allowance available.
+                 current_cache = 2 * pages * cfg.num_key_value_heads * (block // 32) * (cfg.head_dim // 32) * 1088
+@@ -307,6 +318,7 @@
+         expert_parallel=args.expert_parallel,
+         fused_tail=args.fused_tail,
+         optimized_shared=args.optimized_shared,
++        shared_dram=args.shared_dram,
+         shared_geometry=args.shared_geometry,
+         grouped_moe_reduce=args.grouped_moe_reduce,
+         hybrid_experts=args.hybrid_experts,

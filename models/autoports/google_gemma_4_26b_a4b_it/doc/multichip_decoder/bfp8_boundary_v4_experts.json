@@ -1,0 +1,3751 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py",
+    "--expert-boundaries",
+    "--read-padding",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_boundary_v4_experts.json"
+  ],
+  "runtime_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "diagnostic_sha256": "e721c80002d262c0ddce529540f5d6e461a79384ae5ad77960c67c8725b908a9",
+  "dtype": "bfloat8_b",
+  "experts_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "expert_boundaries": true,
+  "gate_k_block": null,
+  "layer": 0,
+  "output_only": false,
+  "retained_groups": [
+    "all"
+  ],
+  "read_output_only": false,
+  "replay_delay_ms": 0,
+  "read_padding": true,
+  "length": 4096,
+  "steps": 128,
+  "completed_steps": 1,
+  "passed": false,
+  "reference_read_host_ms": [
+    47.723482362926006
+  ],
+  "limitation": "Retained tensor handles change allocator lifetimes; this run does not measure performance.",
+  "expert_gate_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=6-2,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "expert_down_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=6,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "boundaries": {
+    "input_norm": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_sdpa": {
+      "logical_shape": [
+        1,
+        1,
+        4,
+        256
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_wo_fp32": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_cast": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_dram": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_rs": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        704
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        704
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_ag": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT8_B",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_promoted_fp32": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "attention_sharded_fp32": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "post_attention_norm_sharded": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}], shape=[32, 32], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[32, 32],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":7}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "post_attention_norm_unweighted": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "post_attention_norm": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "residual": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "residual_norm": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_scores": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_centered_scores": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.FLOAT32",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_rounded_scores": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_gate_values": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "router_gate_indices": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "routes": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "route_indices": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.UINT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_input": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_routing_row_major": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_mix_weights_row_major": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_mix_weights_tiled": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        32
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_gate_up_raw": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        8,
+        1,
+        384
+      ],
+      "padded_shape": [
+        1,
+        1,
+        1,
+        8,
+        32,
+        384
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_gate": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_up": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_hidden": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        192
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        192
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_down_raw": {
+      "logical_shape": [
+        1,
+        8,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        8,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_down_permuted": {
+      "logical_shape": [
+        1,
+        1,
+        8,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "expert_output": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "routed_local": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "shared_input": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "shared_local": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "shared_reduced": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "routed_reduced": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    },
+    "output": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    }
+  },
+  "failure": {
+    "tp": 4,
+    "step": 0,
+    "absolute_position": 4096,
+    "first_different_boundary": "post_attention_norm:physical",
+    "output_replicas_differ": false,
+    "output_nonfinite": false,
+    "comparisons": {
+      "input_norm": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_sdpa": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_wo_fp32": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_cast": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_dram": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_rs": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_ag": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_promoted_fp32": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_sharded_fp32": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "post_attention_norm_sharded": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "post_attention_norm_unweighted": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "post_attention_norm": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "residual": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "residual_norm": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_scores": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_centered_scores": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_rounded_scores": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_gate_values": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_gate_indices": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "routes": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "route_indices": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_input": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_routing_row_major": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_mix_weights_row_major": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_mix_weights_tiled": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_gate_up_raw": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_gate": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_up": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_hidden": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_down_raw": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_down_permuted": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_output": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "routed_local": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "shared_input": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "shared_local": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "shared_reduced": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "routed_reduced": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "output": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "input_norm:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_sdpa:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_wo_fp32:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_cast:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_dram:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_rs:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_ag:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_promoted_fp32:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "attention_sharded_fp32:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "post_attention_norm_sharded:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "post_attention_norm_unweighted:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "post_attention_norm:physical": {
+        "equal": false,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          {
+            "rank": 1,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          {
+            "rank": 2,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          {
+            "rank": 3,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          }
+        ]
+      },
+      "residual:physical": {
+        "equal": false,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          {
+            "rank": 1,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          {
+            "rank": 2,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          },
+          {
+            "rank": 3,
+            "equal": false,
+            "changed_elements": 15764,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": [
+              0,
+              0,
+              1,
+              0
+            ]
+          }
+        ]
+      },
+      "residual_norm:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_scores:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_centered_scores:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "router_rounded_scores:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3968,
+            "actual_nonfinite": 3968,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "routes:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_input:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_mix_weights_tiled:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_gate_up_raw:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 1276,
+            "actual_nonfinite": 1276,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 1245,
+            "actual_nonfinite": 1245,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 1173,
+            "actual_nonfinite": 1173,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 858,
+            "actual_nonfinite": 858,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_gate:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 634,
+            "actual_nonfinite": 634,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 628,
+            "actual_nonfinite": 628,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 564,
+            "actual_nonfinite": 564,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 459,
+            "actual_nonfinite": 459,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_up:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 642,
+            "actual_nonfinite": 642,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 617,
+            "actual_nonfinite": 617,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 609,
+            "actual_nonfinite": 609,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 399,
+            "actual_nonfinite": 399,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_hidden:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4628,
+            "actual_nonfinite": 4628,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4408,
+            "actual_nonfinite": 4408,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4424,
+            "actual_nonfinite": 4424,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 3005,
+            "actual_nonfinite": 3005,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_down_raw:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 1008,
+            "actual_nonfinite": 1008,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 843,
+            "actual_nonfinite": 843,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 799,
+            "actual_nonfinite": 799,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 212,
+            "actual_nonfinite": 212,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_down_permuted:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "expert_output:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "routed_local:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "shared_input:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "shared_local:physical": {
+        "equal": true,
+        "reference_replicas_equal": false,
+        "actual_replicas_equal": false,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 658,
+            "actual_nonfinite": 658,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 426,
+            "actual_nonfinite": 426,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 446,
+            "actual_nonfinite": 446,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 509,
+            "actual_nonfinite": 509,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "shared_reduced:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4813,
+            "actual_nonfinite": 4813,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4813,
+            "actual_nonfinite": 4813,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4813,
+            "actual_nonfinite": 4813,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 4813,
+            "actual_nonfinite": 4813,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "routed_reduced:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      },
+      "output:physical": {
+        "equal": true,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 1,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 2,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          },
+          {
+            "rank": 3,
+            "equal": true,
+            "changed_elements": 0,
+            "reference_nonfinite": 15764,
+            "actual_nonfinite": 15764,
+            "finite_max_abs_diff": 0.0,
+            "first_changed_index": null
+          }
+        ]
+      }
+    }
+  },
+  "failure_tensors": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_boundary_v4_experts.pt"
+}

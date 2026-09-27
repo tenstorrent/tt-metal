@@ -1,0 +1,110 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py",
+    "--output-only",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_output_replay_diagnostic.json"
+  ],
+  "runtime_sha256": "49cd4b3e47aeca24389fd58c29262556d05ec35cf0f0d80c8077c02af51f88e5",
+  "diagnostic_sha256": "d1ef3125f3878e1a2049bf088571fba92b9021c715d2bbf42f4f48dac6e0bacb",
+  "dtype": "bfloat8_b",
+  "layer": 0,
+  "output_only": true,
+  "length": 4096,
+  "steps": 128,
+  "completed_steps": 21,
+  "passed": false,
+  "limitation": "Retained tensor handles change allocator lifetimes; this run does not measure performance.",
+  "boundaries": {
+    "output": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    }
+  },
+  "failure": {
+    "tp": 4,
+    "step": 20,
+    "absolute_position": 4116,
+    "first_different_boundary": "output",
+    "output_replicas_differ": false,
+    "output_nonfinite": false,
+    "comparisons": {
+      "output": {
+        "equal": false,
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": false,
+            "changed_elements": 1114,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0625,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              7
+            ]
+          },
+          {
+            "rank": 1,
+            "equal": false,
+            "changed_elements": 1114,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0625,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              7
+            ]
+          },
+          {
+            "rank": 2,
+            "equal": false,
+            "changed_elements": 1114,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0625,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              7
+            ]
+          },
+          {
+            "rank": 3,
+            "equal": false,
+            "changed_elements": 1114,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.0625,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              7
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "failure_tensors": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_output_replay_diagnostic.pt"
+}

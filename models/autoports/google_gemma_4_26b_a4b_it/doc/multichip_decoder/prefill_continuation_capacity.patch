@@ -1,0 +1,73 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -556,10 +556,69 @@
+         )
+         return self
+ 
++    def _prefill_continuation(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id, start_pos):
++        """Preserve per-token cache updates while bounding retained output tiles."""
++        length = hidden_states.shape[-2]
++        self._validate_kv_cache(kv_cache)
++        if length <= 0 or start_pos < 0 or start_pos + length > self.config.max_position_embeddings:
++            raise ValueError("Sequence outside HF context contract")
++        rope_2d = tuple(ttnn.reshape(r, (r.shape[-2], r.shape[-1])) for r in rope_mats)
++        request_table = page_table[user_id : user_id + 1, :]
++        rows, tiles, chunks, groups = [], [], [], []
++
++        def merge(parts):
++            result = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
++            parts.clear()
++            return result
++
++        for offset in range(length):
++            position = start_pos + offset
++            rows.append(
++                self.decode_forward(
++                    hidden_states[:, :, offset : offset + 1, :],
++                    rope_mats=rope_2d,
++                    current_pos=self.positions_u32[:, position : position + 1],
++                    cache_pos=ttnn.reshape(self.positions_i32[:, position : position + 1], (1,)),
++                    page_table=request_table,
++                    kv_cache=kv_cache,
++                )
++            )
++            if len(rows) == 32:
++                # Only these one-token tensors need concat's bounded RM path.
++                tiles.append(merge(rows))
++                if len(tiles) == 32:
++                    chunks.append(merge(tiles))
++                    if len(chunks) == 32:
++                        groups.append(merge(chunks))
++        if length == 1:
++            return rows[0]
++        if rows:
++            # Padding participates only in assembly and is sliced away below.
++            # Reusing a row creates no new cache update or tensor allocation.
++            rows.extend([rows[-1]] * (32 - len(rows)))
++            tiles.append(merge(rows))
++        if tiles:
++            chunks.append(merge(tiles))
++        if chunks:
++            groups.append(merge(chunks))
++        # At most eight groups at 262144 tokens. Clearing references also works
++        # when a single-input merge aliases its input; do not force deallocate.
++        result = merge(groups)
++        return result if result.shape[-2] == length else result[:, :, :length, :]
++
+     def prefill_forward(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id=0, start_pos=0):
+         """Assemble long replicated prefill outputs in bounded tiled groups."""
+         length = hidden_states.shape[-2]
+-        if start_pos or length <= self.chunk_size or self.sharded_residual:
++        if start_pos > 0:
++            return self._prefill_continuation(
++                hidden_states,
++                rope_mats=rope_mats,
++                page_table=page_table,
++                kv_cache=kv_cache,
++                user_id=user_id,
++                start_pos=start_pos,
++            )
++        if start_pos < 0 or length <= self.chunk_size or self.sharded_residual:
+             return super().prefill_forward(
+                 hidden_states,
+                 rope_mats=rope_mats,

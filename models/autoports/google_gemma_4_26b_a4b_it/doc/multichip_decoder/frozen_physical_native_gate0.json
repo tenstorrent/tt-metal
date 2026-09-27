@@ -1,0 +1,359 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/probe_indexed_expert_replay.py",
+    "--output-only",
+    "--physical-input",
+    "--native-gate-core",
+    "0",
+    "--read-padding",
+    "--fixture",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_boundary_retain_hidden.pt",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/frozen_physical_native_gate0.json"
+  ],
+  "runtime_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "experts_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "probe_sha256": "a0a8f356b75ca10feb84ac7c2123af6a7b20933df2b55147014ce3355525884b",
+  "fixture_sha256": "4d081810b53550fd10d1e0b81e8425b8d30a241288e46852721945be32e667dd",
+  "passed": true,
+  "layer": 0,
+  "output_only": true,
+  "physical_input": true,
+  "native_gate_core": 0,
+  "read_output_only": false,
+  "read_padding": true,
+  "repeats": 128,
+  "completed_repeats": 128,
+  "limitation": "Host reupload preserves saved physical BF16 values; whole-layer allocator/program state differs.",
+  "native_gate_addresses": [
+    {
+      "bias": 1570048,
+      "indices": 1568000,
+      "output": 1565952,
+      "output_indices": 1563904,
+      "face": 1556608
+    },
+    {
+      "bias": 1561728,
+      "indices": 1559680,
+      "output": 1554560,
+      "output_indices": 1552512,
+      "face": 1546368
+    }
+  ],
+  "physical_input_comparison": {
+    "expert_input": {
+      "equal": true,
+      "comparison": "logical_values",
+      "reference_replicas_equal": true,
+      "actual_replicas_equal": true,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    },
+    "routes": {
+      "equal": true,
+      "comparison": "logical_values",
+      "reference_replicas_equal": true,
+      "actual_replicas_equal": true,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    },
+    "expert_input:physical": {
+      "equal": true,
+      "comparison": "snapshot_bits",
+      "reference_replicas_equal": true,
+      "actual_replicas_equal": true,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 37552,
+          "actual_nonfinite": 37552,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 37552,
+          "actual_nonfinite": 37552,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 37552,
+          "actual_nonfinite": 37552,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 37552,
+          "actual_nonfinite": 37552,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    },
+    "routes:physical": {
+      "equal": true,
+      "comparison": "snapshot_bits",
+      "reference_replicas_equal": true,
+      "actual_replicas_equal": true,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    }
+  },
+  "configuration": {
+    "local_width": 192,
+    "gate_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=6-2,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "down_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=6,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "mix_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=1,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+    "decode_compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x702dc9d5e1c0>",
+    "mix_compute": "<ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x702dc9d5e460>",
+    "gate_weight_dtype": "DataType.BFLOAT8_B",
+    "gate_weight_shape": [
+      1,
+      128,
+      2816,
+      384
+    ],
+    "down_weight_dtype": "DataType.BFLOAT4_B",
+    "down_weight_shape": [
+      1,
+      128,
+      192,
+      2816
+    ]
+  },
+  "boundaries": {
+    "output": {
+      "shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16"
+    }
+  },
+  "recorded_output_comparison": {
+    "output": {
+      "equal": false,
+      "comparison": "logical_values",
+      "reference_replicas_equal": false,
+      "actual_replicas_equal": false,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": false,
+          "changed_elements": 2450,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0078125,
+          "first_changed_index": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    }
+  },
+  "recorded_actual_output_comparison": {
+    "output": {
+      "equal": true,
+      "comparison": "logical_values",
+      "reference_replicas_equal": false,
+      "actual_replicas_equal": false,
+      "ranks": [
+        {
+          "rank": 0,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 1,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 2,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        },
+        {
+          "rank": 3,
+          "equal": true,
+          "changed_elements": 0,
+          "reference_nonfinite": 0,
+          "actual_nonfinite": 0,
+          "finite_max_abs_diff": 0.0,
+          "first_changed_index": null
+        }
+      ]
+    }
+  },
+  "reference_tensors": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/frozen_physical_native_gate0.reference.pt"
+}

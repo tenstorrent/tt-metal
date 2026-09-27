@@ -1,0 +1,7 @@
+{
+  "base_sha256": "06f0a0573dbd14e852be4a27c88b72faa610a51961b90cf33365025747898581",
+  "candidate_sha256": "c6c55f39bf683cc33f1955145fb0fc23081f2cbc5c32cfe20c17c9edfa687049",
+  "runtime_reference_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "patch": "sparse_geometry_runner.patch",
+  "snapshot": "sparse_geometry_runner_candidate.py.txt"
+}

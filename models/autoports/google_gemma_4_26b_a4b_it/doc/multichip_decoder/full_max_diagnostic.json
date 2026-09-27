@@ -1,0 +1,56 @@
+{
+  "runtime_sha256": "d3dee9c50f549b6a48e657f0f8b2745a42c436a81ebecb8d8b099e1ae34f454b",
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_multichip_progress.py",
+    "--tp",
+    "4",
+    "--fused-tail",
+    "--hybrid-experts",
+    "--optimized-shared",
+    "--layer",
+    "5",
+    "--length",
+    "262143",
+    "--repeat-input",
+    "--steps",
+    "1",
+    "--trace",
+    "--check-cache",
+    "--prefill-timing-samples",
+    "1",
+    "--reserve-full-stack",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/full_max_diagnostic.json"
+  ],
+  "expert_parallel": false,
+  "fused_tail": true,
+  "optimized_shared": true,
+  "hybrid_experts": true,
+  "cache_pcc": [],
+  "capacity": {
+    "reserved_other_resident_bytes_per_device": 21072183296,
+    "current_weight_bound": 259322368,
+    "current_cache_bytes": 285212672,
+    "current_rope_bytes": 1073741824,
+    "accounting": "memory_capacity_plan.json",
+    "limitation": "Anonymous DRAM reservations exercise capacity, not a full-model stack"
+  },
+  "layer_type": "full_attention",
+  "length": 262143,
+  "steps": 1,
+  "pcc": [],
+  "passed": null,
+  "trace": true,
+  "timings": {
+    "4": {
+      "prefill_host_us": [
+        11557541.5706262
+      ],
+      "decode_host_us": [
+        1638.7468203902245
+      ]
+    }
+  },
+  "all_replicas_equal": true,
+  "sharded_residual": false
+}

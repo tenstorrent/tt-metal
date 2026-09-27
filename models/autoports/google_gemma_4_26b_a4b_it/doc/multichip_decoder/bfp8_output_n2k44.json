@@ -1,0 +1,137 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py",
+    "--output-only",
+    "--gate-n-tiles",
+    "2",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_output_n2k44.json"
+  ],
+  "runtime_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "diagnostic_sha256": "dc22ebba887ee93fa2279d7e5c3481de4e1d5ea5a60d319101c7e2309548ccd8",
+  "dtype": "bfloat8_b",
+  "experts_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "expert_boundaries": false,
+  "expert_retained_names": null,
+  "gate_k_block": null,
+  "gate_n_tiles": 2,
+  "log_addresses": false,
+  "layer": 0,
+  "output_only": true,
+  "retained_groups": [],
+  "read_output_only": false,
+  "replay_delay_ms": 0,
+  "read_padding": false,
+  "length": 4096,
+  "steps": 128,
+  "completed_steps": 8,
+  "passed": false,
+  "reference_read_host_ms": [
+    0.38969144225120544,
+    0.2598753198981285,
+    0.24664029479026794,
+    0.26039592921733856,
+    0.24117901921272278,
+    0.23911520838737488,
+    0.23644883185625076,
+    0.2556974068284035
+  ],
+  "physical_variation_steps": [],
+  "limitation": "Retained tensor handles change allocator lifetimes; this run does not measure performance.",
+  "expert_gate_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=6-1,in0_block_w=44,out_subblock_h=1,out_subblock_w=2,out_block_h=1,out_block_w=2,per_core_M=1,per_core_N=2,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "expert_down_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=6,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "boundaries": {
+    "output": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    }
+  },
+  "failure": {
+    "tp": 4,
+    "step": 7,
+    "absolute_position": 4103,
+    "first_different_boundary": "output",
+    "first_different_physical_boundary": null,
+    "output_replicas_differ": false,
+    "output_nonfinite": false,
+    "comparisons": {
+      "output": {
+        "equal": false,
+        "comparison": "logical_values",
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": false,
+            "changed_elements": 1715,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.75,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "rank": 1,
+            "equal": false,
+            "changed_elements": 1715,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.75,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "rank": 2,
+            "equal": false,
+            "changed_elements": 1715,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.75,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "rank": 3,
+            "equal": false,
+            "changed_elements": 1715,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.75,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "failure_tensors": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_output_n2k44.pt"
+}

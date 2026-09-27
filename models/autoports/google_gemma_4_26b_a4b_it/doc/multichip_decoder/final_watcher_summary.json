@@ -1,0 +1,35 @@
+{
+  "passed": true,
+  "runs": [
+    {
+      "layer_type": "sliding_attention",
+      "exit_code": 0,
+      "minimum_pcc": 0.9976112404200184,
+      "watcher_checks_enabled": true,
+      "noinline": true,
+      "evidence": [
+        "sliding_final_watcher.json",
+        "sliding_final_watcher.command.json",
+        "sliding_final_watcher.watcher.log"
+      ],
+      "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255"
+    },
+    {
+      "layer_type": "full_attention",
+      "exit_code": 0,
+      "minimum_pcc": 0.9994477563467595,
+      "watcher_checks_enabled": true,
+      "noinline": true,
+      "evidence": [
+        "full_final_watcher.json",
+        "full_final_watcher.command.json",
+        "full_final_watcher.watcher.log"
+      ],
+      "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255"
+    }
+  ],
+  "notes": [
+    "All Watcher checks enabled; NOINLINE permits instrumented fabric firmware to fit.",
+    "Compiler unused-variable/function warnings are build diagnostics, not Watcher violations. Normal process/device shutdown succeeded."
+  ]
+}

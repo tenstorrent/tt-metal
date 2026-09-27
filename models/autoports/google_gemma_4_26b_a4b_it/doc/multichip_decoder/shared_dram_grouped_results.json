@@ -1,0 +1,160 @@
+{
+  "sliding_shared_geometry1": {
+    "artifact": "sliding_shared_geometry1.json",
+    "log": "sliding_shared_geometry1.log",
+    "exit_code": 0,
+    "runtime_sha256": "be27d72163e05ac9ff294624e2475412ebc2bf9ba5f5a1afaa022816cac32426",
+    "command": "HF_HUB_OFFLINE=1 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder --fused-tail --hybrid-experts --optimized-shared --shared-geometry 1 --layer 0 --length 4096 --steps 128 --trace --check-cache --output models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_shared_geometry1.json",
+    "passed": true,
+    "minimum_pcc": 0.9998746421370647,
+    "minimum_cache_pcc": 0.999999998714412,
+    "median_host_us": {
+      "1": {
+        "prefill_host_us": 221180.52560836077,
+        "decode_host_us": 825.6146684288979
+      },
+      "4": {
+        "prefill_host_us": 94886.50783896446,
+        "decode_host_us": 769.4284431636333
+      }
+    },
+    "all_replicas_equal": true,
+    "trace": true,
+    "topology": "linear",
+    "sharded_residual": false,
+    "fused_agmm": false
+  },
+  "full_shared_geometry1": {
+    "artifact": "full_shared_geometry1.json",
+    "log": "full_shared_geometry1.log",
+    "exit_code": 0,
+    "runtime_sha256": "be27d72163e05ac9ff294624e2475412ebc2bf9ba5f5a1afaa022816cac32426",
+    "command": "HF_HUB_OFFLINE=1 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder --fused-tail --hybrid-experts --optimized-shared --shared-geometry 1 --layer 5 --length 4096 --steps 128 --trace --check-cache --output models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/full_shared_geometry1.json",
+    "passed": true,
+    "minimum_pcc": 0.9994611279838629,
+    "minimum_cache_pcc": 0.9999715022296233,
+    "median_host_us": {
+      "1": {
+        "prefill_host_us": 186393.17154884338,
+        "decode_host_us": 876.0187774896622
+      },
+      "4": {
+        "prefill_host_us": 80722.17646986246,
+        "decode_host_us": 761.4055648446083
+      }
+    },
+    "all_replicas_equal": true,
+    "trace": true,
+    "topology": "linear",
+    "sharded_residual": false,
+    "fused_agmm": false
+  },
+  "sliding_shared_dram": {
+    "artifact": "sliding_shared_dram.json",
+    "log": "sliding_shared_dram.log",
+    "exit_code": 0,
+    "runtime_sha256": "e9b7dd05c6f1dd3201c869756860dbc9e3050bd7f2eaa2af68c584e68b233d20",
+    "command": "HF_HUB_OFFLINE=1 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder --fused-tail --hybrid-experts --optimized-shared --shared-dram --layer 0 --length 4096 --steps 128 --trace --check-cache --output models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_shared_dram.json",
+    "passed": true,
+    "minimum_pcc": 0.9999102725942829,
+    "minimum_cache_pcc": 0.999999998714412,
+    "median_host_us": {
+      "1": {
+        "prefill_host_us": 221247.41971492767,
+        "decode_host_us": 825.0270038843155
+      },
+      "4": {
+        "prefill_host_us": 94888.0035430193,
+        "decode_host_us": 783.6217992007732
+      }
+    },
+    "all_replicas_equal": true,
+    "trace": true,
+    "topology": "linear",
+    "sharded_residual": false,
+    "fused_agmm": false,
+    "decode_change_vs_geometry1_percent": 1.8446622506937072
+  },
+  "full_shared_dram": {
+    "artifact": "full_shared_dram.json",
+    "log": "full_shared_dram.log",
+    "exit_code": 0,
+    "runtime_sha256": "e9b7dd05c6f1dd3201c869756860dbc9e3050bd7f2eaa2af68c584e68b233d20",
+    "command": "HF_HUB_OFFLINE=1 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder --fused-tail --hybrid-experts --optimized-shared --shared-dram --layer 5 --length 4096 --steps 128 --trace --check-cache --output models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/full_shared_dram.json",
+    "passed": true,
+    "minimum_pcc": 0.9994750345027902,
+    "minimum_cache_pcc": 0.9999715022296233,
+    "median_host_us": {
+      "1": {
+        "prefill_host_us": 186675.96951127052,
+        "decode_host_us": 875.9330958127975
+      },
+      "4": {
+        "prefill_host_us": 80511.52713596821,
+        "decode_host_us": 774.5800539851189
+      }
+    },
+    "all_replicas_equal": true,
+    "trace": true,
+    "topology": "linear",
+    "sharded_residual": false,
+    "fused_agmm": false,
+    "decode_change_vs_geometry1_percent": 1.7302853759939785
+  },
+  "sliding_grouped_shared_geometry1": {
+    "artifact": "sliding_grouped_shared_geometry1.json",
+    "log": "sliding_grouped_shared_geometry1.log",
+    "exit_code": 0,
+    "runtime_sha256": "20151de9802f92af989cdad8f27cb764c79c8b8fad6c80939f5392edb8575cd4",
+    "command": "HF_HUB_OFFLINE=1 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder --fused-tail --hybrid-experts --optimized-shared --shared-geometry 1 --grouped-moe-reduce --layer 0 --length 4096 --steps 128 --trace --check-cache --output models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_grouped_shared_geometry1.json",
+    "passed": true,
+    "minimum_pcc": 0.9998746421370647,
+    "minimum_cache_pcc": 0.999999998714412,
+    "median_host_us": {
+      "1": {
+        "prefill_host_us": 221633.41753184795,
+        "decode_host_us": 825.7473818957806
+      },
+      "4": {
+        "prefill_host_us": 95257.13603943586,
+        "decode_host_us": 750.4038512706757
+      }
+    },
+    "all_replicas_equal": true,
+    "trace": true,
+    "topology": "linear",
+    "sharded_residual": false,
+    "fused_agmm": false,
+    "decode_change_vs_geometry1_percent": -2.4725615568271575,
+    "pcc_array_matches_control": true,
+    "cache_pcc_array_matches_control": true
+  },
+  "full_grouped_shared_geometry1": {
+    "artifact": "full_grouped_shared_geometry1.json",
+    "log": "full_grouped_shared_geometry1.log",
+    "exit_code": 0,
+    "runtime_sha256": "20151de9802f92af989cdad8f27cb764c79c8b8fad6c80939f5392edb8575cd4",
+    "command": "HF_HUB_OFFLINE=1 python_env/bin/python -m models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder --fused-tail --hybrid-experts --optimized-shared --shared-geometry 1 --grouped-moe-reduce --layer 5 --length 4096 --steps 128 --trace --check-cache --output models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/full_grouped_shared_geometry1.json",
+    "passed": true,
+    "minimum_pcc": 0.9994611279838629,
+    "minimum_cache_pcc": 0.9999715022296233,
+    "median_host_us": {
+      "1": {
+        "prefill_host_us": 186579.54968512058,
+        "decode_host_us": 876.222737133503
+      },
+      "4": {
+        "prefill_host_us": 80875.04748255014,
+        "decode_host_us": 741.9274188578129
+      }
+    },
+    "all_replicas_equal": true,
+    "trace": true,
+    "topology": "linear",
+    "sharded_residual": false,
+    "fused_agmm": false,
+    "decode_change_vs_geometry1_percent": -2.5581827722484074,
+    "pcc_array_matches_control": true,
+    "cache_pcc_array_matches_control": true
+  }
+}

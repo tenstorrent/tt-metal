@@ -22,10 +22,12 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--family", choices=["mm_rs", "ag_mm"], required=True)
     parser.add_argument("--layer", choices=["sliding_attention", "full_attention"], default="sliding_attention")
+    parser.add_argument("--topology", choices=["linear", "ring"], default="linear")
     parser.add_argument("--dtype", choices=["fp32", "bf16"], default="fp32")
     parser.add_argument("--grid-x", type=int, default=8)
     parser.add_argument("--block-k", type=int, default=2)
     parser.add_argument("--out-block-w", type=int)
+    parser.add_argument("--subblock-w", type=int, default=1)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -36,7 +38,7 @@ def main():
     k = 1024 if args.layer == "sliding_attention" else 2048
     n = 2048 if args.layer == "sliding_attention" else 3072
     eps = 1e-6
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if args.topology == "ring" else ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=16 * 1024**2)
     try:
         grid = mesh.compute_with_storage_grid_size()
@@ -44,8 +46,12 @@ def main():
         manager = mesh.create_sub_device_manager([ttnn.SubDevice([cores])], 0)
         mesh.load_sub_device_manager(manager)
         mesh.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
-        compute = ttnn.BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        compute = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
         def upload(t, shard=None, dt=dtype):
@@ -65,7 +71,12 @@ def main():
         # Distinct ownership per operation; each full invocation resets its semaphores internally.
         rs_sems, ag_sems, stats_sems = sems(3), sems(2), sems(2)
         rs_barrier, ag_barrier, stats_barrier = sems(3)
-        common = dict(dim=3, num_links=1, topology=ttnn.Topology.Linear, subdevice_id=ttnn.SubDeviceId(0))
+        common = dict(
+            dim=3,
+            num_links=1,
+            topology=ttnn.Topology.Ring if args.topology == "ring" else ttnn.Topology.Linear,
+            subdevice_id=ttnn.SubDeviceId(0),
+        )
 
         def gather(x, handles, barrier):
             return ttnn.experimental.all_gather_async(
@@ -88,7 +99,7 @@ def main():
             compute_with_storage_grid_size=(args.grid_x, 6),
             in0_block_w=args.block_k,
             out_subblock_h=1,
-            out_subblock_w=1,
+            out_subblock_w=args.subblock_w,
             per_core_M=1,
             per_core_N=per_n,
             transpose_mcast=False,
@@ -158,8 +169,12 @@ def main():
         def host(x):
             return ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3)).float()
 
+        print("UNFUSED_REFERENCE_BEGIN", flush=True)
         reference = host(run(False))
+        print("UNFUSED_REFERENCE_PASS", flush=True)
+        print("FUSED_CANDIDATE_BEGIN", flush=True)
         candidate = host(run(True))
+        print("FUSED_CANDIDATE_RETURNED", flush=True)
         pcc = torch.corrcoef(torch.stack([reference.flatten(), candidate.flatten()]))[0, 1].item()
         assert pcc >= 0.995, pcc
         results = {}

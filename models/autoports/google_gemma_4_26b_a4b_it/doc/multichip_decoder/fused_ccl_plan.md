@@ -1,6 +1,6 @@
 # Fused CCL component experiment plan
 
-Status: prepared and Python-compiled; no hardware results yet. This is a
+Status: Ring component probes completed; see `AUTOFIX_fused_ccl.md` for results and Linear MMRS triage. This is a
 shape-faithful synthetic component experiment, not a layer accuracy or speed claim.
 Read alongside `mesh_plan.md`. The target is FABRIC_1D, Linear, one link, 1x4
 Blackhole. These candidates consume fractured activations directly.
@@ -82,3 +82,16 @@ A recursive architecture-guard search in both fused-family source directories
 and the RS artifact implementation found no Blackhole/Wormhole architecture
 branch or explicit exclusion. This is source compatibility evidence only;
 delegated matmul/CCL compilation and runtime support remain unverified.
+
+The executed adaptation adds `--topology ring` (FABRIC_1D_RING plus Ring CCL)
+and `--subblock-w`. Ring initialization and all eight component runs passed.
+Tuned MMRS uses grid11,K16,subblock4; tuned AGMM uses grid8,K22,subblock4.
+AGMM shows a component host-latency win; MMRS is slower than the equivalent
+separate producer/consumer path. Final residual choice still requires actual
+whole-layer comparison.
+
+Real-weight integration is now measured at4096/128 for both kinds, including
+logical S1, paged cache, runtime fallback guard, and deterministic trace.
+See `AUTOFIX_fused_ccl.md`: adapting fused AGMM to the optimized 1D matmul
+and L1 output gives only a small full-attention improvement, and loses on
+sliding. Complete residual-contract selection belongs to the stage report.

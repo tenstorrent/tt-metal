@@ -27,9 +27,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layer", type=int, default=0)
     parser.add_argument("--batch", type=int, default=32)
+    parser.add_argument("--base-length", type=int, default=32)
     parser.add_argument("--expert-parallel", action="store_true")
+    parser.add_argument("--hybrid-experts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fused-tail", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--optimized-shared", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=None)
+    parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--sliding-sharded-rope", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+    parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
+    parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat8_b")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.expert_parallel and args.hybrid_experts:
+        parser.error("--expert-parallel requires --no-hybrid-experts")
+    if args.shared_geometry and not args.optimized_shared:
+        parser.error("--no-optimized-shared requires --shared-geometry 0")
     torch.set_num_threads(8)
     torch.manual_seed(99)
     root = Path(__file__).parents[1]
@@ -37,12 +52,18 @@ def main():
     hf = load_layer(config, args.layer, True)
     fixture = torch.load(root / f"doc/optimized_decoder/actual_text_layer{args.layer}_4096_128.pt", weights_only=True)
     batch = args.batch
-    extent = 128
+    assert 1 <= batch <= 32 and args.base_length >= 32
+    lengths = [args.base_length + slot for slot in range(batch)]
+    extent = (max(lengths) + 1 + 127) // 128 * 128
     block = 32
-    lengths = [32 + slot for slot in range(batch)]
-    inputs = [fixture["prefill"][:, slot * 96 : slot * 96 + length] for slot, length in enumerate(lengths)]
+    stride = args.base_length + 64
+    assert (batch - 1) * stride + max(lengths) < fixture["prefill"].shape[1]
+    inputs = [fixture["prefill"][:, slot * stride : slot * stride + length] for slot, length in enumerate(lengths)]
     tokens = torch.cat(
-        [fixture["prefill"][:, slot * 96 + length : slot * 96 + length + 1] for slot, length in enumerate(lengths)],
+        [
+            fixture["prefill"][:, slot * stride + length : slot * stride + length + 1]
+            for slot, length in enumerate(lengths)
+        ],
         dim=1,
     )
     table = torch.randperm(batch * extent // block, dtype=torch.int32).reshape(batch, -1)
@@ -70,8 +91,31 @@ def main():
                 hf_config=config,
                 layer_idx=args.layer,
                 mesh_device=mesh,
-                **({"expert_parallel": True} if tp == 4 and args.expert_parallel else {}),
+                **(
+                    {
+                        "expert_parallel": args.expert_parallel,
+                        "hybrid_experts": args.hybrid_experts,
+                        "fused_tail": args.fused_tail,
+                        "optimized_shared": args.optimized_shared,
+                        "shared_geometry": args.shared_geometry,
+                        "grouped_moe_reduce": args.grouped_moe_reduce,
+                        "qkv_fidelity": getattr(ttnn.MathFidelity, args.qkv_fidelity),
+                        "output_fidelity": getattr(ttnn.MathFidelity, args.output_fidelity),
+                        "attention_ccl_dtype": getattr(ttnn, args.attention_ccl_dtype),
+                        "full_attention_ccl_dtype": (
+                            getattr(ttnn, args.full_attention_ccl_dtype) if args.full_attention_ccl_dtype else None
+                        ),
+                    }
+                    if tp == 4
+                    else {}
+                ),
             )
+            if (
+                tp == 4
+                and args.sliding_sharded_rope is not None
+                and config.layer_types[args.layer] == "sliding_attention"
+            ):
+                decoder.layer.self_attn.sharded_decode_rope = args.sliding_sharded_rope
             cfg = decoder.layer.self_attn.config
             cache = [
                 upload(
@@ -139,6 +183,18 @@ def main():
             decoded = read(y)
             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
             assert torch.equal(decoded, read(y))
+            # Reassign logical requests to existing cache slots after capture.
+            # Every mutable tensor keeps its address while its contents change.
+            for value, destination, dtype, layout in (
+                (table.flip(0), page_table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                (tokens.flip(1).unsqueeze(0), token, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                (torch.tensor([lengths[::-1]], dtype=torch.int32), pos, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+                (torch.tensor(lengths[::-1], dtype=torch.int32), cache_pos, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            ):
+                host = ttnn.from_torch(value, dtype=dtype, layout=layout, mesh_mapper=mapper)
+                ttnn.copy_host_to_device_tensor(host, destination)
+            ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
+            assert torch.equal(decoded.flip(2), read(y)), "Trace retained stale request/page ownership"
             ttnn.release_trace(mesh, trace)
             results[tp] = dict(prefill=prefills, decode=decoded)
             preservation[tp] = dict(
@@ -146,6 +202,7 @@ def main():
                 other_slots_unchanged=True,
                 all_device_outputs_equal=True,
                 repeat_trace_equal=True,
+                refreshed_request_page_ownership=True,
             )
         finally:
             ttnn.close_mesh_device(mesh)
@@ -153,7 +210,20 @@ def main():
     decodes = [pcc(results[1]["decode"][:, :, i : i + 1], results[4]["decode"][:, :, i : i + 1]) for i in range(batch)]
     report = dict(
         layer_type=config.layer_types[args.layer],
+        expert_parallel=args.expert_parallel,
+        hybrid_experts=args.hybrid_experts,
+        fused_tail=args.fused_tail,
+        optimized_shared=args.optimized_shared,
+        shared_geometry=args.shared_geometry,
+        grouped_moe_reduce=args.grouped_moe_reduce,
+        sliding_sharded_rope_override=args.sliding_sharded_rope,
+        qkv_fidelity=args.qkv_fidelity,
+        output_fidelity=args.output_fidelity,
+        attention_ccl_dtype=args.attention_ccl_dtype,
+        full_attention_ccl_dtype_override=args.full_attention_ccl_dtype,
         batch=batch,
+        base_length=args.base_length,
+        continuation_lengths=[length - 31 for length in lengths],
         lengths=lengths,
         prefill_pcc=prefills,
         decode_pcc=decodes,

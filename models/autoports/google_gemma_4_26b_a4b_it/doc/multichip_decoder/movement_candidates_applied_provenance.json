@@ -1,0 +1,11 @@
+{
+  "runtime_sha256": "c96c935847572085ef97b67ebd76c79eaaf31a45b3f6b90277d69d4951e3fc8d",
+  "runner_sha256": "ac9c1e9d55b66724c00a3432b4affdf0910d6503dfd53bd70e2ab3f88bc50bb0",
+  "changes": [
+    "Optional native sharded decode RoPE",
+    "Optional grouped MoE BFP8 CCL",
+    "Explicit11x10 grid validation",
+    "Test-only one-role K-block and direct raw-weight expert BFP4 candidates"
+  ],
+  "defaults_changed": false
+}

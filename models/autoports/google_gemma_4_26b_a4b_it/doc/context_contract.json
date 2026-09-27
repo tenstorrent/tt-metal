@@ -168,7 +168,7 @@
     "native_profile_runtime_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898"
   },
   "multichip_decoder": {
-    "status": "candidate_unvalidated",
+    "status": "final_policy_validated_independent_review_pending",
     "target_mesh": [
       1,
       4
@@ -188,21 +188,34 @@
       "full_attention": 285212672
     },
     "full_stack_kv_cache_bytes_per_device_at_max_context": 8556380160,
-    "weight_bytes_per_device": 6067486720,
+    "weight_bytes_per_device": 9231600640,
     "reserved_trace_activation_bytes": 2147483648,
-    "largest_tested_multichip_context": 4224,
+    "largest_tested_multichip_context": 262144,
     "evidence": [
       "multichip_decoder/mesh_plan.md",
       "multichip_decoder/memory_capacity_plan.json",
       "multichip_decoder/memory_audit.md",
       "multichip_decoder/sliding_ep_v2.json",
-      "multichip_decoder/full_ep_v2.json"
+      "multichip_decoder/full_ep_v2.json",
+      "multichip_decoder/sliding_max_capacity.json",
+      "multichip_decoder/full_group_tail.json",
+      "multichip_decoder/capacity_audit.md",
+      "multichip_decoder/full_max_capacity_verified.json",
+      "multichip_decoder/AUTOFIX_max_context.md",
+      "multichip_decoder/sliding_long_prefix.json",
+      "multichip_decoder/full_long_prefix.json",
+      "multichip_decoder/sliding_max_aligned.json",
+      "multichip_decoder/memory_capacity_plan_before_final_policy.json",
+      "multichip_decoder/sliding_final_max_262143.json",
+      "multichip_decoder/sliding_final_max_262144.json",
+      "multichip_decoder/full_final_max_262143.json",
+      "multichip_decoder/full_final_max_262144.json"
     ],
     "missing_reasons": [
-      "Full-stack payload and constructor lifetimes are source-audited; maximum-context multichip allocation and allocator peak remain unvalidated. No context reduction is made.",
-      "The 4.125 GiB long-prefill input/chunk-output/concatenation buffers are counted separately from the 2 GiB reserve; shared per-kind RoPE and tied embedding/LM-head storage are required by this bound."
+      "Real full-model allocation order/fragmentation is deferred to the full-model stage; these tests execute each real layer with anonymous other-resident reservations.",
+      "RoPE tables must be shared by kind/layout and tied embedding/LM head must share storage; B32 short contexts do not imply32 maximum-length requests."
     ],
-    "memory_capacity_status": "calculated_unvalidated",
+    "memory_capacity_status": "final_policy_reserved_capacity_validated_both_layer_kinds",
     "long_prefill_live_buffers_bytes_per_device": 4429185024,
     "long_prefill_live_buffer_components_bytes_per_device": {
       "input_bf16": 1476395008,
@@ -210,15 +223,52 @@
       "concatenated_output_bf16": 1476395008,
       "total": 4429185024
     },
-    "resident_and_reserve_bound_bytes_per_device": 19858358272,
-    "conservative_peak_bound_bytes_per_device": 24287543296,
+    "resident_and_reserve_bound_bytes_per_device": 23022472192,
+    "conservative_peak_bound_bytes_per_device": 27451657216,
     "memory_accounting": "multichip_decoder/memory_audit.md",
     "hypothetical_dual_expert_layout": {
-      "selected": false,
-      "implemented": false,
+      "selected": true,
+      "implemented": true,
       "additional_expert_weight_bytes_per_device": 4797562880,
-      "conservative_peak_bound_bytes_per_device": 29085106176,
-      "status": "calculated_unvalidated"
-    }
+      "conservative_peak_bound_bytes_per_device": 27354955776,
+      "status": "selected current expert layouts; subtotal excludes shared decode weights; final maximum-context tests pass both layer kinds"
+    },
+    "per_layer_type": {
+      "sliding_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 19797114880,
+        "evidence": [
+          "multichip_decoder/sliding_final_max_262143.json",
+          "multichip_decoder/sliding_final_max_262144.json"
+        ]
+      },
+      "full_attention": {
+        "passing_prefill_tokens": 262144,
+        "passing_traced_decode_context": 262144,
+        "nonaligned_prefill_tokens": 262143,
+        "reserved_other_resident_bytes_per_device": 19260243968,
+        "evidence": [
+          "multichip_decoder/full_final_max_262143.json",
+          "multichip_decoder/full_final_max_262144.json"
+        ]
+      }
+    },
+    "candidate_weight_bytes_per_device": 11000048640,
+    "candidate_conservative_peak_bound_bytes_per_device": 29220105216,
+    "default_memory_policy": "Selected hybrid EP4 prefill plus indexed TP4 decode; raw host BFP4 sliding TP gate/up, BFP4 TP down, retained BF16 shared prefill, BFP4 shared decode gate/up with BFP8 sliding/BFP4 full down. Matching final maximum-context tests pass both layer kinds.",
+    "current_runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "headroom_to_decimal_32gb_bytes_per_device": 4548342784,
+    "setup_temporary_upper_bound_bytes_per_device": 1404305408,
+    "setup_upper_bound_including_reserve_bytes_per_device": 24426777600,
+    "selected_hybrid_tp_decode_base_memory_bound": {
+      "weight_bytes_per_device": 4337336320,
+      "resident_and_reserve_bound_bytes_per_device": 18128207872,
+      "conservative_peak_bound_bytes_per_device": 22557392896,
+      "scope": "Selected hybrid policy's TP-decode base for additive accounting; not actual TP-only prefill memory. Excludes EP-prefill expert weights and additional shared decode weights."
+    },
+    "candidate_memory_evidence_status": "Historical pre-final-policy candidate. Candidate weight/peak fields and per-layer reservations are preserved as measured/planned at that time; see memory_capacity_plan_before_final_policy.json.",
+    "supported_context": 262144
   }
 }

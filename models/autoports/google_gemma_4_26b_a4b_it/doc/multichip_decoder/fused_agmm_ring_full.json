@@ -1,0 +1,23 @@
+{
+  "family": "ag_mm",
+  "layer": "full_attention",
+  "topology": "ring",
+  "dtype": "fp32",
+  "grid_x": 8,
+  "block_k": 2,
+  "out_block_w": null,
+  "iterations": 20,
+  "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/fused_agmm_ring_full.json",
+  "passed": true,
+  "pcc": 0.9999999403953552,
+  "measurements": {
+    "unfused": {
+      "trace_host_us": 126.81649999999999
+    },
+    "fused": {
+      "trace_host_us": 122.949
+    }
+  },
+  "source_sha256": "24ce6b4d39feb6dedc848173eb91970df7bd1619d478349a91d0c0e183016676",
+  "scope": "synthetic component, whole producer/consumer window; host timing, not device timing"
+}

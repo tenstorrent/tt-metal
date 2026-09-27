@@ -1,0 +1,16 @@
+{
+  "status": "integrated_acceptance_pending",
+  "files": {
+    "tt/multichip_decoder.py": "1683b8a4ffb80de79ee45fa2392360a94628b80ae8e6e22fed53ab7198f02528",
+    "tests/run_multichip_decoder.py": "e0b3d6c2c41b448fb0628a4bbd37a23f6540c2d7c425961f22cf2cbe0b26f0e2",
+    "tests/test_multichip_stack.py": "2c29bc5eaf19d28c067e6e16ff51732294f612627437d616dd14a1285ea6f453",
+    "tests/test_multichip_contracts.py": "d06fc03c30e3d2fe3ff6030a6df2dfe83da8b66120cd21c17a8b2c59e25fc3d3"
+  },
+  "selection": [
+    "gatecore109",
+    "sliding: BF16 shardedRoPE, QKV8x4N2K22, WO11x8N1K32, BF16 attentionCCL, BF8 groupedMoECCL",
+    "full: original FP32 interleavedRoPE, QKV8x6N2K22, WO11x8N1K8, BF8attentionCCL, BF16groupedMoECCL",
+    "indexed active8 decode: BFP4gate/up/down, BF8input, LoFi; EP prefill unchanged",
+    "sharedGU BFP4 both, downBFP8sliding/BFP4full; geometry2sliding/1full; BF16prefill unchanged"
+  ]
+}

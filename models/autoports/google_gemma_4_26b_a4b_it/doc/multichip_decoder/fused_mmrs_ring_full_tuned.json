@@ -1,0 +1,24 @@
+{
+  "family": "mm_rs",
+  "layer": "full_attention",
+  "topology": "ring",
+  "dtype": "fp32",
+  "grid_x": 11,
+  "block_k": 16,
+  "out_block_w": null,
+  "subblock_w": 4,
+  "iterations": 20,
+  "output": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/fused_mmrs_ring_full_tuned.json",
+  "passed": true,
+  "pcc": 0.9999999403953552,
+  "measurements": {
+    "unfused": {
+      "trace_host_us": 97.285
+    },
+    "fused": {
+      "trace_host_us": 100.607
+    }
+  },
+  "source_sha256": "8212857de436d21498b18435fad1e92977ec92026363c4f5b8a7b6eff2c7e73d",
+  "scope": "synthetic component, whole producer/consumer window; host timing, not device timing"
+}

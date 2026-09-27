@@ -5,4 +5,7 @@ profile*/reports/
 *.pt
 *.png
 profile*/prefill_table.txt
+profile*/decode_table.txt
 profile*/*_perf_report.txt
+# XZ preserves this CSV below the repository file-size limit.
+profile_final_sliding/prefill_perf_report.csv.gz

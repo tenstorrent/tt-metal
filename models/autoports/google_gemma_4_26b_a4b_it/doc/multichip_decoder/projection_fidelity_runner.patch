@@ -1,0 +1,46 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
+@@ -32,6 +32,8 @@
+     parser.add_argument("--optimized-shared", action="store_true")
+     parser.add_argument("--shared-dram", action="store_true")
+     parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=0)
++    parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"])
++    parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"])
+     parser.add_argument("--grouped-moe-reduce", action="store_true")
+     parser.add_argument("--hybrid-experts", action="store_true")
+     parser.add_argument("--check-cache", action="store_true")
+@@ -133,6 +135,24 @@
+                     else {}
+                 ),
+             )
++            if tp == 4:
++                def fidelity_override(original, name):
++                    return ttnn.init_device_compute_kernel_config(
++                        mesh.arch(),
++                        math_fidelity=getattr(ttnn.MathFidelity, name),
++                        math_approx_mode=original.math_approx_mode,
++                        fp32_dest_acc_en=original.fp32_dest_acc_en,
++                        packer_l1_acc=original.packer_l1_acc,
++                        dst_full_sync_en=original.dst_full_sync_en,
++                    )
++
++                attention = decoder.layer.self_attn
++                if args.output_fidelity:
++                    attention.output_compute = fidelity_override(attention.output_compute, args.output_fidelity)
++                if args.qkv_fidelity:
++                    projection = attention.source.weights.wqkv
++                    projection = getattr(projection, "projection", projection)
++                    projection.decode_compute = fidelity_override(projection.decode_compute, args.qkv_fidelity)
+             cfg = decoder.layer.self_attn.config
+             cache = [
+                 upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b)
+@@ -314,6 +334,9 @@
+         assert min(cache_pcc) >= 0.995, cache_pcc
+     result = dict(
+         runtime_sha256=runtime_hash,
++        runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
++        output_fidelity_override=args.output_fidelity,
++        qkv_fidelity_override=args.qkv_fidelity,
+         command=sys.argv,
+         expert_parallel=args.expert_parallel,
+         fused_tail=args.fused_tail,

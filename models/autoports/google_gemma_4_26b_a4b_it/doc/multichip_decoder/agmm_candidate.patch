@@ -1,0 +1,130 @@
+--- a/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
++++ b/models/autoports/google_gemma_4_26b_a4b_it/tt/multichip_decoder.py
+@@ -64,6 +64,71 @@
+             program_config=self.program,
+             memory_config=ttnn.L1_MEMORY_CONFIG,
+         )
++
++
++class _GatherProjection:
++    """Decode-only gather fusion; prefill retains the optimized projection."""
++
++    def __init__(self, projection, mesh):
++        import torch
++
++        self.projection = projection
++        self.weight = projection.weight
++        self.hidden = self.weight.shape[-2]
++        self.local_hidden = self.hidden // 4
++        self.local_output = self.weight.shape[-1]
++        grid = mesh.compute_with_storage_grid_size()
++        cores = ttnn.CoreRangeSet(
++            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
++        )
++        self.semaphores = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(2)]
++        self.barrier = ttnn.create_global_semaphore(mesh, cores, 0)
++        # Logical row1 with tile-padded physical row32; buffer belongs to this layer.
++        self.gather_buffer = ttnn.from_torch(
++            torch.zeros(1, 1, 1, self.hidden),
++            device=mesh,
++            dtype=ttnn.float32,
++            layout=ttnn.TILE_LAYOUT,
++            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
++            memory_config=ttnn.DRAM_MEMORY_CONFIG,
++        )
++        self.program = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
++            compute_with_storage_grid_size=(8, 6),
++            in0_block_w=22,
++            out_subblock_h=1,
++            out_subblock_w=4,
++            per_core_M=1,
++            per_core_N=self.local_output // (32 * 8),
++            transpose_mcast=False,
++            fused_activation=None,
++            fuse_batch=False,
++        )
++
++    def __call__(self, x):
++        if x.shape[-1] == self.hidden:
++            return self.projection(x)
++        if tuple(x.shape) != (1, 1, 1, self.local_hidden):
++            raise ValueError("Fused gather-QKV expects one logical decode row with hidden width704")
++        _, projected = ttnn.experimental.all_gather_matmul_async(
++            ttnn.to_memory_config(ttnn.typecast(x, ttnn.float32), ttnn.DRAM_MEMORY_CONFIG),
++            self.weight,
++            persistent_output_buffer=self.gather_buffer,
++            dim=3,
++            multi_device_global_semaphore=self.semaphores,
++            all_gather_core_grid_offset=(0, 6),
++            barrier_semaphore=self.barrier,
++            num_links=1,
++            topology=ttnn.Topology.Ring,
++            memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
++            memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
++            program_config=self.program,
++            compute_kernel_config=self.projection.decode_compute,
++            dtype=ttnn.float32,
++        )
++        # The downstream head splitter sees logical S1 even if a kernel exposes padding.
++        if projected.shape[-2] != 1:
++            projected = projected[:, :, :1, :]
++        return projected
+ 
+ 
+ class _LocalAttention(OptimizedAttention):
+@@ -299,6 +364,8 @@
+         expert_parallel=False,
+         fused_tail=False,
+         hybrid_experts=False,
++        fused_agmm=False,
++        topology=ttnn.Topology.Linear,
+         optimized_shared=False,
+     ):
+         import torch
+@@ -312,7 +379,11 @@
+         self.config, self.layer_idx, self.chunk_size = config, layer_idx, chunk_size
+         self.mesh_device = mesh_device
+         self.mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=4))
+-        self.ccl = CCLManager(mesh_device, 1, ttnn.Topology.Linear)
++        if fused_agmm and (not sharded_residual or topology != ttnn.Topology.Ring):
++            raise ValueError("Fused gather-QKV requires sharded residuals and Ring fabric/topology")
++        self.topology = topology
++        self.fused_agmm = fused_agmm
++        self.ccl = CCLManager(mesh_device, 1, topology)
+         self.sharded_residual = sharded_residual
+         self.fused_tail = fused_tail
+         if sharded_residual:
+@@ -375,9 +446,12 @@
+         source.config.num_attention_heads //= 4
+         source.config.num_key_value_heads = max(1, source.config.num_key_value_heads // 4)
+         source.config.num_key_value_groups = source.config.num_attention_heads // source.config.num_key_value_heads
++        projection = _Projection(ttnn.typecast(source.weights.wqkv, ttnn.bfloat8_b), compute, mesh_device, sliding)
++        if fused_agmm:
++            projection = _GatherProjection(projection, mesh_device)
+         source.weights = replace(
+             source.weights,
+-            wqkv=_Projection(ttnn.typecast(source.weights.wqkv, ttnn.bfloat8_b), compute, mesh_device, sliding),
++            wqkv=projection,
+             o_proj=ttnn.typecast(source.weights.o_proj, ttnn.bfloat8_b),
+         )
+         base = SimpleNamespace(
+@@ -565,7 +639,7 @@
+             multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
+             num_links=1,
+             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+-            topology=ttnn.Topology.Linear,
++            topology=self.topology,
+             cluster_axis=1,
+             barrier_semaphore=self.ccl.get_barrier_semaphore(),
+         )
+@@ -585,7 +659,9 @@
+         return result if name is None else ttnn.mul(result, self.shard_norm_weights[name])
+ 
+     def _sharded_forward(self, x, **attention_kwargs):
+-        normed = self.gather(self.distributed_norm(x, "input_layernorm"))
++        normed = self.distributed_norm(x, "input_layernorm")
++        if not (self.fused_agmm and attention_kwargs.get("is_decode", True)):
++            normed = self.gather(normed)
+         attention = self.layer.self_attn(normed, **attention_kwargs)
+         residual = ttnn.add(
+             ttnn.typecast(x, ttnn.float32), self.distributed_norm(attention, "post_attention_layernorm")

@@ -1,0 +1,92 @@
+{
+  "runtime_sha256": "8c73f97c110ed5159521e48eacb23502b2c9f9585be734fa2eefe609b4b62615",
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py",
+    "--layer",
+    "0",
+    "--length",
+    "65",
+    "--steps",
+    "8",
+    "--trace",
+    "--check-cache",
+    "--ring",
+    "--sharded-residual",
+    "--fused-agmm",
+    "--hybrid-experts",
+    "--optimized-shared",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/agmm_layer0_smoke.json"
+  ],
+  "expert_parallel": false,
+  "fused_tail": false,
+  "optimized_shared": true,
+  "hybrid_experts": true,
+  "cache_pcc": [
+    0.9999901753500775,
+    0.9999902667082127,
+    0.9999867826083548,
+    0.9999876864118278,
+    0.9999788351946315,
+    0.999981250702154,
+    0.9999834526465845,
+    0.9999794203440507
+  ],
+  "capacity": {},
+  "layer_type": "sliding_attention",
+  "length": 65,
+  "steps": 8,
+  "pcc": [
+    0.9998835777263048,
+    0.9999008071136876,
+    0.999858282605486,
+    0.9998791728483748,
+    0.9999129437091481,
+    0.9999097837140534,
+    0.9999302520867475,
+    0.9999549221715269,
+    0.9999331021996951
+  ],
+  "passed": true,
+  "trace": true,
+  "timings": {
+    "1": {
+      "prefill_host_us": [
+        7151.663303375244,
+        6543.195806443691,
+        6875.937804579735
+      ],
+      "decode_host_us": [
+        803.3178746700287,
+        803.8580417633057,
+        804.9514144659042,
+        801.9153028726578,
+        803.0477911233902,
+        801.1236786842346,
+        803.2573387026787,
+        800.5332201719284
+      ]
+    },
+    "4": {
+      "prefill_host_us": [
+        6533.095613121986,
+        5033.764056861401,
+        5195.051431655884
+      ],
+      "decode_host_us": [
+        940.7196193933487,
+        937.173143029213,
+        933.9861571788788,
+        938.3251890540123,
+        938.9761835336685,
+        938.0541741847992,
+        935.1391345262527,
+        941.7915716767311
+      ]
+    }
+  },
+  "all_replicas_equal": false,
+  "sharded_residual": true,
+  "topology": "ring",
+  "fused_agmm": true
+}

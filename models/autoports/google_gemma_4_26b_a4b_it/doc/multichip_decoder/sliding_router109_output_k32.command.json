@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/workspace/tt-metal/python_env/bin/python",
+    "-m",
+    "models.autoports.google_gemma_4_26b_a4b_it.tests.run_multichip_decoder",
+    "--layer",
+    "0",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--trace",
+    "--check-cache",
+    "--attention-ccl-dtype",
+    "bfloat8_b",
+    "--dense-geometry",
+    "qkv-n2",
+    "--projection-role",
+    "output",
+    "--projection-k",
+    "32",
+    "--sharded-decode-rope",
+    "--output",
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/sliding_router109_output_k32.json"
+  ],
+  "exit_code": 0
+}

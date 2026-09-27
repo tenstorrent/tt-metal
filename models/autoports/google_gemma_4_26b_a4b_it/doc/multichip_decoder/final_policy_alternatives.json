@@ -1,0 +1,85 @@
+[
+  {
+    "name": "sliding_final_gate_n2_k44",
+    "layer_type": "sliding_attention",
+    "options": [
+      "--sparse-gate-geometry",
+      "n2-k44"
+    ],
+    "passed": true,
+    "minimum_pcc": 0.9976112404200184,
+    "tp4_decode_host_us": 681.5353408455849,
+    "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "evidence": "sliding_final_gate_n2_k44.json"
+  },
+  {
+    "name": "sliding_final_gate_n2_k88",
+    "layer_type": "sliding_attention",
+    "options": [
+      "--sparse-gate-geometry",
+      "n2-k88"
+    ],
+    "passed": true,
+    "minimum_pcc": 0.9976112404200184,
+    "tp4_decode_host_us": 683.9795969426632,
+    "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "evidence": "sliding_final_gate_n2_k88.json"
+  },
+  {
+    "name": "sliding_final_down_n2_k6",
+    "layer_type": "sliding_attention",
+    "options": [
+      "--sparse-down-geometry",
+      "n2-k6"
+    ],
+    "passed": true,
+    "minimum_pcc": 0.9976112404200184,
+    "tp4_decode_host_us": 652.0096212625504,
+    "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "evidence": "sliding_final_down_n2_k6.json"
+  },
+  {
+    "name": "sliding_final_shared_dram",
+    "layer_type": "sliding_attention",
+    "options": [
+      "--shared-dram",
+      "--shared-geometry",
+      "0"
+    ],
+    "passed": true,
+    "minimum_pcc": 0.9976635364444364,
+    "tp4_decode_host_us": 666.3063541054726,
+    "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "evidence": "sliding_final_shared_dram.json"
+  },
+  {
+    "name": "sliding_final_sharded_agmm",
+    "layer_type": "sliding_attention",
+    "options": [
+      "--sharded-residual",
+      "--ring",
+      "--fused-agmm",
+      "--no-grouped-moe-reduce"
+    ],
+    "passed": true,
+    "minimum_pcc": 0.9980863697120862,
+    "tp4_decode_host_us": 810.7610046863556,
+    "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "evidence": "sliding_final_sharded_agmm.json"
+  },
+  {
+    "name": "full_final_sharded_agmm",
+    "layer_type": "full_attention",
+    "options": [
+      "--sharded-residual",
+      "--ring",
+      "--fused-agmm",
+      "--no-grouped-moe-reduce"
+    ],
+    "passed": true,
+    "minimum_pcc": 0.9973459456141522,
+    "tp4_decode_host_us": 877.8981864452362,
+    "runtime_sha256": "a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255",
+    "evidence": "full_final_sharded_agmm.json"
+  }
+]

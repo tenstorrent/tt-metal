@@ -1,0 +1,10 @@
+{
+  "tt/multichip_decoder.py": {
+    "sha256": "20151de9802f92af989cdad8f27cb764c79c8b8fad6c80939f5392edb8575cd4",
+    "snapshot": "runtime_shared_dram_grouped.py.txt"
+  },
+  "tests/run_multichip_decoder.py": {
+    "sha256": "7c9e3fde951ee9ca2429546b95e5a4a8218ae2e4fa34a4e6b6539b57d20b47c8",
+    "snapshot": "runner_shared_dram_grouped.py.txt"
+  }
+}

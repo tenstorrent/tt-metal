@@ -1,0 +1,17 @@
+{
+  "mode": "independent source-only CodexCLI AutoDebug; not stage-review",
+  "model": "gpt-5.5",
+  "reasoning_effort": "xhigh",
+  "session": "01a0e0aa-a0e0-7490-893f-fb50086dd5fe",
+  "initial_exit_code": 0,
+  "followup_status": "complete",
+  "source_tool_environment": "danger-full-access, matching enclosing session; no device access authorized",
+  "files": {
+    "rope_fresh_prompt.txt": "13a4d5f4b0660ffd12fd6ffdc5f19427eb99168679c4c16d32aeba30b9c9d0f0",
+    "rope_fresh_session.log": "01f3502ce22da3e7956c7ba10599b27ddca72dfe2fc6b3dffced892d544abda6",
+    "rope_fresh_followup_prompt.txt": "45de106d9b55ebc509c85db0c869fd8e473150f4485d758feb347f4542eb58a0",
+    "rope_fresh_followup_session.log": "3a43e88ee3b5944e2e5d7bef620630cc3183ce223c7377b6b29440f529d5e32e",
+    "AUTODEBUG_sharded_rope_fresh.md": "412dc3264fed63307006ae67236220df2ed805217ce2af319926423c9a3c8b07"
+  },
+  "followup_exit_code": 0
+}

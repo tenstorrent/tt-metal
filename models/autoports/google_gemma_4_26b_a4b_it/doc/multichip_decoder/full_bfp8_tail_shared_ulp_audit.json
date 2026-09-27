@@ -1,0 +1,58 @@
+{
+  "basis": "CPU comparison of saved failing physical runtime output; BF16 encoding distances are not root-cause proof",
+  "source": "full_bfp8_paired_tail_shared.failure.pt",
+  "boundaries": {
+    "tail_shared": [
+      {
+        "rank": 3,
+        "changed_flat_indices": [
+          36,
+          38,
+          42,
+          52,
+          54,
+          60,
+          63
+        ],
+        "absolute_bf16_encoding_steps": [
+          1,
+          1,
+          1,
+          2,
+          1,
+          1,
+          1
+        ],
+        "max_abs": 0.125,
+        "same_sign": true
+      }
+    ],
+    "output": [
+      {
+        "rank": 3,
+        "changed_flat_indices": [
+          36,
+          38,
+          39,
+          42,
+          43,
+          52,
+          54,
+          63
+        ],
+        "absolute_bf16_encoding_steps": [
+          1,
+          2,
+          1,
+          2,
+          5,
+          1,
+          3,
+          3
+        ],
+        "max_abs": 0.0078125,
+        "same_sign": true
+      }
+    ]
+  }
+}

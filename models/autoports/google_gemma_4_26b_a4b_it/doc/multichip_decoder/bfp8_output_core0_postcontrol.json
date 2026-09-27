@@ -1,0 +1,192 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_attention_ccl_boundaries.py",
+    "--output-only",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_output_core0_postcontrol.json"
+  ],
+  "runtime_sha256": "8b59370cda6f4ff88157de123123509036f2e91e8054000c809752e21f933175",
+  "diagnostic_sha256": "46a488849e39bbdf1da0f27c92fc0849d67c60fc9d340246e9c02d94ea56b158",
+  "dtype": "bfloat8_b",
+  "experts_sha256": "5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898",
+  "expert_boundaries": false,
+  "expert_retained_names": null,
+  "gate_k_block": null,
+  "gate_n_tiles": 1,
+  "log_addresses": false,
+  "expert_input_dram": false,
+  "router_core_x": 0,
+  "layer": 0,
+  "output_only": true,
+  "retained_groups": [],
+  "read_output_only": false,
+  "replay_delay_ms": 0,
+  "read_padding": false,
+  "length": 4096,
+  "steps": 128,
+  "completed_steps": 63,
+  "passed": false,
+  "reference_read_host_ms": [
+    1.20619498193264,
+    0.28870999813079834,
+    0.2572685480117798,
+    0.6870273500680923,
+    0.9762579575181007,
+    1.2474246323108673,
+    0.24684984236955643,
+    0.2493634819984436,
+    0.2647535875439644,
+    0.25239959359169006,
+    0.2550855278968811,
+    0.2646027132868767,
+    0.2608662471175194,
+    0.24827290326356888,
+    0.40555186569690704,
+    0.25423429906368256,
+    0.25569554418325424,
+    0.2422509714961052,
+    0.2640634775161743,
+    0.24146027863025665,
+    0.2681706100702286,
+    0.26210956275463104,
+    0.25327131152153015,
+    0.7698051631450653,
+    0.24540722370147705,
+    0.6576608866453171,
+    0.23915525525808334,
+    0.2498449757695198,
+    0.2450551837682724,
+    0.24882424622774124,
+    0.260915607213974,
+    0.2583516761660576,
+    0.5949623882770538,
+    0.24855323135852814,
+    0.25644712150096893,
+    0.28155650943517685,
+    0.2493634819984436,
+    0.2516387030482292,
+    0.2594338729977608,
+    0.2469392493367195,
+    0.24832319468259811,
+    0.24329312145709991,
+    0.6480216979980469,
+    0.4360796883702278,
+    0.5014641210436821,
+    0.45031774789094925,
+    0.2601649612188339,
+    0.30966009944677353,
+    0.27491245418787,
+    0.25742966681718826,
+    0.24557672441005707,
+    0.250387005507946,
+    0.2681706100702286,
+    0.5515087395906448,
+    0.25438331067562103,
+    0.25164894759655,
+    0.2741515636444092,
+    0.25229062885046005,
+    0.2488335594534874,
+    0.2561379224061966,
+    0.25073811411857605,
+    0.2667587250471115,
+    0.26482343673706055
+  ],
+  "physical_variation_steps": [],
+  "limitation": "Retained tensor handles change allocator lifetimes; this run does not measure performance.",
+  "expert_gate_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=6-2,in0_block_w=44,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "expert_down_program": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w=6,out_subblock_h=1,out_subblock_w=1,out_block_h=1,out_block_w=1,per_core_M=1,per_core_N=1,fuse_batch=0,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores=std::nullopt,stream_in1=0)",
+  "boundaries": {
+    "output": {
+      "logical_shape": [
+        1,
+        1,
+        1,
+        2816
+      ],
+      "padded_shape": [
+        1,
+        1,
+        32,
+        2816
+      ],
+      "dtype": "DataType.BFLOAT16",
+      "memory": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)"
+    }
+  },
+  "failure": {
+    "tp": 4,
+    "step": 62,
+    "absolute_position": 4158,
+    "first_different_boundary": "output",
+    "first_different_physical_boundary": null,
+    "output_replicas_differ": false,
+    "output_nonfinite": false,
+    "comparisons": {
+      "output": {
+        "equal": false,
+        "comparison": "logical_values",
+        "reference_replicas_equal": true,
+        "actual_replicas_equal": true,
+        "ranks": [
+          {
+            "rank": 0,
+            "equal": false,
+            "changed_elements": 1727,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.125,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "rank": 1,
+            "equal": false,
+            "changed_elements": 1727,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.125,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "rank": 2,
+            "equal": false,
+            "changed_elements": 1727,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.125,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          {
+            "rank": 3,
+            "equal": false,
+            "changed_elements": 1727,
+            "reference_nonfinite": 0,
+            "actual_nonfinite": 0,
+            "finite_max_abs_diff": 0.125,
+            "first_changed_index": [
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "failure_tensors": "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/bfp8_output_core0_postcontrol.pt"
+}

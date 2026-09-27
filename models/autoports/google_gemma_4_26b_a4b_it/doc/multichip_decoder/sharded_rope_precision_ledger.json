@@ -1,0 +1,32 @@
+{
+  "original_interleaved": {
+    "rotary_input": "float32",
+    "table_storage": "bfloat16",
+    "rotary_tables": "float32",
+    "destination_accumulation": "float32",
+    "rotary_output": "float32",
+    "native_widths": [
+      256,
+      512
+    ]
+  },
+  "adapted_optional_sharded": {
+    "rotary_input_before_adapter": "float32",
+    "rotary_native_input": "bfloat16",
+    "rotary_native_tables": "bfloat16",
+    "native_intermediates": "bfloat16",
+    "destination_accumulation": "bfloat16",
+    "math_fidelity": "HiFi4",
+    "restored_rotary_output": "float32",
+    "native_width": 256,
+    "D512": "two paired-half chunks, reassembled in original feature order"
+  },
+  "unchanged": {
+    "QKV_output_fidelity": "LoFi",
+    "WO_output_fidelity": "LoFi",
+    "weights": "existing policies",
+    "kv_cache": "bfloat8_b",
+    "attention_CCL_for_trials": "bfloat8_b"
+  },
+  "component_metadata_note": "sharded_rope_adapted_contract record input_dtype/table_dtype/fp32_dest_acc_en describe uploaded tensors and supplied outer config; the adapted runtime internally applies the native BF16 policy listed here."
+}

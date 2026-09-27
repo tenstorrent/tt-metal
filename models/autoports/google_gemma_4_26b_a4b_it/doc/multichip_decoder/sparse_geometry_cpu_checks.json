@@ -1,0 +1,148 @@
+{
+  "ttnn_imported": false,
+  "hardware_used": false,
+  "runner_candidate_sha256": "c6c55f39bf683cc33f1955145fb0fc23081f2cbc5c32cfe20c17c9edfa687049",
+  "checks": [
+    {
+      "gate": "baseline",
+      "down": "baseline",
+      "page_block_unchanged": true,
+      "weights_compute_router_mix_prefill_unchanged": true
+    },
+    {
+      "gate": "n2-k44",
+      "down": "baseline",
+      "page_block_unchanged": true,
+      "weights_compute_router_mix_prefill_unchanged": true,
+      "gate_program": {
+        "compute_with_storage_grid_size": [
+          6,
+          1
+        ],
+        "in0_block_w": 44,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      }
+    },
+    {
+      "gate": "n2-k88",
+      "down": "baseline",
+      "page_block_unchanged": true,
+      "weights_compute_router_mix_prefill_unchanged": true,
+      "gate_program": {
+        "compute_with_storage_grid_size": [
+          6,
+          1
+        ],
+        "in0_block_w": 88,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      }
+    },
+    {
+      "gate": "baseline",
+      "down": "n2-k6",
+      "page_block_unchanged": true,
+      "weights_compute_router_mix_prefill_unchanged": true,
+      "down_program": {
+        "compute_with_storage_grid_size": [
+          11,
+          4
+        ],
+        "in0_block_w": 6,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      }
+    },
+    {
+      "gate": "n2-k44",
+      "down": "n2-k6",
+      "page_block_unchanged": true,
+      "weights_compute_router_mix_prefill_unchanged": true,
+      "gate_program": {
+        "compute_with_storage_grid_size": [
+          6,
+          1
+        ],
+        "in0_block_w": 44,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      },
+      "down_program": {
+        "compute_with_storage_grid_size": [
+          11,
+          4
+        ],
+        "in0_block_w": 6,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      }
+    },
+    {
+      "gate": "n2-k88",
+      "down": "n2-k6",
+      "page_block_unchanged": true,
+      "weights_compute_router_mix_prefill_unchanged": true,
+      "gate_program": {
+        "compute_with_storage_grid_size": [
+          6,
+          1
+        ],
+        "in0_block_w": 88,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      },
+      "down_program": {
+        "compute_with_storage_grid_size": [
+          11,
+          4
+        ],
+        "in0_block_w": 6,
+        "out_subblock_h": 1,
+        "out_subblock_w": 2,
+        "out_block_h": 1,
+        "out_block_w": 2,
+        "per_core_M": 1,
+        "per_core_N": 2,
+        "fuse_batch": false,
+        "mcast_in0": true
+      }
+    }
+  ]
+}

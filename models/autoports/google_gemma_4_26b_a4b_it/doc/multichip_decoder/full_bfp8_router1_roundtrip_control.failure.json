@@ -1,0 +1,115 @@
+{
+  "command": [
+    "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/diagnose_paired_boundary.py",
+    "--probe",
+    "none",
+    "--router-core",
+    "1",
+    "0",
+    "--roundtrip-router-buffers",
+    "--layer",
+    "5",
+    "--length",
+    "4096",
+    "--steps",
+    "128",
+    "--trace",
+    "--check-cache",
+    "--fused-tail",
+    "--hybrid-experts",
+    "--optimized-shared",
+    "--shared-geometry",
+    "1",
+    "--grouped-moe-reduce",
+    "--qkv-fidelity",
+    "LoFi",
+    "--output-fidelity",
+    "LoFi",
+    "--attention-ccl-dtype",
+    "bfloat8_b",
+    "--output",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/full_bfp8_router1_roundtrip_control.json"
+  ],
+  "runtime_sha256": "070613ddc32b5cc8a22fd92a64cb541de9a9f27152852f1caad0843d1d06903d",
+  "runner_sha256": "cfcfa094a1e6672027d43d1e3f0f3ee396d152ed60be55344ef8d117b621b3c8",
+  "layer": 5,
+  "router_buffer_addresses": {
+    "bias": {
+      "before": 1561856,
+      "intermediate": 1559808,
+      "after": 1557760
+    },
+    "indices": {
+      "before": 1570048,
+      "intermediate": 1555712,
+      "after": 1553664
+    },
+    "output": {
+      "before": 1568000,
+      "intermediate": 1551616,
+      "after": 1549568
+    },
+    "output_indices": {
+      "before": 1565952,
+      "intermediate": 1547520,
+      "after": 1545472
+    }
+  },
+  "kind": "replica_difference",
+  "tp": 4,
+  "phase": "decode",
+  "step": 13,
+  "replay": "repeat1",
+  "absolute_position": 4109,
+  "replicas_equal": false,
+  "ranks": [
+    {
+      "rank": 0,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": true,
+      "bits_equal_to_rank0": true,
+      "changed_vs_rank0": 0,
+      "finite_max_abs_diff": 0.0
+    },
+    {
+      "rank": 1,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": false,
+      "bits_equal_to_rank0": false,
+      "changed_vs_rank0": 1,
+      "finite_max_abs_diff": 0.0001220703125
+    },
+    {
+      "rank": 2,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": false,
+      "bits_equal_to_rank0": false,
+      "changed_vs_rank0": 1,
+      "finite_max_abs_diff": 0.0001220703125
+    },
+    {
+      "rank": 3,
+      "elements": 2816,
+      "finite": 2816,
+      "nan": 0,
+      "positive_infinity": 0,
+      "negative_infinity": 0,
+      "equal_to_rank0": false,
+      "bits_equal_to_rank0": false,
+      "changed_vs_rank0": 1,
+      "finite_max_abs_diff": 0.0001220703125
+    }
+  ]
+}

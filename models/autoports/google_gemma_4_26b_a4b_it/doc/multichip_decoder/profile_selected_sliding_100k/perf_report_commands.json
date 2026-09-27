@@ -1,0 +1,15 @@
+{
+  "scope": "CPU postprocessing reproduction commands for preserved completed outputs; no hardware capture",
+  "commands": [
+    "python_env/bin/tt-perf-report models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/reports/tp4/2026_09_27_00_43_07/ops_perf_results_tp4_2026_09_27_00_43_07.csv --start-signpost PERF_PREFILL --end-signpost PERF_PREFILL --csv models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/prefill_perf_report.csv > models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/prefill_csv.log 2>&1",
+    "python_env/bin/tt-perf-report models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/reports/tp4/2026_09_27_00_43_07/ops_perf_results_tp4_2026_09_27_00_43_07.csv --start-signpost PERF_PREFILL --end-signpost PERF_PREFILL --no-summary > models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/prefill_table.txt 2>&1",
+    "python_env/bin/tt-perf-report models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/reports/tp4/2026_09_27_00_43_07/ops_perf_results_tp4_2026_09_27_00_43_07.csv --start-signpost PERF_DECODE --end-signpost PERF_DECODE --tracing-mode --active-experts 8 --csv models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/decode_perf_report.csv > models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/decode_csv.log 2>&1",
+    "python_env/bin/tt-perf-report models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/reports/tp4/2026_09_27_00_43_07/ops_perf_results_tp4_2026_09_27_00_43_07.csv --start-signpost PERF_DECODE --end-signpost PERF_DECODE --tracing-mode --active-experts 8 --no-summary > models/autoports/google_gemma_4_26b_a4b_it/doc/multichip_decoder/profile_selected_sliding_100k/decode_table.txt 2>&1"
+  ],
+  "notes": [
+    "Advice enabled in both human tables. CSV stdout is status boilerplate, not the human table.",
+    "Prefill does not use active-experts8 because each32-token group can select a larger expert union.",
+    "Tool merges device rows; op subtotal is not divided by4 and is not used as a whole-layer denominator.",
+    "Headline whole-layer accounting is in whole_layer.json, not generic per-op/tool overall rooflines."
+  ]
+}

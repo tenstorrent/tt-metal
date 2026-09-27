@@ -1,0 +1,56 @@
+--- models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
++++ models/autoports/google_gemma_4_26b_a4b_it/tests/run_multichip_decoder.py
+@@ -35,6 +35,8 @@
+     parser.add_argument("--shared-geometry", type=int, choices=[0, 1, 2], default=1)
+     parser.add_argument("--output-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
+     parser.add_argument("--qkv-fidelity", choices=["LoFi", "HiFi2", "HiFi4"], default="LoFi")
++    parser.add_argument("--dense-geometry", choices=["baseline", "qkv-n2", "qkv-n4", "output-n2", "output-n4", "router-n2", "router-n4"], default="baseline")
++    parser.add_argument("--sharded-decode-rope", action="store_true")
+     parser.add_argument("--attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"], default="bfloat16")
+     parser.add_argument("--full-attention-ccl-dtype", choices=["float32", "bfloat16", "bfloat8_b"])
+     parser.add_argument("--grouped-moe-reduce", action=argparse.BooleanOptionalAction, default=True)
+@@ -153,6 +155,35 @@
+                     else {}
+                 ),
+             )
++            if tp == 4:
++                attention = decoder.layer.self_attn
++                attention.sharded_decode_rope = args.sharded_decode_rope
++                if args.dense_geometry != "baseline":
++                    role, width = args.dense_geometry.split("-n")
++                    width = int(width)
++                    if role == "qkv":
++                        owner, field = attention.source.weights.wqkv, "program"
++                        grid = (8, (64 if args.layer == 0 else 96) // width // 8)
++                    elif role == "output":
++                        owner, field = attention, "output_program"
++                        grid = (11, 88 // width // 11)
++                    else:
++                        owner, field = decoder.layer.moe.router, "projection_program"
++                        grid = (4 // width, 1)
++                    previous = getattr(owner, field)
++                    setattr(owner, field, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
++                        compute_with_storage_grid_size=grid,
++                        in0_block_w=previous.in0_block_w,
++                        out_subblock_h=1,
++                        out_subblock_w=width,
++                        out_block_h=1,
++                        out_block_w=width,
++                        per_core_M=1,
++                        per_core_N=width,
++                        fuse_batch=True,
++                        fused_activation=None,
++                        mcast_in0=True,
++                    ))
+             cfg = decoder.layer.self_attn.config
+             cache = [
+                 upload(torch.zeros(pages, cfg.num_key_value_heads, block, cfg.head_dim), ttnn.bfloat8_b)
+@@ -350,6 +381,8 @@
+     result = dict(
+         runtime_sha256=runtime_hash,
+         runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
++        dense_geometry=args.dense_geometry,
++        sharded_decode_rope=args.sharded_decode_rope,
+         qkv_fidelity=args.qkv_fidelity,
+         output_fidelity=args.output_fidelity,
+         attention_ccl_dtype=args.attention_ccl_dtype,

@@ -1,0 +1,92 @@
+{
+  "runtime_sha256": "c74f191d446a67ae75a7334dda513bdd4a664ae46e958a1a49d6d1ad79c4f508",
+  "probe_sha256": "098fb070882744ad2c5688dd30f20d014392ff2d22c6ecedf97c6c0c250b2614",
+  "results": [
+    {
+      "width": 256,
+      "heads": 1,
+      "input_dtype": "float32",
+      "table_dtype": "float32",
+      "fp32_dest_acc_en": true,
+      "requested_full_sync": false,
+      "finite": true,
+      "replicas_equal": true,
+      "baseline_vs_cpu_pcc": 0.9999998623867951,
+      "sharded_vs_cpu_pcc": 0.9999946910837126,
+      "max_abs_difference": 0.021484375,
+      "changed": 245
+    },
+    {
+      "width": 256,
+      "heads": 2,
+      "input_dtype": "float32",
+      "table_dtype": "float32",
+      "fp32_dest_acc_en": true,
+      "requested_full_sync": false,
+      "finite": true,
+      "replicas_equal": true,
+      "baseline_vs_cpu_pcc": 0.9999998636451557,
+      "sharded_vs_cpu_pcc": 0.9999944193421677,
+      "max_abs_difference": 0.025390625,
+      "changed": 484
+    },
+    {
+      "width": 256,
+      "heads": 4,
+      "input_dtype": "float32",
+      "table_dtype": "float32",
+      "fp32_dest_acc_en": true,
+      "requested_full_sync": false,
+      "finite": true,
+      "replicas_equal": true,
+      "baseline_vs_cpu_pcc": 0.9999998517141815,
+      "sharded_vs_cpu_pcc": 0.9999946196629339,
+      "max_abs_difference": 0.01953125,
+      "changed": 961
+    },
+    {
+      "width": 512,
+      "heads": 1,
+      "input_dtype": "float32",
+      "table_dtype": "float32",
+      "fp32_dest_acc_en": true,
+      "requested_full_sync": false,
+      "finite": true,
+      "replicas_equal": true,
+      "baseline_vs_cpu_pcc": 0.9999998440355693,
+      "sharded_vs_cpu_pcc": 0.9999950279886626,
+      "max_abs_difference": 0.025390625,
+      "changed": 483
+    },
+    {
+      "width": 512,
+      "heads": 2,
+      "input_dtype": "float32",
+      "table_dtype": "float32",
+      "fp32_dest_acc_en": true,
+      "requested_full_sync": false,
+      "finite": true,
+      "replicas_equal": true,
+      "baseline_vs_cpu_pcc": 0.9999998515059421,
+      "sharded_vs_cpu_pcc": 0.9999946067272923,
+      "max_abs_difference": 0.033203125,
+      "changed": 964
+    },
+    {
+      "width": 512,
+      "heads": 4,
+      "input_dtype": "float32",
+      "table_dtype": "float32",
+      "fp32_dest_acc_en": true,
+      "requested_full_sync": false,
+      "finite": true,
+      "replicas_equal": true,
+      "baseline_vs_cpu_pcc": 0.9999998558051063,
+      "sharded_vs_cpu_pcc": 0.9999942057583786,
+      "max_abs_difference": 0.025390625,
+      "changed": 1923
+    }
+  ],
+  "adapted": true,
+  "passed": true
+}

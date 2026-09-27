@@ -1,0 +1,51 @@
+{
+  "geometry": [
+    {
+      "k": 2816,
+      "n": 1280,
+      "storage_cores": 8,
+      "k_block": 11,
+      "input_shard": [
+        32,
+        352
+      ],
+      "output_shard": [
+        32,
+        160
+      ],
+      "bank_shard": [
+        2816,
+        160
+      ],
+      "per_core_M": 1,
+      "per_core_N": 5
+    },
+    {
+      "k": 544,
+      "n": 2816,
+      "storage_cores": 1,
+      "k_block": 17,
+      "input_shard": [
+        32,
+        544
+      ],
+      "output_shard": [
+        32,
+        2816
+      ],
+      "bank_shard": [
+        544,
+        352
+      ],
+      "per_core_M": 1,
+      "per_core_N": 88
+    }
+  ],
+  "rank_packing_exact": true,
+  "padding_zero": true,
+  "ttnn_imported": false,
+  "extra_weight_tiles": 528,
+  "extra_sliding_bytes": 574464,
+  "extra_full_bytes": 304128,
+  "extra_stack_bytes": 15882240
+}
