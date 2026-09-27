@@ -96,11 +96,10 @@ FinishWorkSplit compute_work_split(const Tensor& input, const Tensor& indices, u
     split.row_tiles_per_batch = padded[-2] / TILE_HEIGHT;
     split.k_rounded = indices.logical_shape()[-1];
     split.k_tiles = tt::div_up(split.k_rounded, TILE_WIDTH);
-    // A core's time is the gather latency of one unit, so when the half tile units would leave the
-    // grid mostly idle, hand out single faces instead and halve that latency. Past half the grid the
-    // extra cores contend for the same DRAM banks and the halving is lost.
+    // A core's time is the gather latency of one unit, so whenever the single faces fit the grid hand
+    // them out instead of the half tile units and halve that latency.
     const uint32_t half_units = split.total_tile_rows * split.k_tiles * 2;
-    split.units_per_tile = 4 * half_units <= num_cores ? 4 : 2;
+    split.units_per_tile = 2 * half_units <= num_cores ? 4 : 2;
     split.total_units = split.total_tile_rows * split.k_tiles * split.units_per_tile;
     split.index_is_u32 = ttnn::prim::padded_width_needs_uint32_indices(padded[-1]);
     return split;
