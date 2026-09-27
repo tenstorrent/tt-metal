@@ -129,6 +129,10 @@ constexpr uint32_t cb_gather_l1 = 17;  // the ROOT's level-1 landing ring
 constexpr uint32_t cb_node_out = 18;   // an interior gatherer's RAW folded sum
 constexpr uint32_t cb_mcast_in = 16;
 constexpr uint32_t TILE_DIM = 32;
+#ifdef RMS_RESIDUAL_OUT
+// `return_residual_sum`: pass A's `t = x + r` at the input's dtype (compute's second pack).
+constexpr uint32_t cb_residual_sum = 26;
+#endif
 }  // namespace
 
 void kernel_main() {
@@ -300,6 +304,56 @@ void kernel_main() {
     const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
 
     const uint32_t num_blocks = (num_rows + BLOCK_ROWS - 1) / BLOCK_ROWS;
+#ifdef RMS_RESIDUAL_OUT
+
+    // ---- `return_residual_sum`: store t as compute produces it ------------------
+    // The output TILE path's tile ids and `wt < WT` pad skip, on a second tensor, whatever
+    // the scheme (row split, width split, shards).  Two differences, both about L1:
+    //   * cb_residual_sum is a SMALL ring -- two of compute's DEST blocks (T_BLK tiles each,
+    //     the pass-B block size PASS_B_BLK, which divides WT_CHUNK) -- not a chunk-sized
+    //     buffer, so the option costs a few tiles of L1 and moves no blocking decision;
+    //   * so this drains one T_BLK group at a time and frees each group as soon as its bytes
+    //     have LEFT this core (`noc_async_writes_flushed`); the acked barrier is taken once
+    //     per chunk, and by `write_block` and the exit fence after it.
+    // t's accessor CT args follow T_BLK after the output's; its address is the kernel's ONE
+    // common runtime arg, so the option adds nothing to the per-core arg layout.  Called
+    // FIRST in every block loop below, before this kernel waits for anything else of block
+    // blk: compute pushes t in pass A, ahead of the combine's partial and of pass B's output,
+    // and with a two-block ring it cannot get further until t is drained (draining it after
+    // the combine deadlocked the width split).  On a combine plan the drain overlaps
+    // compute's square + reduce, which run after the add and before the partial exists.
+    static_assert(IS_TILE != 0, "rms_norm_ttnn: return_residual_sum is TILE-only");
+    constexpr uint32_t T_BLK = get_compile_time_arg_val(out_args.next_compile_time_args_offset());
+    static_assert(T_BLK >= 1 && WT_CHUNK % T_BLK == 0, "rms_norm_ttnn: the t group must divide WT_CHUNK");
+    constexpr auto t_args = TensorAccessorArgs<out_args.next_compile_time_args_offset() + 1>();
+    const auto t_acc = TensorAccessor(t_args, get_common_arg_val<uint32_t>(0));
+    const uint32_t t_tile_bytes = get_tile_size(cb_residual_sum);
+    auto write_t_block = [&](uint32_t blk) {
+        MaybeDeviceZoneScope("writer_write_t");
+        const uint32_t r0 = blk * BLOCK_ROWS;
+        const uint32_t rows = (num_rows - r0 < BLOCK_ROWS) ? (num_rows - r0) : BLOCK_ROWS;
+        const uint32_t first_tile_row = row_start + r0;
+        for (uint32_t c = 0; c < NUM_W_CHUNKS; ++c) {
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint32_t tile_base = (first_tile_row + r) * WT + w_start + c * WT_CHUNK;
+                for (uint32_t w0 = 0; w0 < WT_CHUNK; w0 += T_BLK) {
+                    cb_wait_front(cb_residual_sum, T_BLK);
+                    uint32_t l1_addr = get_read_ptr(cb_residual_sum);
+                    for (uint32_t i = 0; i < T_BLK; ++i) {
+                        const uint32_t w = w0 + i;
+                        if (w_start + c * WT_CHUNK + w < WT) {  // a ragged width ends in pad tiles
+                            noc_async_write_tile(tile_base + w, t_acc, l1_addr);
+                        }
+                        l1_addr += t_tile_bytes;
+                    }
+                    noc_async_writes_flushed();
+                    cb_pop_front(cb_residual_sum, T_BLK);
+                }
+            }
+            noc_async_write_barrier();
+        }
+    };
+#endif
 
     // ---- BAND write-back: the reader's stage_band, mirrored ------------------
     // Same transaction granularity as the read half (one per tile-row when the band
@@ -750,6 +804,11 @@ void kernel_main() {
             if (is_root != 0) {
                 auto sender = mc.sender(noc);
                 for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+#ifdef RMS_RESIDUAL_OUT
+                    // t first: compute adds block blk (pushing t) before it can produce the partial
+                    // this round ships, and cb_residual_sum is only two DEST blocks deep.
+                    write_t_block(blk);
+#endif
                     tree_round();
                     {
                         // The multicast tail is BYTE-FOR-BYTE the flat one (D24 ordering
@@ -772,6 +831,11 @@ void kernel_main() {
             } else {
                 auto receiver = mc.receiver(noc);
                 for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+#ifdef RMS_RESIDUAL_OUT
+                    // t first: compute adds block blk (pushing t) before it can produce the partial
+                    // this round ships, and cb_residual_sum is only two DEST blocks deep.
+                    write_t_block(blk);
+#endif
                     tree_round();
                     {
                         MaybeDeviceZoneScope("writer_mcast_recv");
@@ -785,6 +849,11 @@ void kernel_main() {
         } else if (is_root != 0) {
             auto sender = mc.sender(noc);
             for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+#ifdef RMS_RESIDUAL_OUT
+                // t first: compute adds block blk (pushing t) before it can produce the partial
+                // this round ships, and cb_residual_sum is only two DEST blocks deep.
+                write_t_block(blk);
+#endif
                 // 1. the root's own COMPACT partial goes into its own slot of its own
                 //    gather CB.  D27: ONE page, so the window is GATHER_SLOTS whatever
                 //    `rows` is -- a RAGGED last block needs no special case, and both
@@ -871,6 +940,11 @@ void kernel_main() {
             const uint32_t root_x = mc.sender_x();
             const uint32_t root_y = mc.sender_y();
             for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+#ifdef RMS_RESIDUAL_OUT
+                // t first: compute adds block blk (pushing t) before it can produce the partial
+                // this round ships, and cb_residual_sum is only two DEST blocks deep.
+                write_t_block(blk);
+#endif
                 // 1. ship this core's COMPACT partial to the root's slot, then signal.
                 //    ONE whole-tile write per round (D27), whatever BLOCK_ROWS is.  The
                 //    landing address is `get_write_ptr(cb_partials_gathered)` computed
@@ -906,6 +980,9 @@ void kernel_main() {
         }
     } else {
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+#ifdef RMS_RESIDUAL_OUT
+            write_t_block(blk);
+#endif
             write_block(blk);
         }
     }

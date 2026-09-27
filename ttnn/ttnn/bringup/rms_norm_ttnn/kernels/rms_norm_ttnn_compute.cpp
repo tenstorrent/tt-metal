@@ -405,6 +405,12 @@ constexpr uint32_t cb_residual_tiles = 20;
 constexpr uint32_t cb_x_sum = 21;  // t = x + r; takes over cb_input_tiles' HELD role
 constexpr uint32_t cb_bias_sticks = 22;
 constexpr uint32_t cb_bias_tiles = 23;
+#ifdef RMS_RESIDUAL_OUT
+// `return_residual_sum`: pass A's `t = x + r`, packed a second time -- at the INPUT's
+// dtype -- for the writer to store as the op's second output.  The define is present
+// only when the option is on, so an option-off build is this file without these lines.
+constexpr uint32_t cb_residual_sum = 26;
+#endif
 }  // namespace
 
 // =======================================================================================
@@ -1227,6 +1233,32 @@ void kernel_main() {
                 ckl::PackTile<X_SUM_OUT>{});
         }
     };
+#ifdef RMS_RESIDUAL_OUT
+    // `return_residual_sum`: pass A's residual add with a SECOND pack of the same DEST
+    // value into cb_residual_sum, so the stored `t` is bit-for-bit the sum the statistics
+    // are taken over (both packs read one DEST slot; neither is a recompute).  The two
+    // packs are two PackTile elements at different CBs, which the chain allows (it only
+    // refuses two packs on the same (CB, DEST slot)); at a bf8b input the second pack has
+    // its own format, reprogrammed per stage by the chain's heterogeneous-pack path.
+    // PerBlockSize on the new CB: its ring is only two DEST blocks (see the host), so the
+    // writer stores t one block behind the add.  Pass A only: STREAM's pass-B rebuild of
+    // `t` below keeps the one-pack chain, so `t` is written exactly once.
+    static_assert(HAS_R, "rms_norm_ttnn: return_residual_sum needs a residual");
+    static_assert(!RM, "rms_norm_ttnn: return_residual_sum is TILE-only");
+    static_assert(!RES_FUSE, "rms_norm_ttnn: the fused pass-A chain does not materialize t");
+    // The host sized cb_residual_sum in these DEST blocks (the define's value is its PASS_B_BLK).
+    static_assert(RMS_RESIDUAL_OUT == PASS_B_BLK, "rms_norm_ttnn: cb_residual_sum's push unit drifted from PASS_B_BLK");
+    constexpr auto T_SUM_OUT =
+        ckl::output(cb_residual_sum, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize);
+    auto residual_add_emit_block = [&](uint32_t rows) {
+        MaybeDeviceZoneScope("compute_residual_add");
+        ckl::eltwise_chain(
+            ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
+            ckl::PackTile<X_SUM_OUT>{},
+            ckl::PackTile<T_SUM_OUT>{});
+    };
+#endif
 
     // PERF 1: the boot constants are waited ONCE, at first use, via these one-shot flags.
     // `cb_scaler` and `cb_bank` are pushed once by the reader and never popped until the
@@ -1268,7 +1300,11 @@ void kernel_main() {
                     ckl::PackTile<SQ_OUT>{});
             } else {
                 // t = x + r, materialized into the CB the rest of the kernel reads.
+#ifdef RMS_RESIDUAL_OUT
+                residual_add_emit_block(rows);
+#else
                 residual_add_block(rows);
+#endif
                 // x^2, either packed to cb_x_squared per width tile or folded into DEST
                 // (D12).  `square` cannot carry the tile base, so the chain is spelled
                 // out; it is exactly what square<> expands to.

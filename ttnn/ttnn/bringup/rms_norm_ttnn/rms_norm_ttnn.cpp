@@ -20,6 +20,7 @@
 
 #include "device/rms_norm_ttnn_device_operation.hpp"
 #include "device/rms_norm_ttnn_device_operation_types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::bringup::rms_norm_ttnn {
 
@@ -371,6 +372,48 @@ bool same_placement_spec(const ttnn::MemoryConfig& a, const ttnn::MemoryConfig& 
            a.shard_spec()->orientation == b.shard_spec()->orientation;
 }
 
+// `return_residual_sum`'s own refusals, after the op's usual ones (validate()), so an option-off call refuses
+// exactly as before.  Returns t's placement.
+ttnn::MemoryConfig check_residual_sum(
+    const Tensor& input,
+    const std::optional<const Tensor>& residual,
+    bool return_residual_sum,
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config) {
+    if (!return_residual_sum) {
+        if (residual_sum_memory_config.has_value()) {
+            throw ValueErrorCpp(
+                "rms_norm_ttnn: residual_sum_memory_config was given without return_residual_sum=True; it places the "
+                "residual sum, which is only returned when return_residual_sum is on");
+        }
+        return input.memory_config();
+    }
+    if (!residual.has_value()) {
+        throw ValueErrorCpp(
+            "rms_norm_ttnn: return_residual_sum=True needs residual_input_tensor: the residual sum it returns is "
+            "input_tensor + residual_input_tensor");
+    }
+    if (input.layout() != Layout::TILE) {
+        throw UnsupportedAxisError(fmt::format(
+            "rms_norm_ttnn: return_residual_sum=True supports layout [Layout.TILE] only; got {} (a ROW_MAJOR residual "
+            "sum would need its own untilize of t, which this op does not build)",
+            input.layout()));
+    }
+    const auto mc = residual_sum_memory_config.value_or(input.memory_config());
+    if (!supported_memory_layout(mc.memory_layout())) {
+        throw UnsupportedAxisError(fmt::format(
+            "rms_norm_ttnn: residual_sum_memory_config.memory_layout={} not in SUPPORTED [INTERLEAVED, HEIGHT_SHARDED, "
+            "WIDTH_SHARDED, BLOCK_SHARDED]",
+            mc.memory_layout()));
+    }
+    if (is_sharded_ml(mc.memory_layout()) && !mc.shard_spec().has_value() && !mc.nd_shard_spec().has_value()) {
+        throw ValueErrorCpp(fmt::format(
+            "rms_norm_ttnn: residual_sum_memory_config is {} but carries no shard spec; give it one (or pass an "
+            "interleaved config)",
+            mc.memory_layout()));
+    }
+    return mc;
+}
+
 std::optional<Tensor> as_optional(const std::optional<const Tensor>& t) {
     if (!t.has_value()) {
         return std::nullopt;
@@ -404,7 +447,7 @@ tt::tt_metal::ComputeConfigDescriptor normalize_compute_kernel_config(const std:
     return out;
 }
 
-std::pair<ttnn::Tensor, bool> rms_norm_with_inplace(
+RmsNormResult rms_norm_full(
     const ttnn::Tensor& input_tensor,
     double epsilon,
     const std::optional<const ttnn::Tensor>& weight,
@@ -412,10 +455,14 @@ std::pair<ttnn::Tensor, bool> rms_norm_with_inplace(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ProgramConfigArg>& program_config,
-    const std::optional<ComputeConfigArg>& compute_kernel_config) {
+    const std::optional<ComputeConfigArg>& compute_kernel_config,
+    bool return_residual_sum,
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config) {
     const auto cfg = normalize_compute_kernel_config(compute_kernel_config);
     const auto resolved =
         validate(input_tensor, weight, bias, residual_input_tensor, memory_config, program_config, cfg);
+    const auto residual_sum_mc =
+        check_residual_sum(input_tensor, residual_input_tensor, return_residual_sum, residual_sum_memory_config);
     const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
 
     // The ROW_MAJOR BAND scheme's output-placement limit (rms_norm_ttnn_program_descriptor.py _plan_band),
@@ -437,6 +484,18 @@ std::pair<ttnn::Tensor, bool> rms_norm_with_inplace(
         }
     }
 
+    // t = x + r: allocated here, at the input's dtype / layout / shape, and handed to the device op as its
+    // second (preallocated) output.  Absent when the option is off.
+    std::optional<Tensor> residual_sum;
+    if (return_residual_sum) {
+        residual_sum = create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                input_tensor.logical_shape(),
+                tt::tt_metal::TensorLayout(
+                    input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), residual_sum_mc)),
+            input_tensor.device());
+    }
+
     auto out = ttnn::prim::bringup::rms_norm_ttnn(
         input_tensor,
         as_optional(weight),
@@ -446,8 +505,57 @@ std::pair<ttnn::Tensor, bool> rms_norm_with_inplace(
         cfg,
         resolved.subblock_w,
         resolved.inplace,
-        output_mem_config);
-    return {std::move(out), resolved.inplace};
+        output_mem_config,
+        residual_sum);
+    return RmsNormResult{
+        .output = std::move(out), .inplace = resolved.inplace, .residual_sum = std::move(residual_sum)};
+}
+
+std::pair<ttnn::Tensor, bool> rms_norm_with_inplace(
+    const ttnn::Tensor& input_tensor,
+    double epsilon,
+    const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<const ttnn::Tensor>& bias,
+    const std::optional<const ttnn::Tensor>& residual_input_tensor,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ProgramConfigArg>& program_config,
+    const std::optional<ComputeConfigArg>& compute_kernel_config) {
+    auto r = rms_norm_full(
+        input_tensor,
+        epsilon,
+        weight,
+        bias,
+        residual_input_tensor,
+        memory_config,
+        program_config,
+        compute_kernel_config,
+        /*return_residual_sum=*/false,
+        std::nullopt);
+    return {std::move(r.output), r.inplace};
+}
+
+std::pair<ttnn::Tensor, ttnn::Tensor> rms_norm_with_residual_sum(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& residual_input_tensor,
+    double epsilon,
+    const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<const ttnn::Tensor>& bias,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config,
+    const std::optional<ProgramConfigArg>& program_config,
+    const std::optional<ComputeConfigArg>& compute_kernel_config) {
+    auto r = rms_norm_full(
+        input_tensor,
+        epsilon,
+        weight,
+        bias,
+        residual_input_tensor,
+        memory_config,
+        program_config,
+        compute_kernel_config,
+        /*return_residual_sum=*/true,
+        residual_sum_memory_config);
+    return {std::move(r.output), std::move(*r.residual_sum)};
 }
 
 ttnn::Tensor rms_norm(
