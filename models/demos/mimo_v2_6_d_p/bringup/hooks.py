@@ -182,8 +182,9 @@ def _router_host_fn(mesh, module):
 
 def _experts_module(mesh, spec, layer, loader=None, cfg=None):
     """TtExperts (EP=4, 64 experts per chip, bfp8, local dispatch -> per-expert SwiGLU -> combine) for one MoE layer.
-    Defaults: loop mode, bf16 input, fp32 intermediates, HiFi4; MIMO_EXPERTS_MODE / MIMO_EXPERTS_ACT=bfp8 /
-    MIMO_EXPERTS_MID=bf16 / MIMO_EXPERTS_FIDELITY=HiFi2 select the older behaviour (tt/model.py:build_experts)."""
+    Default: mode 'unified' (fused unified_routed_expert_moe, high_precision, HiFi4 + fp32 dest); MIMO_EXPERTS_MODE=loop
+    selects the previous per-expert path, MIMO_EXPERTS_FIDELITY / _ACT / _MID the older variants (tt/model.py:build_experts).
+    """
     import os
 
     from models.demos.common.bringup.reference.golden import hf_path
@@ -457,12 +458,14 @@ class MiMoDeviceModel:
         import os
 
         from models.demos.mimo_v2_6_d_p.tt.attention import sdpa_settings
+        from models.demos.mimo_v2_6_d_p.tt.model import EXPERTS_FIDELITY_DEFAULT, EXPERTS_MODE_DEFAULT
 
         full, sl = sdpa_settings(False), sdpa_settings(True)
         return {
             "sdpa_full_cfg": full["name"],
             "sdpa_sliding_cfg": sl["name"],
-            "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", "loop"),
+            "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", EXPERTS_MODE_DEFAULT),
+            "experts_fidelity": os.environ.get("MIMO_EXPERTS_FIDELITY", EXPERTS_FIDELITY_DEFAULT),
             "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
         }
 

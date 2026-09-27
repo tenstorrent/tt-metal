@@ -25,7 +25,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
     const std::optional<std::vector<ttnn::Tensor>>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens) {
+    uint32_t max_active_tokens,
+    bool high_precision) {
     // Single fused device op across ALL local experts. This builds ONE program
     // whose reader/compute/writer kernels iterate over every local expert.
     TT_FATAL(
@@ -82,7 +83,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const ttnn::Tensor output =
         x_is_row_major ? ttnn::empty(
                              dispatched_buffer.logical_shape(),
-                             tt::tt_metal::DataType::BFLOAT8_B,
+                             high_precision ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::BFLOAT8_B,
                              tt::tt_metal::Layout::TILE,
                              dispatched_buffer.device(),
                              tt::tt_metal::MemoryConfig{
@@ -108,7 +109,8 @@ ttnn::Tensor unified_routed_expert_moe(
         up_biases_v,
         down_biases_v,
         min_active_tokens,
-        max_active_tokens);
+        max_active_tokens,
+        high_precision);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
