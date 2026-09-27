@@ -18,8 +18,9 @@ at a time, and the bfp8 device tensors are cached under generated/mimo_v2_6_d_p/
 skips the dequant. expert_token_counts / expert_region_offsets are per chip [1, 256] (global expert ids). No shared
 expert, so the routed partial is the only thing all-reduced.
 
-Adapted from models/demos/gemma4_a4b_d_p/tt/experts.py (itself from ernie45_d_p/tt/moe_unified.py). Needs the
-1-device dispatch-axis ttnn patches (commits 2727352de41, e30d505c4ae).
+Adapted from models/demos/gemma4_a4b_d_p/tt/experts.py (itself from ernie45_d_p/tt/moe_unified.py). Uses the bring-up
+forks (ttnn/ttnn/bringup): offset_cumsum, dispatch and combine for the 1-device dispatch axis, and
+unified_routed_expert_ffn for high_precision (mode 'unified').
 """
 
 from __future__ import annotations
@@ -41,6 +42,49 @@ CACHE_ROOT = REPO / "generated/mimo_v2_6_d_p/tt_cache"
 DGS = 1  # dispatch group = one chip (mesh rows)
 # Dispatch/combine hold no per-layer state: one pair per (mesh, chunk length) is shared by every MoE layer.
 _SEQ_MODULES = {}
+
+
+def _dispatch(m, x, indices, offsets, table):
+    """TtDispatchModule.forward on the bring-up fork ttnn.bringup.dispatch (1-device dispatch axis, no fabric;
+    ttnn/ttnn/bringup/INDEX.md). m is the TtDispatchModule holding the sizes; returns (buffer, metadata)."""
+    return ttnn.bringup.dispatch(
+        input_tensor=x,
+        indices_tensor=indices,
+        expert_offsets_tensor=offsets,
+        expert_dispatch_table_tensor=table,
+        dispatch_group_size=m.dispatch_group_size,
+        experts_per_chip=m.experts_per_chip,
+        num_routed_experts=m.num_routed_experts,
+        num_experts_per_tok=m.num_experts_per_tok,
+        metadata_len=m.metadata_len,
+        max_dispatch_buffer_token_size=m.max_dispatch_buffer_token_size,
+        cluster_axis=m.cluster_axis,
+        num_links=m.num_links,
+        topology=m.topology,
+        fp8_output=m.fp8_output,
+        subdevice_id=m.subdevice_id,
+        num_workers_per_sender=m.num_workers_per_sender,
+    )
+
+
+def _combine(m, buf, meta, counts, region_offsets, seq_len):
+    """TtCombineModule.forward on the bring-up fork ttnn.bringup.combine (1-device dispatch axis, no fabric)."""
+    return ttnn.bringup.combine(
+        buf,
+        meta,
+        counts,
+        region_offsets,
+        dispatch_group_size=m.dispatch_group_size,
+        experts_per_chip=m.experts_per_chip,
+        num_experts_per_tok=m.num_experts_per_tok,
+        seq_len_per_chip=seq_len,
+        cluster_axis=m.cluster_axis,
+        num_links=m.num_links,
+        topology=m.topology,
+        memory_config=m.memory_config,
+        init_zeros=m.init_zeros,
+        use_fp8_combine=m.fp8_output,
+    )
 
 
 class LazyExpertWeights:
@@ -208,7 +252,7 @@ class TtExperts:
         dispatch, combine = self._seq_modules(S)
         idx2 = ttnn.reshape(ttnn.typecast(idx, ttnn.uint16) if idx.dtype != ttnn.uint16 else idx, (S, K))
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(idx2, self.dispatch_table, self.E, K)
-        offsets, counts, region_offsets = ttnn.experimental.deepseek_prefill.offset_cumsum(
+        offsets, counts, region_offsets = ttnn.bringup.offset_cumsum(
             hist,
             cluster_axis=0,
             num_links=self.num_links,
@@ -218,7 +262,7 @@ class TtExperts:
         ind = ttnn.reshape(ttnn.to_layout(idx2, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
         wb = ttnn.typecast(wts, ttnn.bfloat16) if wts.dtype != ttnn.bfloat16 else wts
         scores = ttnn.reshape(ttnn.to_layout(wb, ttnn.ROW_MAJOR_LAYOUT), (1, S, K))
-        buf, meta = dispatch(ttnn.squeeze(x, dim=0), scores, ind, offsets, self.dispatch_table)
+        buf, meta = _dispatch(dispatch, ttnn.squeeze(x, dim=0), ind, offsets, self.dispatch_table)
         buf2 = ttnn.squeeze(ttnn.squeeze(buf, dim=0), dim=0)
         if self.hybrid is not None:
             # moe_fused_swiglu reads a TILE bf8 buffer (at each expert's region offset).
@@ -234,7 +278,7 @@ class TtExperts:
             out = self.routed(buf2, counts, region_offsets)
         ttnn.deallocate(buf2)
         out = ttnn.unsqueeze(ttnn.unsqueeze(out, dim=0), dim=0)
-        comb = combine(out, meta, counts, region_offsets, seq_len_per_chip=S)
+        comb = _combine(combine, out, meta, counts, region_offsets, S)
         ttnn.deallocate(out)
         red = self.reduce(comb, weights=scores, indices=ind, expert_dispatch_table=self.dispatch_table)
         ttnn.deallocate(comb)
@@ -248,7 +292,7 @@ class TtExperts:
         loop_cfg (fidelity, fp32 dest) for Silu and keeps x, intermediates and the output in bf16 (layer 5's outlier
         channels fail with a bf8 x). buf is ROW_MAJOR bf16; returns a fresh TILE bf16 buffer."""
         r = self.routed
-        return ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+        return ttnn.bringup.unified_routed_expert_moe(
             buf,
             region_offsets,
             counts,
@@ -258,7 +302,7 @@ class TtExperts:
             r.down_projs,
             max_dispatched_tokens_per_expert=r.max_tokens,
             compute_kernel_config=self.loop_cfg,
-            activation=ttnn.RoutedExpertActivation.Silu,
+            activation=ttnn.bringup.RoutedExpertActivation.Silu,
             high_precision=True,
         )
 

@@ -57,9 +57,6 @@ enum class RoutedExpertActivation : uint8_t {
     SituGlu = 2,
     // clamped SiLU-GLU: silu(min(gate,L)) * clamp(up,±L)  (DeepSeek V4)
     ClampedSiluGlu = 3,
-    // GeGLU with the tanh approximation: gelu_tanh(gate) * up  (Gemma-4). Same path as Silu,
-    // with gelu_tanh_tile in place of silu_tile.
-    GeluTanh = 4,
 };
 
 // Attributes (the constants known at host time).
@@ -103,14 +100,6 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
-    // Opt-in precise path (MiMo-V2 bring-up; default false keeps every existing caller
-    // byte-identical). When true, every activation variant takes the caller's
-    // compute_kernel_config math_fidelity and fp32_dest_acc_en (otherwise only GeluTanh does),
-    // and x (tilized in-kernel), the gate/activated intermediates and the output stay bf16
-    // instead of bf8_b; with an fp32 dest the K-loop partials are Float32. Requires a ROW_MAJOR x. Changes formats and
-    // kernel config, so it belongs to the program-cache key.
-    bool high_precision = false;
-
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -118,22 +107,10 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens",
-        "compute_kernel_config",
-        "high_precision");
-    // compute_kernel_config is part of the key because GeluTanh honours its math_fidelity and
-    // fp32_dest_acc_en (the other variants ignore it unless high_precision is set).
+        "max_active_tokens");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles,
-            experts_per_chip,
-            x_is_row_major,
-            activation,
-            fuse_bias,
-            min_active_tokens,
-            max_active_tokens,
-            compute_kernel_config,
-            high_precision);
+            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
     }
 };
 
