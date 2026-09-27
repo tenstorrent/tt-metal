@@ -327,3 +327,95 @@ def test_device_cfm_traced_matches_eager_per_step_count(device, n_timesteps):
     passed, pcc = comp_pcc(want, got, GATE_BF16)
     print(f"\n  device CausalConditionalCFM traced ({n_timesteps}-step Euler) PCC {pcc}")
     assert passed, pcc
+
+
+@needs_l1_small_trace
+def test_device_cfm_trace_capture_failure_falls_back_to_eager(device, monkeypatch):
+    """If trace capture fails, the solve must fall back to the eager loop on the conditioning tensors it
+    already uploaded -- which capture had ADOPTED as the trace's persistent buffers. Before 2026-09-25 the
+    failure path released the trace's buffers first, freeing exactly those tensors, and the fallback then
+    read freed tensors. Capture is forced to fail here; the fallback must match the torch reference, and a
+    later traced solve (capture working again) must still be correct."""
+    import ttnn
+    from models.demos.audio.cosyvoice2.tt.flow.decoder import (
+        CausalConditionalCFMRef,
+        CausalConditionalDecoderRef,
+        TtCausalConditionalCFM,
+        TtCausalConditionalDecoder,
+    )
+
+    torch.manual_seed(61)
+    dec = CausalConditionalDecoderRef()
+    dec.eval()
+    cfm = CausalConditionalCFMRef(dec)
+    tt_cfm = TtCausalConditionalCFM(device, TtCausalConditionalDecoder(device, dec), cfm.rand_noise, cfm)
+    t_len = 32
+    mu, cond = torch.randn(1, t_len, 80) * 0.1, torch.randn(1, t_len, 80) * 0.1
+    spks, mask = torch.randn(1, 80) * 0.1, torch.ones(1, t_len, 1)
+    with torch.no_grad():
+        want = cfm.forward(mu, mask, n_timesteps=4, spks=spks, cond=cond)
+
+    def failing_capture(*args, **kwargs):
+        raise RuntimeError("forced capture failure")
+
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(ttnn, "begin_trace_capture", failing_capture)
+            got = tt_cfm.forward(mu, mask, 4, spks, cond, use_trace=True)
+        passed, pcc = comp_pcc(want, got, GATE_BF16)
+        print(f"\n  capture failed -> eager fallback PCC {pcc}")
+        assert passed, pcc
+        got = tt_cfm.forward(mu, mask, 4, spks, cond, use_trace=True)
+        passed, pcc = comp_pcc(want, got, GATE_BF16)
+        print(f"  next solve, capture working again (traced) PCC {pcc}")
+        assert passed, pcc
+    finally:
+        tt_cfm.release_cfm_trace()
+
+
+def test_device_cfm_traces_pass_allocation_tracker():
+    """Re-runs this file's traced CFM tests in a subprocess with `TT_METAL_TRACE_ALLOC_TRACKING=1`, under
+    which `ttnn.execute_trace` raises if any buffer allocated while a trace existed is still alive at replay
+    (a buffer the replay may overwrite). Covers the bug class found 2026-09-25 (a copy kernel compiled after
+    capture, the initial-noise upload kept alive across replays), which PCC checks alone did not catch.
+    A subprocess because the tracker is read once at process start (C++ runtime options and the Python
+    `execute_trace` wrapper), so it cannot be switched on inside this already-running process. Skipped when
+    the whole run is already under the tracker -- the traced tests then check it themselves.
+
+    Opt-in (`COSYVOICE2_RUN_TRACE_ALLOC_TRACKER=1`), and it must be the only test in its pytest invocation:
+    once any test in this process has opened the device, the process holds UMD's `CHIP_IN_USE` lock until
+    it exits (`ttnn.close_device` does not release it), so the child blocks on that lock and never opens the
+    card (verified 2026-09-27). Run it alone:
+        COSYVOICE2_RUN_TRACE_ALLOC_TRACKER=1 pytest <this file>::test_device_cfm_traces_pass_allocation_tracker
+    """
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    if os.environ.get("COSYVOICE2_RUN_TRACE_ALLOC_TRACKER") != "1":
+        pytest.skip("opt-in: set COSYVOICE2_RUN_TRACE_ALLOC_TRACKER=1 and run this test in its own pytest invocation")
+    if os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") == "1":
+        pytest.skip("already running under TT_METAL_TRACE_ALLOC_TRACKING=1")
+    env = dict(os.environ, TT_METAL_TRACE_ALLOC_TRACKING="1")
+    env.pop("COSYVOICE2_RUN_TRACE_ALLOC_TRACKER")
+    cmd = [sys.executable, "-m", "pytest", __file__, "-q", "-p", "no:cacheprovider"]
+    cmd += ["-k", "device_cfm and trace and not allocation_tracker"]
+    # On timeout, interrupt the child rather than kill it: `subprocess.run(timeout=...)` would SIGKILL a
+    # process that holds the device, and a SIGKILL mid-op can wedge the card. SIGINT lets the child's pytest
+    # unwind its fixtures and close the device; SIGKILL only if it is still alive after the grace period.
+    timeout_s, grace_s = 1800, 120
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.send_signal(signal.SIGINT)
+        try:
+            out, err = proc.communicate(timeout=grace_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+        pytest.fail(f"tracker subprocess timed out after {timeout_s}s\n{out[-6000:]}{err[-3000:]}")
+    summary = [l for l in out.splitlines() if " passed" in l or " failed" in l or " error" in l][-1:]
+    print(f"\n  tracker subprocess: {summary}")
+    assert proc.returncode == 0, out[-6000:] + err[-3000:]

@@ -954,7 +954,11 @@ class TtCausalConditionalCFM:
         # explicitly in DRAM rather than inheriting a memory config ... since a trace bakes
         # in addresses").
         mu_dev = ttnn.from_torch(
-            mu_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            mu_in,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # [2B, 1, spk_dim], not [2B, spk_dim] -- see TtCausalConditionalDecoder's
         # spks handling / _sinusoidal_pos_emb's docstring for why.
@@ -1099,12 +1103,24 @@ class TtCausalConditionalCFM:
         # it is a device tensor rather than a Python float -- otherwise its value would be
         # baked into the trace and every replay would use the first step's dt.
         self._dt_buf = ttnn.from_torch(
-            torch.full((1, 1, 1), dt0, dtype=torch.float32),
+            torch.zeros(1, 1, 1),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        dt0_dev = self._dt_device(dt0)
+        ttnn.copy(dt0_dev, self._dt_buf)
+        ttnn.deallocate(dt0_dev)
+        # Compile, BEFORE capture, every `ttnn.copy` program the replay loop and `_reuse_trace`
+        # will run into these buffers (temb/dt/x above; the four conditioning refills here).
+        # A copy program first compiled after capture allocates a program-cache device buffer
+        # while the trace is live -- flagged by TT_METAL_TRACE_ALLOC_TRACKING=1 as liable to be
+        # overwritten by the next replay (found 2026-09-25: the per-step `dt` copy).
+        for buf in (self._mu2_buf, self._spks2_buf, self._cond2_buf, self._mask2_buf):
+            tmp = ttnn.clone(buf, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.copy(tmp, buf)
+            ttnn.deallocate(tmp)
 
         def body():
             x2 = ttnn.concat([self._x_buf, self._x_buf], dim=0)
@@ -1205,6 +1221,11 @@ class TtCausalConditionalCFM:
             traced = True
         except Exception as e:  # noqa: BLE001
             logger.warning(f"CFM trace capture unavailable, falling back to eager: {e}")
+            if self._mu2_buf is mu_dev:
+                # A failed `_capture` had already ADOPTED these as the trace's buffers; the eager
+                # fallback below still reads them (and frees them at the end), so they must not be
+                # released with the rest.
+                self._mu2_buf = self._spks2_buf = self._cond2_buf = self._mask2_buf = None
             self._release_trace()
 
         if traced and reused:
@@ -1220,6 +1241,12 @@ class TtCausalConditionalCFM:
             ttnn.deallocate(mask_dev)
 
         if traced:
+            # `z_dev` is only ever a copy source (into `_x_buf`, by `_reuse_trace` or `_capture`), so it
+            # is freed BEFORE the first replay: on a reuse it was allocated while this trace is live, and
+            # a buffer from that window still alive at `execute_trace` is one the replay may overwrite
+            # (TT_METAL_TRACE_ALLOC_TRACKING=1 flags it; found 2026-09-25).
+            ttnn.deallocate(z_dev)
+            z_dev = None
             # The traced body ITSELF allocates nothing during replay -- every tensor `body()`
             # touches is a persistent buffer. The per-step temb/dt UPLOAD (host -> device,
             # `_temb_device`/`_dt_device`) is not part of that graph at all; seeing PCC ~0.6
@@ -1236,13 +1263,17 @@ class TtCausalConditionalCFM:
                 ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
                 ttnn.copy(self._next_x, self._x_buf)
             if self._cache_trace:
-                x_dev = ttnn.clone(self._x_buf)
+                # Read the result straight from `_x_buf` (`to_torch` already copies it to host). A
+                # device-side `ttnn.clone` here compiled its program AFTER capture, allocating a
+                # program-cache buffer while the trace is live -- flagged by
+                # TT_METAL_TRACE_ALLOC_TRACKING=1 at the next reuse's replay (found 2026-09-27).
+                result = ttnn.to_torch(self._x_buf).float().reshape(1, t_len, ch)
             else:
                 x_dev = self._x_buf
                 self._x_buf = None
                 self._release_trace()
-            result = ttnn.to_torch(x_dev).float().reshape(1, t_len, ch)
-            ttnn.deallocate(x_dev)
+                result = ttnn.to_torch(x_dev).float().reshape(1, t_len, ch)
+                ttnn.deallocate(x_dev)
         else:
             # Fell back before capturing anything durable -- run the untraced eager loop on
             # the already-uploaded conditioning tensors instead of failing the solve.
@@ -1263,7 +1294,8 @@ class TtCausalConditionalCFM:
                     dt = t_span[step + 1] - t
             result = x
 
-        ttnn.deallocate(z_dev)
+        if z_dev is not None:
+            ttnn.deallocate(z_dev)
         if not traced:
             ttnn.deallocate(mu_dev)
             ttnn.deallocate(spks_dev)
