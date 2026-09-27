@@ -26,7 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.blackhole.qwen36.tests.test_factory import get_pcc_threshold, parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
@@ -692,6 +692,23 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
     )
 
 
+def _real_text_prompts(tokenizer, lens):
+    """Per-user windows of real English text, one per entry of ``lens`` (offline, deterministic).
+
+    The corpus is the committed sample-prompt files (~25.7k tokens); user u takes ``lens[u]`` tokens
+    starting at ``u * stride``, so every user gets a different window."""
+    import json
+
+    galaxy = "models/demos/llama3_70b_galaxy/demo/sample_prompts/"
+    parts = [json.load(open("models/demos/blackhole/qwen36/demo/sample_prompts/input_data_long_4k.json"))[0]["prompt"]]
+    for f in ("input_data_questions_prefill_256.json", "input_data_prefill_128.json", "eval_repeat_prompts_debug.json"):
+        parts += [e["prompt"] for e in json.load(open(galaxy + f))]
+    ids = tokenizer("\n\n".join(parts), add_special_tokens=False)["input_ids"]
+    assert len(ids) >= max(lens), f"real-text corpus has {len(ids)} tokens, need {max(lens)}"
+    stride = max(1, (len(ids) - max(lens)) // max(1, len(lens) - 1))
+    return [ids[u * stride : u * stride + n] for u, n in enumerate(lens)]
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 # Two cases, not the 2x3 cross product (#50969 CI budget): "mixed" already cycles
@@ -745,7 +762,15 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     # the GDN state at sequence start, so users don't bleed into each other.
     omodel, args, opt = _build(1)
     vocab = args.vocab_size
-    prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
+    # Wormhole uses real-text prompts. With uniformly random tokens the MoE router sees near-tied expert
+    # scores, so the batched and B=1 paths -- both on device -- can pick different experts from rounding
+    # alone, and this device-vs-device check measures router noise rather than batching bugs: on the
+    # Wormhole (1,4) mesh one of 32 users fell to decode PCC 0.964 while both paths stayed equally close
+    # (~0.95) to an fp32 torch reference. Real text passes at 0.985. Blackhole keeps random tokens.
+    if is_blackhole():
+        prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
+    else:
+        prompts = _real_text_prompts(args.tokenizer, prompt_lens)
     oracle_pf = []
     oracle_rec = []  # per user: list over GDN layers of device-0 rec_state shard [Nv,Dk,Dv]
     oracle_dec = [[] for _ in range(B)]
