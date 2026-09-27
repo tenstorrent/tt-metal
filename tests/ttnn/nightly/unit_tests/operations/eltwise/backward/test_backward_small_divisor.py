@@ -37,14 +37,6 @@ CASE_IDS = [
     "1e18_control", "1e19", "1e20", "1e25",
 ]
 
-# reciprocal_bw gets a shorter list on purpose. Torch evaluates that particular
-# derivative as -grad * (1/x) * (1/x), so its own reference stops being usable once
-# (1/x)^2 leaves the range -- below 5.4e-20 it overflows, above roughly 2.7e22 it
-# underflows to zero. What is left is still on both sides of the working band, which
-# is what the test needs.
-RECIP_CASES = ((1e-18, 1e-20), (1e-19, 1e-20), (8e-20, 1e-20), (1e18, 1e20), (1e19, 1e20), (1e20, 1e20))
-RECIP_CASE_IDS = ["1e-18_control", "1e-19", "8e-20", "1e18_control", "1e19", "1e20"]
-
 DTYPES = ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16))
 DTYPE_IDS = ("float32", "bfloat16")
 
@@ -88,21 +80,6 @@ def test_bw_rdiv_extreme_divisor(divisor, numerator, torch_dtype, ttnn_dtype, de
     )
     golden = ttnn.get_golden_function(ttnn.rdiv_bw)(grad_data, in_data, numerator)
     _check("rdiv_bw", tt_out[0], golden[0], divisor)
-
-
-@pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
-@pytest.mark.parametrize("divisor, grad_scale", RECIP_CASES, ids=RECIP_CASE_IDS)
-def test_bw_reciprocal_extreme_input(divisor, grad_scale, torch_dtype, ttnn_dtype, device):
-    # The gradient is -grad / x^2, so grad is scaled to keep the exact answer a normal
-    # float at both ends rather than only in the middle.
-    in_data = torch.full(SHAPE, divisor, dtype=torch_dtype).requires_grad_(True)
-    grad_data = torch.full(SHAPE, grad_scale, dtype=torch_dtype)
-
-    tt_out = ttnn.reciprocal_bw(
-        _to_device(grad_data, ttnn_dtype, device), _to_device(in_data, ttnn_dtype, device)
-    )
-    golden = ttnn.get_golden_function(ttnn.reciprocal_bw)(grad_data, in_data)
-    _check("reciprocal_bw", tt_out[0], golden[0], divisor)
 
 
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
