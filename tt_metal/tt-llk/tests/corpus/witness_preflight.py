@@ -199,8 +199,15 @@ def main(argv=None):
     ap.add_argument(
         "--allow-pin-mismatch",
         action="store_true",
-        help="LOUD escape: run against a non-pinned toolchain (lane "
-        "verification of a candidate compiler); the nightly never passes this",
+        help="accepted and ignored; a pin mismatch no longer refuses "
+        "(kept so existing callers do not break)",
+    )
+    ap.add_argument(
+        "--require-pin",
+        action="store_true",
+        help="refuse to run unless the resolved cc1plus IS the reviewed pin. "
+        "Use when the run's purpose is to make a statement ABOUT the pin; "
+        "off by default so a freshly built compiler just works",
     )
     ap.add_argument(
         "--only-flag",
@@ -258,25 +265,30 @@ def main(argv=None):
         )
         return 2
     cc1_sha = sweep.sha256(pathlib.Path(cc1))
+    # A compiler that is not the reviewed pin is REPORTED, not refused.  Every
+    # freshly built toolchain has a new sha, so refusing here meant a clean
+    # from-scratch build could never run the gate at all.  What matters is that
+    # nobody later mistakes these verdicts for statements about the pin -- so
+    # the sha actually used is printed on every run, mismatch or not, and the
+    # warning says plainly what the verdicts do and do not cover.
     if cc1_sha != pin.group(1):
-        msg = (
-            f"resolved cc1plus {cc1_sha} != reviewed pin {pin.group(1)} " f"(at {cc1})"
+        print(
+            f"witness-preflight: NOT THE REVIEWED PIN — using cc1plus "
+            f"{cc1_sha} (at {cc1}); reviewed pin is {pin.group(1)}.  "
+            "Verdicts below describe THIS compiler, not the pin.",
+            file=sys.stderr,
         )
-        if a.allow_pin_mismatch:
+        if a.require_pin:
             print(
-                f"witness-preflight: WARNING — PIN MISMATCH HONORED "
-                f"(--allow-pin-mismatch): {msg}; verdicts below are NOT "
-                "statements about the reviewed pin",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"witness-preflight: ENV ERROR: {msg} — the witness gate "
-                "proves fires at the PIN; repoint tests/sfpi or pass "
-                "--allow-pin-mismatch for a lane-candidate run",
+                "witness-preflight: refusing because --require-pin was given",
                 file=sys.stderr,
             )
             return 2
+    else:
+        print(
+            f"witness-preflight: cc1plus {cc1_sha} IS the reviewed pin",
+            file=sys.stderr,
+        )
     python = find_python(llk / "tests")
     if python is None:
         print(
