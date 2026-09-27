@@ -1,0 +1,113 @@
+{
+ "rung": "last",
+ "chunk": [
+  51200,
+  56320
+ ],
+ "layers": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "wall_ms": 258.29434394836426,
+ "device_ms": {
+  "attention": 141.961841,
+  "experts": 94.003091,
+  "router": 7.085666,
+  "mlp": 6.002236,
+  "ffn_norm": 2.345118,
+  "attn_norm": 2.327022,
+  "attn_residual": 1.694897,
+  "ffn_residual": 1.402359,
+  "mlp_residual": 0.281951
+ },
+ "sections_ms": {
+  "attention": 141.961841,
+  "experts": 94.003091,
+  "router": 7.085666,
+  "mlp": 6.002236,
+  "ffn_norm": 2.345118,
+  "attn_norm": 2.327022,
+  "attn_residual": 1.694897,
+  "ffn_residual": 1.402359,
+  "mlp_residual": 0.281951
+ },
+ "sections_ms_per_chip": {
+  "attn_norm": {
+   "1": 2.319883,
+   "3": 2.320215,
+   "0": 2.314263,
+   "2": 2.317911
+  },
+  "attention": {
+   "1": 141.895347,
+   "3": 141.952057,
+   "0": 141.881686,
+   "2": 141.950677
+  },
+  "attn_residual": {
+   "1": 1.687815,
+   "3": 1.684322,
+   "0": 1.689367,
+   "2": 1.687059
+  },
+  "ffn_norm": {
+   "1": 2.327886,
+   "3": 2.327534,
+   "0": 2.32394,
+   "2": 2.33755
+  },
+  "mlp": {
+   "1": 5.983086,
+   "3": 5.994268,
+   "0": 5.983787,
+   "2": 6.002236
+  },
+  "mlp_residual": {
+   "1": 0.281845,
+   "3": 0.278957,
+   "0": 0.280296,
+   "2": 0.281951
+  },
+  "router": {
+   "1": 7.066208,
+   "3": 7.083524,
+   "0": 7.065031,
+   "2": 7.067943
+  },
+  "experts": {
+   "1": 93.775889,
+   "3": 93.889866,
+   "0": 93.75127,
+   "2": 93.950385
+  },
+  "ffn_residual": {
+   "1": 1.395881,
+   "3": 1.395323,
+   "0": 1.398582,
+   "2": 1.397389
+  }
+ },
+ "programs": {
+  "attn_norm": 24,
+  "attention": 568,
+  "attn_residual": 24,
+  "ffn_norm": 24,
+  "mlp": 28,
+  "mlp_residual": 4,
+  "router": 340,
+  "experts": 260,
+  "ffn_residual": 20
+ },
+ "settings": {
+  "sdpa_full_cfg": "A",
+  "sdpa_sliding_cfg": "base",
+  "experts_mode": "unified",
+  "experts_fidelity": "HiFi4",
+  "router_mode": "fp32"
+ },
+ "full_prefill": null
+}
