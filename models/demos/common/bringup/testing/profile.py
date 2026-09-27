@@ -124,6 +124,7 @@ def op_profile(mesh, run) -> tuple[dict, dict | None]:
             {
                 "op": r["op"],
                 "shape": r["shape"],
+                "mem": r.get("mem", ""),
                 "calls": r["calls"],
                 "programs": r["programs"],
                 "ms": round(r["ns"] / 1e6, 4),
@@ -138,13 +139,27 @@ def op_profile(mesh, run) -> tuple[dict, dict | None]:
         # the same merge as the op rows (per section, back-to-back repeats of op + shape), then zip onto them
         agg = {}
         for c in tl["calls"]:
-            if c["key"] is None:
+            if c["key"] is None or not c.get("programs"):  # op rows only hold calls that launched programs
                 continue
             rows = agg.setdefault(c["key"], [])
-            if rows and rows[-1]["op"] == c["op"] and rows[-1]["shape"] == c["shape"]:
+            if (
+                rows
+                and rows[-1]["op"] == c["op"]
+                and rows[-1]["shape"] == c["shape"]
+                and rows[-1]["mem"] == c.get("mem", "")
+            ):
                 r = rows[-1]
             else:
-                r = {"op": c["op"], "shape": c["shape"], "gap": 0.0, "slot": 0.0, "host": 0.0, "kernel": 0.0, "n": 0}
+                r = {
+                    "op": c["op"],
+                    "shape": c["shape"],
+                    "mem": c.get("mem", ""),
+                    "gap": 0.0,
+                    "slot": 0.0,
+                    "host": 0.0,
+                    "kernel": 0.0,
+                    "n": 0,
+                }
                 rows.append(r)
             r["gap"] += c["gap_ns"]
             r["slot"] += c["slot_ns"]
@@ -152,9 +167,8 @@ def op_profile(mesh, run) -> tuple[dict, dict | None]:
             r["kernel"] += c["kernel_ns"]
             r["n"] += 1
         for sec, rows in out.items():
-            trow = [r for r in agg.get(sec, []) if r["kernel"] > 0 or r["op"] != "(other)"]
-            trow = [r for r in trow if any(o["op"] == r["op"] and o["shape"] == r["shape"] for o in rows)]
-            if len(trow) != len(rows):
+            trow = agg.get(sec, [])
+            if [(r["op"], r["shape"], r["mem"]) for r in trow] != [(o["op"], o["shape"], o["mem"]) for o in rows]:
                 continue
             for o, t in zip(rows, trow):
                 o.update(
@@ -231,7 +245,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     ops, timeline = op_profile(mesh, run) if want_ops(s) else (None, None)
     if ops is not None:
         metrics.record("op_rows", sum(len(v) for v in ops.values()))
-        metrics.record("timeline_ok", int(bool(timeline) and "error" not in timeline))
+        attached = all("gap_ms" in r for rows in ops.values() for r in rows)  # every op row got its timeline columns
+        metrics.record("timeline_ok", int(bool(timeline) and "error" not in timeline and attached))
         if timeline and "error" not in timeline:
             for k in ("device_timeline_ms", "kernel_ms", "gap_ms", "host_dispatch_ms", "host_wall_ms"):
                 metrics.record(f"timeline_{k}", timeline[k])
