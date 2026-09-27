@@ -25,13 +25,22 @@
 #
 # Any argument that is not a wrapper flag is forwarded verbatim to
 # sweep_2x2.py, so `--ops a,b --phases classify --dry-run --force` all work
-# unchanged.
+# unchanged. `--evidence-root` is wrapper-owned because preflights also write
+# there; one canonical copy is forwarded to the engine.
 #
 # Exit codes: 0 green · 1 sweep RED / witness RED / compile-gate RED /
 #             DejaGnu RED · 2 a gate or self-test refused · 3 evidence-root
 #             collision.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=sweep_args_lib.sh
+source "$HERE/sweep_args_lib.sh" || { echo "FATAL: sweep_args_lib.sh missing/broken"; exit 2; }
+
+# --evidence-root is an engine option with wrapper-wide consequences: every
+# preflight and artifact must use the same exact path. Consume it before the
+# wrapper parser, then pass one canonical value to the engine below.
+consume_evidence_root_args "$@" || exit 2
+set -- ${EVIDENCE_ARGS[@]+"${EVIDENCE_ARGS[@]}"}
 
 MODE=""
 SKIP_WITNESS=0
@@ -51,6 +60,8 @@ usage() {
 #   --skip-witness        EMERGENCY escape from the union fire-witness
 #                         preflight (nightly only); logged loudly and
 #                         recorded in the evidence dir
+#   --evidence-root PATH  exact shared wrapper+engine artifact root (the
+#                         equals form is accepted too)
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode)       MODE=${2:-}; shift 2 || usage 2 ;;
@@ -77,6 +88,10 @@ esac
 
 DRY_RUN=0
 for _a in "$@"; do [ "$_a" = "--dry-run" ] && DRY_RUN=1; done
+
+_ARGS_TEST_TMP=/tmp/sweep-$MODE-selftest-args.$$
+bash "$HERE/selftest_sweep_args.sh" > "$_ARGS_TEST_TMP" 2>&1 \
+  || { echo "FATAL: sweep argument self-test failed:"; cat "$_ARGS_TEST_TMP"; rm -f "$_ARGS_TEST_TMP"; exit 2; }
 
 # ------------------------------------------------------ setup preflight --
 # Refuse to sweep unless craq-sfpi/scripts/setup.sh has stood up all four
@@ -131,7 +146,8 @@ source "$HERE/sweep_2x2.conf" \
 
 # --------------------------------------------------------- run identity --
 DATE=${SWEEP_DATE:-$(date +%Y%m%d)}
-EV="$EVIDENCE_ROOT/$MODE-$DATE"
+EV=${EVIDENCE_ROOT_OVERRIDE:-$EVIDENCE_ROOT/$MODE-$DATE}
+EV_PARENT=$(dirname -- "$EV")
 BASELINE="$HERE/sfpu_device_baseline_${CHIP_CLASS}_v1.tsv"
 [ -f "$BASELINE" ] || { echo "FATAL: no baseline for chip class '$CHIP_CLASS' ($BASELINE)"; exit 2; }
 # KERNEL-scoped (v2) VERDICT baseline: passed when seeded; absent = bootstrap
@@ -158,7 +174,7 @@ case "$MODE" in
   nightly)  PREV_ORDER=(nightly weekly headline) ;;
   weekly)   PREV_ORDER=(weekly nightly headline) ;;
 esac
-PREV=$(newest_clean_runs "$EVIDENCE_ROOT" "$EV" "${SWEEP_PREV_CHAIN:-3}" "${PREV_ORDER[@]}")
+PREV=$(newest_clean_runs "$EV_PARENT" "$EV" "${SWEEP_PREV_CHAIN:-3}" "${PREV_ORDER[@]}")
 
 echo "== $MODE sweep $DATE -> $EV (prev chain: ${PREV:-none}) =="
 
@@ -170,6 +186,7 @@ python3 "$HERE/sfpu_corpus.py" --validate || { echo "FATAL: corpus validation fa
 # three that stay fail-fast in every mode (e2e-metric, perf-schema-columns,
 # perf-header-gate), which guard the verdict arithmetic itself.
 mkdir -p "$EV"
+mv "$_ARGS_TEST_TMP" "$EV/selftest-sweep-args.txt" 2>/dev/null || true
 mv "$_LIB_TMP" "$EV/selftest-wrapper-lib.txt" 2>/dev/null || true
 mv "$_CONF_LINT_TMP" "$EV/selftest-conf-lint.txt" 2>/dev/null || true
 
