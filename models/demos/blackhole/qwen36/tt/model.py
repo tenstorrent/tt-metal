@@ -3256,6 +3256,18 @@ class Qwen36Model:
             _dev_copy = 0
         # QWEN36_PREFILL_LOGITS_FAST=1: read the [1, vocab] logits row from ONE device instead of all replicas.
         _fast_logits = os.environ.get("QWEN36_PREFILL_LOGITS_FAST", "0") == "1"
+        # QWEN36_PLAIN_GDN_SLOT_FAST (default 1; host round-trip path only, i.e. _dev_copy == 0): the same slot write
+        # without moving the fp32 recurrent state through the host. Measured at TP=2 (lane Q, opt_round4): the host
+        # path costs ~175 ms per admission (snapshot 43 ms + write_slot 130 ms: 2 x 75 MB of fp32 state per device over
+        # PCIe with host untilize/tilize, a slice/concat/copy rewrite of each 50 MB [B, Nv, Dk, Dv] buffer, and
+        # 4 x n_dev blocking row reads per layer for the packed-history repack). Fast path, per GDN layer:
+        #   * recurrent state: ttnn.fill_cache(rec_b, scratch.rec_state, slot) -- the in-place one-row write the
+        #     device-copy mode already uses (fp32 -> fp32 tile copy); only when the dtypes match (else host path);
+        #   * conv taps: one host read of every layer's taps (device concat) feeds the packed-history repack (no per-row
+        #     read back); the step's last user writes device clones of its taps, earlier users upload their rows.
+        # The final batched state (rec_state, conv_states, conv_hist_packed) is bit-identical to the host path's
+        # (tests/test_gdn_slot_write_fast_tp2_scratch.py). =0 restores the host round trip byte-for-byte.
+        _fast_slot = (not _dev_copy) and os.environ.get("QWEN36_PLAIN_GDN_SLOT_FAST", "1") == "1"
         _t0 = _tp()
         prev = self._bind_gdn_prefill_scratch()
         _t["bind"] += _tp() - _t0
@@ -3263,6 +3275,7 @@ class Qwen36Model:
         host_logits = []
         per_user_rec = []
         per_user_conv = []
+        per_user_conv_dev = []  # QWEN36_PLAIN_GDN_SLOT_FAST: device clones of the scratch conv taps
         try:
             for u in range(N):
                 toks = token_ids_list[u]
@@ -3371,10 +3384,52 @@ class Qwen36Model:
                     continue
                 # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
                 # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
-                per_user_conv.append(
-                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
-                )
+                if _fast_slot:
+                    # Recurrent state straight into the decode row on device (enqueued before the next user's
+                    # prefill resets the scratch; the command queue orders them). None = "already written".
+                    slot = int(empty_slots[u])
+                    recs = []
+                    for dn in dn_states:
+                        rec_b = prev_by_dn[dn][2]
+                        if dn.rec_state.dtype == rec_b.dtype:
+                            ttnn.fill_cache(rec_b, dn.rec_state, slot)  # in place: rec_b[slot] = scratch state
+                            recs.append(None)
+                        else:
+                            recs.append(ttnn.to_torch(dn.rec_state, mesh_composer=comp))
+                    per_user_rec.append(recs)
+                else:
+                    per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
+                if _fast_slot:
+                    # Conv taps: ONE host read of all layers' taps (concatenated on device) for the packed-history
+                    # repack, instead of 4 blocking reads per layer (same values as the per-tap to_torch snapshot,
+                    # [n_dev, 1, C] each). The LAST user of the step also keeps device clones of its taps, written into
+                    # the decode rows after unbind with no host upload; earlier users upload their host rows, because a
+                    # clone allocated now could sit inside the next user's trace-replay intermediates (baked addresses)
+                    # and be overwritten by that replay (measured: 2-user steps corrupted every clone).
+                    last = u == N - 1
+                    taps_dev = [[ttnn.clone(c) for c in dn.conv_states] for dn in dn_states]
+                    per_layer = [ttnn.concat(t, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in taps_dev]
+                    cat = ttnn.concat(per_layer, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, L*K, C]
+                    for t in per_layer:
+                        ttnn.deallocate(t)
+                    if not last:
+                        for t in taps_dev:
+                            for c in t:
+                                ttnn.deallocate(c)
+                        taps_dev = None
+                    host = ttnn.to_torch(cat, mesh_composer=comp)  # [n_dev, L*K, C]
+                    ttnn.deallocate(cat)
+                    per_user_conv.append(
+                        [
+                            [host[:, li * dn.K + m : li * dn.K + m + 1, :].contiguous() for m in range(dn.K)]
+                            for li, dn in enumerate(dn_states)
+                        ]
+                    )
+                    per_user_conv_dev.append(taps_dev)
+                else:
+                    per_user_conv.append(
+                        [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
+                    )
                 _t4 = _tp()
                 _t["prefill"] += _t2 - _t1
                 _t["logits"] += _t3 - _t2
@@ -3401,7 +3456,13 @@ class Qwen36Model:
         _t6 = _tp()
         if not _dev_copy:
             for u in range(N):
-                self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
+                self._write_gdn_slot(
+                    int(empty_slots[u]),
+                    per_user_rec[u],
+                    per_user_conv[u],
+                    hist_from_snapshot=_fast_slot,
+                    conv_dev=per_user_conv_dev[u] if _fast_slot else None,  # None for all but the last user
+                )
         _t["write_slot"] += _tp() - _t6
         if _timing:
             lens = [int(v) for v in valid_lens] if valid_lens is not None else [int(t.shape[1]) for t in token_ids_list]
@@ -3520,7 +3581,7 @@ class Qwen36Model:
                 if src is not dn.conv_states[m]:
                     ttnn.deallocate(src)
 
-    def _write_gdn_slot(self, slot, rec_snap, conv_snap, sync_hist=True):
+    def _write_gdn_slot(self, slot, rec_snap, conv_snap, sync_hist=True, hist_from_snapshot=False, conv_dev=None):
         """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
         into decode `slot` of the batched buffers via TPGatedDeltaNet.write_slot (preserving the
         other live rows). Shapes/mappers mirror _assemble_per_user_gdn (mesh dim 0 = devices).
@@ -3528,28 +3589,47 @@ class Qwen36Model:
         rec_snap[li]:  host [num_devices, Nv, Dk, Dv]; conv_snap[li]: list of K host [num_devices, 1, D].
         sync_hist:     passed to write_slot (False = the spec join: leave the plain decode conv's packed
                        history invalid instead of rebuilding it).
+        rec_snap[li] may be None: that layer's recurrent row was already written on device (QWEN36_PLAIN_GDN_SLOT_FAST).
+        hist_from_snapshot: hand write_slot the snapshot's own tap rows for the packed-history repack (no read back).
+        conv_dev[li]: optional device tensors (clones of the B=1 scratch taps, same values as conv_snap[li]) written
+                       instead of uploading conv_snap[li] (consumed).
         """
         mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
         for li, dn in enumerate(dn_layers):
-            rec = ttnn.from_torch(
-                rec_snap[li],
-                dtype=dn.rec_state.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=mapper,
-            )
-            convs = [
-                ttnn.from_torch(
-                    conv_snap[li][m],
-                    dtype=dn.conv_states[m].dtype,
+            rec = None
+            if rec_snap[li] is not None:
+                rec = ttnn.from_torch(
+                    rec_snap[li],
+                    dtype=dn.rec_state.dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.mesh_device,
                     mesh_mapper=mapper,
                 )
-                for m in range(dn.K)
-            ]
-            dn.write_slot(slot, rec, convs, sync_hist=sync_hist)
+            hist_rows = None
+            if hist_from_snapshot and all(dn.conv_states[m].dtype == ttnn.bfloat16 for m in range(dn.K)):
+                # Rows exactly as _sync_conv_hist_packed would read them back from conv_states[m][slot] (bf16 -> bf16
+                # row write, then .float()): device d's row of the host snapshot [n_dev, 1, C].
+                n_dev = self.mesh_device.get_num_devices()
+                C = conv_snap[li][0].shape[-1]
+                hist_rows = [
+                    [conv_snap[li][m].reshape(n_dev, -1, C)[d, 0].to(torch.bfloat16).float() for d in range(n_dev)]
+                    for m in range(dn.K)
+                ]
+            if conv_dev is not None:
+                convs = list(conv_dev[li])
+            else:
+                convs = [
+                    ttnn.from_torch(
+                        conv_snap[li][m],
+                        dtype=dn.conv_states[m].dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh_device,
+                        mesh_mapper=mapper,
+                    )
+                    for m in range(dn.K)
+                ]
+            dn.write_slot(slot, rec, convs, sync_hist=sync_hist, hist_rows=hist_rows)
 
     def _remap_gdn_slots(self, remap):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state

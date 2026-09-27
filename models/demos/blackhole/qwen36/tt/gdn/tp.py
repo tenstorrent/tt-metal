@@ -1549,7 +1549,7 @@ class TPGatedDeltaNet:
         for p in parts:
             ttnn.deallocate(p)
 
-    def write_slot(self, slot, rec, convs, sync_hist=True):
+    def write_slot(self, slot, rec, convs, sync_hist=True, hist_rows=None):
         """Write one user's B=1 prefill state into decode `slot`, preserving every other (live)
         row. The per-slot analogue of assemble_batched_state for vLLM continuous batching.
 
@@ -1561,14 +1561,20 @@ class TPGatedDeltaNet:
                (the plain serving path, default). False (the spec join, prefill_for_spec) skips it and leaves the
                history INVALID: nothing on the spec path reads it, and the rebuild it would trigger (the B=1 scratch
                prefill cleared _hist_packed_valid, so it is the FULL one) is B x K x n_dev blocking reads per layer.
+        rec=None: the recurrent state row was already written by the caller (prefill_paged_slots' fast slot write:
+               ttnn.fill_cache straight from the B=1 scratch); only the conv taps (+ packed history) are written here.
+        hist_rows: optional host copy of exactly the rows written into conv_states[*][slot] (rows[j][d] = device d's
+               float row of tap j, as _sync_conv_hist_packed reads them back); lets the per-slot history repack skip
+               its 4 x n_dev blocking device reads. Must be the same values as `convs` (the caller's host snapshot).
         Consumes rec and convs. Requires the batched buffers (allocate_kv_caches(batch_size=B))."""
         assert self.rec_state is not None and self.conv_states is not None, "batched GDN state not allocated"
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
-        rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
-        if rec_src is not rec:
-            ttnn.deallocate(rec)
-        self._write_index(self.rec_state, rec_src, slot, dim=0)
+        if rec is not None:
+            rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
+            if rec_src is not rec:
+                ttnn.deallocate(rec)
+            self._write_index(self.rec_state, rec_src, slot, dim=0)
         convs_dev = []
         for m in range(self.K):
             c = convs[m]
@@ -1579,7 +1585,7 @@ class TPGatedDeltaNet:
             self._write_index(self.conv_states[m], c_src, slot, dim=1)
         if sync_hist:
             if self.conv_hist_packed is not None and self._hist_packed_valid:
-                self._sync_conv_hist_packed(slot=slot)  # per-slot repack, no full rebuild
+                self._sync_conv_hist_packed(slot=slot, rows=hist_rows)  # per-slot repack, no full rebuild
             else:
                 self._sync_conv_hist_packed()
         else:
@@ -1952,11 +1958,13 @@ class TPGatedDeltaNet:
             )
         return self._conv_taps_packed
 
-    def _sync_conv_hist_packed(self, slot=None):
+    def _sync_conv_hist_packed(self, slot=None, rows=None):
         """Eagerly bring conv_hist_packed in line with conv_states after they were rewritten (prefill capture, reset,
         batched assembly, slot writes). Only when the fused-conv decode path is enabled. slot=None rebuilds every slot;
         an int repacks that slot only. Host round trip -> must be called from eager (non-traced) code, which all
         conv_states writers are; the decode path itself then never needs to rebuild (reads inside a trace capture fault).
+        rows (slot repack only): the slot's 4 x n_dev float rows already on host (write_slot's hist_rows) instead of
+        reading them back from conv_states.
         """
         if not self._decode_fused_conv or self.conv_states is None:
             self._hist_packed_valid = False
@@ -1965,14 +1973,15 @@ class TPGatedDeltaNet:
             self._hist_packed_valid = False
             self._ensure_conv_hist_packed()
             return
-        rows = []
-        for c in self.conv_states:
-            # read back only the slot's row (device slice), not the whole [1, Bmax, C] tap: 4 x 20 KiB instead of
-            # 4 x 640 KiB per layer at Bmax = 32 (48 layers -> this is the per-admission hand-off cost)
-            sl = self._slice_along(c, 1, slot, slot + 1) if c.shape[1] > 1 else c
-            rows.append([ttnn.to_torch(d).reshape(-1, d.shape[-1])[0].float() for d in ttnn.get_device_tensors(sl)])
-            if sl is not c:
-                ttnn.deallocate(sl)
+        if rows is None:
+            rows = []
+            for c in self.conv_states:
+                # read back only the slot's row (device slice), not the whole [1, Bmax, C] tap: 4 x 20 KiB instead of
+                # 4 x 640 KiB per layer at Bmax = 32 (48 layers -> this is the per-admission hand-off cost)
+                sl = self._slice_along(c, 1, slot, slot + 1) if c.shape[1] > 1 else c
+                rows.append([ttnn.to_torch(d).reshape(-1, d.shape[-1])[0].float() for d in ttnn.get_device_tensors(sl)])
+                if sl is not c:
+                    ttnn.deallocate(sl)
         packed_slot = self._packed_slot_tensor(rows, slot)
         self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
         ttnn.deallocate(packed_slot)
