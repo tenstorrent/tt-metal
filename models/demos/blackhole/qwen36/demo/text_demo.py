@@ -33,20 +33,15 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, run_for_blackhole, run_for_wormhole_b0_or_blackhole
+from models.demos.blackhole.qwen36.tests.test_factory import MESH_SHAPES
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-# N150x4 is the Wormhole mesh, and it is supported for the Qwen3.6-35B-A3B (MoE) checkpoint ONLY
-# — see `_skip_unsupported_on_wormhole`. Every other entry is the pre-existing Blackhole set.
-_MESH_SHAPE = {
-    "P150": (1, 1),
-    "P150x4": (1, 4),
-    "P150x8": (1, 8),
-    "N150x4": (1, 4),
-}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+# Single MESH_DEVICE -> shape table, so a new device only needs adding in one place.
+_MESH_SHAPE = MESH_SHAPES.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
@@ -226,14 +221,7 @@ def _skip_unsupported_on_wormhole(seqlen, batch):
     if is_blackhole():
         return
     hf_model = os.environ.get("HF_MODEL", "")
-    config_path = os.path.join(hf_model, "config.json")
-    if os.path.isfile(config_path):
-        with open(config_path) as f:
-            cfg = json.load(f)
-        is_moe = bool((cfg.get("text_config") or cfg).get("num_experts"))
-    else:
-        is_moe = "A3B" in hf_model  # hub id, not yet snapshot_download'd
-    if not is_moe:
+    if "A3B" not in hf_model:
         pytest.skip(f"Wormhole supports only the Qwen3.6-35B-A3B (MoE) checkpoint here; HF_MODEL={hf_model!r}")
     if batch > 1 and batch * seqlen > _WH_MAX_BATCHED_KV_TOKENS:
         pytest.skip(

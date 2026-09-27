@@ -18,10 +18,13 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 # expansion runs there so repeat_interleave hits its TILE-native kernel. Blackhole dispatches to
 # the shared upstream function unchanged. See recurrent_decode_wh.py.
 from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import (
-    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,
+    recurrent_gated_delta_rule_decode_wh,
+    wh_decode_fork_applies,
 )
-from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import wh_decode_fork_applies
 from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    recurrent_gated_delta_rule_decode_ttnn as _recurrent_decode_upstream,
+)
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
@@ -755,8 +758,12 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles only applies to the fused op; the seq adapter has no such param.
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        # const_tiles only applies to the fused op; out_dtype only to the seq adapter.
+        _extra = (
+            {"const_tiles": self._fused_const_tiles}
+            if _use_fused
+            else {"out_dtype": tpc.chunk_seq_out_dtype(self.mesh)}
+        )
         o, final_state = _delta_fn(
             q,
             k,
@@ -1180,7 +1187,12 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        # const_tiles only applies to the fused op; out_dtype only to the seq adapter.
+        _extra = (
+            {"const_tiles": self._fused_const_tiles}
+            if _use_fused
+            else {"out_dtype": tpc.chunk_seq_out_dtype(self.mesh)}
+        )
         o, final_state = _delta_fn(
             q,
             k,
@@ -1333,11 +1345,8 @@ class TPGatedDeltaNet:
         # which hard-requires DRAM, and unlike the residual→DistributedNorm all-gather).
         # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
         _hp = os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"
-        # q and k are ADJACENT in the conv output and the same width, so when the recurrence will
-        # take the Wormhole fork, hand them over as ONE tensor and let it run the norm, transpose
-        # and GQA expansion once instead of twice. Gated on the SAME predicate the dispatch uses --
-        # the upstream fallback takes q/k separately and applies its own q scale, so it must get
-        # the unfused pair and the uncompensated epsilon below.
+        # q/k are adjacent and same-width, so hand them over fused. This predicate also picks the
+        # decode implementation below, so the two can never disagree; it is False on Blackhole.
         _fuse_qk = wh_decode_fork_applies(B, Nk, Dk, Dv, gqa_repeat=Nv // Nk, high_precision=_hp)
         q = k = qk = None
         if _fuse_qk:
@@ -1372,22 +1381,42 @@ class TPGatedDeltaNet:
         g = ttnn.reshape(g, (B, 1, Nv))
 
         init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
-        o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
-            q,
-            k,
-            v,
-            beta,
-            g,
-            scale=self.scale,
-            initial_state=init_state,
-            device=self.mesh,
-            high_precision=_hp,
-            gqa_repeat=rf,
-            q_norm_weight=tw["qn_w"],
-            k_norm_weight=tw["kn_w"],
-            qk_fused=qk,
-            v_rowed=_fuse_qk,
-        )
+        if _fuse_qk:
+            o, new_rec = recurrent_gated_delta_rule_decode_wh(
+                None,
+                None,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=init_state,
+                device=self.mesh,
+                high_precision=_hp,
+                gqa_repeat=rf,
+                q_norm_weight=tw.get("qn_w"),
+                k_norm_weight=tw.get("kn_w"),
+                qk_fused=qk,
+                v_rowed=True,
+            )
+        else:
+            # Upstream has no GQA step and folds scale/norm itself, so expand here and pass neither.
+            # The Blackhole prep above already expanded q/k, so this only runs on the Wormhole leg
+            # whose shape is over the fork's L1 budget.
+            if not bh and rf > 1:
+                # repeat_interleave is TILE-native only at dim < rank-2, hence the reshape either side.
+                q = ttnn.reshape(ttnn.repeat_interleave(ttnn.reshape(q, (B, Nk, Dk)), rf, dim=1), (B, 1, Nv, Dk))
+                k = ttnn.reshape(ttnn.repeat_interleave(ttnn.reshape(k, (B, Nk, Dk)), rf, dim=1), (B, 1, Nv, Dk))
+            o, new_rec = _recurrent_decode_upstream(
+                q,
+                k,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=init_state,
+                device=self.mesh,
+                high_precision=_hp,
+            )
         if init_state is not self.rec_state:
             ttnn.deallocate(init_state)
         if self._stable_state:

@@ -462,6 +462,7 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     cache[key][1] = idx ^ 1
     return pair[idx]
 
+
 def agmm_grid(mesh_device, cluster_axis=1):
     """(grid, num_links, num_workers_per_link) for the fused all-gather+matmul prefill ops.
 
@@ -661,6 +662,22 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
         )
         cache[key] = (mk(N), mk(N // nd))
     return cache[key]
+
+
+def chunk_seq_out_dtype(mesh_device):
+    """dtype for the shared chunk-seq kernel's output relayout; None keeps upstream's fp32.
+
+    Upstream relayouts that output as an L1-resident [BH,L,V] tensor. At fp32 it does not fit
+    Wormhole's smaller L1 and dies with "Out of Memory", so N150/N300 ask for bf16 (which costs
+    nothing measurable: logit PCC 0.9998-1.0000). Blackhole absorbs the fp32, and an 8-device T3K
+    holds few enough heads per chip that it fits there too -- both keep the default. N150 KEEPS the
+    fix: at TP=1 it holds the full head count on one chip, twice N300's per-chip size.
+    """
+    if is_blackhole():
+        return None
+    if mesh_device is not None and mesh_device.get_num_devices() == 8:
+        return None
+    return ttnn.bfloat16
 
 
 def mmrs_prefill_supported():
