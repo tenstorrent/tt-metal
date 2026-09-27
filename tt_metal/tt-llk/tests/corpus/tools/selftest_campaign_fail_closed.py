@@ -81,11 +81,22 @@ def test_partial_tolerance_coverage_refuses() -> None:
         )
 
 
-def _write_slice(root: Path, chip: int, op: str, verdict: str, numeric=True) -> None:
+def _write_slice(
+    root: Path,
+    chip: int,
+    op: str,
+    verdict: str,
+    numeric=True,
+    start: int | None = None,
+    total: int = 5,
+) -> None:
     out = root / f"slice-{chip}"
     out.mkdir(exist_ok=True)
+    if start is None:
+        start = chip * total
     (out / f"{op}-VERDICT.txt").write_text(
-        f"OP={op} VERDICT={verdict} covered=5 witness_bands=[]\n"
+        f"OP={op} VERDICT={verdict} start={start} total={total} "
+        f"covered={total} witness_bands=[]\n"
     )
     if numeric:
         (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
@@ -104,9 +115,9 @@ def test_galaxy_combiner_refuses_nonpass() -> None:
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
         assert not passed and "numeric_gate=FAIL" in summary
         _write = out / "slice-1/op-CORRECTNESS-VERDICT.txt"
-        _write.write_text("NUMERIC_GATE=PASS\n")
+        _write.write_text("OP=op NUMERIC_GATE=PASS\n")
         (out / "slice-1/op-VERDICT.txt").write_text(
-            "OP=op VERDICT=DIVERGENT covered=5 witness_bands=[1]\n"
+            "OP=op VERDICT=DIVERGENT start=5 total=5 covered=5 witness_bands=[1]\n"
         )
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
         assert not passed and "VERDICT=DIVERGENT" in summary
@@ -114,17 +125,39 @@ def test_galaxy_combiner_refuses_nonpass() -> None:
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, True)
         assert not passed and "VERDICT=INCOMPLETE" in summary
 
-        # Total coverage alone is insufficient: duplicated/overlapping slice
-        # claims must not add up to a false full-space verdict.
-        _write_slice(out, 1, "op", "BIT-EXACT-ALL-INPUTS")
-        (out / "slice-0/op-VERDICT.txt").write_text(
-            "OP=op VERDICT=BIT-EXACT-ALL-INPUTS covered=4 witness_bands=[]\n"
-        )
+        # Pre-range legacy verdicts are not resumable campaign evidence.
         (out / "slice-1/op-VERDICT.txt").write_text(
-            "OP=op VERDICT=BIT-EXACT-ALL-INPUTS covered=6 witness_bands=[]\n"
+            "OP=op VERDICT=BIT-EXACT-ALL-INPUTS covered=5 witness_bands=[]\n"
         )
         summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
         assert not passed and "VERDICT=INCOMPLETE" in summary
+
+        # Equal-sized duplicate ranges have the right total count but overlap;
+        # exact start/total checking must refuse them.
+        _write_slice(out, 0, "op", "BIT-EXACT-ALL-INPUTS", start=0)
+        _write_slice(out, 1, "op", "BIT-EXACT-ALL-INPUTS", start=0)
+        summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
+        assert not passed and "VERDICT=INCOMPLETE" in summary
+
+        # A verdict file whose payload names another operation is not evidence
+        # for the requested op, even when its filename and ranges look right.
+        (out / "slice-1/op-VERDICT.txt").write_text(
+            "OP=other VERDICT=BIT-EXACT-ALL-INPUTS start=5 total=5 "
+            "covered=5 witness_bands=[]\n"
+        )
+        summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
+        assert not passed and "VERDICT=INCOMPLETE" in summary
+
+        # Token parsing is exact: PASSIVE must not satisfy NUMERIC_GATE=PASS.
+        _write_slice(out, 1, "op", "BIT-EXACT-ALL-INPUTS")
+        (out / "slice-1/op-CORRECTNESS-VERDICT.txt").write_text(
+            "OP=op NUMERIC_GATE=PASSIVE\n"
+        )
+        summary, passed = galaxy_combine.combine(out, 2, 10, "op", True, False)
+        assert not passed and "numeric_gate=FAIL" in summary
+
+        summary, passed = galaxy_combine.combine(out, 2, 10, "op", False, False)
+        assert passed and "numeric_gate=NOT_REQUESTED" in summary
 
 
 def test_identity_refusal_exits_nonzero() -> None:

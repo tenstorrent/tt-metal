@@ -268,7 +268,8 @@ def main():
         raise RuntimeError(f"coverage gap: {covered} != {args.total}")
     verdict = "BIT-EXACT-ALL-INPUTS" if all_equal else "DIVERGENT"
     summary = (
-        f"OP={args.op} VERDICT={verdict} bands={n_bands} covered={covered} "
+        f"OP={args.op} VERDICT={verdict} start={args.start_bit} "
+        f"total={args.total} bands={n_bands} covered={covered} "
         f"(full 2^32={covered==TWO32}) wall_s={wall:.1f} witness_bands={witness_bands}"
     )
     print(summary, flush=True)
