@@ -31,11 +31,11 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
-// One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
-// SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
+// One token's row of the embedding as combine moves it: bfloat16, whatever the dispatched buffer holds. Off
+// the SHAPE, not the page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not; and
+// a bfloat8_b TILE buffer is dequantised by the untilizers, so only its tiles are in its own format.
 inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
-           tensor_args.dispatched_buffer.element_size();
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) * sizeof(uint16_t);
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
@@ -48,10 +48,15 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
            tensor_args.dispatched_buffer.tensor_spec().tile().get_width();
 }
 
+// One tile of the dispatched buffer, in its own format: its page, which a bfloat8_b tile's shared exponents
+// make more than one byte per element.
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
-           tensor_args.dispatched_buffer.element_size();
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
 }
+
+// The page of the untilizers' one-word batch count, which the compute kernel reads as a UInt32 tile: a
+// bfloat16 tile's worth, independent of the dispatched buffer's format.
+constexpr uint32_t BATCH_COUNT_PAGE_BYTES = 32 * 32 * sizeof(uint16_t);
 
 // Tiles the untilize takes per pack call, and so the width of the input window: as wide as it can be, and a
 // divisor of the row so the blocks tile it exactly. Eight is what llk_pack_untilize asserts as its ceiling
