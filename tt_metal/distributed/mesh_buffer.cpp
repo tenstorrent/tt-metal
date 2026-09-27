@@ -398,7 +398,12 @@ void MeshBuffer::deallocate() {
     }
 
     auto mesh_device = mesh_device_.lock();
-    if (mesh_device) {
+    // A MeshBuffer can outlive its MeshDevice's underlying MetalEnv/MetalContext: closing the mesh device
+    // and calling tt::tt_metal::detail::ReleaseOwnership() does not by itself destroy MeshBuffer/MeshDevice
+    // objects still held by a caller (e.g. a Python reference cycle collected after teardown). In that case
+    // mesh_device->impl().is_initialized() is false, and metal_env() below would dereference a dangling
+    // MetalEnvImpl*. Mirror the device_->is_initialized() guard in Buffer::deallocate_impl().
+    if (mesh_device && mesh_device->impl().is_initialized()) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
@@ -433,7 +438,8 @@ void MeshBuffer::deallocate() {
         return;
     }
 
-    // Special handling is required if MeshDevice is already deallocated
+    // Special handling is required if MeshDevice is already deallocated, or is still alive but no longer
+    // initialized (closed and its MetalEnv/MetalContext released).
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
