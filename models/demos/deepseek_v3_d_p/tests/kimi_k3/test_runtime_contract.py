@@ -19,8 +19,8 @@ signatures. No mesh, no weights, no checkpoint.
 
 from __future__ import annotations
 
+import ast
 import inspect
-import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, create_autospec
@@ -37,14 +37,23 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transfor
 _RUNTIME_SRC = Path(__file__).parents[2] / "tt" / "tt_prefill_runtime.py"
 
 
+def _call_site(callee: str) -> ast.Call:
+    """The one call to `callee` in `TtPrefillRuntime`, read off the source."""
+    tree = ast.parse(_RUNTIME_SRC.read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and ast.unparse(node.func) == callee]
+    assert (
+        len(calls) == 1
+    ), f"expected one {callee} call site, found {len(calls)}; the test needs updating, not deleting"
+    call = calls[0]
+    assert not any(isinstance(arg, ast.Starred) for arg in call.args) and all(
+        kw.arg for kw in call.keywords
+    ), f"{callee} is called with */** expansion, which this test cannot bind; the test needs updating"
+    return call
+
+
 def _model_cls_kwargs() -> list[str]:
-    """The keywords `_build_model` passes to `MODEL_CLS`, read off the call site."""
-    src = _RUNTIME_SRC.read_text(encoding="utf-8")
-    start = src.index("self.MODEL_CLS(")
-    call = src[start : src.index("\n        )\n", start)]
-    names = re.findall(r"^\s{12}(\w+)=", call, re.M)
-    assert names, "could not parse the MODEL_CLS call site; the test needs updating, not deleting"
-    return names
+    """The keywords `_build_model` passes to `MODEL_CLS`."""
+    return [kw.arg for kw in _call_site("self.MODEL_CLS").keywords]
 
 
 def test_every_runtime_kwarg_binds_to_the_transformer_or_the_block():
@@ -60,6 +69,27 @@ def test_every_runtime_kwarg_binds_to_the_transformer_or_the_block():
         f"on the first layer. Name them in TtKimiK3Transformer.__init__ (rejecting the values "
         f"Kimi-K3 cannot honour) rather than widening TtKimiK3Block."
     )
+
+
+def test_the_cache_check_call_binds_to_the_transformer():
+    """`check_cache_complete` runs before the model is built, so a kwarg it rejects fails every runner."""
+    call = _call_site("self.MODEL_CLS.check_cache_complete")
+    inspect.signature(TtKimiK3Transformer.check_cache_complete).bind(
+        *[None] * len(call.args), **{kw.arg: None for kw in call.keywords}
+    )
+
+
+def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    runtime = object.__new__(TtKimiK3Runtime)
+    runtime.config = SimpleNamespace(mtp_levels=2)
+    parent_build = create_autospec(TtPrefillRuntime._build_model)
+    monkeypatch.setattr(TtPrefillRuntime, "_build_model", parent_build)
+    with expect_error(ValueError, "no MTP predictor"):
+        runtime._build_model({})
+    parent_build.assert_not_called()
 
 
 def test_the_block_kwargs_that_are_swept_through_are_genuinely_block_level():

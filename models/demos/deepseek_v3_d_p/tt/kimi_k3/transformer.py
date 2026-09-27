@@ -53,6 +53,7 @@ class TtKimiK3Transformer(LightweightModule):
         kv_only_last_layer: bool = False,
         model_cfg: type | None = None,
         routed_expert_weights_dtype=None,
+        mtp_levels: int = 0,  # TtKimiK3Runtime rejects nonzero before this runs
     ) -> bool:
         """Whether this rank's whole slice is on disk, in the signature the runtime calls.
 
@@ -105,9 +106,12 @@ class TtKimiK3Transformer(LightweightModule):
         # left to `**block_kwargs`, which would forward them to `TtKimiK3Block` and raise.
         padding_side: str = "right",
         sparse_kv_cache_format=None,
+        mtp_predictor=None,
         **block_kwargs,
     ):
         super().__init__()
+        if mtp_predictor is not None:
+            raise ValueError("Kimi-K3 has no MTP predictor; got a non-None mtp_predictor")
         # Kimi-K3's MLA cache is dense: `zero_padded_kv_cache` asserts TILE layout, which a sparse
         # kvpe cache (bf16/fp8 ROW_MAJOR, read natively by sparse_sdpa) does not satisfy. Accepting a
         # sparse format silently would produce a cache the pad-zero path cannot touch, so refuse it.
