@@ -384,6 +384,7 @@
       "optimized_full_model/final_perf_findings.md"
     ],
     "inherited_full_model_max_context_evidence": "full_model/capacity.json",
-    "review": "optimized_full_model/stage_review.md"
+    "review": "optimized_full_model/stage_review.md",
+    "implementation_commit": "9473a2e1b18be1dc9e5fe0add73a0f62ffcc115f"
   }
 }

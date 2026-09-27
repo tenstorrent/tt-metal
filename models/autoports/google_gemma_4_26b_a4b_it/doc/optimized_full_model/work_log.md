@@ -168,3 +168,8 @@ no remote push.
 Commit preparation also normalized CSV CRLF to LF (values unchanged). The first
 commit attempt found no configured Git identity; reuse the established local
 checkpoint identity without changing global Git configuration.
+
+Stage-owned implementation/evidence checkpoint: tt-metal, branch
+`gemma-4-26b-a4b-it`, commit `9473a2e1b18be1dc9e5fe0add73a0f62ffcc115f`.
+Commit hooks all pass. No push performed. This following documentation-only
+checkpoint records the implementation SHA; telemetry records both checkpoints.
