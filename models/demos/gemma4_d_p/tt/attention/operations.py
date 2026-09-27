@@ -18,7 +18,7 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.matmul_config import prefill_matmul_program_config
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
 
 from .weights import AttentionWeights
 
@@ -41,7 +41,9 @@ def projection_matmul_configs(hidden_states, weight):
     """
     device = hidden_states.device()
     grid = device.compute_with_storage_grid_size()
-    program_config = prefill_matmul_program_config(hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True)
+    program_config = prefill_1d_matmul_program_config(hidden_states, weight, grid) or prefill_matmul_program_config(
+        hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True
+    )
     if program_config is None:
         return None, None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
