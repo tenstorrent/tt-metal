@@ -129,6 +129,7 @@ footer{color:var(--muted);font-size:12px}
 .opchain .ob i{display:block;height:100%;border-radius:4px}
 .opchain .om{font:12px var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .opchain .om small{display:block;color:var(--muted);font-size:11px}
+.opchain .ot{grid-column:2/-1;font:11.5px/1.3 var(--f-mono);color:var(--muted);margin-top:-2px}
 @media (max-width:640px){.opchain li{grid-template-columns:26px minmax(0,1fr) 70px}.opchain .ob{grid-column:2/4}}
 .pgrp{font:500 11px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:10px 8px 4px}
 .pstep{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;cursor:pointer;color:var(--ink);font:inherit;font-size:13px}
@@ -230,6 +231,7 @@ footer{color:var(--muted);font-size:12px}
   <section aria-labelledby="s-prof" id="prof-sec">
     <div class="sec-head"><h2 id="s-prof"></h2><span class="tl-total" id="p-total"></span></div>
     <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
+    <p class="sub" id="p-tl" style="margin:6px 0 0;font-size:13px" hidden></p>
     <div class="ptabs" id="p-tabs" role="tablist" aria-label="Layers shown"></div>
     <div class="pbar" id="p-bar"></div>
     <div class="pparts" id="p-parts"></div>
@@ -531,6 +533,9 @@ function profile(){
   if (!P){ secEl.hidden = true; return; }
   $("#s-prof").textContent = P.heading;
   const V = P.views && P.views.length ? P.views : [{id:"all", label:"All layers", n:1, steps:P.steps}];
+  const TL = P.timeline, tlEl = $("#p-tl");
+  if (TL && !TL.error){ tlEl.hidden = false;
+    tlEl.textContent = `Pipelined run (no syncs): the device timeline of chip ${TL.critical_chip} is ${TL.device_timeline_ms.toFixed(1)} ms = kernels ${TL.kernel_ms.toFixed(1)} ms + idle gaps ${TL.gap_ms.toFixed(1)} ms between ops. Host dispatch of the ${TL.calls} ttnn calls takes ${TL.host_dispatch_ms.toFixed(1)} ms in total and ${TL.gap_ms < 0.02 * TL.device_timeline_ms ? "is hidden behind device work: this chunk is device-bound" : "shows up as device idle time"}; host wall ${TL.host_wall_ms.toFixed(1)} ms.`; }
   const tabs = $("#p-tabs");
   tabs.hidden = V.length < 2;
   let vi = 0;
@@ -608,17 +613,21 @@ function profile(){
     $("#pd-cap").textContent = `What each chip holds during this phase, and its measured device time ${v.id === "all" ? "summed over the profiled layers" : v.n > 1 ? "per layer" : "in this layer"}. ${msg.charAt(0).toUpperCase() + msg.slice(1)}.`;
     opsList(s);
   }
+  function fmu(ms){ return ms >= 1 ? `${ms.toFixed(2)} ms` : `${(ms * 1e3).toFixed(ms * 1e3 >= 10 ? 0 : 1)} µs`; }
   function opsList(s){
     const O = s.ops || [], wrap = $("#pd-ops-wrap");
     wrap.hidden = !O.length;
     if (!O.length) return;
     const mx = Math.max(...O.map(o => o.ms), 1e-9), sum = O.reduce((a, o) => a + o.ms, 0);
-    $("#pd-ops-note").textContent = `${O.length} distinct call${O.length > 1 ? "s" : ""} · ${sum.toFixed(sum >= 10 ? 1 : 2)} ms · shapes are per chip` + (v.id === "all" ? " · summed over layers" : v.n > 1 ? " · per layer" : "");
+    const hasTL = O.some(o => o.gap_ms != null), sg = O.reduce((a, o) => a + (o.gap_ms || 0), 0), sh = O.reduce((a, o) => a + (o.host_ms || 0), 0);
+    $("#pd-ops-note").textContent = `${O.length} distinct call${O.length > 1 ? "s" : ""} · device ${sum.toFixed(sum >= 10 ? 1 : 2)} ms` +
+      (hasTL ? ` · idle gaps ${fmu(sg)} · host dispatch ${fmu(sh)}` : "") + ` · shapes are per chip` + (v.id === "all" ? " · summed over layers" : v.n > 1 ? " · per layer" : "");
     const fm = x => x >= 10 ? x.toFixed(1) : x >= 0.1 ? x.toFixed(2) : x.toFixed(3);
     $("#pd-ops").innerHTML = O.map((o, i) => { const c = o.calls, cs = Math.abs(c - 1) > 1e-6 ? ` ×${Number.isInteger(c) ? c : c.toFixed(1)}` : "";
       return `<li><span class="oi">${i + 1}</span><span><span class="on">ttnn.${esc(o.op)}${cs}</span><span class="os">${esc(o.shape || "—")}</span></span>` +
         `<span class="ob" title="${fm(o.ms)} ms"><i style="width:${(100 * o.ms / mx).toFixed(1)}%;background:var(--b-${s.bound})"></i></span>` +
-        `<span class="om">${fm(o.ms)} ms<small>${(100 * o.ms / (sum || 1)).toFixed(0)}%</small></span></li>`; }).join("");
+        `<span class="om">${fm(o.ms)} ms<small>${(100 * o.ms / (sum || 1)).toFixed(0)}%</small></span>` +
+        (o.gap_ms != null ? `<span class="ot">device idle before it ${fmu(o.gap_ms)} · host dispatch ${fmu(o.host_ms)}</span>` : "") + `</li>`; }).join("");
   }
   bar.querySelectorAll(".pseg").forEach(b => b.addEventListener("click", () => select(S.findIndex(s => s.key === b.dataset.k))));
   $("#p-steps").querySelectorAll(".pstep").forEach(b => b.addEventListener("click", () => select(+b.dataset.i)));
