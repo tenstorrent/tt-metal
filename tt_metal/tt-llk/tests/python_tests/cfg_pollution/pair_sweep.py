@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Pair-trial phase for the weekly config-pollution CI job.
+
+Consumes the manifest from discover_catalog.py (or snapshot_build.py -- same shape) and sweeps
+every (X, K) ordered pair in the catalog, checking whether K still passes after X's residue.
+Two modes, chosen per X:
+
+  restore  (X passed its self-consistency gate): replay X's captured post-execution CFG
+           snapshot in-kernel immediately before K's launch. No card reset between trials.
+  fullreset (X failed the gate): fall back to the historical ground-truth recipe
+           (tt-smi -r -> real X -> real K, no reset in between) for every pair in that row.
+
+The restore-mode phase is parallelized across pytest-xdist, one round PER POLLUTER (not per
+pair, and not per victim): compile every victim once (--compile-producer), then for each
+polluter X run one `--compile-consumer -n jobs` round with every other victim K as a separate
+item, each pinned to X's restore plan via xdist_plan_plugin.py. That turns what would be N**2
+serial trials into N rounds of up to N-1 parallel trials -- an empirical catalog is 2-7x the
+size of the old hand-curated ~50-op set (which made a fully serial N**2 sweep tolerable), so
+serial pair-by-pair execution no longer fits a weekly CI budget. A small number of launches per worker needs no reset (validated in Phase A at small scale, and
+confirmed again as an isolated 12-launch chain, twice), which is what makes cross-core parallelism
+safe within a small batch. That validation does NOT extend to an arbitrarily large batch or round:
+a physical core accumulates real, persistent hardware state across every no-reset launch regardless
+of which op runs, and past some point -- empirically observed between roughly 12 (clean) and 130-190
+(reliably broken), and NOT simply a fixed launches-since-reset count (composition-dependent: one
+190-launch chain broke at launch 129, an otherwise-similar chain stayed clean through launch 85) --
+every subsequent launch on that core starts failing. Confirmed to survive a fresh pytest subprocess
+restart (so it isn't a host-side leak), but cleared by a real reset; `tt-smi -r` resets the whole
+chip, not one core, so it can only be inserted at a round/batch boundary where every worker is
+synced, never mid-batch. Each polluter's victims are therefore split into small sub-batches (sized
+to keep launches-per-worker safely under the lowest confirmed-clean figure), with a `reset()` before
+every sub-batch rather than once per (potentially much larger) round.
+
+A pair is an escape when K's baseline is PASS but K after X is FAIL or HANG. A K-side flake
+(K itself sometimes flaky at baseline) is out of scope here: only PASS-baseline ops are used
+as victims at all, so any post-X divergence is attributable to X, not to K's own instability.
+
+Restore mode replants a *captured snapshot* of X's residue rather than running X for real, so a
+restore-mode escape can be a snapshot/replant-fidelity artifact of the harness rather than a real
+hardware effect (confirmed on real escapes: ~half of a full-sweep's candidates were this kind of
+noise). Every restore-mode escape is therefore re-checked with a plain-pytest ground-truth
+reproduction before it is reported: reset, then one serial (`-n`-less, single-core) pytest
+invocation running X's real test then K's real test back to back, no restore machinery, no
+plan-map. Only escapes that reproduce this way are reported; unverified candidates are still
+written to the JSONL (with `verified: false`) so nothing is silently dropped, but they are
+excluded from the final escape count/summary. Fallback-mode escapes already ran real X then real
+K with no reset in between (see the fallback phase below), so they're ground truth already and
+skip re-verification. This still isn't an absolute guarantee -- a single hardware run can still be
+flaky -- but it is far stronger evidence than an unverified restore-mode hit.
+
+Usage:
+  python3 pair_sweep.py --worktree DIR --arch blackhole --manifest /path/to/manifest.json \
+      --out /path/to/findings.jsonl [--self-pairs] [--jobs 8] [--timeout 90] [--port 5556]
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+
+PASS, FAIL, HANG, ENVERR = "PASS", "FAIL", "HANG", "ENVERR"
+_CODE = {0: PASS, 1: FAIL, 5: HANG}
+
+
+def reset():
+    subprocess.run(["tt-smi", "-r"], capture_output=True, text=True)
+
+
+def pytest_env(worktree):
+    env = dict(os.environ)
+    cfg_pollution_dir = os.path.join(worktree, "tests", "python_tests", "cfg_pollution")
+    env["PYTHONPATH"] = cfg_pollution_dir + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+def _run_test_sh(
+    worktree, mode, test_file, test_id, arch, port, timeout, env_extra=None
+):
+    cmd = [
+        "bash",
+        os.path.join(worktree, ".claude/scripts/run_test.sh"),
+        mode,
+        "--worktree",
+        worktree,
+        "--arch",
+        arch,
+        "--test",
+        test_file,
+        "--test-id",
+        test_id,
+        "--maxfail",
+        "1",
+        "--port",
+        str(port),
+        "--timeout",
+        str(timeout),
+    ]
+    env = {**os.environ, **(env_extra or {})}
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    return proc
+
+
+def simulate(worktree, arch, test_file, test_id, port, timeout, env_extra=None):
+    proc = _run_test_sh(
+        worktree, "simulate", test_file, test_id, arch, port, timeout, env_extra
+    )
+    if "does not exist" in (proc.stdout + proc.stderr):
+        return ENVERR
+    return _CODE.get(proc.returncode, ENVERR)
+
+
+def compile_all(worktree, arch, nodeids, jobs, timeout):
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--compile-producer",
+        "-n",
+        str(jobs),
+        f"--timeout={timeout}",
+    ] + nodeids
+    return subprocess.run(
+        cmd,
+        cwd=os.path.join(worktree, "tests", "python_tests"),
+        env={**pytest_env(worktree), "CHIP_ARCH": arch},
+        capture_output=True,
+        text=True,
+    )
+
+
+def run_round(worktree, arch, nodeids, plan_map_path, jobs, timeout, junit_path):
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--compile-consumer",
+        "-n",
+        str(jobs),
+        "-p",
+        "xdist_plan_plugin",
+        f"--llk-plan-map={plan_map_path}",
+        f"--timeout={timeout}",
+        f"--junitxml={junit_path}",
+    ] + nodeids
+    return subprocess.run(
+        cmd,
+        cwd=os.path.join(worktree, "tests", "python_tests"),
+        env={**pytest_env(worktree), "CHIP_ARCH": arch},
+        capture_output=True,
+        text=True,
+    )
+
+
+def parse_junit(junit_path):
+    tree = ET.parse(junit_path)
+    results = {}
+    for case in tree.getroot().iter("testcase"):
+        nodeid = f"{case.get('classname')}.py::{case.get('name')}"
+        failed = case.find("failure") is not None or case.find("error") is not None
+        results[nodeid] = FAIL if failed else PASS
+    return results
+
+
+def verify_ground_truth(
+    worktree, arch, polluter_nodeid, victim_nodeid, timeout, junit_path
+):
+    """Reset, then run the real polluter then the real victim in ONE serial pytest invocation
+    (no -n, so both pin to the same physical core as pytest-xdist's own "master" worker) with no
+    restore/plan-map machinery at all. Returns the victim's own verdict from that real run.
+    """
+    reset()
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--compile-consumer",
+        f"--timeout={timeout}",
+        f"--junitxml={junit_path}",
+        polluter_nodeid,
+        victim_nodeid,
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=os.path.join(worktree, "tests", "python_tests"),
+        env={**pytest_env(worktree), "CHIP_ARCH": arch},
+        capture_output=True,
+        text=True,
+    )
+    if not os.path.exists(junit_path):
+        return ENVERR, proc
+    return parse_junit(junit_path).get(victim_nodeid, ENVERR), proc
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--arch", required=True, choices=["blackhole", "wormhole"])
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--out", required=True, help="JSONL: every trial result")
+    p.add_argument("--self-pairs", action="store_true")
+    p.add_argument(
+        "--jobs",
+        type=int,
+        default=8,
+        help="xdist worker count for each restore-mode round -- one physical Tensix "
+        "core per worker, matching discover_catalog.py's own -n 8",
+    )
+    p.add_argument("--port", type=int, default=5556)
+    p.add_argument("--timeout", type=int, default=90)
+    p.add_argument(
+        "--skip-compile",
+        action="store_true",
+        help="every victim is already compiled (e.g. discover_catalog.py just "
+        "compiled this same manifest's candidates in the same invocation) -- "
+        "skip the redundant producer recompile",
+    )
+    p.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="report every restore-mode escape as-is, without the plain-pytest "
+        "ground-truth re-check. Useful for debugging the restore mechanism "
+        "itself; the default (verify) is what CI should use.",
+    )
+    args = p.parse_args()
+
+    with open(args.manifest) as f:
+        manifest = json.load(f)
+    ops = manifest["ops"]
+    victims = [o for o in ops if o.get("baseline") == PASS]
+    restore_x = [o for o in victims if o.get("usable")]
+    fallback_x = [o for o in victims if not o.get("usable")]
+    nodeids = [v["test_id"] for v in victims]
+    nodeid_by_key = {v["key"]: v["test_id"] for v in victims}
+
+    print(
+        f"[pair_sweep] victims={len(victims)} restore-mode polluters={len(restore_x)} "
+        f"fallback polluters={len(fallback_x)}",
+        file=sys.stderr,
+    )
+
+    out_f = open(args.out, "w")
+    escapes = []
+
+    def record(mode, x_key, k_key, verdict, k_baseline, extra=None):
+        rec = {
+            "mode": mode,
+            "polluter": x_key,
+            "victim": k_key,
+            "verdict": verdict,
+            "victim_baseline": k_baseline,
+        }
+        if extra:
+            rec.update(extra)
+        out_f.write(json.dumps(rec) + "\n")
+        out_f.flush()
+        if verdict != k_baseline:
+            escapes.append(rec)
+            print(
+                f"[pair_sweep] ESCAPE {x_key} -> {k_key}: {verdict} (baseline {k_baseline}) [{mode}]",
+                file=sys.stderr,
+            )
+
+    # --- Restore-mode phase: one xdist round PER POLLUTER, every other victim run in that round
+    #     in parallel across -n jobs workers, all pinned to that round's single restore plan. ---
+    if restore_x:
+        tmp_dir = os.path.dirname(os.path.abspath(args.out)) or "."
+        os.makedirs(tmp_dir, exist_ok=True)
+        if args.skip_compile:
+            print(
+                f"[pair_sweep] --skip-compile: assuming all {len(nodeids)} victims are already "
+                f"compiled",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[pair_sweep] compiling {len(nodeids)} victims once (producer, -n {args.jobs})...",
+                file=sys.stderr,
+            )
+            cproc = compile_all(
+                args.worktree, args.arch, nodeids, args.jobs, args.timeout
+            )
+            if cproc.returncode != 0:
+                print(
+                    f"[pair_sweep] WARNING: compile-producer had failures (rc={cproc.returncode}); "
+                    f"affected victims will show up as ENVERR in any round",
+                    file=sys.stderr,
+                )
+
+        # A physical core accumulates real, persistent hardware state across every no-reset kernel
+        # launch it runs, regardless of which op runs or which CFG/ADC/addr-mod residue is in play:
+        # confirmed on hardware two ways -- (1) it survives a fresh pytest subprocess restart, so
+        # it isn't a host-side leak; (2) it does NOT reduce to a fixed launches-since-reset count
+        # (one clean 190-launch chain failed at launch 129, another otherwise-identical chain
+        # stayed clean through launch 85 -- composition-dependent, not purely count-dependent) --
+        # so a single reset per polluter round is not sufficient on its own: one round's own launch
+        # count per worker (up to (len(victims)-1)/jobs) can still land in unsafe territory. The
+        # only figure confirmed clean twice, in isolation, is 12 sequential launches on one core; a
+        # single `tt-smi -r` resets the WHOLE chip, not one core, so this can only be inserted at a
+        # round boundary (all workers synced), never mid-round while other workers are in flight.
+        # Fix: split each polluter's victims into small sub-batches sized to keep launches-per-
+        # worker safely under that floor, with a reset before every sub-batch instead of once per
+        # (potentially much larger) round.
+        SAFE_LAUNCHES_PER_WORKER = 10
+
+        def _chunks(seq, size):
+            for i in range(0, len(seq), size):
+                yield seq[i : i + size]
+
+        for xi, x in enumerate(restore_x):
+            plan_map = {}
+            for k, nodeid in zip(victims, nodeids):
+                if x["key"] == k["key"] and not args.self_pairs:
+                    continue
+                plan_map[nodeid] = {
+                    "restore": x["restore_path"],
+                    "addrmod_restore": x.get("addrmod_restore_path"),
+                }
+            if not plan_map:
+                continue
+            round_nodeids = list(plan_map.keys())
+            batch_size = SAFE_LAUNCHES_PER_WORKER * args.jobs
+            batches = list(_chunks(round_nodeids, batch_size))
+
+            print(
+                f"[pair_sweep] restore-mode round {xi+1}/{len(restore_x)}: polluter {x['key']}, "
+                f"{len(round_nodeids)} victims across -n {args.jobs}, {len(batches)} sub-batch(es) "
+                f"of <={batch_size}...",
+                file=sys.stderr,
+            )
+            results = {}
+            for bi, batch_nodeids in enumerate(batches):
+                batch_plan_map = {n: plan_map[n] for n in batch_nodeids}
+                plan_map_path = os.path.join(
+                    tmp_dir, f"pairsweep_round{xi}_batch{bi}.map.json"
+                )
+                with open(plan_map_path, "w") as f:
+                    json.dump(batch_plan_map, f)
+                junit_path = os.path.join(
+                    tmp_dir, f"pairsweep_round{xi}_batch{bi}.junit.xml"
+                )
+
+                reset()
+                rproc = run_round(
+                    args.worktree,
+                    args.arch,
+                    batch_nodeids,
+                    plan_map_path,
+                    args.jobs,
+                    args.timeout,
+                    junit_path,
+                )
+                if not os.path.exists(junit_path):
+                    print(
+                        f"[pair_sweep] WARNING: sub-batch {bi+1}/{len(batches)} for polluter "
+                        f"{x['key']} produced no junit report; every victim in it recorded as "
+                        f"ENVERR",
+                        file=sys.stderr,
+                    )
+                    print(rproc.stdout[-2000:], file=sys.stderr)
+                    print(rproc.stderr[-2000:], file=sys.stderr)
+                else:
+                    results.update(parse_junit(junit_path))
+
+            for k, nodeid in zip(victims, nodeids):
+                if nodeid not in plan_map:
+                    continue
+                v = results.get(nodeid, ENVERR)
+                record("restore", x["key"], k["key"], v, k["baseline"])
+
+    # --- Fallback phase: full reset per pair, for X's that failed their own restore-gate. ---
+    for x in fallback_x:
+        for k in victims:
+            if x["key"] == k["key"] and not args.self_pairs:
+                continue
+            reset()
+            # Compile both variants together in one producer invocation so neither evicts the
+            # other's ELF (cfg_oppair.py's approach), then run each via simulate.
+            proc = subprocess.run(
+                [
+                    "bash",
+                    os.path.join(args.worktree, ".claude/scripts/run_test.sh"),
+                    "compile",
+                    "--worktree",
+                    args.worktree,
+                    "--arch",
+                    args.arch,
+                    "--test",
+                    x["test_file"],
+                    "--test-id",
+                    x["test_id"],
+                    "--port",
+                    str(args.port),
+                    "--timeout",
+                    str(args.timeout),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                [
+                    "bash",
+                    os.path.join(args.worktree, ".claude/scripts/run_test.sh"),
+                    "compile",
+                    "--worktree",
+                    args.worktree,
+                    "--arch",
+                    args.arch,
+                    "--test",
+                    k["test_file"],
+                    "--test-id",
+                    k["test_id"],
+                    "--port",
+                    str(args.port),
+                    "--timeout",
+                    str(args.timeout),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            vx = simulate(
+                args.worktree,
+                args.arch,
+                x["test_file"],
+                x["test_id"],
+                args.port,
+                args.timeout,
+            )
+            vk = simulate(
+                args.worktree,
+                args.arch,
+                k["test_file"],
+                k["test_id"],
+                args.port,
+                args.timeout,
+            )
+            record(
+                "fullreset",
+                x["key"],
+                k["key"],
+                vk,
+                k["baseline"],
+                extra={"polluter_verdict": vx},
+            )
+
+    out_f.close()
+
+    # --- Verify phase: re-check every restore-mode escape with a plain-pytest ground-truth
+    #     reproduction (reset, real X, real K, same core, no restore machinery) before reporting
+    #     it. Fallback-mode escapes already ran that way, so they're trusted as-is. ---
+    candidates_path = os.path.splitext(args.out)[0] + ".candidates.json"
+    if args.skip_verify:
+        for e in escapes:
+            e["verified"] = None
+    else:
+        verify_dir = os.path.dirname(os.path.abspath(args.out)) or "."
+        to_verify = [e for e in escapes if e["mode"] == "restore"]
+        print(
+            f"[pair_sweep] verifying {len(to_verify)} restore-mode escape(s) with plain "
+            f"pytest (reset, real polluter, real victim, same core, no restore machinery)...",
+            file=sys.stderr,
+        )
+        verified_so_far = 0
+        for i, e in enumerate(escapes):
+            if e["mode"] != "restore":
+                e["verified"] = (
+                    True  # fullreset already ran real X then real K, no reset between
+                )
+                continue
+            verified_so_far += 1
+            px, vk = nodeid_by_key.get(e["polluter"]), nodeid_by_key.get(e["victim"])
+            if not px or not vk:
+                e["verified"] = False
+                e["verify_result"] = ENVERR
+                continue
+            junit_path = os.path.join(verify_dir, f"verify_{i}.junit.xml")
+            result, _ = verify_ground_truth(
+                args.worktree, args.arch, px, vk, args.timeout, junit_path
+            )
+            e["verify_result"] = result
+            e["verified"] = result == FAIL
+            print(
+                f"    [{verified_so_far}/{len(to_verify)}] {e['polluter']} -> {e['victim']}: "
+                f"{'CONFIRMED' if e['verified'] else 'NOT reproduced (noise)'}",
+                file=sys.stderr,
+            )
+
+    with open(candidates_path, "w") as f:
+        json.dump(escapes, f, indent=2)
+
+    verified_escapes = [e for e in escapes if e.get("verified")]
+    print(f"\n========== PAIR SWEEP RESULT ==========", file=sys.stderr)
+    print(f"trials -> {args.out}", file=sys.stderr)
+    print(
+        f"all candidate escapes (verified + not) -> {candidates_path}", file=sys.stderr
+    )
+    if args.skip_verify:
+        print(
+            f"ESCAPES (UNVERIFIED, --skip-verify was passed): {len(escapes)}",
+            file=sys.stderr,
+        )
+        report_escapes = escapes
+    else:
+        noise = len(escapes) - len(verified_escapes)
+        print(
+            f"ESCAPES (verified): {len(verified_escapes)} "
+            f"({noise} candidate(s) did not reproduce and are excluded)",
+            file=sys.stderr,
+        )
+        report_escapes = verified_escapes
+    for e in report_escapes:
+        print(
+            f"  {e['polluter']} -> {e['victim']}: {e['verdict']} (baseline {e['victim_baseline']}) [{e['mode']}]",
+            file=sys.stderr,
+        )
+
+
+if __name__ == "__main__":
+    main()
