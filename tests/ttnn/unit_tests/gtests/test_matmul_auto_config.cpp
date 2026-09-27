@@ -273,6 +273,66 @@ TEST(MatmulAutoConfig, NoBlockFloatPartials) {
     }
 }
 
+// Subblocks at least two tiles on each side, unless B's tiles are smaller than A's
+TEST(MatmulAutoConfig, SubblockShape) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_problem(1, 1, 8192, 8192, 8192);
+    auto chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_GE(std::min(chosen->blocking.out_subblock_h, chosen->blocking.out_subblock_w), 2u);
+    p = make_problem(1, 1, 8192, 8192, 8192, tt::DataFormat::Bfp8_b);  // bf16 A, bfp8 B
+    chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(chosen->blocking.out_subblock_h, 1u);
+    EXPECT_EQ(chosen->blocking.out_subblock_w, 8u);
+}
+
+// 1D in0-mcast splits a wide output block into subblock-wide blocks (not into 1-tile ones)
+TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_problem(1, 1, 32, 2560, 262144);
+    auto chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
+    EXPECT_EQ(chosen->blocking.per_core_N, 128u);
+    EXPECT_EQ(chosen->blocking.out_block_w, 8u);
+    p = make_problem(1, 1, 32, 4544, 11 * 32 * 64);  // per_core_N = 11 has no divisor in 2..8
+    chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
+}
+
+// Large 2D output blocks may use K blocks up to 16 deep; small ones stay at 8
+TEST(MatmulAutoConfig, LargeBlockKDepth) {
+    // Llama-70B TP8 w1 prefill (bf16 x bfp4, LoFi), with the L1 budget the device reported
+    auto p = make_problem(1, 1, 2048, 8192, 3584, tt::DataFormat::Bfp4_b);
+    p.math_fidelity = MathFidelity::LoFi;
+    auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 1377056);
+    auto chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
+    EXPECT_GT(chosen->blocking.out_block_h * chosen->blocking.out_block_w, LARGE_BLOCK_TILES);
+    EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
+    p = make_problem(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);  // 1x4 blocks
+    hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_LE(chosen->blocking.in0_block_w, MAX_IN0_BLOCK_W);
+}
+
+// When keeping the full multicast extent only fits with single-tile K steps, 1D shrinks it instead
+TEST(MatmulAutoConfig, OneDAvoidsSingleTileK) {
+    // 1024x1024x16384 bf16 x bfp8 with an L1 output, at the L1 budget the device reported
+    auto p = make_problem(1, 1, 1024, 1024, 16384, tt::DataFormat::Bfp8_b);
+    p.out.in_l1 = true;
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 820000);
+    const auto chosen = choose_candidate(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
+    EXPECT_GE(chosen->blocking.in0_block_w, 2u);
+    EXPECT_LT(chosen->blocking.out_block_h, chosen->blocking.per_core_M);
+}
+
 Placement sharded(Layout layout, CoreCoord grid, uint32_t shard_h, uint32_t shard_w, bool col_major = false) {
     Placement pl;
     pl.layout = layout;
@@ -368,7 +428,7 @@ TEST(MatmulAutoConfig, ShardedLayouts) {
             EXPECT_EQ(b.in0_block_w, c.p.Kt) << c.name << ": height-sharded A is read in place over all of K";
         }
         if (c.p.out.sharded() && c.family != Family::Reuse) {
-            EXPECT_TRUE(b.out_block_w == b.per_core_N || b.out_block_h == 1) << c.name;
+            EXPECT_EQ(b.out_block_w, b.per_core_N) << c.name << ": sharded output blocks span per_core_N";
             EXPECT_TRUE(b.out_subblock_w == b.per_core_N || b.out_subblock_h == 1) << c.name;
         }
         EXPECT_LE(circular_buffer_bytes(c.p, hw, chosen->family, b), hw.l1_cb_budget) << c.name;

@@ -345,6 +345,55 @@ def get_cases(tiers=None):
     return cases
 
 
+def cases_from_csv(path):
+    """The cases of an earlier run_suite.py results CSV (one per case name), e.g. to rerun its traced tier
+    without the trace JSON."""
+    import ast
+    import csv
+    import re
+
+    def shard(s):
+        if not s:
+            return None
+        grid, shape, orientation = s.split(":")
+        ranges = tuple(tuple(int(x) for x in re.findall(r"\d+", part)) for part in grid.split("+"))
+        h, w = shape.split("x")
+        return (ranges, (int(h), int(w)), orientation)
+
+    cases = {}
+    for r in csv.DictReader(open(path)):
+        if r["case"] in cases:
+            continue
+        cg = r["core_grid"]
+        cases[r["case"]] = Case(
+            name=r["case"],
+            a_shape=tuple(int(x) for x in r["a_shape"].split("x")),
+            b_shape=tuple(int(x) for x in r["b_shape"].split("x")),
+            tier=r["tier"],
+            source=r["source"],
+            a_dtype=r["a_dtype"],
+            b_dtype=r["b_dtype"],
+            out_dtype=r["out_dtype"] or None,
+            a_mem=r["a_mem"],
+            b_mem=r["b_mem"],
+            out_mem=r["out_mem"],
+            a_shard=shard(r.get("a_shard", "")),
+            b_shard=shard(r.get("b_shard", "")),
+            out_shard=shard(r.get("out_shard", "")),
+            transpose_a=r["transpose_a"] == "1",
+            transpose_b=r["transpose_b"] == "1",
+            op=r["op"],
+            bias=r["bias"] == "1",
+            activation=r["activation"] or None,
+            core_grid=None if cg == "" else (cg if cg == "device" else ast.literal_eval(cg)),
+            fidelity=r["fidelity"],
+            fp32_acc=r["fp32_acc"] == "1",
+            packer_l1_acc=r["packer_l1_acc"] == "1",
+            tags=tuple(t for t in r["tags"].split(";") if t),
+        )
+    return list(cases.values())
+
+
 # ---------------------------------------------------------------------------
 # Tier: traced (real-model matmul/linear calls from the model tracer's master JSON)
 # ---------------------------------------------------------------------------

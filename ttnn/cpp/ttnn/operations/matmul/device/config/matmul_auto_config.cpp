@@ -24,9 +24,9 @@ constexpr uint32_t L1_HEADROOM_BYTES = 16 * 1024;
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 uint32_t align_up(uint32_t a, uint32_t alignment) { return div_up(a, alignment) * alignment; }
 
-// Largest in0_block_w (see MAX_IN0_BLOCK_W and MAX_SELF_READ_TILES_PER_K_STEP). With a single K block the
-// mcast factories single-buffer the inputs, so reading the next block can't overlap math on the current one:
-// keep two blocks when K allows it. The reuse factory always double-buffers.
+// Largest in0_block_w (see MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES and MAX_SELF_READ_TILES_PER_K_STEP). With a
+// single K block the mcast factories single-buffer the inputs, so reading the next block can't overlap math on
+// the current one: keep two blocks when K allows it. The reuse factory always double-buffers.
 uint32_t max_in0_block_w(uint32_t Kt, Family family, uint32_t out_block_h, uint32_t out_block_w) {
     const uint32_t two_blocks = (family != Family::Reuse && Kt >= 2) ? Kt / 2 : Kt;
     // Tiles per K step of the operand(s) each core reads itself rather than receiving by multicast
@@ -37,9 +37,11 @@ uint32_t max_in0_block_w(uint32_t Kt, Family family, uint32_t out_block_h, uint3
         case Family::Mcast1DIn1: self_read = out_block_h; break;
         case Family::Reuse: self_read = out_block_h + out_block_w; break;
     }
+    const bool large_2d_block = family == Family::Mcast2D && out_block_h * out_block_w > LARGE_BLOCK_TILES;
+    const uint32_t depth = large_2d_block ? 2 * MAX_IN0_BLOCK_W : MAX_IN0_BLOCK_W;
     const uint32_t self_read_limit =
-        self_read == 0 ? MAX_IN0_BLOCK_W : std::max(MIN_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP / self_read);
-    return std::min({MAX_IN0_BLOCK_W, two_blocks, self_read_limit});
+        self_read == 0 ? depth : std::max(MIN_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP / self_read);
+    return std::min({depth, two_blocks, self_read_limit});
 }
 
 // Rows of output tiles the mcast families split across cores: all batches when fused, else one batch.
@@ -75,11 +77,17 @@ uint32_t max_subblock_area(const Problem& p, Family family) {
     return area;
 }
 
-// Largest-area subblock dividing (block_h, block_w); ties prefer the wider one. `h_divides` restricts
-// the height further (Reuse with batched inputs needs out_subblock_h | Mt); with `full_row_w` set, a subblock
-// taller than one tile must span that width (sharded outputs: out_subblock_w == per_core_N or h == 1).
+// Largest-area subblock dividing (block_h, block_w). Among equal areas, with `prefer_two_wide` one at least
+// two tiles on each side, then the wider one. `h_divides` restricts the height further (Reuse with batched
+// inputs needs out_subblock_h | Mt); with `full_row_w` set, a subblock taller than one tile must span that
+// width (sharded outputs: out_subblock_w == per_core_N or h == 1).
 std::pair<uint32_t, uint32_t> choose_subblock(
-    uint32_t block_h, uint32_t block_w, uint32_t max_area, uint32_t h_divides = 0, uint32_t full_row_w = 0) {
+    uint32_t block_h,
+    uint32_t block_w,
+    uint32_t max_area,
+    bool prefer_two_wide,
+    uint32_t h_divides = 0,
+    uint32_t full_row_w = 0) {
     std::pair<uint32_t, uint32_t> best{1, 1};
     for (uint32_t h = 1; h <= std::min(block_h, max_area); ++h) {
         if (block_h % h != 0 || (h_divides != 0 && h_divides % h != 0)) {
@@ -91,7 +99,10 @@ std::pair<uint32_t, uint32_t> choose_subblock(
             }
             const auto area = h * w;
             const auto best_area = best.first * best.second;
-            if (area > best_area || (area == best_area && w > best.second)) {
+            const bool two_wide = std::min(h, w) >= 2;
+            const bool best_two_wide = std::min(best.first, best.second) >= 2;
+            const bool tie_better = prefer_two_wide && two_wide != best_two_wide ? two_wide : w > best.second;
+            if (area > best_area || (area == best_area && tie_better)) {
                 best = {h, w};
             }
             break;  // widest w for this h found
@@ -225,7 +236,7 @@ namespace {
 struct BlockRules {
     uint32_t k_divides = 0;    // in0_block_w must also divide this (a sharded A's shard width)
     uint32_t k_fixed = 0;      // in0_block_w must be exactly this
-    bool sharded_out = false;  // out_block_w == per_core_N or out_block_h == 1
+    bool sharded_out = false;  // out_block_w == per_core_N
     // in0_block_w to use when some block fits with it, even above the K depth limit: a width- or block-sharded
     // A's shard width. Each K block is then a whole shard column, multicast in place; a narrower one makes the
     // sender copy every K block out of the shard first (extract_shard_sub_blocks).
@@ -239,8 +250,10 @@ bool k_allowed(const BlockRules& rules, uint32_t k) {
     return (rules.k_fixed == 0 || k == rules.k_fixed) && (rules.k_divides == 0 || rules.k_divides % k == 0);
 }
 
-bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_block_h, uint32_t out_block_w) {
-    return !rules.sharded_out || out_block_w == per_core_N || out_block_h == 1;
+// Validation also admits out_block_h == 1 with a narrower out_block_w, but the 1D in0-mcast factory then
+// writes a sharded output wrongly (#58046), so a sharded output's blocks always span per_core_N.
+bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_block_w) {
+    return !rules.sharded_out || out_block_w == per_core_N;
 }
 
 }  // namespace
@@ -257,19 +270,19 @@ std::optional<Blocking> block_2d(
     bool fuse_batch,
     const BlockRules& rules = {}) {
     const auto k_options = divisors_desc(p.Kt);
-    const uint32_t k_max =
-        rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, Family::Mcast2D, per_core_M, per_core_N);
     std::optional<Blocking> best;
     uint64_t best_product = 0;
     uint64_t best_area = 0;
     for (uint32_t h : divisors_desc(per_core_M)) {
         for (uint32_t w : divisors_desc(per_core_N)) {
             const uint64_t area = static_cast<uint64_t>(h) * w;
+            // K depth limit of this block size (larger blocks may go deeper); it only shrinks as w does
+            const uint32_t k_max = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, Family::Mcast2D, h, w);
             if (best && !rules.prefers_other(best->in0_block_w) &&
                 area * std::max(k_max, rules.k_preferred) < best_product) {
                 break;  // narrower blocks for this h can't win
             }
-            if (!block_allowed(rules, per_core_N, h, w)) {
+            if (!block_allowed(rules, per_core_N, w)) {
                 continue;
             }
             for (uint32_t k : k_options) {
@@ -302,9 +315,24 @@ std::optional<Blocking> block_2d(
     return best;
 }
 
+// The widest divisor of `n` that is at most `limit`.
+uint32_t widest_divisor_within(uint32_t n, uint32_t limit) {
+    for (uint32_t d = std::min(n, limit); d > 1; --d) {
+        if (n % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
+
 // 1D mcast (issue #57884 heuristic 2): keep the full per-core extent along the multicast dimension, shrink
 // the other one only if needed; in0_block_w is the largest that fits, up to MAX_IN0_BLOCK_W (or the layout's
-// preferred one, as in 2D).
+// preferred one, as in 2D). Two refinements:
+//  - in 1D in0-mcast the core that reads B also writes the output, and a single output block wider than a
+//    subblock row queues all of its writes after the last read: the block is split to the widest subblock
+//    width (when that is at least 2 tiles; a sharded output keeps full-width blocks);
+//  - if keeping the full multicast extent only fits with single-tile K steps, both dimensions are searched
+//    as in 2D (largest in0_block_w * area; ties avoid 1-tile dimensions, then prefer the larger, squarer block).
 std::optional<Blocking> block_1d(
     const Problem& p,
     const HardwareDesc& hw,
@@ -314,20 +342,21 @@ std::optional<Blocking> block_1d(
     bool fuse_batch,
     const BlockRules& rules = {}) {
     const bool is_tall = family == Family::Mcast1DIn1;
-    const uint32_t fixed = is_tall ? per_core_N : per_core_M;
+    const uint32_t fixed_full = is_tall ? per_core_N : per_core_M;
     const uint32_t cheap_full = is_tall ? per_core_M : per_core_N;
     const uint32_t M_rows = output_rows(p, fuse_batch);
-    std::optional<Blocking> best;
-    uint64_t best_product = 0;
-    for (uint32_t cheap : divisors_desc(cheap_full)) {
-        const uint32_t out_block_h = is_tall ? cheap : fixed;
-        const uint32_t out_block_w = is_tall ? fixed : cheap;
+    const uint32_t max_area = max_subblock_area(p, family);
+    const uint32_t split_w = widest_divisor_within(per_core_N, max_area);
+    const bool split = !is_tall && rules.k_fixed == 0 && !rules.sharded_out && per_core_N > max_area && split_w > 1;
+
+    // The largest fitting in0_block_w for this output block, if any
+    auto fit = [&](uint32_t out_block_h, uint32_t out_block_w) -> std::optional<Blocking> {
         // in1-mcast with a single block row: Mt % out_block_h == 0 or one output block per core
         if (is_tall && div_up(M_rows, per_core_M) == 1 && M_rows % out_block_h != 0 && per_core_M != out_block_h) {
-            continue;
+            return std::nullopt;
         }
-        if (!block_allowed(rules, per_core_N, out_block_h, out_block_w)) {
-            continue;
+        if (!block_allowed(rules, per_core_N, out_block_w) || (split && out_block_w > split_w)) {
+            return std::nullopt;
         }
         const uint32_t k_limit =
             rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, family, out_block_h, out_block_w);
@@ -337,25 +366,67 @@ std::optional<Blocking> block_1d(
                 continue;
             }
             Blocking b{per_core_M, per_core_N, k, out_block_h, out_block_w, 0, 0, fuse_batch};
-            if (circular_buffer_bytes(p, hw, family, b) > hw.l1_cb_budget) {
-                continue;
+            if (circular_buffer_bytes(p, hw, family, b) <= hw.l1_cb_budget) {
+                return b;
             }
-            const uint64_t product = static_cast<uint64_t>(out_block_h) * out_block_w * k;
-            const uint64_t area = static_cast<uint64_t>(out_block_h) * out_block_w;
-            const uint64_t best_area = best ? static_cast<uint64_t>(best->out_block_h) * best->out_block_w : 0;
-            const bool preference = best && rules.prefers(k) != rules.prefers(best->in0_block_w);
-            if (preference ? rules.prefers(k)
-                           : (product > best_product || (product == best_product && area > best_area))) {
+        }
+        return std::nullopt;
+    };
+    auto area_of = [](const Blocking& b) { return static_cast<uint64_t>(b.out_block_h) * b.out_block_w; };
+
+    std::optional<Blocking> best;
+    uint64_t best_product = 0;
+    for (uint32_t cheap : divisors_desc(cheap_full)) {
+        const auto b = fit(is_tall ? cheap : fixed_full, is_tall ? fixed_full : cheap);
+        if (b) {
+            const uint64_t product = area_of(*b) * b->in0_block_w;
+            const bool preference = best && rules.prefers(b->in0_block_w) != rules.prefers(best->in0_block_w);
+            if (preference ? rules.prefers(b->in0_block_w)
+                           : (product > best_product || (product == best_product && area_of(*b) > area_of(*best)))) {
                 best = b;
                 best_product = product;
             }
-            break;  // largest fitting k for this output block
         }
         if (best && (best->in0_block_w > 1 || best_product == static_cast<uint64_t>(per_core_M) * per_core_N)) {
             break;  // full block already fits at k >= 1; don't split further
         }
     }
-    return best;
+    if (!best || best->in0_block_w > 1 || p.Kt == 1 || rules.k_fixed != 0 || rules.sharded_out) {
+        return best;
+    }
+
+    // Single-tile K steps: shrink the multicast dimension too
+    auto unit_dims = [&](const Blocking& b) {
+        return (b.in0_block_w == 1) + (b.out_block_h == 1 && per_core_M > 1) + (b.out_block_w == 1 && per_core_N > 1);
+    };
+    auto skew = [](const Blocking& b) {
+        return b.out_block_h > b.out_block_w ? b.out_block_h - b.out_block_w : b.out_block_w - b.out_block_h;
+    };
+    std::optional<Blocking> alt;
+    for (uint32_t fixed : divisors_desc(fixed_full)) {
+        for (uint32_t cheap : divisors_desc(cheap_full)) {
+            const auto b = fit(is_tall ? cheap : fixed, is_tall ? fixed : cheap);
+            if (!b) {
+                continue;
+            }
+            const uint64_t product = area_of(*b) * b->in0_block_w;
+            const uint64_t alt_product = alt ? area_of(*alt) * alt->in0_block_w : 0;
+            bool better = !alt || product > alt_product;
+            if (alt && product == alt_product) {
+                if (unit_dims(*b) != unit_dims(*alt)) {
+                    better = unit_dims(*b) < unit_dims(*alt);
+                } else if (area_of(*b) != area_of(*alt)) {
+                    better = area_of(*b) > area_of(*alt);
+                } else {
+                    better = skew(*b) < skew(*alt);
+                }
+            }
+            if (better) {
+                alt = b;
+            }
+        }
+    }
+    return alt && alt->in0_block_w > 1 ? alt : best;
 }
 
 // Reuse with a height-sharded A: each core computes its shard's rows against all of N, over all of K.
@@ -413,13 +484,20 @@ uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, con
     return div_up(output_rows(p, b.fuse_batch), b.per_core_M) * div_up(p.Nt, b.per_core_N);
 }
 
+// Subblocks two tiles or more on each side, unless B's tiles are smaller than A's. Per K step, an h x w
+// subblock (h <= w) unpacks h tiles of A and h * w of B, so going from 1 x 8 to 2 x 4 costs one more A tile
+// per 8 outputs, and avoids the single-row path, whose per-tile overhead shows as up to 10% on large
+// matmuls with bf16 B. Only when A is the heavier operand (e.g. bf16 A, block-float B) does the extra A
+// unpack cost more than it saves (1 x 8 then wins by ~5% on the Wormhole sweeps).
 void set_subblock(const Problem& p, Family family, Blocking& b) {
     const bool reuse = family == Family::Reuse;
+    const bool prefer_two_wide = tt::tile_size(p.in1_format) >= tt::tile_size(p.in0_format);
     // Reuse with batched A and B requires out_subblock_h | Mt
     const auto [h, w] = choose_subblock(
         reuse ? b.per_core_M : b.out_block_h,
         reuse ? b.per_core_N : b.out_block_w,
         max_subblock_area(p, family),
+        prefer_two_wide,
         reuse ? p.Mt : 0,
         p.out.sharded() ? b.per_core_N : 0);
     b.out_subblock_h = h;

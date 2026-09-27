@@ -30,8 +30,12 @@
 //    ONE_D_CORE_ADVANTAGE times as many cores busy (e.g. large N, where Reuse's per_core_N = N leaves few cores)
 //    or Reuse would read ONE_D_CORE_ADVANTAGE times as much input (splitting batch matrices re-reads B);
 //  - block sizes follow the #57884 heuristics within the L1 budget, with one K block depth rule
-//    (MAX_IN0_BLOCK_W, MAX_SELF_READ_TILES_PER_K_STEP) that yields only to precision: partial sums never go
-//    through a block-float format, using a single K block if nothing shallower avoids it.
+//    (MAX_IN0_BLOCK_W, LARGE_BLOCK_TILES, MAX_SELF_READ_TILES_PER_K_STEP) that yields only to precision: partial
+//    sums never go through a block-float format, using a single K block if nothing shallower avoids it. 1D
+//    blocks keep the full per-core extent along the multicast dimension unless that forces single-tile K steps,
+//    and 1D in0-mcast splits a wide output block into subblock-wide blocks;
+//  - subblocks are the largest that fit DST, two tiles or more on each side unless B's tiles are smaller
+//    than A's.
 // Sharded tensors constrain the choice rather than change the rules: a sharded A fixes the family, grid and
 // per-core sizes (width -> 1D in0-mcast, height -> 1D in1-mcast or Reuse for batched B, block -> 2D), a sharded
 // output (with interleaved inputs) fixes the family (and with a shard spec, the grid and per-core sizes), and
@@ -50,6 +54,14 @@ constexpr double ONE_D_CORE_ADVANTAGE = 1.5;
 // for K depth. The mcast families also keep at least two K blocks, since with a single block they
 // single-buffer the inputs.
 constexpr uint32_t MAX_IN0_BLOCK_W = 8;
+
+// 2D output blocks of more than this many tiles may use K blocks up to 2 * MAX_IN0_BLOCK_W deep. Every K block
+// ends with a pack of the whole output block (L1 accumulation of the partials), which sits on the compute
+// path; a large block is compute bound, so deeper K blocks amortize that pack. Smaller blocks wait on data,
+// where the pack is hidden and a deeper K block only lengthens the pipeline fill. On the Wormhole 2D sweeps,
+// with the output block fixed, K depth 16 beat 8 on 6 of 10 larger blocks and lost on none, while on smaller
+// blocks 8 won 51 to 19. The threshold is where the sweeps turn, not derived.
+constexpr uint32_t LARGE_BLOCK_TILES = 64;
 
 // K block depth is further limited so that the operand a core reads by itself (not by multicast) moves at
 // most this many tiles per K step: B's slice in 1D in0-mcast, A's in 1D in1-mcast, both in Reuse, none in 2D.

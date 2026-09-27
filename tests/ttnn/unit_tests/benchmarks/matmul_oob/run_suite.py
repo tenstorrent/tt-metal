@@ -44,7 +44,7 @@ import torch  # noqa: E402
 import ttnn  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
-from suite import TIERS, get_cases  # noqa: E402
+from suite import TIERS, cases_from_csv, get_cases  # noqa: E402
 
 DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b, "fp32": ttnn.float32}
 FIDELITIES = {
@@ -379,12 +379,14 @@ class CaseRun:
                 row["config"] = config or ""
                 row["config_type"] = config.split("(", 1)[0] if config else ""
                 for _ in range(args.warmup):
+                    ttnn.deallocate(out)  # each call sees the same L1 state (one output at a time)
                     out = self._call(program_config)
                 ttnn.synchronize_device(self.device)
                 ttnn.ReadDeviceProfiler(self.device)
                 new_program_entries(self.device_id, self.seen_programs)  # discard compile/warmup
 
                 for _ in range(args.iters):
+                    ttnn.deallocate(out)
                     out = self._call(program_config)
                 ttnn.synchronize_device(self.device)
                 ttnn.ReadDeviceProfiler(self.device)
@@ -545,6 +547,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default="generated/matmul_oob/results.csv")
     parser.add_argument("--tiers", nargs="+", choices=list(TIERS), default=None)
+    parser.add_argument("--cases-csv", default=None, help="take the cases from an earlier results CSV instead")
     parser.add_argument("--filter", default=None, help="regex on case name")
     parser.add_argument("--exclude-tags", nargs="*", default=[], help="skip cases with any of these tags")
     parser.add_argument("--modes", nargs="+", choices=list(MODES), default=["oob"])
@@ -559,7 +562,9 @@ def main():
     parser.add_argument("--list", action="store_true", help="print the selected cases and exit")
     args = parser.parse_args()
 
-    cases = get_cases(args.tiers)
+    cases = cases_from_csv(args.cases_csv) if args.cases_csv else get_cases(args.tiers)
+    if args.cases_csv and args.tiers:
+        cases = [c for c in cases if c.tier in args.tiers]
     if args.filter:
         cases = [c for c in cases if re.search(args.filter, c.name)]
     if args.exclude_tags:
