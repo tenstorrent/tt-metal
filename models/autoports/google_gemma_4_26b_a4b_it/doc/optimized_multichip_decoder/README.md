@@ -141,3 +141,5 @@ The compact local evidence packet is written to
 `bringup/artifacts/multigoal-runs/20260925T171711Z/telemetry/packets/1a0f19aa-a217-42b9-acac-1a58fe787838.json`.
 Archive paths and original hashes are mapped in `preserved_evidence_manifest.json`;
 raw native captures and fixture tensors remain local.
+
+Local implementation/evidence commit: `dc254cbde8997f0ec8f8f42bccb5aaf1f0e8d69e`.

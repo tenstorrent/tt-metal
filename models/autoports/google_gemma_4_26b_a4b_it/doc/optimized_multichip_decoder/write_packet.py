@@ -62,6 +62,7 @@ data["missing_reasons"][
     "accuracy.dataset_samples"
 ] = "Layer fixture comparisons cover one prefill and128 decode positions per kind; no benchmark-dataset population is defined."
 data["notes"] = [
+    "Implementation/evidence commit dc254cbde8997f0ec8f8f42bccb5aaf1f0e8d69e; independent stage_review.md clean-pass.",
     "Decoder stage only; real TP4 active-expert execution. No full-model or serving result.",
     "Rooflines use complete firmware layer windows including gaps, four-ASIC theoretical peaks, useful active8 FLOPs and estimated DRAM transfers, not controller counters.",
     "33-token adjacent sliding stack minimum PCC0.995049733 has limited margin. Capacity reservations do not execute the complete model allocation order.",
