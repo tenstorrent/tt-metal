@@ -315,8 +315,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
     }
 
-    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
     ttnn::kernel_lib::host::Mcast2D in0_mcast = [&]() {
         const auto mcast_rect = CoreRangeSet(in0_mcast_rect);
         if (in0_is_sharded) {
@@ -326,7 +326,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             const std::optional<uint32_t> ack_count_override =
                 in0_mcast_rect.size() > num_cores ? std::make_optional(num_cores - 1) : std::nullopt;
             return ttnn::kernel_lib::host::Mcast2D(
-                device,
+                &device,
                 mcast_rect,
                 ttnn::kernel_lib::host::Mcast2DRotatingSenderConfig{
                     .sender_grid = in0_mcast_sender_cores,
@@ -335,7 +335,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         }
         // The fixed sender is one of num_cores active participants; every other active core acknowledges it.
         return ttnn::kernel_lib::host::Mcast2D(
-            device,
+            &device,
             mcast_rect,
             ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
             ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .ack_count_override = num_cores - 1});
@@ -1300,13 +1300,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
-    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     // Mcast args. The receiver bounding box can contain inactive tail fillers; only the other num_cores - 1
     // workers acknowledge the fixed sender.
     ttnn::kernel_lib::host::Mcast2D in1_mcast(
-        device,
+        &device,
         CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
         ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
         ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .ack_count_override = num_cores - 1});

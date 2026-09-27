@@ -296,15 +296,12 @@ struct McastArgs : detail::McastArgsImpl<
                        (get_compile_time_arg_val(CT_BASE) != mcast_wire::ABSENT),
                        detail::mcast_metadata<detail::PositionalMcastCompileTime<CT_BASE>>(),
                        detail::PositionalMcastRuntime<RT_BASE>,
-                       SemaphoreBindingToken<
-                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>(),
-                           SemScope::LOCAL_NONATOMIC>,
-                       SemaphoreBindingToken<
-                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::CONSUMER_READY>(),
-                           SemScope::LOCAL_NONATOMIC>,
-                       SemaphoreBindingToken<
-                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>(),
-                           SemScope::LOCAL_NONATOMIC>> {
+                       detail::McastSemaphoreToken<McastSemaphoreBinding{
+                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>()}>,
+                       detail::McastSemaphoreToken<McastSemaphoreBinding{
+                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::CONSUMER_READY>()}>,
+                       detail::McastSemaphoreToken<McastSemaphoreBinding{
+                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>()}>> {
     static_assert(
         mcast_wire::valid_compile_time_control(get_compile_time_arg_val(CT_BASE)),
         "Unsupported multicast wire tag; rebuild host and kernels for the unified family format");

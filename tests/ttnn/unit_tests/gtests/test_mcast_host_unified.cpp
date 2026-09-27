@@ -410,7 +410,11 @@ TEST_F(McastUnifiedFixture, DescriptorSpecAndDirectAttachmentParity) {
         .kernels =
             {{.unique_id = targets.front(),
               .source = m2::KernelSpec::SourceCode{"void kernel_main() {}"},
-              .hw_config = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0}}},
+              .hw_config =
+                  m2::DataMovementHardwareConfig{
+                      .config_1xx =
+                          m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                              .processor = tt::tt_metal::DataMovementProcessor::RISCV_0}}}},
         .work_units = {{.name = "test", .kernels = {targets.front()}, .target_nodes = receivers}}};
     spec.kernels.front().advanced_options.num_runtime_varargs = 2;
     m2::ProgramRunArgs args;
@@ -563,7 +567,9 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
         .source = "tests/ttnn/unit_tests/kernel_lib/kernels/mcast_unified.cpp",
         .compile_time_args = {{"rounds", rounds}},
         .runtime_arg_schema = {.runtime_arg_names = {"seed", "acknowledges", "report_addr"}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = noc}};
+        .hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = noc}}};
     kernel.scratchpad_bindings.push_back(
         {.scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     m2::ProgramSpec spec{

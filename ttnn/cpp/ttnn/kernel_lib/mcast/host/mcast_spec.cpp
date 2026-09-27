@@ -123,8 +123,8 @@ std::vector<size_t> validate_targets(
 
 NOC spec_noc(const m2::KernelSpec& kernel) {
     const auto& hw = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    if (const auto* gen1 = std::get_if<m2::DataMovementGen1Config>(&hw)) {
-        return gen1->noc;
+    if (hw.config_1xx.has_value()) {
+        return hw.config_1xx->noc;
     }
     return NOC::NOC_0;  // Gen2 has one unified NoC.
 }
@@ -262,7 +262,9 @@ void McastFamily::attach(
                 kernel.semaphore_bindings.push_back({.semaphore_spec_name = names[role], .accessor_name = accessor});
             }
             kernel.compiler_options.defines.emplace(
-                accessor + "_type", role < count ? "sem::" + accessor + "_t" : "std::nullptr_t");
+                accessor + "_type",
+                role < count ? "dataflow_kernel_lib::detail::McastSemaphoreToken<sem::" + accessor + ">"
+                             : "std::nullptr_t");
         }
     }
     spec = std::move(staged);

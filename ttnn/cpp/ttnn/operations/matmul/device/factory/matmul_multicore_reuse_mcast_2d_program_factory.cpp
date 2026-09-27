@@ -2192,15 +2192,15 @@ create_program_mcast_in0_in1(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
     const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
                                                  : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
     ttnn::kernel_lib::host::Mcast1D in0_mcast = [&]() {
         const auto mcast_config = ttnn::kernel_lib::host::McastConfig{.noc = in0_noc};
         if (in0_block_sharded) {
             return ttnn::kernel_lib::host::Mcast1D(
-                device,
+                &device,
                 output_work_grid,
                 in0_mcast_shape,
                 ttnn::kernel_lib::host::Mcast1DRotatingSenderConfig{
@@ -2209,14 +2209,14 @@ create_program_mcast_in0_in1(
                 mcast_config);
         }
         return ttnn::kernel_lib::host::Mcast1D(
-            device,
+            &device,
             output_work_grid,
             in0_mcast_shape,
             ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
             mcast_config);
     }();
     ttnn::kernel_lib::host::Mcast1D in1_mcast(
-        device,
+        &device,
         output_work_grid,
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
@@ -2512,15 +2512,15 @@ create_program_mcast_in0_in1(
     */
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
     if (fuse_op && !in0_block_sharded) {
         if (fused_op_signaler->is_all_gather()) {
             // Create semaphores
-            fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+            fused_op_signaler->init_fused_op(program, &device, in0_sender_interleaved);
         } else if (fused_op_signaler->is_reduce_scatter()) {
-            fused_op_signaler->init_fused_op(program, device, output_work_grid.bounding_box(), cores);
+            fused_op_signaler->init_fused_op(program, &device, output_work_grid.bounding_box(), cores);
         } else {
             TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
         }

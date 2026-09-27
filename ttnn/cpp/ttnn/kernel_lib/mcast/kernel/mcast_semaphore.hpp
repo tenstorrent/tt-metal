@@ -18,8 +18,7 @@ struct McastSemaphoreBinding {
 
     constexpr McastSemaphoreBinding(uint32_t id) : id(id), scope(SemScope::LOCAL_NONATOMIC) {}
     constexpr McastSemaphoreBinding(std::nullptr_t) : McastSemaphoreBinding(UNUSED_SEM_ID) {}
-    template <uint32_t ID, SemScope SCOPE>
-    constexpr McastSemaphoreBinding(SemaphoreBindingToken<ID, SCOPE>) : id(ID), scope(SCOPE) {}
+    constexpr McastSemaphoreBinding(SemaphoreBindingToken token) : id(token.id), scope(token.scope) {}
 };
 
 namespace detail {
@@ -28,18 +27,20 @@ constexpr uint32_t mcast_semaphore_id(McastSemaphoreBinding binding) { return bi
 // Normalize values to token types for out-of-line pipe definitions: SFPI's
 // C++17 NTTP extension does not match class-valued parameters on those methods.
 template <McastSemaphoreBinding BINDING>
-using McastSemaphoreToken = SemaphoreBindingToken<BINDING.id, BINDING.scope>;
+struct McastSemaphoreToken {
+    constexpr operator McastSemaphoreBinding() const { return BINDING; }
+};
 
 template <McastSemaphoreBinding BINDING>
-using McastSemaphore = std::
-    conditional_t<BINDING.id == UNUSED_SEM_ID, std::nullptr_t, Semaphore<ProgrammableCoreType::TENSIX, BINDING.scope>>;
+using McastSemaphore =
+    std::conditional_t<BINDING.id == UNUSED_SEM_ID, std::nullptr_t, Semaphore<ProgrammableCoreType::TENSIX>>;
 
 template <McastSemaphoreBinding BINDING>
 FORCE_INLINE McastSemaphore<BINDING> make_mcast_semaphore() {
     if constexpr (BINDING.id == UNUSED_SEM_ID) {
         return nullptr;
     } else {
-        return McastSemaphore<BINDING>(SemaphoreBindingToken<BINDING.id, BINDING.scope>{});
+        return McastSemaphore<BINDING>(SemaphoreBindingToken{BINDING.id, BINDING.scope});
     }
 }
 

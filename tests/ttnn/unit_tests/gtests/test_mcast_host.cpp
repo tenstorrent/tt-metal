@@ -1966,7 +1966,7 @@ m2::ProgramSpec spec_pair(uint32_t prefix = 0) {
             .source = m2::KernelSpec::SourceCode{"void kernel_main() {}"},
             .compile_time_args = {{"kept_ct", 73}},
             .runtime_arg_schema = {.runtime_arg_names = {"kept_rt"}, .common_runtime_arg_names = {"kept_common"}},
-            .hw_config = m2::DataMovementHardwareConfig{m2::CreateReaderGen1DataMovementConfig()}};
+            .hw_config = m2::CreateReaderDataMovementConfig()};
         kernel.advanced_options.num_runtime_varargs = prefix;
         kernel.advanced_options.compile_time_varargs = {101, 103};
         spec.kernels.push_back(std::move(kernel));
@@ -2050,7 +2050,7 @@ TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePref
         EXPECT_EQ(kernel.compile_time_args.get("kept_ct").value(), 73u);
         EXPECT_EQ(
             kernel.compiler_options.defines.get("channel_mcast_data_ready_type").value(),
-            "sem::channel_mcast_data_ready_t");
+            "dataflow_kernel_lib::detail::McastSemaphoreToken<sem::channel_mcast_data_ready>");
         EXPECT_EQ(kernel.compiler_options.defines.get("channel_mcast_signal_source_type").value(), "std::nullptr_t");
         EXPECT_EQ(args.kernel_run_args[i].common_runtime_arg_values.get("kept_common").value(), 97u);
     }
@@ -2115,8 +2115,7 @@ TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
             args.kernel_run_args[1].advanced_options.runtime_varargs[{3, 0}] = {37};
         }
         if (std::string_view(violation) == "wrong-sender-noc") {
-            std::get<m2::DataMovementGen1Config>(std::get<m2::DataMovementHardwareConfig>(spec.kernels[0].hw_config))
-                .noc = NOC::NOC_1;
+            std::get<m2::DataMovementHardwareConfig>(spec.kernels[0].hw_config).config_1xx->noc = NOC::NOC_1;
         }
         if (std::string_view(violation) == "duplicate-prefix") {
             spec.kernels[1].compile_time_args["channel_mcast_ct_base"] = 55;
@@ -2213,8 +2212,7 @@ TEST_F(McastHostFixture, SpecAttachAllowsOtherNocOnlyOnPureMulticastReceivers) {
     auto multicast = make_family(device_, {GroupInput(participants, {{0, 0}})});
     auto chain = make_family(device_, {GroupInput(participants, {{0, 0}})}, chain_config());
     auto spec = spec_pair();
-    std::get<m2::DataMovementGen1Config>(std::get<m2::DataMovementHardwareConfig>(spec.kernels[1].hw_config)).noc =
-        NOC::NOC_1;
+    std::get<m2::DataMovementHardwareConfig>(spec.kernels[1].hw_config).config_1xx->noc = NOC::NOC_1;
     m2::ProgramRunArgs args;
     EXPECT_ANY_THROW(chain.attach(spec, args, "chain", spec_targets));
     EXPECT_TRUE(args.kernel_run_args.empty());
@@ -2251,7 +2249,9 @@ void run_spec_device_contract(
         .unique_id = targets.front(),
         .source = "tests/ttnn/unit_tests/kernel_lib/kernels/mcast_spec.cpp",
         .compile_time_args = {{"rounds", rounds}, {"control", control ? 1u : 0u}},
-        .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = noc}};
+        .hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = noc}}};
     kernel.advanced_options.num_runtime_varargs = 2;
     kernel.scratchpad_bindings.push_back(
         {.scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -2337,7 +2337,11 @@ TEST_F(McastHostFixture, SpecDeviceOldTag) {
                 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
                 void kernel_main() { constexpr auto channel = MCAST_SPEC_ARGS(channel); }
             )"},
-              .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}}},
+              .hw_config =
+                  m2::DataMovementHardwareConfig{
+                      .config_1xx =
+                          m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                              .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}}}},
         .work_units = {{.name = "old_tag", .kernels = {targets.front()}, .target_nodes = CoreCoord{0, 0}}}};
     auto family = make_family(device_, {{grid({0, 0}, {1, 0}), {{0, 0}}}});
     m2::ProgramRunArgs args;
