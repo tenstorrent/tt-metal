@@ -2,7 +2,7 @@
 
 | Candidate upstream task | Completed / frozen subset / full population | Score | Published score / delta |
 | --- | --- | --- | --- |
-| MMLU-Pro (`mmlu_pro`) | 0 / 280 / 12032 | Unavailable | Unavailable |
+| MMLU-Pro (`mmlu_pro`) | 0 / 280 / 12032 | Unavailable | [82.6%](https://huggingface.co/google/gemma-4-26B-A4B-it#benchmark-results) / unavailable |
 | GSM8K-CoT (`gsm8k_cot`) | 0 / 256 / 1319 | Unavailable | Unavailable |
 | IFEval (`ifeval`) | 0 / 256 / 541 | Unavailable | Unavailable |
 
@@ -19,8 +19,9 @@ There is no accuracy verdict or score threshold.
 
 The manifest retains the packaged common subsets and document/few-shot hashes;
 these are intended sample counts, not evaluated samples. Dataset verification,
-native chat-template/thinking policy validation, upstream scoring and published
-reference research remain undone. All response, stop and truncation counts are
+live chat-template/thinking policy validation and upstream scoring remain undone.
+Published MMLU-Pro82.6% and alternative GPQA Diamond82.3% reference figures are
+retained in published_references.json; protocol/subset equivalence is unproven. All response, stop and truncation counts are
 unavailable. The preparation configuration is explicitly incomplete.
 
 Stage 10 used the generated 30-layer model, selected
@@ -40,3 +41,14 @@ See [run notes](../RUN_NOTES.md), [identity](../identity.json),
 [manifest](manifest.json) and the AutoDebug/AutoFix reports in the parent directory.
 
 Context check passed (262144 preserved). Evidence check failed with missing generated implementation identity (exit2); this is not a completed benchmark. Check logs are retained.
+
+Offline setup progress: the pinned tokenizer template passed one-BOS checks in
+both thinking modes, and the installed vLLM benchmark CLI starts. Stage 10's
+startup log reports approximately190 seconds to readiness, before this attempt;
+its server subsequently stopped. No Stage11 launch has occurred.
+
+Host tests cover the phase-timeline reducer and the planned server-configuration
+validator. These tools are not yet connected to a live collector/control hook.
+The checkpoint's top_k64 policy is capped to32 by the current device formatter;
+an existing request-specific host-sampling route is under validation. No claim
+is made that live benchmark protocol or roofline collection is ready.

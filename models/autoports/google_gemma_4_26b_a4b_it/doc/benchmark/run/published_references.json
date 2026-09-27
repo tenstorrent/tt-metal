@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-09-27T17:54:53.436410+00:00",
+  "source_url": "https://huggingface.co/google/gemma-4-26B-A4B-it",
+  "scores_percent": {
+    "mmlu_pro": 82.6,
+    "gpqa_diamond": 82.3
+  },
+  "protocol_notes": "Published instruction-tuned figures. The page does not establish identity with the frozen upstream task variants, few-shot selections or subset scores. No local delta can be computed without scores.",
+  "native_sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 64
+  },
+  "native_sampling_local_evidence": "tokenizer_preflight.json",
+  "hardware_source_url": "https://docs.tenstorrent.com/aibs/blackhole/p300.html",
+  "hardware_reference": {
+    "asic_per_card": 2,
+    "tensix_per_asic": 120,
+    "ai_clock_hz": 1350000000,
+    "dram_bytes_per_second_per_card": 1024000000000
+  },
+  "hardware_note": "Reference specifications only; not an observed clock, live mesh identity or measured roofline."
+}

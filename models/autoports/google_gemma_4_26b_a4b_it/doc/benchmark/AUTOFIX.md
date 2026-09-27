@@ -30,3 +30,16 @@ collection, and run the genuine profiles on resume. Stage remains incomplete.
 Evidence/context checks and exit statuses are in run/check_results.json.
 
 Checker integration: a null generator_module caused an AttributeError. Omitted the unobserved optional value (no module identity invented) and reran; checker now exits2 with the intended missing-generated-implementation evidence failure. Initial log retained.
+
+## Continued setup checks
+
+The offline tokenizer probe initially compared a BatchEncoding directly with a
+list. Inspecting the actual return proved this was a probe error. The retained
+benchmark_tokenizer_check.py extracts input_ids for Mapping returns and passes
+both modes, preserving the original native template.
+
+Source-only phase diagnosis and reducer tests are in PHASE_COLLECTION_DESIGN.md
+and run/phase_reducer_tests.log. No runtime instrumentation is claimed complete.
+Native top_k64 mismatch is independently documented in
+AUTODEBUG_sampling_policy.md and run/sampling_policy_probe.json. A host-sampling
+route is a candidate to validate, not an applied fix or a completed benchmark.

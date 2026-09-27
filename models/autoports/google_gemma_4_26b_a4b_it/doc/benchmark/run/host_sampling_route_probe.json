@@ -1,0 +1,43 @@
+{
+  "scope": "AST-extracted actual target-checkout routing function; mocked metadata; no imports, hardware or API calls",
+  "source": "/workspace/tt-metal/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py",
+  "source_sha256": "068d956521f8ee055b120dc1d49751d993e8c68fcf13dd16e563a57631caf442",
+  "plugin_commit": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d",
+  "function_lines": [
+    2641,
+    2687
+  ],
+  "results": [
+    {
+      "max_num_logprobs": null,
+      "is_decode": false,
+      "device_sampling": true
+    },
+    {
+      "max_num_logprobs": null,
+      "is_decode": true,
+      "device_sampling": true
+    },
+    {
+      "max_num_logprobs": 0,
+      "is_decode": false,
+      "device_sampling": false
+    },
+    {
+      "max_num_logprobs": 0,
+      "is_decode": true,
+      "device_sampling": false
+    },
+    {
+      "max_num_logprobs": 1,
+      "is_decode": false,
+      "device_sampling": false
+    },
+    {
+      "max_num_logprobs": 1,
+      "is_decode": true,
+      "device_sampling": false
+    }
+  ],
+  "prior_other_checkout_evidence": "models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/host_sampling_route_probe_other_checkout.json"
+}
