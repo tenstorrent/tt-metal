@@ -52,6 +52,46 @@ from models.experimental.llama32_1b_quasar.utility_functions import is_quasar
 pytestmark = demo.pytestmark
 
 
+def _qsr_capped_grid_xy(dev, max_cores=None):
+    """Grid (x, y) capped to the emulator size (LLAMA_QSR_MAX_GRID_CORES, default 2 compute nodes).
+
+    The forced-interleaved 1D-mcast matmul only passes on Quasar at a SMALL grid: the standalone
+    test_quasar_qkv_matmul_dfb.py FAILS at compute_with_storage_grid_size=(8,4) but PASSES at the actual
+    (small) device grid. To match what runs on the 2-core emulator regardless of the sim's device size, cap
+    every Quasar grid (matmul + SDPA) to <= max_cores cores, laid out as a single row where possible."""
+    if max_cores is None:
+        max_cores = int(os.environ.get("LLAMA_QSR_MAX_GRID_CORES", "2"))
+    dx, dy = int(dev.x), int(dev.y)
+    if dx >= 2:
+        return min(dx, max_cores), 1
+    return 1, min(dy, max_cores)
+
+
+def _quasar_upload_tile_heads_padded(t, dev):
+    """Upload a torch [1, batch, n_heads, head_dim] tensor as a TILE DRAM ttnn tensor, padding the heads dim
+    (dim -2) up to a multiple of TILE_HEIGHT (32) so quasar.tilize accepts it. This mirrors what the real
+    nlp_create_qkv_heads_decode produces: k/v have num_kv_heads=8 in the tile-height slot, tile-padded to 32.
+    Consumers here read the head count from elsewhere (paged_update_cache uses the CACHE's head count; host SDPA
+    uses q's real n_heads=32), so the trailing zero-padded head rows are never read. RM-tilize path avoids the
+    from_torch(TILE) hang; head_dim (64) is already tile-aligned."""
+    import torch as _torch
+
+    h = t.shape[-2]
+    pad = (-h) % 32
+    if pad:
+        t = _torch.nn.functional.pad(t, (0, 0, 0, pad))  # pad heads (dim -2) to a full tile
+    rm = ttnn.from_torch(
+        t.to(_torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=dev,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
+    )
+    qtil = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+    return (qtil or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+
 def _install_quasar_tilize_from_torch(monkeypatch):
     """Route on-device ``ttnn.from_torch(..., layout=TILE)`` through the Gen2-native quasar tilize.
 
@@ -105,8 +145,12 @@ def _install_quasar_tilize_from_torch(monkeypatch):
             tilize_dtype = out_dtype
             if staged_bf16:
                 rm_kwargs["dtype"] = ttnn.bfloat16
+                # bf8_b/bf4_b are unsupported on Quasar: any DEVICE op with a block-float DFB FATALs at
+                # program_spec.cpp:2253. When matmuls run on device (LLAMA_QSR_DEVICE_ATTN), the weights are
+                # in1 DFBs, so pack them bf16 instead of the requested block-float. (float32 -> bf16 also
+                # dodges the fp32 mainline-tilize hang.) Bring-up numeric downcast; the model is bf16 e2e.
+                tilize_dtype = ttnn.bfloat16
             if out_dtype == ttnn.float32:
-                tilize_dtype = ttnn.bfloat16  # dodge the fp32 mainline-tilize hang; downcast for bring-up
                 logger.warning(f"[llama-e2e][quasar] downcasting fp32 target -> bf16 for {desc} (fp32 hang dodge)")
             # CRITICAL: cast the dtype on the HOST (torch) so the row-major upload is a pure DMA with no
             # device op. If the source torch tensor is fp32 and rm dtype is bf16, from_torch does the
@@ -226,7 +270,7 @@ def _install_quasar_fp32_acc_off(monkeypatch):
             monkeypatch.setattr(ttnn, name, _force_off(orig))
 
 
-def _install_quasar_interleaved_matmul(monkeypatch):
+def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
     """Force the decode matmuls interleaved on Quasar.
 
     The model's decode QKV / WO / MLP(W1,W2,W3) / LM-head matmuls use DRAM-sharded program configs
@@ -252,6 +296,10 @@ def _install_quasar_interleaved_matmul(monkeypatch):
             logger.warning(f"[llama-e2e][quasar] matmul de-shard failed ({e}); passing tensor through")
             return t
 
+    dev = mesh_device.compute_with_storage_grid_size()
+    cx, cy = _qsr_capped_grid_xy(dev)
+    core_grid = ttnn.CoreGrid(y=cy, x=cx)
+
     def _wrap(orig):
         def _mm(input_tensor, weight, *args, **kwargs):
             # De-shard the INPUTS to DRAM-interleaved and drop the DRAM-sharded program_config so the picker
@@ -261,10 +309,159 @@ def _install_quasar_interleaved_matmul(monkeypatch):
             # being a real sharded->interleaved conversion. Forcing the output interleaved makes
             # sharded_to_interleaved a no-op that ALIASES the input, so the following deallocate frees the
             # tensor the reshape then uses ("Tensor is not allocated").
+            # Pin an explicit 1D mcast_in0 config at the capped (2-node) grid + DRAM output. WHY:
+            #  - With program_config=None the auto-picker chose the 2D-mcast factory
+            #    (matmul_multi_core_reuse_mcast_2d_optimized), whose in0_sender DM kernel is Gen1-UNPORTED on
+            #    Quasar (program_spec.cpp:1325 FATAL). The 1D mcast_in0 factory IS Gen2-ported (validated by
+            #    test_quasar_qkv_matmul_dfb.py), so force it.
+            #  - Small grid: the 1D matmul FAILS at large grids on Quasar (that test fails at (8,4)); cap to 2
+            #    nodes -- the validated regime -- regardless of the sim's device size.
+            #  - Output memcfg is chosen below: WIDTH_SHARDED L1 when the per-core shard fits (decode QKV must
+            #    be sharded so create_qkv_heads_decode uses its Gen2 Sharded factory, not the self-looping
+            #    Interleaved one), else DRAM (wide lm_head, prefill). _install_quasar_s2i_copy handles the
+            #    downstream sharded_to_interleaved-of-an-interleaved-tensor alias for the DRAM case.
             input_tensor = _to_dram(input_tensor)
             weight = _to_dram(weight)
-            kwargs["program_config"] = None
+            try:
+                ish = input_tensor.padded_shape  # [.., M, K]
+                wsh = weight.padded_shape  # [.., K, N]
+                mt = max(int(ish[-2]) // 32, 1)
+                kt = max(int(ish[-1]) // 32, 1)
+                nt = max(int(wsh[-1]) // 32, 1)
+                nc = cx * cy
+                per_core_n = max((nt + nc - 1) // nc, 1)
+                in0_block_w = next((d for d in (4, 2, 1) if kt % d == 0), 1)
+                osw = next((d for d in (4, 2, 1) if per_core_n % d == 0), 1)
+                kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=(cx, cy),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=1,
+                    out_subblock_w=osw,
+                    per_core_M=mt,
+                    per_core_N=per_core_n,
+                    fuse_batch=False,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+                # Output memcfg: WIDTH_SHARDED L1 when the per-core output shard fits L1, else DRAM. The decode
+                # QKV matmul MUST be width-sharded so its consumer nlp_create_qkv_heads_decode picks the
+                # Gen2-clean Sharded factory (the Interleaved factory self-loops reader_scratch -> Gen2 FATAL).
+                # But wide outputs (lm_head N=128256 -> 2004 tiles/core) and prefill (per_core_M=32) OOM L1, so
+                # those stay DRAM (their consumers -- concat/residual/argmax, and prefill's non-decode
+                # create_qkv -- accept interleaved). Threshold 128 tiles/core (~256KB bf16).
+                out_tiles = mt * per_core_n
+                if out_tiles <= 128:
+                    kwargs["memory_config"] = ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
+                    )
+                else:
+                    kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+                kwargs.pop("core_grid", None)
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] 1D matmul cfg build failed ({e}); auto-select w/ core_grid")
+                kwargs["program_config"] = None
+                kwargs["core_grid"] = core_grid
             return orig(input_tensor, weight, *args, **kwargs)
+
+        return _mm
+
+    for name in ("linear", "matmul"):
+        orig = getattr(ttnn, name, None)
+        if orig is not None:
+            monkeypatch.setattr(ttnn, name, _wrap(orig))
+
+
+def _install_quasar_bf16_kv_cache(monkeypatch):
+    """Allocate the paged KV cache as bf16 on Quasar (needed for ON-DEVICE decode SDPA).
+
+    The decode SDPA validate hard-requires bf16 q/k/v on Quasar (bf8_b/bf4_b unsupported). The cache is
+    allocated by EagerLLMExecutor.allocate_kv_cache via ttnn.as_tensor(dtype=kv_cache_dtype), where
+    kv_cache_dtype defaults to bf8_b (executor.py:424). While host-SDPA reads the cache via to_torch (dtype
+    agnostic), the device flash-decode reads it as a DFB -> a bf8_b cache FATALs. Force the executor's
+    model_args.kv_cache_dtype to bf16 before allocation. (enable_model_cache is false in this run, so the
+    dtype-blind empty-cache file is not reloaded -- no stale-bf8_b-file hazard.)"""
+    try:
+        from models.experimental.llama32_1b_quasar.models.executor import EagerLLMExecutor
+    except Exception as e:
+        logger.warning(f"[llama-e2e][quasar] could not import EagerLLMExecutor for bf16 KV cache ({e})")
+        return
+
+    orig = EagerLLMExecutor.allocate_kv_cache
+
+    def _patched(self, kv_cache_shape, dtype, num_layers):
+        ma = getattr(self, "model_args", None)
+        if ma is not None:
+            try:
+                ma.kv_cache_dtype = ttnn.bfloat16
+                logger.warning("[llama-e2e][quasar] forcing KV cache dtype -> bf16 for on-device SDPA")
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not force KV cache dtype ({e})")
+        return orig(self, kv_cache_shape, dtype, num_layers)
+
+    monkeypatch.setattr(EagerLLMExecutor, "allocate_kv_cache", _patched)
+
+
+def _install_quasar_host_matmul(monkeypatch):
+    """Compute the decode matmuls on the HOST (torch), sidestepping the Quasar 1D-mcast matmul.
+
+    The forced-interleaved decode matmuls (QKV / WO / MLP w1,w3,w2 / lm_head) all route through the mainline
+    1D mcast_in0 matmul, which underflows the in0 DFB tile counter on the Quasar sim (posted=64 acked=65) --
+    a runtime/sim DM<->tensix counter-remapper mis-delivery, not an op bug (craq-sim issue filed). To surface
+    what fails DOWNSTREAM of the matmuls, we gather both operands to host, do a plain torch matmul (+ bias if
+    given -- the decode linears have NO fused activation; MLP SiLU is a separate ttnn.mul), and upload the
+    result into the caller's requested memory_config. Single-device (N150) only; multi-device falls back to
+    the device op. Numerics are exact-ish (fp32 accumulate -> bf16); this is a bring-up sidestep, not perf.
+    """
+    import torch as _torch
+
+    def _upload(out_t, dev, out_memcfg):
+        # bf16 row-major upload (pure DMA) -> quasar.tilize (DRAM interleaved) -> caller's memory_config.
+        rm = ttnn.from_torch(
+            out_t.to(_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
+        )
+        qtil = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+        tiled = (qtil or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        # Sharding is forced off on Quasar (_install_quasar_force_interleaved), so always return the tensor
+        # DRAM-interleaved regardless of the requested memcfg. A non-sharded L1 target still gets honored.
+        if out_memcfg is None or out_memcfg == ttnn.DRAM_MEMORY_CONFIG:
+            return tiled
+        try:
+            if out_memcfg.is_sharded():
+                return tiled  # no sharding on Quasar
+        except Exception:
+            return tiled
+        q_tmc = getattr(getattr(ttnn.experimental, "quasar", None), "to_memory_config", None)
+        try:
+            return (q_tmc or ttnn.to_memory_config)(tiled, out_memcfg)
+        except Exception:
+            return tiled
+
+    def _wrap(orig):
+        def _mm(input_tensor, weight, *args, **kwargs):
+            try:
+                dev = input_tensor.device()
+                if dev is None or dev.get_num_devices() != 1:
+                    return orig(input_tensor, weight, *args, **kwargs)
+                a = ttnn.to_torch(input_tensor).float()
+                b = ttnn.to_torch(weight).float()
+                out = _torch.matmul(a, b)
+                bias = kwargs.get("bias")
+                if bias is not None:
+                    out = out + ttnn.to_torch(bias).float()
+                res = _upload(out, dev, kwargs.get("memory_config"))
+                logger.warning(
+                    f"[llama-e2e][quasar] host matmul {tuple(a.shape)} x {tuple(b.shape)} -> {tuple(out.shape)} "
+                    f"(sidestepped device 1D-mcast; out_memcfg={kwargs.get('memory_config')})"
+                )
+                return res
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] host matmul failed ({e}); falling back to device op")
+                return orig(input_tensor, weight, *args, **kwargs)
 
         return _mm
 
@@ -321,10 +518,624 @@ def _install_quasar_host_embedding(monkeypatch):
     monkeypatch.setattr(Embedding1D, "forward", _host_forward)
 
 
-# The Quasar functional simulator runs each op at a few KHz, so a single decode/prefill layer takes
-# minutes (LayerNorm ~54s, Copy ~24s observed). Override the repo-wide 300s pytest-timeout with 60 min so
-# the sim run isn't killed mid-compile. WH/BH are far faster and finish well within this.
-@pytest.mark.timeout(3600)
+def _install_quasar_host_create_qkv_heads(monkeypatch):
+    """Split the fused QKV projection into Q/K/V heads on the HOST on Quasar (a pure reshape, no compute).
+
+    ``ttnn.experimental.nlp_create_qkv_heads_decode`` picks a factory by input layout. Under force-interleaved
+    the fused xqkv is DRAM-interleaved, so the picker selects NLPCreateQKVHeadsDecodeInterleavedProgramFactory,
+    whose reader self-loops the ``reader_scratch`` DFB (PRODUCER+CONSUMER in one DM kernel) -> Gen2
+    ValidateProgramSpec FATAL "Self-loop DFBs not supported for DM kernels on Gen2". The Sharded factory is
+    Gen2-clean but needs a per-head shard the tiny Quasar device can't allocate (built for the 8x8 model grid).
+    The op is just a split of the last dim (Q | K | V, each reshaped to heads), so do it in torch and upload
+    Q/K/V as DRAM-interleaved TILE tensors. Output specs (device op):
+        q: [1, batch, num_q_heads, head_dim], k/v: [1, batch, num_kv_heads, head_dim]
+    with the fused input last dim laid out contiguously as [all Q heads | all K heads | all V heads].
+    Single-device only; multi-device falls back to the device op. (RoPE consumes these next and needs
+    HEIGHT_SHARDED, so it will be the next sidestep -- leaving these interleaved is fine here.)"""
+
+    orig = getattr(ttnn.experimental, "nlp_create_qkv_heads_decode", None)
+    if orig is None:
+        return
+
+    def _host_create(input_tensor, *args, **kwargs):
+        try:
+            dev = input_tensor.device()
+            if dev is None or dev.get_num_devices() != 1:
+                return orig(input_tensor, *args, **kwargs)
+            num_heads = kwargs.get("num_heads", args[0] if len(args) > 0 else None)
+            num_kv_heads = kwargs.get("num_kv_heads", num_heads)
+            x = ttnn.to_torch(input_tensor).float()  # [1, 1, batch, qkv]
+            qkv = x.shape[-1]
+            batch = x.shape[-2]
+            head_dim = qkv // (num_heads + 2 * num_kv_heads)
+            x2 = x.reshape(batch, qkv)  # rows = batch users
+            nq = num_heads * head_dim
+            nk = num_kv_heads * head_dim
+            q = x2[:, :nq].reshape(1, batch, num_heads, head_dim)
+            k = x2[:, nq : nq + nk].reshape(1, batch, num_kv_heads, head_dim)
+            v = x2[:, nq + nk :].reshape(1, batch, num_kv_heads, head_dim)
+            logger.warning(
+                f"[llama-e2e][quasar] host create_qkv_heads_decode: batch={batch} nq={num_heads} "
+                f"nkv={num_kv_heads} hd={head_dim} (sidestepped interleaved-factory reader_scratch self-loop)"
+            )
+            return (
+                _quasar_upload_tile_heads_padded(q, dev),
+                _quasar_upload_tile_heads_padded(k, dev),
+                _quasar_upload_tile_heads_padded(v, dev),
+            )
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] host create_qkv_heads failed ({e}); falling back to device op")
+            return orig(input_tensor, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn.experimental, "nlp_create_qkv_heads_decode", _host_create)
+
+
+def _install_quasar_update_cache_reshard(monkeypatch):
+    """Reshard the k/v inputs to (on-device) paged_update_cache into the HEIGHT_SHARDED layout it requires.
+
+    paged_update_cache keeps the KV cache on device (Quasar-safe per the paged_cache Gen2 fold) and host SDPA
+    reads that device cache, so we want to keep update_cache on device. But it FATALs "Expect input_tensor to be
+    sharded": the decode kernel dispatches one user per core and requires the k/v input HEIGHT_SHARDED with
+    shard grid num_cores == batch, shard shape [kv_heads_padded, head_dim], ROW_MAJOR
+    (paged_update_cache_device_operation.cpp:255-289) -- exactly the real create_qkv_heads_decode output layout.
+    Our host create_qkv / host RoPE emit interleaved TILE DRAM (heads padded to 32), so reshard here. For batch=1
+    this is a 1-core shard that fits the tiny device. Thin wrapper -> original device op; falls back on error."""
+
+    def _reshard(t):
+        try:
+            if t is None or t.is_sharded():
+                return t
+            ps = t.padded_shape  # [1, batch, kv_heads_padded, head_dim]
+            batch = int(ps[1])
+            kvh = int(ps[2])
+            hd = int(ps[-1])
+            # batch cores in a row (batch=1 -> single core (0,0)); num_cores == batch as the kernel requires.
+            core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(batch - 1, 0))
+            grid = ttnn.CoreRangeSet([core_range])
+            shard_spec = ttnn.ShardSpec(grid, [kvh, hd], ttnn.ShardOrientation.ROW_MAJOR)
+            memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+            return ttnn.interleaved_to_sharded(t, memcfg)
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] update_cache input reshard failed ({e}); passing through")
+            return t
+
+    def _log_cache_dtype(cache, tag):
+        # Verify whether the KV cache is bf16 or still bf8_b. bf8_b (Bfp8_b) is unsupported on Quasar and the
+        # device SDPA validate hard-requires bf16 for k/v, so if we ever un-host SDPA the cache must be bf16.
+        # The cache is allocated via executor.allocate_kv_cache (ttnn.as_tensor), not from_torch, so the
+        # tilize_from_torch bf16 coercion never sees it -- this log tells us if the allocator fix is needed.
+        try:
+            logger.warning(f"[llama-e2e][quasar] update_cache {tag} cache dtype = {cache.dtype}")
+        except Exception:
+            pass
+
+    def _wrap_nonfused(orig):
+        def _f(cache, input_tensor, *args, **kwargs):
+            _log_cache_dtype(cache, "K/V")
+            return orig(cache, _reshard(input_tensor), *args, **kwargs)
+
+        return _f
+
+    def _wrap_fused(orig):
+        def _f(keys, k, values, v, *args, **kwargs):
+            _log_cache_dtype(keys, "K")
+            _log_cache_dtype(values, "V")
+            return orig(keys, _reshard(k), values, _reshard(v), *args, **kwargs)
+
+        return _f
+
+    for name, wrapper in (
+        ("paged_update_cache", _wrap_nonfused),
+        ("paged_fused_update_cache", _wrap_fused),
+    ):
+        orig = getattr(ttnn.experimental, name, None)
+        if orig is not None:
+            try:
+                monkeypatch.setattr(ttnn.experimental, name, wrapper(orig))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not patch {name} for update_cache reshard ({e})")
+
+
+def _install_quasar_host_rope(monkeypatch):
+    """Apply decode RoPE on the HOST on Quasar (torch), sidestepping the sharded device rotary kernel.
+
+    ``rotary_embedding_llama[_fused_qk]`` require HEIGHT_SHARDED TILE inputs (no interleaved decode variant);
+    under force-interleaved -- and fed our host create_qkv_heads RM tensors -- the device op FATALs
+    ("input tensor to rotary embedding must be tilized", and it needs sharding the tiny device can't provide).
+
+    The math is exact and cheap. ttnn's llama RoPE is the GPT-J *interleaved* rotation: cos/sin are built by
+    permute_to_meta_format (models/tt_transformers/tt/rope.py) which duplicates each frequency ADJACENTLY
+    (stack((c,c)).flatten -> [c0,c0,c1,c1,...]), matched by get_rot_transformation_mat's adjacent-pairing
+    trans_mat (+1 at (2i,2i+1), -1 at (2i+1,2i) => rotate(x) = x @ trans gives [-x1,x0,-x3,x2,...]). So:
+        out = x*cos + (x @ trans)*sin
+    with x [1,batch,n_heads,head_dim] and the model's own (already meta-format) cos/sin broadcast over heads
+    ([1,batch,1,head_dim]). We rebuild the full head_dim x head_dim adjacent-pairing rotate matrix in torch
+    (the device trans_mat is a tiled/repeated 32x32 form, awkward to matmul host-side). Bit-exact vs the kernel.
+    Single-device only; any failure falls back to the device op. TILE DRAM output (heads tile-padded), so the
+    rotated k feeds the on-device paged_update_cache and q feeds host SDPA."""
+    import torch as _torch
+
+    def _adjacent_rotate_mat(hd):
+        # Same as get_rot_transformation_mat: +1 at (2i,2i+1), -1 at (2i+1,2i). With x@m this yields
+        # (x@m)[2i] = -x[2i+1], (x@m)[2i+1] = x[2i]  ->  rot = [-x1, x0, -x3, x2, ...].
+        m = _torch.zeros(hd, hd)
+        even = _torch.arange(0, hd, 2)
+        odd = _torch.arange(1, hd, 2)
+        m[even, odd] = 1.0
+        m[odd, even] = -1.0
+        return m
+
+    def _rope_one(x, cos, sin, is_decode):
+        xt = ttnn.to_torch(x).float()
+        ct = ttnn.to_torch(cos).float()
+        st = ttnn.to_torch(sin).float()
+        if is_decode:
+            # decode: x is [1, batch, n_heads, head_dim]; cos/sin are ONE position per user
+            # [1, batch, 1(or tile-padded), head_dim]. Keep position row 0, broadcast over heads (dim -2).
+            ct = ct[..., :1, :]
+            st = st[..., :1, :]
+        # prefill (is_decode_mode=False): x is [1, n_heads, seq, head_dim]; cos/sin are [1, 1, seq, head_dim].
+        # seq is in dim -2 of BOTH and must NOT be truncated -- broadcast over heads (dim 1) instead.
+        hd = xt.shape[-1]
+        trans = _adjacent_rotate_mat(hd)  # [hd, hd]
+        rot = xt @ trans  # [-x1, x0, -x3, x2, ...]
+        return xt * ct + rot * st
+
+    def _wrap_single(orig):
+        def _f(input_tensor, cos, sin, trans_mat=None, *args, **kwargs):
+            try:
+                dev = input_tensor.device()
+                if dev is None or dev.get_num_devices() != 1:
+                    return orig(input_tensor, cos, sin, trans_mat, *args, **kwargs)
+                is_decode = bool(kwargs.get("is_decode_mode", True))
+                out = _rope_one(input_tensor, cos, sin, is_decode)
+                logger.warning(
+                    f"[llama-e2e][quasar] host RoPE ({'decode' if is_decode else 'prefill'}) "
+                    f"shape={tuple(out.shape)} (sidestepped device rotary)"
+                )
+                return _quasar_upload_tile_heads_padded(out, dev)
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] host RoPE failed ({e}); falling back to device op")
+                return orig(input_tensor, cos, sin, trans_mat, *args, **kwargs)
+
+        return _f
+
+    def _wrap_fused(orig):
+        def _f(q, k, cos, sin, trans_mat=None, *args, **kwargs):
+            try:
+                dev = q.device()
+                if dev is None or dev.get_num_devices() != 1:
+                    return orig(q, k, cos, sin, trans_mat, *args, **kwargs)
+                qo = _rope_one(q, cos, sin, True)  # fused_qk is decode-only
+                ko = _rope_one(k, cos, sin, True)
+                logger.warning("[llama-e2e][quasar] host RoPE fused_qk (decode) (sidestepped sharded device rotary)")
+                return (_quasar_upload_tile_heads_padded(qo, dev), _quasar_upload_tile_heads_padded(ko, dev))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] host RoPE fused_qk failed ({e}); falling back to device op")
+                return orig(q, k, cos, sin, trans_mat, *args, **kwargs)
+
+        return _f
+
+    for name, wrapper in (
+        ("rotary_embedding_llama", _wrap_single),
+        ("rotary_embedding_llama_fused_qk", _wrap_fused),
+    ):
+        orig = getattr(ttnn.experimental, name, None)
+        if orig is not None:
+            try:
+                monkeypatch.setattr(ttnn.experimental, name, wrapper(orig))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not patch {name} for host RoPE ({e})")
+
+
+def _install_quasar_prefill_sdpa_grid(monkeypatch, mesh_device):
+    """Clamp the PREFILL SDPA program-config grid to the device so it runs ON DEVICE on Quasar.
+
+    The model pins prefill SDPA to compute_with_storage_grid_size=(8,8)=64 cores (attention_1d.py:1789),
+    but craq-sim exposes fewer (e.g. 8x4=32) -> `scaled_dot_product_attention` FATALs at
+    sdpa_program_factory.cpp:383 ("Provided grid must not contain more cores than the device"). The op
+    itself is fine on Quasar once the grid fits: the standalone test_quasar_sdpa_prefill.py PASSES causal
+    prefill SDPA at 1 and 2 cores (with TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0). Prefill flash attention
+    distributes Q-chunks across cores independently (no cross-core reduction, unlike decode's tree), so
+    clamping the grid down is safe. Wrap both prefill SDPA ops and rebuild the SDPAProgramConfig with the
+    grid clamped to the device (preserving q/k_chunk_size + exp_approx_mode). NOTE: on-device SDPA relies on
+    TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 (pass it on the pytest invocation) to avoid the tile-counter
+    underflow; without it prefill SDPA may abort like decode did."""
+    tr = getattr(getattr(ttnn.experimental, "quasar", None), "transformer", None)
+    if tr is None:
+        return
+    dev = mesh_device.compute_with_storage_grid_size()
+    cx, cy = _qsr_capped_grid_xy(dev)  # emulator-size cap (2 nodes), matching the validated matmul/SDPA regime
+
+    def _clamp(pc):
+        try:
+            g = pc.compute_with_storage_grid_size
+            gx, gy = int(g.x), int(g.y)
+            if gx <= cx and gy <= cy:
+                return pc  # already within the cap
+            nx, ny = min(gx, cx), min(gy, cy)
+            new = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(nx, ny),
+                exp_approx_mode=pc.exp_approx_mode,
+                q_chunk_size=pc.q_chunk_size,
+                k_chunk_size=pc.k_chunk_size,
+            )
+            logger.warning(f"[llama-e2e][quasar] prefill SDPA grid {gx}x{gy} -> {nx}x{ny} (device {dev.x}x{dev.y})")
+            return new
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] prefill SDPA grid clamp failed ({e}); passing through")
+            return pc
+
+    def _wrap(orig):
+        def _f(*args, **kwargs):
+            pc = kwargs.get("program_config")
+            if pc is not None:
+                kwargs["program_config"] = _clamp(pc)
+            return orig(*args, **kwargs)
+
+        return _f
+
+    for name in ("scaled_dot_product_attention", "chunked_scaled_dot_product_attention"):
+        orig = getattr(tr, name, None)
+        if orig is not None:
+            try:
+                monkeypatch.setattr(tr, name, _wrap(orig))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not patch {name} for prefill SDPA grid ({e})")
+
+
+def _install_quasar_sdpa_single_core(monkeypatch, mesh_device):
+    """Force the Quasar decode SDPA to 1 core per KV-head (no cross-core tree reduction) AND clamp its grid.
+
+    With num_cores_per_head > 1 (e.g. grid 8x4 / 8 KV heads -> 4 cores/head) the flash-decode does a
+    multi-core TREE reduction (reducer <- children over mcast/semaphores). That cross-core handshake
+    DEADLOCKS on the Quasar sim once k_num_chunks > 1 (children have data) -- workers stall at waypoint WFW
+    (wait-front). Setting SDPAProgramConfig.max_cores_per_head_batch = 1 makes num_cores_per_head = 1, so
+    num_tree_reduction_rounds = 0 (sdpa_decode_program_factory.cpp:202-207,249) -- the single-core
+    flash->finalize path that PASSES on device (test_paged_sdpa_decode_single_core with alias=0). Also clamp
+    compute_with_storage_grid_size to the device (model pins 8x8=64 cores) so the on-device decode SDPA does
+    not exceed the device -- matches the prefill SDPA grid clamp. Bring-up path for on-device decode SDPA.
+    """
+    tr = getattr(getattr(ttnn.experimental, "quasar", None), "transformer", None)
+    if tr is None:
+        logger.warning("[llama-e2e][quasar] no experimental.quasar.transformer; SDPA single-core patch skipped")
+        return
+    dev = mesh_device.compute_with_storage_grid_size()
+    cx, cy = _qsr_capped_grid_xy(dev)  # emulator-size cap (2 nodes)
+
+    def _single_core_pc(pc):
+        if pc is None:
+            return pc
+        try:
+            g = pc.compute_with_storage_grid_size
+            grid = ttnn.CoreCoord(min(int(g.x), cx), min(int(g.y), cy))
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                sub_core_grids=pc.sub_core_grids,
+                q_chunk_size=pc.q_chunk_size,
+                k_chunk_size=pc.k_chunk_size,
+                exp_approx_mode=pc.exp_approx_mode,
+                max_cores_per_head_batch=1,
+            )
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] SDPA cfg rebuild failed ({e}); mutating in place")
+            try:
+                pc.max_cores_per_head_batch = 1
+            except Exception:
+                pass
+            return pc
+
+    def _wrap(orig):
+        def _sdpa(*args, **kwargs):
+            if kwargs.get("program_config") is not None:
+                kwargs["program_config"] = _single_core_pc(kwargs["program_config"])
+            return orig(*args, **kwargs)
+
+        return _sdpa
+
+    for name in ("scaled_dot_product_attention_decode", "paged_scaled_dot_product_attention_decode"):
+        orig = getattr(tr, name, None)
+        if orig is not None:
+            try:
+                monkeypatch.setattr(tr, name, _wrap(orig))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not patch {name} ({e})")
+
+
+def _install_quasar_host_sdpa(monkeypatch):
+    """Compute decode SDPA on the HOST (torch), sidestepping the Quasar device flash-decode.
+
+    Even single-core (no tree), the device flash-decode keeps hitting capacity-1 intra-tensix DFB
+    tile-counter underflows on the sim (max buffer, then the multi-chunk lazy-softmax buffers) -- a runtime
+    remapper bug (craq-sim issue filed), whack-a-mole at the kernel level. Gather Q + KV to host, do GQA
+    decode attention in torch, upload the [1,B,nq,hd] output (DRAM). Single-device only; any failure falls
+    back to the device op (which is left single-core by _install_quasar_sdpa_single_core, so it fails fast
+    rather than deadlocking). Bring-up sidestep -- exact-ish numerics (fp32 accumulate -> bf16)."""
+    import torch as _torch
+
+    tr = getattr(getattr(ttnn.experimental, "quasar", None), "transformer", None)
+    if tr is None:
+        return
+
+    def _upload_dram(out_t, dev):
+        rm = ttnn.from_torch(
+            out_t.to(_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
+        )
+        qtil = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+        return (qtil or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+    def _host_decode(q, k, v, page_table, cur_pos, scale, sliding_window):
+        qh = ttnn.to_torch(q).float()  # [1, B, nq, hd]
+        kk = ttnn.to_torch(k).float()
+        vv = ttnn.to_torch(v).float()
+        B, nq, hd = qh.shape[1], qh.shape[2], qh.shape[3]
+        nkv = kk.shape[1]
+        group = max(nq // nkv, 1)  # GQA: q heads per kv head
+        sc = scale if scale is not None else hd**-0.5
+        paged = page_table is not None
+        pt = ttnn.to_torch(page_table).to(_torch.int64) if paged else None
+        cp = ttnn.to_torch(cur_pos).to(_torch.int64).flatten().tolist() if cur_pos is not None else None
+        out = _torch.zeros(1, B, nq, hd)
+        for b in range(B):
+            P = int(cp[b]) if cp is not None else (kk.shape[2] - 1 if not paged else kk.shape[0] * kk.shape[2] - 1)
+            pos = _torch.arange(P + 1)
+            if paged:
+                bs = kk.shape[2]
+                blk = pt[b, pos // bs]
+                off = pos % bs
+                Kb = kk[blk, :, off, :]  # [P+1, nkv, hd]
+                Vb = vv[blk, :, off, :]
+            else:
+                Kb = kk[b, :, : P + 1, :].transpose(0, 1)  # [P+1, nkv, hd]
+                Vb = vv[b, :, : P + 1, :].transpose(0, 1)
+            start = max(0, P + 1 - sliding_window) if sliding_window else 0
+            for h in range(nq):
+                kv = h // group
+                qvec = qh[0, b, h]  # [hd]
+                Ks = Kb[start : P + 1, kv, :]  # [L, hd]
+                Vs = Vb[start : P + 1, kv, :]
+                w = _torch.softmax((Ks @ qvec) * sc, dim=0)  # [L]
+                out[0, b, h] = w @ Vs
+        logger.warning(
+            f"[llama-e2e][quasar] host SDPA decode B={B} nq={nq} nkv={nkv} P0={int(cp[0]) if cp else -1} (sidestepped device flash-decode)"
+        )
+        return _upload_dram(out, q.device())
+
+    def _wrap_paged(orig):
+        def _f(q, k, v, *args, **kwargs):
+            try:
+                dev = q.device()
+                if dev is None or dev.get_num_devices() != 1:
+                    return orig(q, k, v, *args, **kwargs)
+                return _host_decode(
+                    q,
+                    k,
+                    v,
+                    kwargs.get("page_table_tensor"),
+                    kwargs.get("cur_pos_tensor"),
+                    kwargs.get("scale"),
+                    kwargs.get("sliding_window_size"),
+                )
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] host paged SDPA failed ({e}); falling back to device op")
+                return orig(q, k, v, *args, **kwargs)
+
+        return _f
+
+    def _wrap_nonpaged(orig):
+        def _f(q, k, v, *args, **kwargs):
+            try:
+                dev = q.device()
+                if dev is None or dev.get_num_devices() != 1:
+                    return orig(q, k, v, *args, **kwargs)
+                return _host_decode(
+                    q, k, v, None, kwargs.get("cur_pos_tensor"), kwargs.get("scale"), kwargs.get("sliding_window_size")
+                )
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] host SDPA failed ({e}); falling back to device op")
+                return orig(q, k, v, *args, **kwargs)
+
+        return _f
+
+    for name, wrapper in (
+        ("paged_scaled_dot_product_attention_decode", _wrap_paged),
+        ("scaled_dot_product_attention_decode", _wrap_nonpaged),
+    ):
+        orig = getattr(tr, name, None)
+        if orig is not None:
+            try:
+                monkeypatch.setattr(tr, name, wrapper(orig))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not patch {name} for host SDPA ({e})")
+
+
+def _install_quasar_force_interleaved(monkeypatch, mesh_device):
+    """Force OVERSIZED sharded memory configs to DRAM-interleaved on Quasar; keep device-fitting shards.
+
+    The WH tuning threads grid-8x8 (64-core) sharded memcfgs through decode (mlp/attention/rmsnorm/lm_head),
+    which the Quasar device cannot allocate, and whose sharded device ops are broken on the sim anyway. But a
+    few configs are SMALL and device-fitting and MUST stay sharded -- notably RoPE's per-batch shards
+    (batch_grid = 1 core for batch=1): rotary_embedding_llama[_fused_qk] REQUIRES HEIGHT_SHARDED inputs (no
+    interleaved decode variant), so forcing those to DRAM breaks RoPE.
+
+    So ttnn.create_sharded_memory_config returns DRAM only when the requested core_grid does NOT fit the
+    device (the 8x8 ones); a fitting grid keeps its real sharded config. ttnn.to_memory_config coerces a
+    sharded TARGET to DRAM only when its shard grid doesn't fit. Installed BEFORE create_model."""
+    dev = mesh_device.compute_with_storage_grid_size()
+
+    def _grid_fits(cg):
+        try:
+            if cg is None:
+                return False
+            if hasattr(cg, "bounding_box"):  # CoreRangeSet -> bounding-box dimensions (num cores per dim)
+                gs = cg.bounding_box().grid_size()
+                return int(gs.x) <= dev.x and int(gs.y) <= dev.y
+            if hasattr(cg, "x") and hasattr(cg, "y"):  # CoreGrid
+                return int(cg.x) <= dev.x and int(cg.y) <= dev.y
+        except Exception:
+            return False
+        return False
+
+    orig_csmc = getattr(ttnn, "create_sharded_memory_config", None)
+    if orig_csmc is not None:
+
+        def _csmc(*args, **kwargs):
+            cg = kwargs.get("core_grid", args[1] if len(args) > 1 else None)
+            if _grid_fits(cg):
+                return orig_csmc(*args, **kwargs)  # small shard (e.g. RoPE per-batch) -> keep
+            return ttnn.DRAM_MEMORY_CONFIG  # oversized (grid 8x8) -> interleaved
+
+        monkeypatch.setattr(ttnn, "create_sharded_memory_config", _csmc)
+
+    orig_tmc = ttnn.to_memory_config
+
+    def _tmc(tensor, memory_config=None, *args, **kwargs):
+        try:
+            if memory_config is not None and memory_config.is_sharded():
+                cg = None
+                try:
+                    ss = memory_config.shard_spec
+                    cg = ss.grid if ss is not None else None
+                except Exception:
+                    cg = None
+                if not _grid_fits(cg):
+                    memory_config = ttnn.DRAM_MEMORY_CONFIG
+        except Exception:
+            pass
+        return orig_tmc(tensor, memory_config, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn, "to_memory_config", _tmc)
+    logger.warning(
+        f"[llama-e2e][quasar] force-interleaved: oversized shards -> DRAM, device-fitting shards kept (dev {dev.x}x{dev.y})"
+    )
+
+
+def _install_quasar_s2i_copy(monkeypatch):
+    """Make ttnn.sharded_to_interleaved return a DISTINCT copy when its input is already interleaved.
+
+    With force-interleaved + host-side sidesteps, ops that the model built to output WIDTH_SHARDED now yield
+    DRAM-interleaved tensors. The model's attention _all_reduce_qkv_decode then does
+    `out = sharded_to_interleaved(x); deallocate(x); reshape(out)`. When x is already interleaved,
+    sharded_to_interleaved is a no-op ALIAS (out IS x), so deallocate(x) frees the buffer reshape then reads
+    -> "Tensor is not allocated". Returning a genuine copy (add 0 via the routed quasar eltwise, else a host
+    round-trip) makes out distinct from x so the deallocate is safe."""
+
+    orig = ttnn.sharded_to_interleaved
+
+    def _s2i(x, *args, **kwargs):
+        try:
+            if hasattr(x, "is_sharded") and not x.is_sharded():
+                try:
+                    return ttnn.add(x, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # routed -> quasar.add, new buffer
+                except Exception as e:
+                    logger.warning(f"[llama-e2e][quasar] s2i add-copy failed ({e}); host round-trip")
+                    dev = x.device()
+                    t = ttnn.to_torch(x)
+                    return ttnn.from_torch(
+                        t,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=dev,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
+                    )
+        except Exception:
+            pass
+        return orig(x, *args, **kwargs)
+
+    monkeypatch.setattr(ttnn, "sharded_to_interleaved", _s2i)
+
+
+def _install_quasar_mlp_input_relax(monkeypatch):
+    """Relax the MLP decode-input memcfg assertion.
+
+    mlp_1d._load_input_device_tensor asserts x.memory_config() == config.decode_input_memcfg (a WIDTH_SHARDED
+    L1 config). Our host-side sidesteps (matmul/SDPA/eltwise) hand the MLP a DRAM-interleaved x, so the strict
+    check raises "Input tensor memory config does not match the config!". The MLP's w1/w3/w2 matmuls are now
+    computed host-side (they read x to host regardless of layout), so the exact input layout no longer
+    matters. On mismatch, best-effort convert to the declared config; if that can't fit the device grid, pass
+    x through unchanged. Bring-up sidestep for the config-threading the interleaved path breaks."""
+    try:
+        from models.experimental.llama32_1b_quasar.modules.mlp import mlp_1d
+    except Exception as e:
+        logger.warning(f"[llama-e2e][quasar] could not import mlp_1d to relax input check ({e})")
+        return
+    orig = getattr(mlp_1d, "_load_input_device_tensor", None)
+    if orig is None:
+        return
+
+    def _relaxed(x, config, mode):
+        try:
+            return orig(x, config, mode)
+        except ValueError:
+            mem_cfg = config.decode_input_memcfg if mode == "decode" else config.prefill_input_memcfg
+            try:
+                if hasattr(x, "memory_config") and mem_cfg is not None and x.memory_config() != mem_cfg:
+                    x2 = ttnn.to_memory_config(x, mem_cfg)
+                    logger.warning(f"[llama-e2e][quasar] MLP input converted to declared {mode} memcfg")
+                    return x2
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] MLP input convert failed ({e}); passing interleaved through")
+            return x
+
+    monkeypatch.setattr(mlp_1d, "_load_input_device_tensor", _relaxed)
+
+
+def _install_quasar_eltwise(monkeypatch):
+    """Route eltwise binary ops to the Quasar-native experimental ops (keeps them ON DEVICE).
+
+    Mainline binary_ng (ttnn.add / ttnn.mul / ttnn.multiply / ttnn.subtract) is Gen1-only: its program
+    factory builds a legacy DataMovementKernel -> `DataMovementKernel is not supported on Quasar` FATAL
+    (kernel.hpp:477). ttnn.experimental.quasar.{add,multiply,subtract,...} are the DFB-ported equivalents
+    (same kwargs: memory_config/dtype/activations/input_tensor_a_activations, tensor+scalar overloads). Route
+    the mainline names to them on Quasar; fall back to the mainline op if the quasar one errors."""
+    q = getattr(ttnn.experimental, "quasar", None)
+    if q is None:
+        return
+    routes = {"add": "add", "multiply": "multiply", "mul": "multiply", "subtract": "subtract", "sub": "subtract"}
+
+    def _mk(qop, mop, nm):
+        def _f(*args, **kwargs):
+            # Keep eltwise outputs DRAM-interleaved too (sharding forced off on Quasar).
+            try:
+                mc = kwargs.get("memory_config")
+                if mc is not None and mc.is_sharded():
+                    kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            except Exception:
+                pass
+            # bf8_b / bf4_b are not supported on Quasar (real HW limit): the MLP gate mul requests
+            # dtype=bf8_b (cfg.mul_dtype) -> ValidateProgramSpec FATAL "DFB has data format 'Bfp8_b'...".
+            # Force the eltwise output to bf16 (the model is bf16 e2e; downstream matmuls are host-side).
+            try:
+                if kwargs.get("dtype") in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                    kwargs["dtype"] = ttnn.bfloat16
+            except Exception:
+                pass
+            try:
+                return qop(*args, **kwargs)
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] quasar {nm} failed ({e}); mainline fallback")
+                return mop(*args, **kwargs)
+
+        return _f
+
+    for main_name, q_name in routes.items():
+        qop = getattr(q, q_name, None)
+        mop = getattr(ttnn, main_name, None)
+        if qop is not None and mop is not None:
+            monkeypatch.setattr(ttnn, main_name, _mk(qop, mop, main_name))
+
+
+# The Quasar functional simulator runs each op at a few KHz, so a single decode/prefill layer takes minutes
+# (LayerNorm ~54s, Copy ~24s observed); the host-sided run measured ~3h50m. On-device attention adds device
+# op time, so override the repo-wide 300s pytest-timeout with 8h to avoid a mid-run kill
+# (LLAMA32_1B_TF_MAX_DECODE_STEPS caps the decode loop to keep it bounded). WH/BH finish far within this.
+@pytest.mark.timeout(28800)
 @pytest.mark.parametrize("optimizations", ["performance"])
 def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — mesh_device is the imported fixture
     """Token-accuracy + per-op PCC, on WH (hard gate) and Quasar (bring-up, soft gate)."""
@@ -341,6 +1152,13 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         monkeypatch.setenv("DISABLE_MINIMAL_MATMUL", "1")
         # Default to a 1-layer stack for bring-up unless the caller asked for more.
         monkeypatch.setenv("LLAMA32_1B_DEMO_NUM_LAYERS", os.environ.get("LLAMA32_1B_DEMO_NUM_LAYERS", "1"))
+        # Teacher forcing otherwise drives ~255 decode steps (num_target-1), each minutes on the ~57 KHz sim
+        # (a full run is many hours -> the 1h timeout fired mid-run). Cap to 1 decode step for bring-up unless
+        # the caller overrides. (executor.run_teacher_forcing honors LLAMA32_1B_TF_MAX_DECODE_STEPS.)
+        monkeypatch.setenv("LLAMA32_1B_TF_MAX_DECODE_STEPS", os.environ.get("LLAMA32_1B_TF_MAX_DECODE_STEPS", "1"))
+        # Force OVERSIZED (grid-8x8) sharded configs -> DRAM; keep device-fitting shards (RoPE needs them).
+        # MUST be before create_model so the config objects are built with the right layout.
+        _install_quasar_force_interleaved(monkeypatch, mesh_device)
         # Route weight-upload tilize through the Gen2-native quasar op (the mainline one hangs on the sim).
         # Must be installed before create_model, which materializes the weights via ttnn.from_torch.
         _install_quasar_tilize_from_torch(monkeypatch)
@@ -352,12 +1170,54 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         # fp32 accumulation needs (qsr_unpack_src_value in_format=5 out_format=4). Must precede create_model
         # (compute configs are built during model construction).
         _install_quasar_fp32_acc_off(monkeypatch)
-        # Force decode matmuls interleaved (the DRAM-sharded matmul path needs the Quasar-broken sharded
-        # mcast). Complements the interleaved decode-norm refactor in model.py.
-        _install_quasar_interleaved_matmul(monkeypatch)
-        # Skip the ~525MB tok_embeddings table upload: gather on host, upload only the activation. This is
-        # the dominant setup cost on the sim; embedding is a plain gather, not a Quasar op under test.
+
+        # LLAMA_QSR_DEVICE_ATTN=1 (default): run compute ON DEVICE (matmul, create_qkv_heads, RoPE, prefill
+        # SDPA); all confirmed working on device 2026-09-26. =0: the fully host-sided path that passed e2e --
+        # kept as a fallback. DECODE SDPA runs on HOST in BOTH modes (the multi-chunk k_num_chunks>1 path hangs
+        # on device even single-core + alias=0). Embedding also stays HOST either way (~525MB table upload is a
+        # sim-perf tax, not a device limit; unlike bf8_b which is genuinely unsupported). ON-DEVICE MODE
+        # REQUIRES `TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0` in the pytest env (clears the tile-counter
+        # underflow that forced host matmul); matmul + prefill SDPA device paths are validated standalone
+        # (test_quasar_qkv_matmul_dfb.py, test_quasar_sdpa_prefill.py). bf16 substitutes for bf8_b.
+        device_attn = os.environ.get("LLAMA_QSR_DEVICE_ATTN", "1") == "1"
+
+        if device_attn:
+            # Device matmul: de-shard inputs to DRAM-interleaved + drop the DRAM-sharded program_config so the
+            # picker selects the interleaved 1D-mcast matmul (its in0 DFB underflow is cleared by alias=0).
+            _install_quasar_interleaved_matmul(monkeypatch, mesh_device)
+            # KV cache as bf16 so the on-device decode SDPA validate (bf16-only q/k/v on Quasar) passes.
+            _install_quasar_bf16_kv_cache(monkeypatch)
+        else:
+            # Host-sided compute (the passing fallback path).
+            _install_quasar_host_matmul(monkeypatch)
+            _install_quasar_host_create_qkv_heads(monkeypatch)
+            _install_quasar_host_rope(monkeypatch)
+
+        # Skip the ~525MB tok_embeddings table upload: gather on host, upload only the activation. This is the
+        # dominant setup cost on the sim; embedding is a plain gather (device-viable, host is a perf choice).
         _install_quasar_host_embedding(monkeypatch)
+        # Reshard k/v into the HEIGHT_SHARDED layout paged_update_cache requires (one user per core), keeping the
+        # KV cache update on device. batch=1 -> 1-core shard.
+        _install_quasar_update_cache_reshard(monkeypatch)
+        # Clamp the PREFILL SDPA grid (model pins 8x8=64 cores) to the device so it runs ON DEVICE.
+        _install_quasar_prefill_sdpa_grid(monkeypatch, mesh_device)
+        # Decode SDPA single-core config (no tree reduction) -- the fallback config under host SDPA.
+        _install_quasar_sdpa_single_core(monkeypatch, mesh_device)
+        # Decode SDPA on the HOST in BOTH modes. Single-core + alias=0 clears the tree deadlock AND the
+        # tile-counter underflow, and PASSES standalone at cur_pos=64 (k_num_chunks=1). But the e2e decodes at
+        # cur_pos~512 -> k_num_chunks>1 -> the multi-chunk lazy-softmax path, which HANGS on device even
+        # single-core + alias=0 (2026-09-26 device run: SdpaDecode launched, device stuck, no op progress).
+        # Prefill SDPA (scaled_dot_product_attention, on device) is NOT wrapped by this -- only the decode ops.
+        # So: everything on device EXCEPT decode SDPA (host, multi-chunk device bug) + embedding (host, perf).
+        _install_quasar_host_sdpa(monkeypatch)
+        # Route eltwise add/mul/multiply/subtract to the Quasar-native ops: mainline binary_ng is Gen1-only
+        # (DataMovementKernel FATAL on Quasar). Keeps residual adds + MLP gate mul on device.
+        _install_quasar_eltwise(monkeypatch)
+        # Relax the MLP decode-input memcfg assert: interleaved x vs a declared WIDTH_SHARDED config.
+        _install_quasar_mlp_input_relax(monkeypatch)
+        # sharded_to_interleaved on an already-interleaved tensor is a no-op alias; the attention QKV path
+        # then deallocates it and reshapes the alias ("Tensor is not allocated"). Return a distinct copy.
+        _install_quasar_s2i_copy(monkeypatch)
 
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
     cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)

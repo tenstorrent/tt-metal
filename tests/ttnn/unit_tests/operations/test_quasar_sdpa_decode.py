@@ -91,9 +91,10 @@ def _q_height_sharded(t_bf16, mesh_device, batch):
     return (qi2s or ttnn.interleaved_to_sharded)(qt, memcfg)
 
 
-def _prog_cfg(max_cores_per_head_batch=16, k_chunk_size=0):
+def _prog_cfg(max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None):
+    gx, gy = grid_xy if grid_xy is not None else (GRID_X, GRID_Y)
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(GRID_X, GRID_Y),
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
         exp_approx_mode=True,
         q_chunk_size=0,
         k_chunk_size=k_chunk_size,
@@ -117,11 +118,18 @@ def _skip_if_small(mesh_device):
         pytest.skip(f"needs an {GRID_X}x{GRID_Y} grid; device has {grid.x}x{grid.y}")
 
 
-def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0):
+def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None):
     """Paged flash-decode SDPA at the llama shapes. num_cores_per_head is grid-derived (8x4 / 8 KV heads = 4),
     so a multi-core TREE reduction is configured; whether it actually runs (and deadlocks on Quasar) depends
-    on k_num_chunks>1 (children get K data). max_cores_per_head_batch=1 collapses to 1 core/head (no tree)."""
-    _skip_if_small(mesh_device)
+    on k_num_chunks>1 (children get K data). max_cores_per_head_batch=1 collapses to 1 core/head (no tree).
+    grid_xy overrides the program-config compute grid (the e2e clamps it to 2 nodes)."""
+    if grid_xy is None:
+        _skip_if_small(mesh_device)
+    else:
+        gx, gy = grid_xy
+        dev = mesh_device.compute_with_storage_grid_size()
+        if dev.x < gx or dev.y < gy:
+            pytest.skip(f"grid {gx}x{gy} needs a device >= that; device is {dev.x}x{dev.y}")
     batch = 1
     torch.manual_seed(0)
     q = torch.randn(1, batch, N_Q_HEADS, HEAD_DIM, dtype=torch.bfloat16)
@@ -136,10 +144,11 @@ def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0
     pt_t = _int32_rm_dram(page_table, mesh_device)
     cp_t = _int32_rm_dram(cur_pos_t, mesh_device)
 
+    gx, gy = grid_xy if grid_xy is not None else (GRID_X, GRID_Y)
     logger.info(
         f"[sdpa-repro] paged decode cur_pos={cur_pos} max_cores_per_head_batch={max_cores_per_head_batch} "
-        f"k_chunk_size={k_chunk_size} grid {GRID_X}x{GRID_Y} (num_cores_per_head={GRID_X * GRID_Y // N_KV_HEADS} "
-        f"-> {'NO tree' if max_cores_per_head_batch == 1 else 'TREE reduction'})"
+        f"k_chunk_size={k_chunk_size} grid {gx}x{gy} "
+        f"-> {'NO tree' if max_cores_per_head_batch == 1 else 'TREE reduction'}"
     )
     out = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
         q_t,
@@ -148,7 +157,9 @@ def _run_paged(mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0
         page_table_tensor=pt_t,
         cur_pos_tensor=cp_t,
         scale=SCALE,
-        program_config=_prog_cfg(max_cores_per_head_batch=max_cores_per_head_batch, k_chunk_size=k_chunk_size),
+        program_config=_prog_cfg(
+            max_cores_per_head_batch=max_cores_per_head_batch, k_chunk_size=k_chunk_size, grid_xy=grid_xy
+        ),
         compute_kernel_config=_compute_cfg(),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -176,6 +187,19 @@ def test_paged_sdpa_decode_single_core(mesh_device):
     -> num_tree_reduction_rounds=0 (no cross-core reduction). Should PASS on Quasar. This is what the e2e
     _install_quasar_sdpa_single_core monkeypatch does."""
     _run_paged(mesh_device, cur_pos=200, max_cores_per_head_batch=1, k_chunk_size=BLOCK_SIZE)
+
+
+@pytest.mark.parametrize("grid_xy", [(1, 1), (2, 1)], ids=["1node", "2node"])
+def test_paged_sdpa_decode_single_core_grid(mesh_device, grid_xy):
+    """Grid sweep of the SINGLE-CORE MULTI-CHUNK decode (max_cores_per_head_batch=1, k_num_chunks>1). This
+    mirrors the e2e, where _install_quasar_sdpa_single_core clamped the program-config grid to 2 nodes and the
+    on-device decode SDPA then HUNG (2026-09-26: grid=2-1, max_cores=1, cur_pos~512, no op progress). The
+    passing test_paged_sdpa_decode_single_core above used the (8,4) grid config, so the compute grid -- not
+    multi-chunk per se -- is the suspect. Compares 1 node vs 2 nodes at the e2e's single-core config:
+      - if 1node PASSES and 2node HANGS -> the 2-node clamp is the bug; the e2e decode SDPA should use 1 node.
+      - if both hang -> single-core multi-chunk decode is broken on device regardless of grid (keep host SDPA).
+    Run under watcher; alias=0 in the env (matches the e2e)."""
+    _run_paged(mesh_device, cur_pos=200, max_cores_per_head_batch=1, k_chunk_size=BLOCK_SIZE, grid_xy=grid_xy)
 
 
 def test_non_paged_sdpa_decode(mesh_device):
