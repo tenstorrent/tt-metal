@@ -18,6 +18,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import masked_bucket_trace as mbt
+from models.demos.blackhole.qwen36.tt.chunked_prefill import ChunkedPrefillPlanner
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -2826,6 +2827,104 @@ class Qwen36Model:
             dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
+    def _chunked_prefill_planner(self):
+        """The scratch-ownership planner of scheduler-driven chunked prefill (tt/chunked_prefill.py), one per model."""
+        planner = getattr(self, "_cp_planner", None)
+        if planner is None:
+            planner = self._cp_planner = ChunkedPrefillPlanner(self._chunked_chunk_size or 2048)
+        return planner
+
+    def ensure_gdn_park_buffer(self):
+        """Allocate the chunked-prefill PARK buffer once: a same-shape twin of every GDN layer's persistent B=1 prefill
+        scratch (rec_state, the K conv taps, conv_carry), and compile both copy directions. Call it at warmup BEFORE
+        any trace is captured (the chunk trace bakes the scratch addresses; a buffer allocated later could alias a
+        trace intermediate). ~154 MB/device at TP=2 (48 layers x (fp32 [1,24,128,128] 1.5 MB + 5 tile-padded
+        [1,<=3,5120] bf16 taps/carry 0.33 MB each)), which comes out of the KV-pool headroom that
+        QWEN36_MAX_TOKENS_ALL_USERS can grow into. QWEN36_CP_PARK_HOST=1 parks through host memory instead (no device
+        buffer; ~2 host round trips of the state per park/unpark), the fallback should the device copy ever drift."""
+        if getattr(self, "_gdn_park", None) is not None:
+            return
+        self._ensure_gdn_prefill_scratch()
+        if os.environ.get("QWEN36_CP_PARK_HOST", "0") == "1":
+            self._gdn_park = "host"
+            self._gdn_park_host = None
+            logger.info("[chunked-prefill] GDN park buffer: HOST (QWEN36_CP_PARK_HOST=1)")
+            return
+        park = []
+        for _dn, rec, conv, carry, _z0, _zr in self._gdn_prefill_scratch:
+            park.append((ttnn.clone(rec), [ttnn.clone(c) for c in conv], ttnn.clone(carry)))
+        self._gdn_park = park
+        # Compile both copy directions now (same-shape ttnn.copy; the scratch holds warm-up garbage, which the next
+        # sequence start resets anyway).
+        self._park_gdn_scratch()
+        self._unpark_gdn_scratch()
+        ttnn.synchronize_device(self.mesh_device)
+        nbytes = sum(
+            math.prod(tuple(t.padded_shape)) * (4 if t.dtype == ttnn.float32 else 2)
+            for rec, conv, carry in park
+            for t in (rec, carry, *conv)
+        )
+        logger.info(f"[chunked-prefill] GDN park buffer: {len(park)} layers, {nbytes / 2**20:.0f} MiB/device")
+
+    def _park_gdn_scratch(self):
+        """Copy the partial prompt's GDN state out of the B=1 prefill scratch before another prompt resets it.
+        QWEN36_CP_PARK_SYNC=1 (default) fences the device first (review M5: the first version keeps the fence)."""
+        if getattr(self, "_gdn_park", None) is None:
+            raise RuntimeError("chunked prefill: park requested but ensure_gdn_park_buffer() never ran")
+        if os.environ.get("QWEN36_CP_PARK_SYNC", "1") == "1":
+            ttnn.synchronize_device(self.mesh_device)
+        if self._gdn_park == "host":
+            comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            self._gdn_park_host = [
+                (
+                    ttnn.to_torch(rec, mesh_composer=comp),
+                    [ttnn.to_torch(c, mesh_composer=comp) for c in conv],
+                    ttnn.to_torch(carry, mesh_composer=comp),
+                )
+                for _dn, rec, conv, carry, _z0, _zr in self._gdn_prefill_scratch
+            ]
+            return
+        for (_dn, rec, conv, carry, _z0, _zr), (p_rec, p_conv, p_carry) in zip(
+            self._gdn_prefill_scratch, self._gdn_park
+        ):
+            ttnn.copy(rec, p_rec)
+            for c, pc in zip(conv, p_conv):
+                ttnn.copy(c, pc)
+            ttnn.copy(carry, p_carry)
+
+    def _unpark_gdn_scratch(self):
+        """Copy the parked GDN state back into the scratch, in place (the chunk trace baked the scratch addresses)."""
+        if getattr(self, "_gdn_park", None) is None:
+            raise RuntimeError("chunked prefill: unpark requested but ensure_gdn_park_buffer() never ran")
+        if self._gdn_park == "host":
+            if self._gdn_park_host is None:
+                raise RuntimeError("chunked prefill: unpark without a parked host state")
+            mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
+
+            def _in(host, dst):
+                t = ttnn.from_torch(
+                    host, dtype=dst.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, mesh_mapper=mapper
+                )
+                ttnn.copy(t, dst)
+                ttnn.deallocate(t)
+
+            for (_dn, rec, conv, carry, _z0, _zr), (h_rec, h_conv, h_carry) in zip(
+                self._gdn_prefill_scratch, self._gdn_park_host
+            ):
+                _in(h_rec, rec)
+                for hc, c in zip(h_conv, conv):
+                    _in(hc, c)
+                _in(h_carry, carry)
+            self._gdn_park_host = None
+            return
+        for (_dn, rec, conv, carry, _z0, _zr), (p_rec, p_conv, p_carry) in zip(
+            self._gdn_prefill_scratch, self._gdn_park
+        ):
+            ttnn.copy(p_rec, rec)
+            for c, pc in zip(conv, p_conv):
+                ttnn.copy(pc, c)
+            ttnn.copy(p_carry, carry)
+
     def _unbind_gdn_prefill_scratch(self, prev):
         """Rebind the batched [B,...] decode buffers saved by _bind_gdn_prefill_scratch, WITHOUT freeing
         the persistent scratch (unlike _restore_gdn_batched, whose scratch is throwaway)."""
@@ -3206,7 +3305,16 @@ class Qwen36Model:
             for hl in host_logits
         ]
 
-    def prefill_paged_slots(self, token_ids_list, page_table, empty_slots, valid_lens=None):
+    def prefill_paged_slots(
+        self,
+        token_ids_list,
+        page_table,
+        empty_slots,
+        valid_lens=None,
+        start_positions=None,
+        resume_mask=None,
+        final_mask=None,
+    ):
         """vLLM continuous-batching TP prefill: prefill each new request into ITS decode slot.
         Per-slot analogue of prefill_paged_peruser: a new request is prefilled while other decode
         slots are live, so each user's B=1 state must land in row empty_slots[u] WITHOUT disturbing
@@ -3216,6 +3324,12 @@ class Qwen36Model:
         row. ``token_ids_list`` N [1,T_u]; ``page_table`` [N, max_blocks]; ``empty_slots`` N ints;
         ``valid_lens`` optional. Returns N host torch logits [1,1,vocab] in call order. Call
         allocate_kv_caches(batch_size=B) + batched warmup first; long prompts use prefill_traced_chunked via pre-warmed programs (no post-park compile).
+
+        Scheduler-driven chunked prefill (QWEN36_CHUNKED_PREFILL=1, tt/chunked_prefill.py): ``resume_mask[u]`` marks a
+        chunk continuation that resumes at ``start_positions[u]`` from the GDN state the scratch (or its park buffer)
+        holds; ``final_mask[u]`` False marks an intermediate chunk (``valid_lens[u]`` is the chunk end), which writes no
+        decode slot and returns an all-zero logits row (the runner discards its token). Rows run in the planner's order
+        (the continuation first); the returned logits stay in call order. All three default to the unchunked call.
         """
         assert self.use_tp, "prefill_paged_slots is the TP code path (use_tp_path)"
         N = len(token_ids_list)
@@ -3256,24 +3370,47 @@ class Qwen36Model:
             _dev_copy = 0
         # QWEN36_PREFILL_LOGITS_FAST=1: read the [1, vocab] logits row from ONE device instead of all replicas.
         _fast_logits = os.environ.get("QWEN36_PREFILL_LOGITS_FAST", "0") == "1"
+        lens = [int(valid_lens[u]) if valid_lens is not None else int(token_ids_list[u].shape[1]) for u in range(N)]
+        planner = self._chunked_prefill_planner()
+        plans, owner_after = planner.plan(
+            starts=[int(s) for s in start_positions] if start_positions is not None else [0] * N,
+            ends=lens,
+            resume_mask=[bool(m) for m in resume_mask] if resume_mask is not None else [False] * N,
+            final_mask=[bool(m) for m in final_mask] if final_mask is not None else [True] * N,
+            first_blocks=[int(pt[u, 0]) for u in range(N)],
+        )
+        # A failure mid-call leaves the scratch in an unknown state: no owner until the loop completes.
+        planner.owner = None
         _t0 = _tp()
         prev = self._bind_gdn_prefill_scratch()
         _t["bind"] += _tp() - _t0
         prev_by_dn = {p[0]: p for p in prev}  # dn -> (dn, B, rec_batched, conv_batched, ...)
-        host_logits = []
-        per_user_rec = []
-        per_user_conv = []
+        host_logits = [None] * N
+        snapshots = {}  # u -> (rec per GDN layer, conv taps per GDN layer); host slot-write path, final rows only
         try:
-            for u in range(N):
+            for rp in plans:
+                u = rp.row
                 toks = token_ids_list[u]
                 assert toks.shape[0] == 1, f"request {u}: token_ids must be [1, T_u]"
-                actual = int(valid_lens[u]) if valid_lens is not None else toks.shape[1]
+                actual = lens[u]
                 assert actual >= 1, f"request {u}: empty prompt (actual_len={actual})"
+                if rp.park_before:
+                    self._park_gdn_scratch()
+                if rp.unpark_before:
+                    self._unpark_gdn_scratch()
                 # Trace-safe prefill into the B=1 scratch: prefill_traced_chunked runs short prompts in
                 # one masked-bucket forward and chunks longer ones; GDN state carries + is snapshotted below.
                 _t1 = _tp()
-                lg = self.prefill_traced_chunked(toks[:, :actual], pt[u : u + 1], actual_len=actual)
+                lg = self.prefill_traced_chunked(
+                    toks[:, :actual], pt[u : u + 1], actual_len=actual, start=rp.start, want_logits=rp.final
+                )
                 _t2 = _tp()
+                if not rp.final:
+                    # Intermediate chunk: its state stays in the scratch (the planner parks it before any reset), no
+                    # slot write, and no logits (the runner discards an intermediate row's token).
+                    host_logits[u] = torch.zeros(1, 1, self.args.vocab_size)
+                    _t["prefill"] += _t2 - _t1
+                    continue
                 if _fast_logits:
                     # The logits are replicated across the mesh and tile-padded to 32 rows; the default readout
                     # (ConcatMeshToTensor) pulls all 4 replicas (~64 MB) to keep one row. Untilize on device (drops
@@ -3281,9 +3418,9 @@ class Qwen36Model:
                     lg_rm = ttnn.to_layout(lg, ttnn.ROW_MAJOR_LAYOUT)
                     lg_row = ttnn.to_torch(ttnn.get_device_tensors(lg_rm)[0])
                     ttnn.deallocate(lg_rm)
-                    host_logits.append(lg_row.reshape(-1, self.args.vocab_size)[:1].float().view(1, 1, -1))
+                    host_logits[u] = lg_row.reshape(-1, self.args.vocab_size)[:1].float().view(1, 1, -1)
                 else:
-                    host_logits.append(
+                    host_logits[u] = (
                         ttnn.to_torch(lg, mesh_composer=comp)
                         .reshape(-1, self.args.vocab_size)[:1]
                         .float()
@@ -3371,9 +3508,9 @@ class Qwen36Model:
                     continue
                 # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
                 # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
-                per_user_conv.append(
-                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
+                snapshots[u] = (
+                    [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states],
+                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states],
                 )
                 _t4 = _tp()
                 _t["prefill"] += _t2 - _t1
@@ -3394,17 +3531,18 @@ class Qwen36Model:
             # this inside write_slot (sync_hist=True).
             for dn in dn_states:
                 if getattr(dn, "_decode_fused_conv", False):
-                    for u in range(N):
-                        dn._sync_conv_hist_packed(slot=int(empty_slots[u]))
+                    for rp in plans:
+                        if rp.final:
+                            dn._sync_conv_hist_packed(slot=int(empty_slots[rp.row]))
 
-        # Write each user's snapshot into its decode slot, preserving the other live rows.
+        # Write each final row's snapshot into its decode slot, preserving the other live rows.
         _t6 = _tp()
         if not _dev_copy:
-            for u in range(N):
-                self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
+            for u, (rec_snap, conv_snap) in snapshots.items():
+                self._write_gdn_slot(int(empty_slots[u]), rec_snap, conv_snap)
         _t["write_slot"] += _tp() - _t6
+        planner.owner = owner_after
         if _timing:
-            lens = [int(v) for v in valid_lens] if valid_lens is not None else [int(t.shape[1]) for t in token_ids_list]
             logger.info(
                 f"[PREFILL_TIMING] N={N} T={lens} dev_copy={int(_dev_copy)} total={1e3 * (_tp() - _t0):.1f} ms "
                 + " ".join(f"{k}={1e3 * v:.1f}" for k, v in _t.items())
@@ -4365,7 +4503,7 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
-    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None):
+    def prefill_traced_chunked(self, token_ids, page_table, actual_len, vision_tokens=None, start=0, want_logits=True):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk, then
         processing the final partial chunk eagerly with minimal padding. Only the real prompt
         (token_ids[:, :actual_len]) is processed. Full chunks replay from the trace; the tail
@@ -4376,6 +4514,13 @@ class Qwen36Model:
         ttnn.where(mask, vision, text) over persistent buffers staged per chunk via copy_host_to_device
         (no request-time compiles). Each chunk/tail splices its packed-vision slice (vis_row_offset =
         image tokens before it); no image tokens -> identity mask. Works on single device (3D) and TP (4D hidden-sharded; see _set_vision_merge / _alloc_vision_merge_buffers).
+
+        Chunked-prefill resume (TP only, tt/chunked_prefill.py): ``start`` > 0 continues a sequence whose tokens
+        [0, start) are already in the paged KV and whose GDN state is in the bound scratch: no GDN reset, the chunk loop
+        starts at chunk start // chunk_size, and a remainder shorter than a chunk runs through the masked bucket at
+        chunk_start=start (never the short path, whose chunk_start=0 resets the state). ``start`` must be a multiple of
+        the chunk size. ``want_logits=False`` (an intermediate chunk, which always ends on a chunk boundary) skips the
+        logits and returns None.
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
@@ -4390,6 +4535,20 @@ class Qwen36Model:
         assert (
             num_full == 0 or self.use_tp or self._chunked_trace_id is not None
         ), "Call capture_prefill_trace_chunked first"
+        start = int(start)
+        if start or not want_logits:
+            if not self.use_tp or vision_tokens is not None:
+                raise ValueError(
+                    f"chunked-prefill resume is the TP text path only (use_tp={self.use_tp}, "
+                    f"vision={vision_tokens is not None}, start={start}, want_logits={want_logits})"
+                )
+            if start % chunk_size != 0 or not 0 <= start < actual_len:
+                raise ValueError(
+                    f"chunked-prefill resume start {start} is not a multiple of {chunk_size} below {actual_len}"
+                )
+            if not want_logits and tail_real != 0:
+                raise ValueError(f"an intermediate chunk must end on a chunk boundary: actual_len={actual_len}")
+        first_chunk = start // chunk_size
 
         # Stage the per-request RoPE once for the whole prompt (M-RoPE for multimodal, 1D for text).
         # The chunk-replay loops + the masked tail then slice this sequence-indexed table by chunk
@@ -4403,7 +4562,7 @@ class Qwen36Model:
         # so the chunk-input plumbing below is skipped. This is the single bucketed+masked path
         # shared by short prompts and the long-prompt tail; prefill_dispatch routes every traced
         # prefill here so the short/long seam is defined once.
-        if num_full == 0:
+        if num_full == 0 and start == 0:
             # Pad/clip the SDPA page table to the warmed/captured width so the short-prompt forward
             # REPLAYS the pre-warmed programs instead of recompiling at request time (which clobbers
             # parked decode/chunk traces -> second-request hang). vLLM pads to its own
@@ -4431,7 +4590,15 @@ class Qwen36Model:
             # TP long prompt: traced replay preferred; eager masked-bucket fallback if no trace.
             if self._chunked_trace_id is not None:
                 return self._prefill_traced_chunked_tp(
-                    token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=vision_tokens
+                    token_ids,
+                    page_table,
+                    actual_len,
+                    num_full,
+                    chunk_size,
+                    tail_real,
+                    vision_tokens=vision_tokens,
+                    first_chunk=first_chunk,
+                    want_logits=want_logits,
                 )
             # Eager fallback: flexible qk=64 SDPA matches traced path.
             return self._prefill_chunked_eager_tp(
@@ -4443,6 +4610,8 @@ class Qwen36Model:
                 tail_real,
                 flex_sdpa=True,
                 vision_tokens=vision_tokens,
+                first_chunk=first_chunk,
+                want_logits=want_logits,
             )
 
         # Re-zero GDN once; carries across replays + masked tail (chunk_start>0 skips reset).
@@ -4536,14 +4705,26 @@ class Qwen36Model:
         return logits.cpu()
 
     def _prefill_chunked_eager_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True, vision_tokens=None
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        num_full,
+        chunk_size,
+        tail_real,
+        flex_sdpa=True,
+        vision_tokens=None,
+        first_chunk=0,
+        want_logits=True,
     ):
         """TP eager long-prompt prefill via warmed bucket=chunk_size programs.
-        Returns logits [1,1,vocab] at actual_len-1."""
+        Returns logits [1,1,vocab] at actual_len-1 (None when want_logits is False). ``first_chunk`` > 0 resumes a
+        chunked prefill (the carried GDN state is in place; no reset)."""
         # Re-zero GDN at sequence start; tail (chunk_start>0) keeps carried state.
-        self._reset_gdn_state_for_new_sequence()
+        if first_chunk == 0:
+            self._reset_gdn_state_for_new_sequence()
         last_hidden = None
-        for c in range(num_full):
+        for c in range(first_chunk, num_full):
             cs = c * chunk_size
             if last_hidden is not None:
                 ttnn.deallocate(last_hidden)
@@ -4560,7 +4741,8 @@ class Qwen36Model:
             ttnn.synchronize_device(self.device)
             self._notify_prefill_chunk(cs, chunk_size, final=(tail_real == 0 and c == num_full - 1), synced=True)
         if tail_real > 0:
-            ttnn.deallocate(last_hidden)
+            if last_hidden is not None:
+                ttnn.deallocate(last_hidden)
             cs = num_full * chunk_size
             return self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len],
@@ -4571,13 +4753,25 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
+        if not want_logits:
+            ttnn.deallocate(last_hidden)
+            return None
         # Exact multiple of chunk_size: logit from last full chunk.
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
         ttnn.deallocate(last_hidden)
         return logits
 
     def _prefill_traced_chunked_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, vision_tokens=None
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        num_full,
+        chunk_size,
+        tail_real,
+        vision_tokens=None,
+        first_chunk=0,
+        want_logits=True,
     ):
         """TP traced chunk-outer prefill: replay the captured per-chunk trace
         (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
@@ -4586,13 +4780,15 @@ class Qwen36Model:
         copy_host_to_device_tensor (no per-chunk program dispatch / device allocation — only one
         execute_trace per chunk), so GDN recurrent/conv + paged-KV state carry in place across
         replays and host pressure stays bounded at 128K. The tail's chunk_start>0 skips the GDN
-        reset so the carried state continues. Returns logits [1, 1, vocab] at actual_len-1."""
+        reset so the carried state continues. Returns logits [1, 1, vocab] at actual_len-1 (None when want_logits is
+        False). ``first_chunk`` > 0 resumes a chunked prefill: replays start there and the GDN state is not reset."""
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
         rep = ttnn.ReplicateTensorToMesh(self.device)
 
         # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).
-        self._reset_gdn_state_for_new_sequence()
+        if first_chunk == 0:
+            self._reset_gdn_state_for_new_sequence()
 
         # Pad/clip page_table to captured width; write once (constant across chunks).
         buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
@@ -4624,7 +4820,7 @@ class Qwen36Model:
         _overlap = os.environ.get("QWEN36_PREFILL_OVERLAP", "1") != "0"
         _SYNC_EVERY = 8 if _overlap else 1
         _host_refs = []  # keep host tensors alive until the next sync frees their DMAs
-        for c in range(num_full):
+        for c in range(first_chunk, num_full):
             cs = c * chunk_size
             tok_host = ttnn.from_torch(
                 token_ids[:, cs : cs + chunk_size].to(torch.int32),
@@ -4679,7 +4875,7 @@ class Qwen36Model:
             self._notify_prefill_chunk(cs, chunk_size, final=(tail_real == 0 and c == num_full - 1))
 
             # Bound in-flight depth; after a sync the completed DMAs' host tensors can be released.
-            if (c + 1) % _SYNC_EVERY == 0:
+            if (c + 1 - first_chunk) % _SYNC_EVERY == 0:
                 ttnn.synchronize_device(self.device)
                 _host_refs.clear()
             if (c + 1) % _log_every == 0:
@@ -4704,6 +4900,8 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
+        if not want_logits:
+            return None
         return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
 
     def reset_state(self, batch_size=None):

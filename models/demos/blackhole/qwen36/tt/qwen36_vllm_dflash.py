@@ -208,6 +208,11 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     model_capabilities = {
         **Qwen36ForCausalLM.model_capabilities,
+        # No scheduler-driven chunked prefill (QWEN36_CHUNKED_PREFILL is the plain class's knob): prefill_for_spec has
+        # no resume start, and an intermediate chunk commits 0 tokens, which the block accounting does not model. The
+        # plain class reads the knob at access time; this plain dict copy must not inherit it, so state it explicitly
+        # (with _W == 1 the block-output refusals in the plugin would not catch it).
+        "supports_chunked_prefill": False,
         # A decode step commits exactly _W tokens per request (EOS-filled at a stop).
         "output_tokens_per_step": _W,
         # Block on decode steps; prefill anchors are plain width-1 rows.

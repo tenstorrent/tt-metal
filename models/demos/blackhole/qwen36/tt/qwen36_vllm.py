@@ -84,19 +84,46 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     # so no device-resident token/position chain is ever assumed; the plugin then overlaps only the
     # engine's scheduling/output work with the device step (its steady-decode fast path needs device sampling).
     # The gate is read when the platform queries the capability (_ModelCapabilities), not at import time.
+    # QWEN36_CHUNKED_PREFILL=1 (default off; batched TP text serving) declares scheduler-driven chunked prefill:
+    # ``supports_chunked_prefill`` True plus ``tt_prefill_chunk_tokens`` (the 2048 chunk-trace unit; the plugin's chunk
+    # size must be a multiple of it), consumed by the plugin's chunk policy. A resumed chunk continues from the GDN
+    # state parked in the B=1 prefill scratch (model.prefill_paged_slots, tt/chunked_prefill.py). With the knob off
+    # neither key is present, so every profile resolves exactly as before.
     class _ModelCapabilities(dict):
-        """dict whose ``supports_async_decode`` entry reads QWEN36_ASYNC_DECODE_OK at access time."""
+        """dict whose ``supports_async_decode`` (QWEN36_ASYNC_DECODE_OK) and chunked-prefill (QWEN36_CHUNKED_PREFILL)
+        entries are read from the environment at access time."""
 
         _ASYNC = "supports_async_decode"
+        _CHUNKED = "supports_chunked_prefill"
+        _CHUNK_TOKENS = "tt_prefill_chunk_tokens"
+
+        @staticmethod
+        def _chunked_on():
+            return os.environ.get("QWEN36_CHUNKED_PREFILL", "0") == "1"
 
         def __getitem__(self, key):
             if key == self._ASYNC:
                 return os.environ.get("QWEN36_ASYNC_DECODE_OK", "0") == "1"
+            if key == self._CHUNKED:
+                return self._chunked_on()
+            if key == self._CHUNK_TOKENS:
+                if not self._chunked_on():
+                    raise KeyError(key)
+                return _PREFILL_WARMUP_CHUNK
             return super().__getitem__(key)
 
+        def __contains__(self, key):
+            if key == self._CHUNK_TOKENS:
+                return self._chunked_on()
+            if key == self._CHUNKED:
+                return True
+            return super().__contains__(key)
+
         def get(self, key, default=None):
-            if key == self._ASYNC:
+            if key in (self._ASYNC, self._CHUNKED):
                 return self[key]
+            if key == self._CHUNK_TOKENS:
+                return self[key] if self._chunked_on() else default
             return super().get(key, default)
 
     model_capabilities = _ModelCapabilities(
@@ -351,7 +378,26 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 "batched (max_num_seqs>1) serving is text-only; multimodal is single-sequence "
                 "(max_concurrency=1). Run the model at max_num_seqs=1 for image/video requests."
             )
-            return self._prefill_forward_tp_batched(model, tokens, page_table, prompt_lens, kwargs.get("empty_slots"))
+            return self._prefill_forward_tp_batched(
+                model,
+                tokens,
+                page_table,
+                prompt_lens,
+                kwargs.get("empty_slots"),
+                start_pos=kwargs.get("start_pos"),
+                resume_mask=kwargs.get("prefill_resume_mask"),
+                final_mask=kwargs.get("prefill_final_mask"),
+            )
+        resume_mask = kwargs.get("prefill_resume_mask")
+        final_mask = kwargs.get("prefill_final_mask")
+        if (resume_mask is not None and any(bool(m) for m in resume_mask)) or (
+            final_mask is not None and not all(bool(m) for m in final_mask)
+        ):
+            # Chunks are only split while other requests decode, which needs max_num_seqs > 1 (the batched path).
+            raise ValueError(
+                f"chunked prefill needs the batched TP path (use_tp={model.use_tp}, "
+                f"max_batch_size={model.args.max_batch_size}); resume_mask={resume_mask} final_mask={final_mask}"
+            )
         vision_tokens = self._compute_vision_tokens(model, kwargs)
         if model.use_tp:
             return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
@@ -417,7 +463,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         logger.info(f"Finished prefill up to {T} tokens, starting decode...")
         return logits, torch.zeros(1, dtype=torch.long)
 
-    def _prefill_forward_tp_batched(self, model, tokens, page_table, prompt_lens, empty_slots):
+    def _prefill_forward_tp_batched(
+        self, model, tokens, page_table, prompt_lens, empty_slots, start_pos=None, resume_mask=None, final_mask=None
+    ):
         """TP batched (max_num_seqs>1) prefill: prefill each request in this step into its decode slot.
 
         vLLM prefills new requests while other slots decode, so each user's B=1 state is written into
@@ -428,6 +476,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         page_table:  torch [N, max_blocks] — row u = request u's blocks.
         prompt_lens: per-request real lengths (row u trimmed to prompt_lens[u]).
         empty_slots: per-request decode slot; defaults to range(N) (mirrors Generator.prefill_forward_text).
+        start_pos / resume_mask / final_mask: scheduler-driven chunked prefill (QWEN36_CHUNKED_PREFILL=1): a row with
+                     resume_mask True continues its prompt at start_pos (the chunk start); final_mask False marks an
+                     intermediate chunk (prompt_lens = the chunk end). Rows are always passed from token 0. Without the
+                     masks start_pos is ignored and every row prefills from 0 (the pre-chunking behaviour).
         Returns ([N, 1, vocab] host logits, [N] zero rope_deltas — text M-RoPE delta is 0, applied model-side).
         """
         N = tokens.shape[0]
@@ -438,7 +490,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         token_ids_list = [tokens[u : u + 1, : plens[u]].to(torch.int32) for u in range(N)]
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         logger.info(f"Prefilling {N} user(s) into slots {empty_slots} (TP batched masked-bucket)")
-        host_logits = model.prefill_paged_slots(token_ids_list, pt, empty_slots, valid_lens=plens)
+        chunked = resume_mask is not None or final_mask is not None
+        host_logits = model.prefill_paged_slots(
+            token_ids_list,
+            pt,
+            empty_slots,
+            valid_lens=plens,
+            start_positions=[int(start_pos[u]) for u in range(N)] if chunked and start_pos is not None else None,
+            resume_mask=[bool(resume_mask[u]) for u in range(N)] if resume_mask is not None else None,
+            final_mask=[bool(final_mask[u]) for u in range(N)] if final_mask is not None else None,
+        )
         logits = torch.cat([hl.reshape(1, 1, -1) for hl in host_logits], dim=0)  # [N, 1, vocab]
         logger.info(f"Finished batched prefill of {N} user(s), starting decode...")
         return logits, torch.zeros(N, dtype=torch.long)
@@ -540,6 +601,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         )
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
+            if batched and self.model_capabilities.get("supports_chunked_prefill", False):
+                # Chunked prefill parks a partial prompt's scratch state: allocate + compile it before any trace.
+                model.ensure_gdn_park_buffer()
             model.capture_prefill_trace_chunked(
                 self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=True
             )
