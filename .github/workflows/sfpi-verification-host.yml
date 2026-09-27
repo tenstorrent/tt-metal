@@ -1,0 +1,22 @@
+name: SFPI verification safety checks
+on:
+  pull_request:
+    paths:
+      - 'tt_metal/tt-llk/tests/corpus/tools/**'
+      - '.github/workflows/sfpi-verification-host.yml'
+  push:
+    paths:
+      - 'tt_metal/tt-llk/tests/corpus/tools/**'
+      - '.github/workflows/sfpi-verification-host.yml'
+jobs:
+  fail-closed:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exercise refusal, cache, and coverage gates without hardware
+        run: python tt_metal/tt-llk/tests/corpus/tools/selftest_campaign_fail_closed.py
+      - name: Check campaign shell syntax
+        run: bash -n tt_metal/tt-llk/tests/corpus/tools/galaxy_shard.sh
