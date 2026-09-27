@@ -237,4 +237,8 @@ is disclosed alongside affected-kernel JIT/Watcher validation. Optional TP4
 logprob requests are rejected, never silently handled on the host. Full-model
 device-time/roofline metrics remain unknown; no reduced-profile substitution.
 
-Local checkpoint SHA is recorded in the following provenance update. No push.
+Stage implementation/evidence checkpoint: `3d5a5654b5a514ce35d2ee01013ff02700402ac5` in repo
+`/workspace/tt-metal`, branch `gemma-4-26b-a4b-it`. All commit-time hooks pass.
+Only tt-metal was touched. No push was performed. This provenance update is a
+separate local documentation commit; its SHA is recorded in the final local
+telemetry packet alongside the implementation checkpoint.
