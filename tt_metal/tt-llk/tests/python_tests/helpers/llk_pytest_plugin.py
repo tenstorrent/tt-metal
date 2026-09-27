@@ -776,6 +776,9 @@ def pytest_runtest_logreport(report):
             report.user_properties = props
 
 
+_topk_diagnostic_history = []
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     global _RECORD_TEST_ORDER
@@ -783,6 +786,17 @@ def pytest_runtest_makereport(item, call):
     # Execute all other hooks to obtain the report object
     outcome = yield
     report = outcome.get_result()
+
+    if report.when == "call" and not report.skipped:
+        _topk_diagnostic_history.append(item.nodeid)
+        del _topk_diagnostic_history[:-64]
+        if report.failed and "test_topk_xl_unfused_macro_equals_opt_out" in item.nodeid:
+            report.longrepr = str(report.longrepr) + (
+                "\nTOPK_WORKER_HISTORY "
+                + repr({"worker": getattr(item.config, "workerinput", {}).get("workerid", "master"),
+                        "core": TestConfig.TENSIX_LOCATION,
+                        "tests": _topk_diagnostic_history})
+            )
 
     if report.when == "call" and not report.skipped and _RECORD_TEST_ORDER:
         worker_id = getattr(item.config, "workerinput", {}).get("workerid", "master")
