@@ -289,7 +289,10 @@
   # rather than on anything they measure. The nightly entry in ops_unit_tests.yaml drops the
   # same tests by --ignore'ing both files; deselecting the marker instead keeps the
   # functional cases in test_chain_perf.py, which do run here.
+  # Native multicast contracts need their own top-level process; the Python compiler contracts
+  # are ordinary tests collected by the kernel_lib pytest process below.
   cmd: >-
+    build/test/ttnn/unit_tests_ttnn --gtest_filter='Mcast*' &&
     pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
     -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
   skus:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device-owning compiler checks, invoked by the isolated contract launcher."""
+"""Device-owning multicast compiler contracts, collected as ordinary pytest tests."""
 
 import pytest
 import ttnn
