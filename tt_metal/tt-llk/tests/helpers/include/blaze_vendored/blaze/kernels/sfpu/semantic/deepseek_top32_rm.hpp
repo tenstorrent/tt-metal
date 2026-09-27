@@ -120,7 +120,7 @@ sfpi_inline void t32_set_swap_dir_alternating()
         cfg = 0x104;
     }
     v_endif;
-    __builtin_rvtt_sfpwriteconfig_v(cfg.get(), 15);
+    __builtin_rvtt_sfpwriteconfig_v(cfg.get(), 0, 15);
 }
 
 // Typed Dst-counter advance.  G8 (vocabulary-gap datum): the hand kernel's

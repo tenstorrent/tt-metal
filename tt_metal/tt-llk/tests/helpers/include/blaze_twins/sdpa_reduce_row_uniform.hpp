@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat sdpa_reduce_identity()
         // constant in every execution; only its VISIBILITY to the folder is
         // suppressed.
         volatile std::uint32_t seed_bits = 0x80000000u;
-        return sfpi::reinterpret<sfpi::vFloat>(sfpi::vInt(static_cast<int>(seed_bits)));
+        return sfpi::as<sfpi::vFloat>(sfpi::vInt(static_cast<int>(seed_bits)));
     }
 }
 

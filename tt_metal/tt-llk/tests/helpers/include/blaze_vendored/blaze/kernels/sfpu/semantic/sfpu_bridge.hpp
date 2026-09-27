@@ -61,7 +61,7 @@ template <bool Enable>
 sfpi_inline void set_dest_index_tracking_valueform()
 {
     sfpi::vInt cfg = Enable ? 4 : 0;
-    __builtin_rvtt_sfpwriteconfig_v(cfg.get(), 15);
+    __builtin_rvtt_sfpwriteconfig_v(cfg.get(), 0, 15);
 }
 
 // ---------------------------------------------------------------------------
