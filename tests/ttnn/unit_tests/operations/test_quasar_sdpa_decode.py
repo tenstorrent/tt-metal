@@ -246,6 +246,124 @@ def test_paged_sdpa_decode_single_kv_head(mesh_device, grid_xy):
     )
 
 
+def _pcc(a, b):
+    a = a.flatten().float()
+    b = b.flatten().float()
+    if torch.allclose(a, b):
+        return 1.0
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+def _torch_gqa_decode(q, keys, values, cur_pos, scale):
+    """Reference for the paged decode with an identity page table (block b -> logical positions [b*BS, (b+1)*BS)).
+    q [1,1,nq,hd]; keys/values [nb, nkv, BS, hd]. GQA: q-head h attends kv-head h // (nq//nkv). Causal decode
+    attends positions 0..cur_pos inclusive. Returns [nq, hd]."""
+    nb, nkv, bs, hd = keys.shape
+    nq = q.shape[2]
+    qpk = nq // nkv
+    seqlen = cur_pos + 1
+    k = keys.permute(1, 0, 2, 3).reshape(nkv, nb * bs, hd)[:, :seqlen, :].float()  # [nkv, seq, hd]
+    v = values.permute(1, 0, 2, 3).reshape(nkv, nb * bs, hd)[:, :seqlen, :].float()
+    out = torch.zeros(nq, hd)
+    for h in range(nq):
+        kvh = h // qpk
+        qh = q[0, 0, h].float()
+        scores = (k[kvh] @ qh) * scale  # [seq]
+        w = torch.softmax(scores, dim=0)
+        out[h] = w @ v[kvh]
+    return out
+
+
+def _run_split(mesh_device, num_cores):
+    """Split the 8-kv-head decode SDPA into per-group calls that each map ONE kv-head per core, so no core ever
+    owns >1 kv-head (the config that HANGS on Quasar -- see test_paged_sdpa_decode_single_kv_head). The full
+    tensors are built once (DRAM-interleaved TILE); each group is carved out ON DEVICE with ttnn.slice (q sliced
+    on the head axis, k/v on the kv-head axis) so we never host-tilize a sub-tile q height (that FATALs). Each
+    group runs paged decode SDPA with grid (num_cores,1), max_cores_per_head_batch=1 (no tree reduction), then
+    the group outputs are concatenated back on the head axis.
+      - num_cores=1: group size 1 -> 8 sequential calls, 1 kv-head on 1 core.
+      - num_cores=2: group size 2 -> 4 sequential calls, 2 kv-heads on 2 cores (still 1 kv-head/core).
+    Validates finiteness AND PCC vs a torch GQA reference."""
+    dev = mesh_device.compute_with_storage_grid_size()
+    if int(dev.x) < num_cores:
+        pytest.skip(f"split needs >= {num_cores} cores in a row; device is {dev.x}x{dev.y}")
+
+    batch = 1
+    nq, nkv = N_Q_HEADS, N_KV_HEADS
+    qpk = nq // nkv  # 4 q-heads per kv-head
+    gs = min(num_cores, nkv)  # kv-heads per call = cores (1 kv-head/core)
+    assert nkv % gs == 0, f"nkv={nkv} must split into groups of {gs}"
+    cur_pos = 200
+
+    torch.manual_seed(0)
+    q = torch.randn(1, batch, nq, HEAD_DIM, dtype=torch.bfloat16)
+    keys = torch.randn(MAX_NUM_BLOCKS, nkv, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+    values = torch.randn(MAX_NUM_BLOCKS, nkv, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+    page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).reshape(1, MAX_NUM_BLOCKS).repeat(batch, 1)
+    cur_pos_t = torch.full((batch,), cur_pos, dtype=torch.int32)
+
+    # q DRAM-interleaved TILE (the op accepts DRAM-interleaved Q, not just height-sharded -- so we can device-slice
+    # the head axis without a host tilize of a sub-tile height).
+    q_t = _tile_bf16_dram(q, mesh_device)
+    k_t = _tile_bf16_dram(keys, mesh_device)
+    v_t = _tile_bf16_dram(values, mesh_device)
+    pt_t = _int32_rm_dram(page_table, mesh_device)
+    cp_t = _int32_rm_dram(cur_pos_t, mesh_device)
+
+    logger.info(
+        f"[sdpa-repro] SPLIT decode: nq={nq} nkv={nkv} qpk={qpk} group_size={gs} "
+        f"({nkv // gs} calls) grid {num_cores}x1 max_cores=1 cur_pos={cur_pos}"
+    )
+
+    group_outs = []
+    for g0 in range(0, nkv, gs):
+        # q-heads [g0*qpk : (g0+gs)*qpk] on the head axis (dim 2); kv-heads [g0 : g0+gs] on the kv-head axis (dim 1).
+        q_g = ttnn.slice(q_t, [0, 0, g0 * qpk, 0], [1, batch, (g0 + gs) * qpk, HEAD_DIM])
+        k_g = ttnn.slice(k_t, [0, g0, 0, 0], [MAX_NUM_BLOCKS, g0 + gs, BLOCK_SIZE, HEAD_DIM])
+        v_g = ttnn.slice(v_t, [0, g0, 0, 0], [MAX_NUM_BLOCKS, g0 + gs, BLOCK_SIZE, HEAD_DIM])
+        out_g = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
+            q_g,
+            k_g,
+            v_g,
+            page_table_tensor=pt_t,
+            cur_pos_tensor=cp_t,
+            scale=SCALE,
+            program_config=_prog_cfg(
+                mesh_device, max_cores_per_head_batch=1, k_chunk_size=BLOCK_SIZE, grid_xy=(num_cores, 1)
+            ),
+            compute_kernel_config=_compute_cfg(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.synchronize_device(mesh_device)
+        group_outs.append(out_g)
+        logger.info(f"[sdpa-repro] SPLIT group kv[{g0}:{g0 + gs}] done")
+
+    # Concatenate the per-group outputs back along the q-head axis (dim 2).
+    try:
+        out = ttnn.concat(group_outs, dim=2)
+        o = ttnn.to_torch(out)
+    except (RuntimeError, AttributeError) as e:
+        logger.info(f"[sdpa-repro] device concat unavailable ({e}); concatenating on host")
+        o = torch.cat([ttnn.to_torch(g) for g in group_outs], dim=2)
+
+    o = o.reshape(-1, HEAD_DIM)[:nq]  # [nq, hd]
+    ref = _torch_gqa_decode(q, keys, values, cur_pos, SCALE)
+    pcc = _pcc(o, ref)
+    logger.info(f"[sdpa-repro] SPLIT out shape {tuple(o.shape)} finite={torch.isfinite(o).all().item()} PCC={pcc:.5f}")
+    assert torch.isfinite(o).all(), "split SDPA decode produced non-finite output"
+    assert pcc > 0.99, f"split SDPA decode PCC too low: {pcc}"
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("num_cores", [1, 2], ids=["1core", "2core"])
+def test_paged_sdpa_decode_split(mesh_device, num_cores):
+    """Per-kv-head SPLIT of the decode SDPA (the e2e fix for a 2-core Quasar device). Runs nkv/num_cores
+    sequential paged-decode calls, each mapping exactly 1 kv-head per core (the ONLY config that doesn't hang),
+    then concatenates. 1core = 8 calls (1 kv-head each); 2core = 4 calls (2 kv-heads, 1/core). If these PASS,
+    the e2e decode SDPA can run on device via this split instead of the host fallback."""
+    _run_split(mesh_device, num_cores)
+
+
 def test_non_paged_sdpa_decode(mesh_device):
     """Non-paged flash-decode SDPA (simpler: full [batch,kv_heads,seq,head_dim] cache, no page table)."""
     _skip_if_small(mesh_device)
