@@ -1,0 +1,14 @@
+[
+  {
+    "path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/logit_determinism_reduced.pt",
+    "bytes": 67115455,
+    "sha256": "15a7c7852263248a17e370afd7f054dad0ba8d2e5728cf72de6f0c6232d4ed6e",
+    "retention": "Local numerical diagnostic; excluded from source commits"
+  },
+  {
+    "path": "models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/logit_determinism_full.pt",
+    "bytes": 67115389,
+    "sha256": "cc42597d2c4fa71edcf2cce7147701e2247953e40c1c6bb0877301781ff77c3f",
+    "retention": "Local numerical diagnostic; excluded from source commits"
+  }
+]

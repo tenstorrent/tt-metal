@@ -1,0 +1,9 @@
+{
+  "TT_METAL_HOME": "/home/container_app_user/tt-metal",
+  "LD_LIBRARY_PATH": "/home/container_app_user/tt-metal/build/lib",
+  "PYTHONPATH": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/runtime:/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/runtime:/workspace/tt-metal/vllm/plugins/vllm-tt-plugin/src:/home/container_app_user/tt-metal",
+  "VLLM_RPC_TIMEOUT": null,
+  "TT_METAL_DEVICE_PROFILER": null,
+  "TT_METAL_TRACE_ALLOC_TRACKING": null,
+  "TT_METAL_WATCHER": null
+}

@@ -1,0 +1,130 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "tokenizer_class": "GemmaTokenizer",
+  "eos_token_id": 1,
+  "bos_token_id": 2,
+  "pad_token_id": 0,
+  "allowed_sets": [
+    {
+      "allowed_ids": [
+        1,
+        2,
+        3
+      ],
+      "tokens": [
+        "<eos>",
+        "<bos>",
+        "<unk>"
+      ],
+      "special_flags": [
+        true,
+        true,
+        true
+      ],
+      "decoded_with_special": "<eos><bos><unk>",
+      "decoded_without_special": "",
+      "one_token_decodes": [
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "allowed_ids": [
+        4,
+        5,
+        6
+      ],
+      "tokens": [
+        "<mask>",
+        "[multimodal]",
+        "<unused0>"
+      ],
+      "special_flags": [
+        true,
+        false,
+        false
+      ],
+      "decoded_with_special": "<mask>[multimodal]<unused0>",
+      "decoded_without_special": "[multimodal]<unused0>",
+      "one_token_decodes": [
+        "",
+        "[multimodal]",
+        "<unused0>"
+      ]
+    },
+    {
+      "allowed_ids": [
+        7,
+        8,
+        9
+      ],
+      "tokens": [
+        "<unused1>",
+        "<unused2>",
+        "<unused3>"
+      ],
+      "special_flags": [
+        false,
+        false,
+        false
+      ],
+      "decoded_with_special": "<unused1><unused2><unused3>",
+      "decoded_without_special": "<unused1><unused2><unused3>",
+      "one_token_decodes": [
+        "<unused1>",
+        "<unused2>",
+        "<unused3>"
+      ]
+    },
+    {
+      "allowed_ids": [
+        10,
+        11,
+        12
+      ],
+      "tokens": [
+        "<unused4>",
+        "<unused5>",
+        "<unused6>"
+      ],
+      "special_flags": [
+        false,
+        false,
+        false
+      ],
+      "decoded_with_special": "<unused4><unused5><unused6>",
+      "decoded_without_special": "<unused4><unused5><unused6>",
+      "one_token_decodes": [
+        "<unused4>",
+        "<unused5>",
+        "<unused6>"
+      ]
+    },
+    {
+      "allowed_ids": [
+        13,
+        14,
+        15
+      ],
+      "tokens": [
+        "<unused7>",
+        "<unused8>",
+        "<unused9>"
+      ],
+      "special_flags": [
+        false,
+        false,
+        false
+      ],
+      "decoded_with_special": "<unused7><unused8><unused9>",
+      "decoded_without_special": "<unused7><unused8><unused9>",
+      "one_token_decodes": [
+        "<unused7>",
+        "<unused8>",
+        "<unused9>"
+      ]
+    }
+  ]
+}

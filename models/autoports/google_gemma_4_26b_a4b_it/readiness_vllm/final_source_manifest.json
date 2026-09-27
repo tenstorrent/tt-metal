@@ -1,0 +1,18 @@
+{
+  "source_sha256": {
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/generator_vllm.py": "e8fc6f7f98552af64b10370e786b422bf71d9500cd0a32fd2854da50ad1f0533",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/generator.py": "a342dffd8a60515c895e1584e861ae736edaab2b2ece43d4ca5bf958d68fde07",
+    "models/autoports/google_gemma_4_26b_a4b_it/tt/model.py": "5bf24a3a3680a1aeb9cb881993fac4e6583efc8aa50633a7b61eb0199a70680f",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/datatype_sweep/selected_precision_config.json": "9af37c1309a8cfd3b6018b7cbade031a11646dc46d3282cd2be1a4d018fba3b5",
+    "models/autoports/google_gemma_4_26b_a4b_it/doc/context_contract.json": "35cb55620210c728594d625df05713cf788578b13752dcd40f2aef10120fc430",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/async_decode.py": "c036137d1bc0120eeb7368242a618469a81a123c48fcaa92fd190bd951342223",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/input_batch.py": "cabf894e18883d5732d3f5a2b6d978f012782576f86248c3062449f9c2067d4a",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_input.py": "0427255358e8c8b681c739a2fabd8b31d6a4c233177d4cfefa30948bf93f5edd",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py": "068d956521f8ee055b120dc1d49751d993e8c68fcf13dd16e563a57631caf442",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py": "ea873ec71d50e51ff09e98eab043e38bd38f0a5b5346cadcaf90893648eb1846",
+    "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py": "2612f306e06574349551844d7f98bd4e0dafc76c1314377deab5f78c37c29633"
+  },
+  "tt_metal_base": "eeb18d817be12d288c3c437dd593a468e9aa02ae",
+  "vllm_base": "5ffebf4128f81ea5cf8413175eabde52cd8c8d75",
+  "scope": "Final serving validation source; stage changes uncommitted until clean-pass review"
+}

@@ -1,0 +1,699 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "target": {
+    "model": "google/gemma-4-26B-A4B-it",
+    "prompt": "All: ",
+    "max_tokens": 24,
+    "temperature": 0.5,
+    "seed": 6,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 0.0,
+    "frequency_penalty": 0.0,
+    "ignore_eos": true,
+    "return_token_ids": true
+  },
+  "controls_match": true,
+  "comparisons": [
+    {
+      "case": "peer_3_second",
+      "exact_match": true,
+      "first_mismatch_index": null
+    },
+    {
+      "case": "peer_3_first",
+      "exact_match": true,
+      "first_mismatch_index": null
+    },
+    {
+      "case": "peer_7_second",
+      "exact_match": true,
+      "first_mismatch_index": null
+    },
+    {
+      "case": "peer_7_first",
+      "exact_match": true,
+      "first_mismatch_index": null
+    }
+  ],
+  "records": [
+    {
+      "label": "isolated_before",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "All: ",
+        "max_tokens": 24,
+        "temperature": 0.5,
+        "seed": 6,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-9d865f747d804a59",
+        "object": "text_completion",
+        "created": 1790524405,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              3243,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              3243,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 27,
+          "completion_tokens": 24,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_3_second_peer",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "Count: ",
+        "max_tokens": 3,
+        "temperature": 0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-939fd034a5386dcb",
+        "object": "text_completion",
+        "created": 1790524405,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "0: ",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              236771,
+              236787,
+              236743
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              4377,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 6,
+          "completion_tokens": 3,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_3_second_target",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "All: ",
+        "max_tokens": 24,
+        "temperature": 0.5,
+        "seed": 6,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-9f5cface29989ca8",
+        "object": "text_completion",
+        "created": 1790524405,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              3243,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              3243,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 27,
+          "completion_tokens": 24,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_3_first_peer",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "Count: ",
+        "max_tokens": 3,
+        "temperature": 0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-938c123bf7e0a714",
+        "object": "text_completion",
+        "created": 1790524407,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "0: ",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              236771,
+              236787,
+              236743
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              4377,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 6,
+          "completion_tokens": 3,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_3_first_target",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "All: ",
+        "max_tokens": 24,
+        "temperature": 0.5,
+        "seed": 6,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-81cb6b6fbf3a69cd",
+        "object": "text_completion",
+        "created": 1790524407,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              3243,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              3243,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 27,
+          "completion_tokens": 24,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_7_second_peer",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "Count: ",
+        "max_tokens": 7,
+        "temperature": 0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-9b56879f2275a8cc",
+        "object": "text_completion",
+        "created": 1790524409,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "0: 0: 0",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              236771,
+              236787,
+              236743,
+              236771,
+              236787,
+              236743,
+              236771
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              4377,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 10,
+          "completion_tokens": 7,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_7_second_target",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "All: ",
+        "max_tokens": 24,
+        "temperature": 0.5,
+        "seed": 6,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-9e8b3ec6710c0e18",
+        "object": "text_completion",
+        "created": 1790524409,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              3243,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              3243,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 27,
+          "completion_tokens": 24,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_7_first_peer",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "Count: ",
+        "max_tokens": 7,
+        "temperature": 0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-b7ed361d7d92776e",
+        "object": "text_completion",
+        "created": 1790524411,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "0: 0: 0",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              236771,
+              236787,
+              236743,
+              236771,
+              236787,
+              236743,
+              236771
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              4377,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 10,
+          "completion_tokens": 7,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "peer_7_first_target",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "All: ",
+        "max_tokens": 24,
+        "temperature": 0.5,
+        "seed": 6,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-8ea938cfa5be86f8",
+        "object": "text_completion",
+        "created": 1790524411,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              3243,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              3243,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 27,
+          "completion_tokens": 24,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "label": "isolated_after",
+      "request": {
+        "model": "google/gemma-4-26B-A4B-it",
+        "prompt": "All: ",
+        "max_tokens": 24,
+        "temperature": 0.5,
+        "seed": 6,
+        "repetition_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "ignore_eos": true,
+        "return_token_ids": true
+      },
+      "status_code": 200,
+      "response": {
+        "id": "cmpl-b7005dc37831550d",
+        "object": "text_completion",
+        "created": 1790524412,
+        "model": "google/gemma-4-26B-A4B-it",
+        "choices": [
+          {
+            "index": 0,
+            "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": [
+              3243,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787,
+              2343,
+              236787
+            ],
+            "prompt_logprobs": null,
+            "prompt_token_ids": [
+              3243,
+              236787,
+              236743
+            ],
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.26.0-4b09a894",
+        "usage": {
+          "prompt_tokens": 3,
+          "total_tokens": 27,
+          "completion_tokens": 24,
+          "prompt_tokens_details": null
+        },
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    }
+  ],
+  "scope": "HTTP concurrency exercises completion boundaries; scheduler/device instrumentation is needed to prove co-batching."
+}

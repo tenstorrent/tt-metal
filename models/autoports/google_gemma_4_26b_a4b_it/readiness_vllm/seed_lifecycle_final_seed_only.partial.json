@@ -1,0 +1,660 @@
+[
+  {
+    "label": "isolated_before",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "All: ",
+      "max_tokens": 24,
+      "temperature": 0.5,
+      "seed": 6,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-aaa8464a68bdac08",
+      "object": "text_completion",
+      "created": 1790525379,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            3243,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            3243,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 27,
+        "completion_tokens": 24,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_3_second_peer",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "Count: ",
+      "max_tokens": 3,
+      "temperature": 0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-9e6aa01148e729d2",
+      "object": "text_completion",
+      "created": 1790525380,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "0: ",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            236771,
+            236787,
+            236743
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            4377,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 6,
+        "completion_tokens": 3,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_3_second_target",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "All: ",
+      "max_tokens": 24,
+      "temperature": 0.5,
+      "seed": 6,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-8cb25292048e2d0b",
+      "object": "text_completion",
+      "created": 1790525380,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            3243,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            3243,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 27,
+        "completion_tokens": 24,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_3_first_peer",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "Count: ",
+      "max_tokens": 3,
+      "temperature": 0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-b93d401b646097cd",
+      "object": "text_completion",
+      "created": 1790525382,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "0: ",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            236771,
+            236787,
+            236743
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            4377,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 6,
+        "completion_tokens": 3,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_3_first_target",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "All: ",
+      "max_tokens": 24,
+      "temperature": 0.5,
+      "seed": 6,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-b81ceb5ac7d1ebf8",
+      "object": "text_completion",
+      "created": 1790525382,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            3243,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            3243,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 27,
+        "completion_tokens": 24,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_7_second_peer",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "Count: ",
+      "max_tokens": 7,
+      "temperature": 0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-8d7587766aa19f32",
+      "object": "text_completion",
+      "created": 1790525383,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "0: 0: 0",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            236771,
+            236787,
+            236743,
+            236771,
+            236787,
+            236743,
+            236771
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            4377,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 10,
+        "completion_tokens": 7,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_7_second_target",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "All: ",
+      "max_tokens": 24,
+      "temperature": 0.5,
+      "seed": 6,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-b93b4538f79cf1b4",
+      "object": "text_completion",
+      "created": 1790525383,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            3243,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            3243,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 27,
+        "completion_tokens": 24,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_7_first_peer",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "Count: ",
+      "max_tokens": 7,
+      "temperature": 0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-b2d148ca097a79f9",
+      "object": "text_completion",
+      "created": 1790525385,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "0: 0: 0",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            236771,
+            236787,
+            236743,
+            236771,
+            236787,
+            236743,
+            236771
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            4377,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 10,
+        "completion_tokens": 7,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "peer_7_first_target",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "All: ",
+      "max_tokens": 24,
+      "temperature": 0.5,
+      "seed": 6,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-a25a1529fda1870c",
+      "object": "text_completion",
+      "created": 1790525385,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            3243,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            3243,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 27,
+        "completion_tokens": 24,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  },
+  {
+    "label": "isolated_after",
+    "request": {
+      "model": "google/gemma-4-26B-A4B-it",
+      "prompt": "All: ",
+      "max_tokens": 24,
+      "temperature": 0.5,
+      "seed": 6,
+      "repetition_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "ignore_eos": true,
+      "return_token_ids": true
+    },
+    "status_code": 200,
+    "response": {
+      "id": "cmpl-a09ad69a478dfd10",
+      "object": "text_completion",
+      "created": 1790525387,
+      "model": "google/gemma-4-26B-A4B-it",
+      "choices": [
+        {
+          "index": 0,
+          "text": "All: All: All: All: All: All: All: All: All: All: All: All:",
+          "logprobs": null,
+          "finish_reason": "length",
+          "stop_reason": null,
+          "token_ids": [
+            3243,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787,
+            2343,
+            236787
+          ],
+          "prompt_logprobs": null,
+          "prompt_token_ids": [
+            3243,
+            236787,
+            236743
+          ],
+          "routed_experts": null
+        }
+      ],
+      "service_tier": null,
+      "system_fingerprint": "vllm-0.26.0-4b09a894",
+      "usage": {
+        "prompt_tokens": 3,
+        "total_tokens": 27,
+        "completion_tokens": 24,
+        "prompt_tokens_details": null
+      },
+      "kv_transfer_params": null,
+      "ec_transfer_params": null,
+      "metrics": null
+    }
+  }
+]

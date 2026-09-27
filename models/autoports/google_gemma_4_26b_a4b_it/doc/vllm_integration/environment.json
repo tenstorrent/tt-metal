@@ -1,0 +1,19 @@
+{
+  "python": "/workspace/tt-metal/python_env/bin/python",
+  "installed_versions": {
+    "openai": null,
+    "uvloop": null,
+    "vllm": null,
+    "vllm-tt-plugin": null,
+    "torch": "2.11.0+cpu",
+    "transformers": "5.12.1"
+  },
+  "tt_metal_commit": "eeb18d817be12d288c3c437dd593a468e9aa02ae",
+  "vllm_commit": "5ffebf4128f81ea5cf8413175eabde52cd8c8d75",
+  "available_mesh": [
+    1,
+    4
+  ],
+  "hardware": "4 Blackhole p300c ASICs; tt-smi list succeeded",
+  "device_open_attempted": false
+}

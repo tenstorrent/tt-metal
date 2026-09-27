@@ -1,0 +1,17 @@
+{
+  "scope": "Full-model live first-token logprobs versus standalone log_softmax of same prompt last-prefill logits",
+  "comparisons": [
+    {
+      "name": "A",
+      "values": 20,
+      "max_abs_diff": 0.0,
+      "exact": true
+    },
+    {
+      "name": "B",
+      "values": 20,
+      "max_abs_diff": 0.0,
+      "exact": true
+    }
+  ]
+}

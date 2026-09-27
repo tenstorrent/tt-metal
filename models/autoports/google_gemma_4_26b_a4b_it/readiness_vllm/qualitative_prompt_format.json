@@ -1,0 +1,245 @@
+{
+  "hf_model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "tokenizer": "GemmaTokenizer",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "endpoint": "/v1/chat/completions",
+  "prompt_source": "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/runtime/readiness_check/vllm_prompts.txt",
+  "greedy": {
+    "temperature": 0,
+    "max_tokens": 256
+  },
+  "sampled": {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_tokens": 256
+  },
+  "control": "doc/datatype_sweep/selected/qualitative_tt.json; doc/full_model/qualitative_hf.json (128-token caps)",
+  "prompts": [
+    {
+      "id": "shared_0",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a haiku about machine learning."
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nWrite a haiku about machine learning.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        6974,
+        496,
+        678,
+        20517,
+        1003,
+        5464,
+        4735,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ]
+    },
+    {
+      "id": "shared_1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain the difference between supervised and unsupervised learning in simple terms."
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nExplain the difference between supervised and unsupervised learning in simple terms.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        155122,
+        506,
+        4954,
+        1534,
+        52660,
+        532,
+        124155,
+        4735,
+        528,
+        3606,
+        3755,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ]
+    },
+    {
+      "id": "shared_2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered"
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nComplete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        25146,
+        672,
+        3925,
+        236787,
+        9920,
+        3324,
+        496,
+        990,
+        236764,
+        528,
+        496,
+        236365,
+        21880,
+        236764,
+        993,
+        11742,
+        496,
+        23210,
+        3184,
+        70418,
+        1015,
+        11788,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ]
+    },
+    {
+      "id": "shared_3",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What are the three laws of thermodynamics?"
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nWhat are the three laws of thermodynamics?<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        3689,
+        659,
+        506,
+        1806,
+        9734,
+        529,
+        67280,
+        236881,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ]
+    },
+    {
+      "id": "shared_4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Translate the following to French: \"Hello, how are you today?\""
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nTranslate the following to French: \"Hello, how are you today?\"<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        40414,
+        506,
+        2269,
+        531,
+        7830,
+        236787,
+        623,
+        9259,
+        236764,
+        1217,
+        659,
+        611,
+        3124,
+        7462,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ]
+    },
+    {
+      "id": "shared_5",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a Python function to calculate the Fibonacci sequence."
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nWrite a Python function to calculate the Fibonacci sequence.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        6974,
+        496,
+        17856,
+        1292,
+        531,
+        9279,
+        506,
+        123466,
+        7501,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ]
+    }
+  ]
+}
