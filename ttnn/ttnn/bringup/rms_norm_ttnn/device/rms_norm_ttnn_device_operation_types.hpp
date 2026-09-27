@@ -33,6 +33,8 @@ struct RmsNormInputs {
     std::optional<Tensor> weight;
     std::optional<Tensor> bias;
     std::optional<Tensor> residual;
+    // `return_residual_sum`: the preallocated second output, t = x + r.  Absent when the option is off.
+    std::optional<Tensor> residual_sum;
 };
 
 // The refusals keep the Python op's exception TYPES.  std::invalid_argument surfaces in Python as

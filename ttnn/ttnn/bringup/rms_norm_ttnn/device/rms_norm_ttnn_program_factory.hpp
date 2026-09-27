@@ -27,7 +27,8 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor(
     const std::optional<Tensor>& residual,
     double epsilon,
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
-    uint32_t subblock_w);
+    uint32_t subblock_w,
+    const std::optional<Tensor>& residual_sum = std::nullopt);
 
 struct RmsNormProgramFactory {
     // Cache miss: build the whole descriptor.
