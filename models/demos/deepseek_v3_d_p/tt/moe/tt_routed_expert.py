@@ -476,8 +476,8 @@ class TtRoutedExpert(LightweightModule):
         # fallback routed_expert_ffn reads DRAM-interleaved weights only, so the default is
         # interleaved and an explicit True is rejected rather than failing on device.
         if weights_dram_nd_sharded is None:
-            weights_dram_nd_sharded = is_blackhole()
-        elif weights_dram_nd_sharded and not is_blackhole():
+            weights_dram_nd_sharded = self._is_blackhole
+        elif weights_dram_nd_sharded and not self._is_blackhole:
             raise NotImplementedError(
                 "weights_dram_nd_sharded requires the Blackhole fused path; the fallback "
                 "routed_expert_ffn reads DRAM-interleaved weights only"
