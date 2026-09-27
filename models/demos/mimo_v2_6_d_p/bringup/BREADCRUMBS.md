@@ -1112,3 +1112,45 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   the engine's 0xFFFFFFFF pad ids. `TtEmbedding` takes clean ids. Mask the pad ids on the device before the lookup
   (for example, clamp them or pad the table).
 - Re-run: `BRINGUP_RUNG=s4096 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py`
+
+## K.1 contract (attempt 1), 2026-09-26
+- New `tt/runners/adapter.py` (`MiMoPrefillAdapter`, `MiMoPrefillRuntime`, `MiMoV26Config`) and `tt/runners/kv_contract.py`
+  (`MiMoContractKV` + read-back). Registered as `mimo_v2_6_d_p` in `common/prefill/adapter.py:ADAPTER_PATHS` (one line).
+  No other engine change: the producer already calls the adapter's `read_slot_kv_and_check_pcc` and `num_kv_cache_layers`.
+- KV layout: the gpt_oss_d_p GQA substrate with one 384-wide bfp8 slab per chip for K and for V
+  ([users * layers, 1, max_seq, 384], 32-token DRAM round-robin). Sliding layers: heads 2c, 2c+1 side by side
+  (nlp_concat_heads). Full layers: head c then 192 zero columns (`ttnn.pad`). V stays in the device's padded 192 per head
+  (real dims [h*192, h*192+128)), so no slicing on the device. Table configs 0..3 = K chip 0..3, 4..7 = V chip 0..3,
+  13056 B per entry. Written from the attention's existing `kv_sink` right after K/V are computed.
+- Engine input: uint32 ROW_MAJOR [1, 1, chunk] taken as is. Pad ids are clamped on the device with
+  `ttnn.minimum(to_layout(ids, TILE), V - 1)` (probed exact; `ttnn.clamp` has no uint32 path). Acks: `ttnn.event_synchronize`
+  on a recorded event before each `sink(layer, request_id)`, global layer index (TtMiMoBlock.i).
+- Layer subset: `served_layers()` builds and acks `PREFILL_MIMO_LAYERS`, else the BRINGUP_SPEC `layers` (0-5), else all the
+  rank's layers. The subset must be contiguous from the rank's first layer. The contract cache holds only those layers.
+- Gate: FAIL, contract_checks_failed 1. acks_early 0 (192 blocks checked), pcc_producer_kv_k 0.99994, pcc_producer_kv_v
+  0.99979 (per layer K >= 0.99994, V >= 0.99979, pad columns read back zero). Table round-trip and base address OK.
+  The only failure is "acks ... (12 vs 96)": `testing/contract.py` expects acks for `s.num_layers` = 48 layers, and the
+  golden and model have 6. Sending acks for the 42 layers that are not built would fake the check, so I did not.
+  Needs a framework fix (`len(s.layers())` in `run_contract_test` and `engine_env`); see known issues (Proposed).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## K.1 contract (attempt 2), 2026-09-26
+- No code change. I re-ran the gate on the attempt-1 adapter/runtime and got the same result: FAIL, contract_checks_failed 1,
+  acks_early 0, pcc_producer_kv_k 0.99994, pcc_producer_kv_v 0.99979 (per layer K >= 0.99994, V >= 0.99979).
+- The only failed check is `acks ... (12 vs 96)`. `testing/contract.py` builds the expected acks, and
+  PrefillRunParams.num_layers, from `s.num_layers` = 48. The model, golden and KV cache cover spec `layers` 0-5, which
+  gives 6 layers x 2 chunks = 12 acks, in order. I found nothing in the allowed paths (tt/, common/prefill) that can
+  change the expected count. The only way to pass from here is to ack 42 layers that never run, which fakes the check,
+  so I did not.
+- Needed: the framework change in `findings.yaml` (K1-contract-layer-count) and known_issues (Proposed, "The contract
+  test counts every model layer"). With it, the attempt-1 code should pass as is.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## K.1 contract (attempt 3), 2026-09-27
+- No code change. `testing/contract.py` is unchanged since attempt 2: it still sets `L = s.num_layers` (48). The gate
+  re-run gives the same result: FAIL, contract_checks_failed 1 ("acks ... (12 vs 96)"), acks_early 0,
+  pcc_producer_kv_k 0.99994, pcc_producer_kv_v 0.99979.
+- All 48 layers cannot be served either. The bfp8 experts alone are about 6.8 GB per MoE layer, so 47 of those layers
+  need about 320 GB against 128 GB on the box. The golden also has only 6 layers. Acking the missing 42 layers would fake
+  the check. Retrying this role cannot pass. The fix belongs to the framework (findings.yaml K1-contract-layer-count).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
