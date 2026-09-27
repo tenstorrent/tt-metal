@@ -147,6 +147,43 @@ def _resource_estimates(pipeline):
     return result
 
 
+def _allocator_views(parent_mesh, audio_mesh=None):
+    """Mesh allocator reservations, not per-chip telemetry or a peak measurement.
+
+    GetMemoryView reads the mesh's default subdevice allocator. Parent and child
+    views may describe shared reservations, so retain them separately and never
+    sum them or multiply them by the number of physical chips.
+    """
+    import ttnn
+
+    views = {}
+    for name, mesh in (("parent", parent_mesh), ("audio", audio_mesh)):
+        if mesh is None:
+            continue
+        ttnn.synchronize_device(mesh)
+        buffers = {}
+        for kind in ("DRAM", "L1", "TRACE"):
+            view = ttnn.get_memory_view(mesh, getattr(ttnn.BufferType, kind))
+            buffers[kind] = {
+                field: int(getattr(view, field))
+                for field in (
+                    "num_banks",
+                    "total_bytes_per_bank",
+                    "total_bytes_allocated_per_bank",
+                    "total_bytes_free_per_bank",
+                    "largest_contiguous_bytes_free_per_bank",
+                )
+            }
+            buffers[kind]["block_table"] = view.block_table
+        views[name] = {
+            "mesh_shape": list(mesh.shape),
+            "physical_device_ids": list(mesh.get_device_ids()),
+            "same_object_as_parent": mesh is parent_mesh,
+            "buffers": buffers,
+        }
+    return views
+
+
 def pytest_generate_tests(metafunc):
     # Keep the offline verifier importable without TTNN's compiled device module.
     # At pytest collection, use exactly the served Galaxy ring / f07 line fabric.
@@ -240,6 +277,11 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
     profile = os.environ.get("C03_PROFILE", "0") == "1"
     repeats = int(os.environ.get("C03_REPEATS", "5"))
     assert repeats >= 5, "keep at least five independent warm samples"
+    collect_memory = os.environ.get("C03_MEMORY", "0") == "1"
+    assert not collect_memory or profile, "allocator snapshots belong to separate profile runs, not latency runs"
+    allocator_views = {}
+    if collect_memory and not capture_only:
+        allocator_views["before_pipeline"] = _allocator_views(mesh_device)
 
     pipeline, _ = _build_pipeline(
         mesh_device, sp_axis=1, tp_axis=0, checkpoint=str(checkpoint), num_links=2, topology=parent_topology
@@ -249,6 +291,8 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
     assert pipeline.tt_mel_decoder.mesh_device is pipeline.audio_mesh_device
     assert pipeline.tt_vocoder_with_bwe.mesh_device is pipeline.audio_mesh_device
     audio_device = pipeline.audio_mesh_device
+    if collect_memory and not capture_only:
+        allocator_views["after_pipeline_construct"] = _allocator_views(mesh_device, audio_device)
     outputs, times = {}, []
     if profile and not capture_only:
         # Warmup emits instrumented programs too; drain its blocks as well so it
@@ -275,6 +319,8 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
             pytest.skip("kernel recipe capture only; no correctness or timing result")
         decode("eager_b", "b")
         estimates = _resource_estimates(pipeline)
+        if collect_memory:
+            allocator_views["after_eager_warmup"] = _allocator_views(mesh_device, audio_device)
         if profile:
             from tracy import signpost
 
@@ -287,6 +333,8 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
             ttnn.ReadDeviceProfiler(audio_device)
             signpost("stop")
             print(f"C03_PROFILE_OPID_RANGE={op0},{ttnn._ttnn.get_device_operation_id()}")
+            if collect_memory:
+                allocator_views["after_profile"] = _allocator_views(mesh_device, audio_device)
         else:
             _set_trace(pipeline, True)
             decode("capture_a", "a")
@@ -322,6 +370,7 @@ def test_collect_audio_submesh(mesh_device, device_params, parent_topology):
             "audio_topology": "Linear",
             "warm_ms": times,
             "resource_estimates": estimates,
+            "allocator_views": allocator_views,
             "timing_scope": "synchronized torch-latent-in to torch-waveform-out; includes transfers, host bridges, and trimming; excludes load, warmup, capture and file I/O",
         }
         output_path.parent.mkdir(parents=True, exist_ok=True)
