@@ -1515,8 +1515,46 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
         }
 
-        const std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants =
-            enumerate_pin_set_variants(pinnings_by_mesh);
+        // De-unionize pins across instances of this definition. Instances pinned to the same footprint share one
+        // match/commit pass; instances pinned differently each get their own; unpinned instances add one no-pin
+        // pass. This replaces enumerate_pin_set_variants, which unioned pins across every instance of the
+        // definition -- producing cross-contaminated candidate groupings that satisfied any instance's pins and
+        // drove SAT placement to churn/timeout for descriptors with multiple instances of one mesh (e.g. "M0"
+        // mesh 0 and mesh 1). Each pass commits its own footprint (mesh_node_to_asic_position); per-mesh placement
+        // correctness is then enforced downstream by intra-mesh pin validation at seat time.
+        using tt::tt_metal::experimental::tt_fabric::PinningConstraint;
+        std::vector<std::vector<PinningConstraint>> pin_set_passes;
+        {
+            std::set<std::vector<PinningConstraint>> seen_variants;  // mesh-agnostic pin sets already given a pass
+            bool any_pinned = false;
+            bool any_unpinned = false;
+            const auto definition_mesh_ids = get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
+            for (uint32_t mesh_id : definition_mesh_ids) {
+                auto pin_it = pinnings_by_mesh.find(MeshId{mesh_id});
+                if (pin_it == pinnings_by_mesh.end() || pin_it->second.empty()) {
+                    any_unpinned = true;
+                    continue;
+                }
+                any_pinned = true;
+                // Only chip_id and the ASIC positions reach the solver, so instances pinned to identical
+                // footprints (mesh id zeroed out) collapse to one pass -- same work, shared candidates.
+                auto mesh_agnostic = pin_it->second;
+                for (auto& group : mesh_agnostic) {
+                    for (auto& fabric_node : group.fabric_nodes) {
+                        fabric_node.mesh_id = MeshId{0};
+                    }
+                }
+                if (seen_variants.insert(mesh_agnostic).second) {
+                    pin_set_passes.push_back(pin_it->second);
+                }
+            }
+            // One no-pin pass when any instance is unpinned (or the definition has no pins at all). Its commits
+            // carry an empty footprint, which the consumer treats as "applies to every instance", reproducing the
+            // previous unioned behaviour for the unpinned case.
+            if (any_unpinned || !any_pinned) {
+                pin_set_passes.emplace_back();
+            }
+        }
 
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
@@ -1573,7 +1611,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         std::vector<MeshTopologyMatch> best_matches_psd_placed;
         size_t last_topology_match_count = 0;
 
-        for (const auto& active_pinnings : pin_set_variants) {
+        for (const auto& active_pinnings : pin_set_passes) {
             for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
                 best_matches_topology.clear();
                 best_matches_psd_placed.clear();
