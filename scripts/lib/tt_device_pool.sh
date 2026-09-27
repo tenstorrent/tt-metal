@@ -7,11 +7,12 @@
 # independent jobs can run on independent cards at the same time.
 #
 # Selector (what the caller passes to ttpool_acquire):
-#   auto   - DEFAULT. Lowest free card wins: try `flock -n` on card 0, then 1, 2, ...
+#   auto   - Lowest free card wins: try `flock -n` on card 0, then 1, 2, ...
 #            If every card is busy, re-scan once a second, still lowest-first.
 #            No round-robin and no queue fairness among waiters, by design.
 #   <N>    - Wait for that specific card (UMD logical id, see below).
-#   mesh   - Take EVERY card. Locks are taken in ascending order and held as they
+#   mesh   - Take EVERY card (the runners' DEFAULT on this branch, see
+#            TTPOOL_DEFAULT_SELECTOR in tt_safe_run.sh). Locks are taken in ascending order and held as they
 #            are obtained, so a waiting mesh job steadily drains the pool: new
 #            `auto` jobs skip the cards it already holds. Ascending order on both
 #            sides makes deadlock impossible.
@@ -40,8 +41,21 @@
 #   The kernel cache (TT_METAL_CACHE) stays SHARED: jit_build publishes every
 #   artifact with an atomic rename, so concurrent cold compiles are safe.
 #
-# Mesh runs use all cards visible, label "mesh", Inspector port 50100, Tracy port
-# 8100, logs under generated/mesh, and reset every card on a hang.
+# Mesh runs keep the LEGACY whole-box layout exactly: TT_VISIBLE_DEVICES,
+# TT_METAL_LOGS_PATH and the Inspector address are left alone, logs / watcher /
+# triage report stay at generated/{watcher,tt-triage} and the profiler under
+# generated/profiler (Tracy port 8100), and a hang resets the box with plain
+# `tt-smi -r`.
+#
+# Legacy interop: runners that predate the pool (the tt_ops_code_gen eval runner,
+# other checkouts) serialise on the single global /tmp/tt-device.lock and
+# /tmp/tt-device.dirty. After taking its card lock(s) the pool also takes that
+# legacy lock - SHARED for a single card, EXCLUSIVE for mesh - so a legacy runner
+# never overlaps a pool job and vice versa. Card locks are always taken before the
+# legacy lock, which keeps the ordering deadlock-free. A legacy dirty flag found
+# on acquire is turned into per-card dirty flags (every card), so each card is
+# reset by whoever takes it next; mesh runs also set / clear the legacy flag so a
+# legacy runner resets the box after a killed mesh run.
 #
 # Simulator mode is the caller's business: do not call ttpool_acquire on sim.
 #
@@ -76,6 +90,8 @@ TTPOOL_MESH_TRACY_PORT=8100
 TTPOOL_SINGLE_RPC_BASE=50051
 TTPOOL_SINGLE_TRACY_BASE=8086
 TTPOOL_ACQUIRE_TIMEOUT="${TTPOOL_ACQUIRE_TIMEOUT:-0}"
+TTPOOL_LEGACY_LOCK="${TTPOOL_LEGACY_LOCK:-/tmp/tt-device.lock}"
+TTPOOL_LEGACY_DIRTY="${TTPOOL_LEGACY_DIRTY:-/tmp/tt-device.dirty}"
 _TTPOOL_DEADLINE=0
 
 _ttpool_say() { echo "${TTPOOL_LOG_PREFIX}: $*"; }
@@ -84,7 +100,7 @@ ttpool_card_count() {
     ls /dev/tenstorrent/ 2>/dev/null | grep -c '^[0-9][0-9]*$'
 }
 
-ttpool_lock_file() { echo "/tmp/tt-device-$1.lock"; }
+ttpool_lock_file() { if [[ "$1" == legacy ]]; then echo "$TTPOOL_LEGACY_LOCK"; else echo "/tmp/tt-device-$1.lock"; fi; }
 ttpool_dirty_flag() { echo "/tmp/tt-device-$1.dirty"; }
 
 # Find the PID holding an flock on a lock path. Tries lslocks first (fast, global
@@ -170,6 +186,49 @@ _ttpool_wait_card() {
     TTPOOL_LOCK_FDS="${TTPOOL_LOCK_FDS} ${fd}"
 }
 
+# Take the legacy global lock after the card lock(s): -s (shared, single card) or
+# -x (exclusive, mesh). Waits in 20 s slices with holder reporting, bounded by the
+# acquire deadline (returns 2). Then converts a legacy dirty flag into per-card ones.
+_ttpool_take_legacy() {
+    local mode="$1" fd waited=0 slice info n c f
+    _ttpool_open_fd legacy || return 1
+    fd=$_TTPOOL_FD
+    if ! flock -n "$mode" "$fd"; then
+        _ttpool_say "waiting for the legacy whole-box lock ${TTPOOL_LEGACY_LOCK} ($([[ $mode == -x ]] && echo exclusive || echo shared))..."
+        while :; do
+            slice=20
+            if [[ "$_TTPOOL_DEADLINE" -gt 0 ]]; then
+                slice=$(( _TTPOOL_DEADLINE - $(date +%s) ))
+                [[ $slice -gt 20 ]] && slice=20
+            fi
+            if [[ $slice -gt 0 ]] && flock -w "$slice" "$mode" "$fd"; then
+                break
+            fi
+            if _ttpool_timed_out; then
+                exec {fd}>&-
+                _ttpool_say "ERROR: gave up waiting for ${TTPOOL_LEGACY_LOCK} after ${TTPOOL_ACQUIRE_TIMEOUT}s"
+                return 2
+            fi
+            waited=$((waited + slice))
+            info=$(ttpool_holder_info legacy)
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${TTPOOL_LOG_PREFIX}: waiting for ${TTPOOL_LEGACY_LOCK} (${waited}s) — ${info:-holder unknown}"
+        done
+    fi
+    TTPOOL_LOCK_FDS="${TTPOOL_LOCK_FDS} ${fd}"
+    if [[ -f "$TTPOOL_LEGACY_DIRTY" ]]; then
+        n=$(ttpool_card_count)
+        _ttpool_say "legacy ${TTPOOL_LEGACY_DIRTY} present: marking all ${n} cards dirty (each is reset by its next taker)"
+        for ((c = 0; c < n; c++)); do
+            f="$(ttpool_dirty_flag "$c")"
+            [[ -e "$f" ]] || { : >"$f" 2>/dev/null && chmod a+rw "$f" 2>/dev/null; }
+        done
+        rm -f "$TTPOOL_LEGACY_DIRTY" 2>/dev/null || true
+    fi
+}
+
+# Release everything acquired so far and fail with <rc> (used on a legacy-lock timeout).
+_ttpool_abort_acquire() { ttpool_release; TTPOOL_CARDS=""; TTPOOL_LABEL=""; TTPOOL_IS_MESH=false; return "$1"; }
+
 ttpool_release() {
     local fd
     for fd in $TTPOOL_LOCK_FDS; do exec {fd}>&-; done
@@ -214,6 +273,7 @@ ttpool_acquire() {
                 sleep 1
             done
             TTPOOL_LABEL="dev${TTPOOL_CARDS}"
+            _ttpool_take_legacy -s || { _ttpool_abort_acquire $?; return; }
             _ttpool_say "Device lock acquired: card ${TTPOOL_CARDS} (auto, waited $(( $(date +%s) - t0 ))s)"
             ;;
         mesh)
@@ -225,6 +285,7 @@ ttpool_acquire() {
                 TTPOOL_CARDS="${TTPOOL_CARDS:+$TTPOOL_CARDS }$c"
                 _ttpool_say "  holding card ${c}"
             done
+            _ttpool_take_legacy -x || { _ttpool_abort_acquire $?; return; }
             _ttpool_say "Device lock acquired: cards ${TTPOOL_CARDS} (mesh)"
             ;;
         *)
@@ -241,6 +302,7 @@ ttpool_acquire() {
             _ttpool_wait_card "$selector" || return 2
             TTPOOL_CARDS="$selector"
             TTPOOL_LABEL="dev${selector}"
+            _ttpool_take_legacy -s || { _ttpool_abort_acquire $?; return; }
             _ttpool_say "Device lock acquired: card ${selector}"
             ;;
     esac
@@ -250,20 +312,28 @@ ttpool_acquire() {
 ttpool_setup_env() {
     local repo_dir="$1" rpc_port
     [[ -n "$TTPOOL_LABEL" ]] || { _ttpool_say "ERROR: ttpool_setup_env before ttpool_acquire"; return 1; }
+    if [[ "$TTPOOL_IS_MESH" == true ]]; then
+        # Whole box: the exact pre-pool layout. Nothing card-scoped is exported, so
+        # device enumeration / ordering, log paths and the Inspector address are
+        # exactly what the runtime picks without the pool.
+        TTPOOL_LOGS_DIR="${repo_dir}"
+        TTPOOL_TRIAGE_OUT_DIR="${repo_dir}/generated/tt-triage"
+        TTPOOL_TRIAGE_REPORT="${TTPOOL_TRIAGE_OUT_DIR}/triage.txt"
+        TTPOOL_WATCHER_LOG="${repo_dir}/generated/watcher/watcher.log"
+        TTPOOL_PROFILER_DIR="${repo_dir}/generated/profiler"
+        TTPOOL_TRACY_PORT=$TTPOOL_MESH_TRACY_PORT
+        TTPOOL_TRIAGE_EXTRA_ARGS=""
+        mkdir -p "$TTPOOL_TRIAGE_OUT_DIR"
+        return 0
+    fi
     TTPOOL_LOGS_DIR="${repo_dir}/generated/${TTPOOL_LABEL}"
     TTPOOL_TRIAGE_OUT_DIR="${TTPOOL_LOGS_DIR}/tt-triage"
     TTPOOL_TRIAGE_REPORT="${TTPOOL_TRIAGE_OUT_DIR}/triage.txt"
     TTPOOL_WATCHER_LOG="${TTPOOL_LOGS_DIR}/generated/watcher/watcher.log"
     TTPOOL_PROFILER_DIR="${TTPOOL_LOGS_DIR}/profiler"
-    if [[ "$TTPOOL_IS_MESH" == true ]]; then
-        export TT_VISIBLE_DEVICES="${TTPOOL_CARDS// /,}"
-        rpc_port=$TTPOOL_MESH_RPC_PORT
-        TTPOOL_TRACY_PORT=$TTPOOL_MESH_TRACY_PORT
-    else
-        export TT_VISIBLE_DEVICES="$TTPOOL_CARDS"
-        rpc_port=$((TTPOOL_SINGLE_RPC_BASE + TTPOOL_CARDS))
-        TTPOOL_TRACY_PORT=$((TTPOOL_SINGLE_TRACY_BASE + TTPOOL_CARDS))
-    fi
+    export TT_VISIBLE_DEVICES="$TTPOOL_CARDS"
+    rpc_port=$((TTPOOL_SINGLE_RPC_BASE + TTPOOL_CARDS))
+    TTPOOL_TRACY_PORT=$((TTPOOL_SINGLE_TRACY_BASE + TTPOOL_CARDS))
     export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS="127.0.0.1:${rpc_port}"
     export TT_METAL_LOGS_PATH="$TTPOOL_LOGS_DIR"
     # The dispatch-timeout hook inherits TT_VISIBLE_DEVICES, so tt-exalens only opens
@@ -278,12 +348,27 @@ ttpool_mark_dirty() {
         f="$(ttpool_dirty_flag "$c")"
         [[ -e "$f" ]] || { : >"$f" 2>/dev/null && chmod a+rw "$f" 2>/dev/null; }
     done
+    # Mesh holds the legacy lock exclusively: also raise the legacy flag so a legacy
+    # runner (which knows nothing of per-card flags) resets the box after a killed run.
+    if [[ "$TTPOOL_IS_MESH" == true && ! -e "$TTPOOL_LEGACY_DIRTY" ]]; then
+        : >"$TTPOOL_LEGACY_DIRTY" 2>/dev/null && chmod a+rw "$TTPOOL_LEGACY_DIRTY" 2>/dev/null
+    fi
+    return 0
 }
-ttpool_clear_dirty() { local c; for c in $TTPOOL_CARDS; do rm -f "$(ttpool_dirty_flag "$c")"; done; }
+ttpool_clear_dirty() {
+    local c
+    for c in $TTPOOL_CARDS; do rm -f "$(ttpool_dirty_flag "$c")"; done
+    [[ "$TTPOOL_IS_MESH" == true ]] && rm -f "$TTPOOL_LEGACY_DIRTY"
+    return 0
+}
 
 ttpool_reset() {
-    # shellcheck disable=SC2086
-    tt-smi -r $TTPOOL_CARDS
+    if [[ "$TTPOOL_IS_MESH" == true ]]; then
+        tt-smi -r   # whole box, exactly as before the pool
+    else
+        # shellcheck disable=SC2086
+        tt-smi -r $TTPOOL_CARDS
+    fi
 }
 
 ttpool_reset_if_dirty() {
@@ -303,6 +388,8 @@ ttpool_reset_if_dirty() {
 ttpool_publish_triage_report() {
     local repo_dir="$1" legacy_dir="${1}/generated/tt-triage"
     [[ -f "$TTPOOL_TRIAGE_REPORT" ]] || return 0
+    # Mesh writes the report AT the legacy path; linking it onto itself would destroy it.
+    [[ "$(readlink -m "$TTPOOL_TRIAGE_REPORT")" == "$(readlink -m "${legacy_dir}/triage.txt")" ]] && return 0
     mkdir -p "$legacy_dir" 2>/dev/null
     ln -sfn "$TTPOOL_TRIAGE_REPORT" "${legacy_dir}/triage.txt" 2>/dev/null || true
 }

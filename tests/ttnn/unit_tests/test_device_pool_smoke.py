@@ -4,10 +4,10 @@
 """
 Smoke tests for the per-card device pool in scripts/run_safe_pytest.sh.
 
-  scripts/run_safe_pytest.sh tests/ttnn/unit_tests/test_device_pool_smoke.py::test_single_card
+  scripts/run_safe_pytest.sh --device auto tests/ttnn/unit_tests/test_device_pool_smoke.py::test_single_card
       -> runs on the lowest free card, which the process sees as device 0.
-  scripts/run_safe_pytest.sh --mesh tests/ttnn/unit_tests/test_device_pool_smoke.py::test_mesh
-      -> holds every card and opens them all as one mesh.
+  scripts/run_safe_pytest.sh tests/ttnn/unit_tests/test_device_pool_smoke.py::test_mesh
+      -> (default, same as --mesh) holds every card and opens them all as one mesh.
 
 Both print the physical PCIe ids they landed on so a log reader can check the
 assignment against the pool's "card(s)=" line.
