@@ -546,9 +546,9 @@ class TTMoEGate:
         out = ttnn.slice(self.tt_output, [0, 0, 0], [batch_per_iter, 32, 32], memory_config=mem_out)
         out_idx = ttnn.slice(self.tt_output_indices, [0, 0, 0], [batch_per_iter, 32, 32], memory_config=mem_out)
 
-        # The single block generalized op gathers each token's row straight from the logits tile layout;
-        # the combine and the deepseek op still take the (bpi, 16, 16) face repack on one core per token.
-        direct_input = self.num_blocks == 1 and self.n_group != 8
+        # On Blackhole the single block generalized op gathers each token's row straight from the logits tile
+        # layout; the combine, the deepseek op and other archs take the (bpi, 16, 16) face repack on one core per token.
+        direct_input = self.num_blocks == 1 and self.n_group != 8 and ttnn.device.is_blackhole(self.mesh_device)
         weights_chunks, indices_chunks = [], []
         for start in range(0, total_batch + padding, batch_per_iter):
             cur = logits[:, :, start : start + batch_per_iter, :]
