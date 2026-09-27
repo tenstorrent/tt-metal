@@ -111,3 +111,60 @@ activation's reference matches strictly better (weights scaled with `MIMO_FL_WST
 | clamped_silu | 0.9928 | 0.9751 | 843.7 | 1089.2 |
 | gelu_tanh | 0.9938 | 0.9777 | 848.0 | 1080.5 |
 No measurable cost (the activation hides under the next matmul). Not done: GPT-OSS gate/up/down biases.
+
+### Shape generalization
+- `MIMO_FL_I` (per-device intermediate size, I / TP) and any H with Ht % 8 == 0.
+- Gate/up split `_gu_split`: NP column pairs per gate/up core x G M-groups (group g computes row tiles
+  g*MT/G.. of every sub-block; the x block still carries all MT rows, compute starts at row offset g*MT/G). The
+  It/NP pair-sets go round the 16 readers (multiple of 16), each forwarded to its G cores (forwarder receiver j gets
+  block j / G). Picks the most cores (<= 64), then the fewest pairs per core, subject to DST ((MT/G) * 2 NP <= 8)
+  and gate/up L1 (2-expert ring of the pairs' full-K slice + x ring <= 1400 KB; the x ring shrinks 24 -> 16 -> 12
+  slots first). Unused gate/up cores idle inside the multicast rectangles (arena allocated there).
+  I 2048: NP1 G1 (64 cores); 1024: NP1 G2; 512: NP1 G4; 3072 @ H 6144/7168: NP2 G1 (48 cores, MT 2);
+  3072 @ H 3584: NP3 G2 (64, MT 2); 1536: NP1 G1 (48 cores).
+- Relays: super-block width `SE_SBT` (K tiles per row-major chunk: 32, 16 for H 3584).
+- Down: HBUF drops to 2 when 3 h buffers + the (pinned, 2-expert) down ring overflow L1 (I 3072).
+- Bugs found on the way: (1) se5_recv read RT 14 both as the M-group and as the old pair role (`is_b`), so group-1
+  cores never granted weight credits -> hang (DPRINT of receiver/forwarder counters: credits 56 0 56 0);
+  (2) the forwarder sent a whole block as one NoC packet; NP 2 blocks are 18 KB > NOC_MAX_BURST_SIZE (16 KB) -> hang;
+  now bursts under one trid; (3) my own L1 check at 1300 KB silently moved K2 from 24 to 16 x slots (fixed: 1400).
+- Also fixed: an indentation slip in the e2e check block that had skipped the per-expert PCC assert for SiLU runs
+  (introduced with the activation check; only two H-sweep runs affected, rerun).
+
+### TP shapes: M-groups vs fewer cores; x path
+- G > 1 re-forwards every gate/up weight block to G cores. G = 1 on fewer cores (K2 TP2: 32, TP4: 16) is faster at
+  small M and equal at large M (x-path bound anyway), 8 experts, us:
+  | shape | G>1 uni32 / 128 / 512 / rag | G=1 uni32 / 128 / 512 / rag |
+  |---|---|---|
+  | K2 TP2 7168x1024 | 353 / 398 / 826 / 612 (G2) | 283 / 341 / 826 / 603 |
+  | K2 TP4 7168x512 | 306 / 343 / 807 / 584 (G4) | 183 / 237 / 794 / 560 |
+  | K3 3584x3072 | 453 / 540 / 1130 / 887 (NP3 G2) | 403 / 464 / 988 / 752 (NP2, 48 cores) |
+  -> `_gu_split` now prefers the fewest M-groups.
+- Large-M TP profile (TP4, 8 x 512, 794 us): gate/up and down compute ~6 us per 128-row sub-block but the pipeline
+  runs at ~25 us; the relays' tilizer is the limit: `fast_tilize_block` of 32 tiles to bfp8 ~2400-2800 cycles
+  (~80 cyc/tile), each relay (primary + helper per rectangle) tilizes 448 tiles per sub-block, and every x tile is
+  tilized twice (once per rectangle).
+- Tried: shared tilizing (XSHARE: the 4 relays each tilize every 4th super-block once and write it to BOTH
+  primaries' landing rings): correct (PCC ok) but 1.6-1.8x SLOWER (8 x 512: 1261 vs 794 us; 8 x 32: 333 vs 183).
+  Zones: primaries wait 450-660 us per launch for landed super-blocks; the helpers' 139 KB unicasts now cross the
+  chip (6 hops, NOC0, through the rows the linked multicasts reserve) instead of going to the adjacent primary. A
+  deeper landing ring (6 slots, 2 own) changed nothing. Reverted.
+- Re-diagnosis (the relay is not the whole story): with G = 1 each of the 16 (TP4) gate/up cores does a full
+  128-row sub-block for its pair, gate AND up: 4 x 224 x 2 = 1792 tile-matmuls ~24 us -> compute-bound on 16 cores;
+  with G = 4 the 4x duplicated forwarding (16.5 MB per expert over its 4 sub-blocks at M = 512) is also ~25 us.
+  Probes that changed nothing at 8 x 512 (794 us): DRAM x reads off (`MIMO_FL_XRD_SKIP=1`: 791), contiguous 35 KB
+  multicast pieces instead of 8.7 KB (795), h chain pieces 32 -> 8 / 4 (793 / 794), 2 helpers per rectangle (797).
+- Tried: multicast forwarding for G > 1 (each block once to its G cores' 1x2 / 2x2 / 1x4 rectangle). With a
+  transaction id on the multicast -> HANG (the per-id outstanding counters do not track multicast acks: confirms the
+  earlier trid gotcha). Without trid (chunks complete in batches when all this RISC's writes are acked, 2-8 deep):
+  correct but 2.1x slower at small M (8 x 32: 389-414 vs 183 us), ~4% faster at 512 (754 vs 794): 16 forwarders'
+  path-reserved multicasts on NOC1 contend. Reverted.
+- New: `MIMO_FL_XHELP_N` helpers per rectangle (se11_xmc round of 1 + NH, per-helper landing ring + arrival sem;
+  2 needs `MIMO_FL_LAND_SLOTS=2` to fit L1). Best large-M TP4 point: G 2 (32 cores, 2x forwarding) + 2 helpers:
+  | K2 TP4, 8 experts | uni32 | uni128 | uni512 | rag |
+  |---|---|---|---|---|
+  | G1 (default) | 183 | 236 | 794 | 560 |
+  | G2 | 199 | 247 | 732 | 519 |
+  | G2 + 2 helpers | 198 | 253 | 675 | 520 |
+  | G4 + 2 helpers | 285 | 344 | 756 | 569 |
+  Real routing is small-expert dominated, so G 1 stays the default; G 2 + 2 helpers is the opt-in for large M.

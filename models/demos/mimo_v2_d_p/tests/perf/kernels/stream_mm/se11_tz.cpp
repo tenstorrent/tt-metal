@@ -42,7 +42,12 @@ void kernel_main() {
 #endif
                 cb_wait_front(rm_cb, 32);
             }
-            fast_tilize_block(rm_cb, SE_SBT, sb_cb, 0, m * SE_SBT);
+            {
+#ifdef SE_ZONES
+                DeviceZoneScopedN("TZ_BLK");
+#endif
+                fast_tilize_block(rm_cb, SE_SBT, sb_cb, 0, m * SE_SBT);
+            }
             cb_pop_front(rm_cb, 32);
         }
         cb_push_back(sb_cb, mt * SE_SBT);

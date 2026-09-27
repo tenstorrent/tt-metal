@@ -120,13 +120,15 @@ def act_ref(g, u):
     raise ValueError(ACT)  # NoC of the x relays' multicasts (their DRAM reads use the other)
 
 
-GU_L1_BUDGET = int(os.environ.get("MIMO_FL_GU_L1", str(1300 * 1024)))  # gate/up core: weight ring + x ring
+GU_L1_BUDGET = int(os.environ.get("MIMO_FL_GU_L1", str(1400 * 1024)))  # gate/up core: weight ring + x ring
 
 
 def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
     """Gate/up work split for It intermediate tile columns: (NP pairs per core, G M-groups). The It / NP pair-sets
     go round the 16 readers (a multiple of 16), and each is computed by G cores, one per M-group (a group owns
-    MT / G row tiles of every sub-block). Most cores (<= 64), then the fewest pairs per core; DST holds
+    MT / G row tiles of every sub-block). Fewest M-groups first (a group re-forwards every weight block: G > 1
+    measured 14-40% slower at small M, never faster, on K2 TP2 / TP4 and K3), then most cores (<= 64), then the
+    fewest pairs per core; DST holds
     (MT / G) x 2 NP gate/up tiles <= 8, and a core's L1 the 2-expert gate/up ring (each group holds its pairs'
     full-K slice) + the x ring."""
     if os.environ.get("MIMO_FL_NP"):
@@ -140,7 +142,7 @@ def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
             mt_ = g * min(8 // (2 * np_), MT_MAX // g)
             if Ht and 2 * Ht * 2 * np_ * w_tile + x_slots * mt_ * KBLK * BF8_TILE > GU_L1_BUDGET:
                 continue
-            cand = ((ps * g, -np_), np_, g)
+            cand = ((-g, ps * g, -np_), np_, g)
             best = cand if best is None or cand > best else best
     assert best, f"no gate/up split for {It} tile columns"
     return best[1], best[2]
@@ -159,7 +161,7 @@ def _chains(cores, n, phys, noc):
     return [path[i * L : (i + 1) * L] if i < n - 1 else path[i * L :] for i in range(n)]
 
 
-def _layout(device, x2=False, xcol=0):
+def _layout(device, x2=False, xcol=0, nh=1):
     grid = device.compute_with_storage_grid_size()
     phys = lambda c: device.worker_core_from_logical_core(c)
     opt = list(device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0))
@@ -182,14 +184,15 @@ def _layout(device, x2=False, xcol=0):
             next(ttnn.CoreCoord(7, y) for y in (3, 4, 2, 5, 1, 6) if (7, y) not in taken),
         ]
     taken |= {(c.x, c.y) for c in relays}
-    if x2:  # a second relay per rectangle, next to the first (relays k and k + 2 serve rectangle k)
+    if x2:  # nh more relays per rectangle, next to the first (relay 2 + 2 j + k: rectangle k's j-th extra)
         assert XNOC == 0
-        extra = [
-            next(ttnn.CoreCoord(1, y) for y in (5, 3, 6, 2, 7, 1, 8) if (1, y) not in taken),
-            next(ttnn.CoreCoord(7, y) for y in (4, 2, 5, 1, 6, 0, 7) if (7, y) not in taken),
-        ]
-        relays += extra
-        taken |= {(c.x, c.y) for c in extra}
+        for _ in range(nh):
+            extra = [
+                next(ttnn.CoreCoord(1, y) for y in (5, 3, 6, 2, 7, 1, 8, 0, 9) if (1, y) not in taken),
+                next(ttnn.CoreCoord(7, y) for y in (4, 2, 5, 1, 6, 0, 7, 8, 9) if (7, y) not in taken),
+            ]
+            relays += extra
+            taken |= {(c.x, c.y) for c in extra}
     down = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
     return grid, phys, readers, gu, rects, relays, down
 
@@ -230,7 +233,8 @@ def test_stream_expert_flat(device, m, wdtype):
     if XHELP:  # the X2 cores, but relays 2 / 3 only read + tilize for relays 0 / 1 (one sender per rectangle)
         assert E2E and not XCOL
         X2 = True
-    grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL)
+    NH = int(os.environ.get("MIMO_FL_XHELP_N", "1")) if XHELP else 1  # helpers per rectangle
+    grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL, NH)
     ND = len(down)
     nrl = len(relays)
     if os.environ.get("MIMO_FL_SHOW"):
@@ -374,7 +378,9 @@ def test_stream_expert_flat(device, m, wdtype):
     LAND_OFF = SB_OFF + al(
         SB_SLOTS * MT * SBT * BF8_TILE
     )  # XHELP: the primary's landing ring for the helper's super-blocks
-    relay_bytes = (LAND_OFF + (al(LAND_SLOTS * MT * SBT * BF8_TILE) if XHELP else 0)) if E2E else al(RELAY_CB * x_bytes)
+    relay_bytes = (
+        (LAND_OFF + (al(NH * LAND_SLOTS * MT * SBT * BF8_TILE) if XHELP else 0)) if E2E else al(RELAY_CB * x_bytes)
+    )
     arena_tiles = max(gu_bytes, dn_bytes, relay_bytes, RD_OFF) // 2048
     logger.info(
         f"M {m}: {S} sub-blocks; gu ring {ring_g * slot * w_tile >> 10} KB, x ring {X_SLOTS * x_bytes >> 10} KB; "
@@ -768,9 +774,10 @@ def test_stream_expert_flat(device, m, wdtype):
             + ([wx_dev.buffer_address(), d % banks, (d // banks) * wx_region, int(d < n_x)] if SMALL else [])
         )
         dc_rts[pcds[d]][dc.x][dc.y] = [int(SMALL and d < n_x)]
-    xr_rt, xm_rt, hl_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    vstride = XCOL or (2 if X2 else 1)
-    rl_off = lambda idx: idx if XCOL else idx // 2
+    xr_rt, xm_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    hl_rt = [ttnn.RuntimeArgs() for _ in range(NH)]
+    vstride = XCOL or ((1 + NH) if XHELP else 2 if X2 else 1)
+    rl_off = lambda idx: idx if XCOL else ((0 if idx < 2 else (idx - 2) // 2 + 1) if XHELP else idx // 2)
     rl_sb = lambda idx: len([g for g in range(V * nsb) if g % vstride == rl_off(idx)])  # super-blocks relay idx sends
     for idx, rl in enumerate(relays):
         k = idx % 2  # its rectangle
@@ -811,9 +818,21 @@ def test_stream_expert_flat(device, m, wdtype):
             ]
         if XHELP and idx < 2:  # the rectangle's one sender: all its super-blocks, the helper's via the landing ring
             hp = relays[idx + 2]
-            xm_l = xm_l[:6] + [V * nsb, XARR, 1, 0, 0, 0, 0, 0, pk(hp), base + LAND_OFF, LAND_SLOTS]
+            xm_l = (
+                xm_l[:6]
+                + [V * nsb, XARR, 1, 0, 0, 0, 0, 0, pk(hp), base + LAND_OFF, LAND_SLOTS]
+                + [pk(relays[2 + 2 * j_ + idx]) for j_ in range(1, NH)]
+            )
         if XHELP and idx >= 2:
-            hl_rt[rl.x][rl.y] = [pk(relays[idx - 2]), base + LAND_OFF, rl_sb(idx)] + dyn_args
+            j_ = (idx - 2) // 2  # its ring follows the primary's rings of helpers 0..j - 1
+            sbb = MT * SBT * BF8_TILE
+            hl_rt[j_][rl.x][rl.y] = [
+                pk(relays[idx % 2]),
+                base + LAND_OFF + j_ * LAND_SLOTS * sbb,
+                rl_sb(idx),
+                1 + NH,
+                j_ + 1,
+            ] + dyn_args
             continue
         xm_rt[rl.x][rl.y] = xm_l + dyn_args
 
@@ -1048,21 +1067,22 @@ def test_stream_expert_flat(device, m, wdtype):
                     + zones
                     + dyn_def
                     + ([("XMC_WHOLE_SB", "1")] if int(os.environ.get("MIMO_FL_WHOLE_SB", "1" if E2E else "0")) else [])
-                    + ([("XMC_HELPER", "1")] if XHELP else []),
+                    + ([("XMC_HELPER", "1"), ("SE_XNH", str(NH))] if XHELP else []),
                     config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1 if XNOC == 1 else ttnn.NOC.NOC_0),
                 ),
             ]
             + (
-                [
+                [  # helper j of each rectangle bumps arrival semaphore (4, 7, 8, 10)[j] on its primary
                     ttnn.KernelDescriptor(
                         kernel_source=f"{KDIR}/se13_xhelp.cpp",
                         source_type=FP,
-                        core_ranges=_crs(relays[2:]),
-                        compile_time_args=[1, MT, BF8_TILE, LAND_SLOTS, 4, 5, E, nsb],
-                        runtime_args=hl_rt,
+                        core_ranges=_crs(relays[2 + 2 * j_ : 4 + 2 * j_]),
+                        compile_time_args=[1, MT, BF8_TILE, LAND_SLOTS, (4, 7, 8, 10)[j_], 5, E, nsb],
+                        runtime_args=hl_rt[j_],
                         defines=[("SE_SBT", str(SBT))] + dyn_def,
                         config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
                     )
+                    for j_ in range(NH)
                 ]
                 if XHELP
                 else []
@@ -1400,7 +1420,13 @@ def test_stream_expert_flat(device, m, wdtype):
                         logger.info(
                             f"{ACT}: min PCC {min(p_[1] for p_ in pccs):.5f} vs silu-glu reference {min(alt):.5f}"
                         )
-                        assert min(p_[1] for p_ in pccs) > max(alt), "activation not distinguishable / wrong"
+                        # (only when the two references differ: e.g. the clamps never engage at small weights)
+                        sep = min(
+                            comp_pcc((torch.nn.functional.silu(xin[e] @ qg) * (xin[e] @ qu)) @ qd, refs_q[e], 0)[1]
+                            for e in act
+                        )
+                        if sep < 0.999:
+                            assert min(p_[1] for p_ in pccs) > max(alt), "activation not distinguishable / wrong"
                     logger.info(f"e2e per-expert PCC {[round(float(p_[1]), 5) for p_ in pccs]}")
                     assert all(p_[0] for p_ in pccs) or os.environ.get("MIMO_FL_XRD_SKIP")
                     if DYN:

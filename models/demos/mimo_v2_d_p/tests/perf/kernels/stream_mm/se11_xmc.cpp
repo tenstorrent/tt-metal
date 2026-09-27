@@ -45,8 +45,11 @@ void kernel_main() {
     // Dynamic counts: this relay's super-blocks follow from the active experts' sub-blocks (RT 14.. are the
     // se_dyn.hpp args, CT 7 NUM_E, CB 7's upper half this RISC's scratch)
     constexpr uint32_t num_e = get_compile_time_arg_val(7), nsb = get_compile_time_arg_val(8);
+#ifndef SE_XNH
+#define SE_XNH 1  // helpers per primary (XMC_HELPER)
+#endif
 #ifdef XMC_HELPER
-    constexpr uint32_t dyn0 = 17;
+    constexpr uint32_t dyn0 = 16 + SE_XNH;
 #else
     constexpr uint32_t dyn0 = 14;
 #endif
@@ -80,20 +83,23 @@ void kernel_main() {
     uint32_t sent = 0;
     for (uint32_t b = 0; b < num_sb; ++b) {
 #ifdef XMC_HELPER
-        // Odd super-blocks were read and tilized by the helper core (se13_xhelp.cpp) into the landing ring here
-        // (RT 14 helper xy, 15 landing address, 16 landing slots; DATA sem 4 here counts arrivals, CREDIT sem 5 on the
-        // helper counts freed slots).
+        // Super-blocks b with b % (1 + NH) = h + 1 were read and tilized by helper h (se13_xhelp.cpp) into landing
+        // ring h here (RT 14 helper 0 xy, 17.. helpers 1.. xy, 15 landing address (ring h follows ring h - 1), 16
+        // landing slots; DATA sem se_help_sem(h) here counts arrivals, CREDIT sem 5 on the helper counts freed slots).
+        constexpr uint32_t hs = 1 + SE_XNH;
 #ifdef SE_SMALL_T
-        const bool from_helper = b % 2 == 1 && !dyn.small;  // small-M role split: the primary tilized everything
+        const bool from_helper = b % hs != 0 && !dyn.small;  // small-M role split: the primary tilized everything
 #else
-        const bool from_helper = b % 2 == 1;
+        const bool from_helper = b % hs != 0;
 #endif
-        const uint32_t hb = b / 2;
+        const uint32_t hh = b % hs - 1, hb = b / hs;
         uint32_t src;
         if (from_helper) {
             ZW("XMC_HELP");
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(4)), hb + 1);
-            src = get_arg_val<uint32_t>(15) + (hb % get_arg_val<uint32_t>(16)) * sb_tiles * tb;
+            constexpr uint32_t help_sem[4] = {4, 7, 8, 10};
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
+            src = get_arg_val<uint32_t>(15) +
+                  (hh * get_arg_val<uint32_t>(16) + hb % get_arg_val<uint32_t>(16)) * sb_tiles * tb;
         } else {
             {
                 ZW("XMC_SB");
@@ -158,7 +164,7 @@ void kernel_main() {
         }
 #ifdef XMC_HELPER
         if (from_helper) {
-            const uint32_t hxy = get_arg_val<uint32_t>(14);
+            const uint32_t hxy = get_arg_val<uint32_t>(hh ? 16 + hh : 14);
             noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(5)), 1);  // its slot is free again
         } else {
             cb_pop_front(sb_cb, sb_tiles);

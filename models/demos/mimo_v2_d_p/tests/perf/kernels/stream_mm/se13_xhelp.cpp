@@ -9,7 +9,7 @@
 // counts freed slots), then the primary's DATA_SEM is bumped after the write is acknowledged.
 // CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 LAND_SLOTS, 4 DATA_SEM (on the primary), 5 CREDIT_SEM (here), 6 NUM_E, 7 NSB
 //     (SE_DYN)
-// RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3.. se_dyn.hpp args (SE_DYN)
+// RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3 round, 4 place, 5.. se_dyn.hpp args (SE_DYN)
 #include <stdint.h>
 #ifndef SE_SBT
 #define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
@@ -32,11 +32,14 @@ void kernel_main() {
     // Dynamic counts: the odd super-blocks of the active experts' stream (CT 6 NUM_E, 7 NSB; RT 3.. se_dyn.hpp args,
     // CB 7's upper half this RISC's scratch)
     SeDyn dyn;
-    se_dyn_load<get_compile_time_arg_val(6)>(dyn, 3, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
+    // RT 3 / 4: the primary's round (1 + helpers) and this helper's place in it (its super-blocks b % round == place)
+    se_dyn_load<get_compile_time_arg_val(6)>(dyn, 5, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
+    const uint32_t tot_sb = dyn.num_v * get_compile_time_arg_val(7);
+    const uint32_t round_ = get_arg_val<uint32_t>(3), place = get_arg_val<uint32_t>(4);
 #ifdef SE_SMALL_T
-    const uint32_t num_sb = dyn.small ? 0 : dyn.num_v * get_compile_time_arg_val(7) / 2;  // small: the helper idles
+    const uint32_t num_sb = dyn.small || tot_sb <= place ? 0 : (tot_sb - place + round_ - 1) / round_;  // small: idle
 #else
-    const uint32_t num_sb = dyn.num_v * get_compile_time_arg_val(7) / 2;
+    const uint32_t num_sb = tot_sb <= place ? 0 : (tot_sb - place + round_ - 1) / round_;
 #endif
 #else
     const uint32_t num_sb = get_arg_val<uint32_t>(2);
