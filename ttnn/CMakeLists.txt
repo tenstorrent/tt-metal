@@ -264,6 +264,7 @@ target_link_libraries(
         TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
+        TTNN::Ops::Bringup # derived ops of model bring-ups (ttnn/ttnn/bringup/INDEX.md)
         TTNN::Ops::Moreh
         TTNN::Ops::Transformer
 )
@@ -453,6 +454,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/experimental)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
+add_subdirectory(ttnn/bringup)
 add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/moreh)

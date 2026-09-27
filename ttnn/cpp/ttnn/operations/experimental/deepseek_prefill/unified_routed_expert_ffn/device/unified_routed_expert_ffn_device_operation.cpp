@@ -75,7 +75,6 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             "x must be ROW_MAJOR when x_is_row_major, got {}",
             t.x.layout());
     } else {
-        TT_FATAL(!op.high_precision, "high_precision needs a ROW_MAJOR bf16 x (it tilizes x to bf16 in-kernel)");
         TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
         TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
     }
@@ -397,8 +396,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_biases,
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens,
-    bool high_precision) {
+    uint32_t max_active_tokens) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -410,8 +408,7 @@ ttnn::Tensor unified_routed_expert_moe(
             .fuse_bias = !gate_biases.empty(),
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
-            .max_active_tokens = max_active_tokens,
-            .high_precision = high_precision},
+            .max_active_tokens = max_active_tokens},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

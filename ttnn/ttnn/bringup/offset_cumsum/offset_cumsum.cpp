@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "offset_cumsum.hpp"
+#include "device/offset_cumsum_device_operation.hpp"
+
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+
+namespace ttnn::operations::bringup::offset_cumsum {
+
+std::array<ttnn::Tensor, 3> offset_cumsum(
+    const ttnn::Tensor& input_tensor,
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    uint32_t experts_per_chip,
+    const ttnn::MemoryConfig& memory_config,
+    bool use_l1_small_for_semaphores) {
+    const auto& shape = input_tensor.logical_shape();
+    uint32_t n_routed_experts = shape[-1];
+
+    auto reshaped = ttnn::reshape(input_tensor, ttnn::Shape({1, n_routed_experts}));
+
+    // A dispatch group of one device (e.g. a 1xN mesh with the dispatch axis = rows) has nothing to gather,
+    // and ttnn::all_gather rejects a 1-device axis: feed the local histogram straight to the prefix sum.
+    const bool single_device_axis = input_tensor.device()->shape()[cluster_axis] == 1;
+    auto gathered = single_device_axis ? reshaped
+                                       : ttnn::all_gather(
+                                             reshaped,
+                                             /*dim=*/0,
+                                             /*cluster_axis=*/cluster_axis,
+                                             /*memory_config=*/memory_config,
+                                             /*persistent_output_tensor=*/std::nullopt,
+                                             /*subdevice_id=*/std::nullopt,
+                                             /*sub_core_grid=*/std::nullopt,
+                                             /*num_links=*/num_links,
+                                             /*topology=*/std::nullopt,
+                                             /*chunks_per_sync=*/std::nullopt,
+                                             /*num_workers_per_link=*/std::nullopt,
+                                             /*num_buffers_per_channel=*/std::nullopt,
+                                             /*use_l1_small_for_semaphores=*/use_l1_small_for_semaphores);
+
+    auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
+
+    return ttnn::prim::bringup::offset_cumsum(row_major, cluster_axis, experts_per_chip);
+}
+
+}  // namespace ttnn::operations::bringup::offset_cumsum

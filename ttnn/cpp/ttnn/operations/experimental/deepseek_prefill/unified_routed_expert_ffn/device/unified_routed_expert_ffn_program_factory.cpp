@@ -249,13 +249,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Single source of truth for the dst-accumulator mode: drives DST_CAPACITY,
     // the ComputeConfig below, and (via -DFP32_DEST_ACC_EN) the compute kernel's
     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
-    // bf16 dst for every variant except GeluTanh (Gemma-4 bring-up) and the opt-in
-    // high_precision path (MiMo-V2), which take the caller's fp32_dest_acc_en; the other
-    // variants and callers stay byte-identical.
-    const bool honour_compute_config = op.activation == RoutedExpertActivation::GeluTanh || op.high_precision;
-    const bool kFp32DestAccEn = honour_compute_config && op.compute_kernel_config.has_value() &&
-                                ttnn::get_fp32_dest_acc_en(op.compute_kernel_config);
-    const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    constexpr bool kFp32DestAccEn = false;
+    constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
@@ -324,21 +319,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     //   * intermediates (gate/up_intermed, activated) are Bfp8_b: post-activation
     //     per-element values feeding the next matmul, not accumulators, so
     //     1KB/tile (half the bf16 cost) is enough and saves L1.
-    //   * high_precision keeps the intermediates and the tilized x in bf16: a bf8_b x (one
-    //     exponent per 16 values) flushes the channels next to an outlier (MiMo-V2 layer 5:
-    //     |x| up to 131 with median 0.009 -> rel L2 0.045). With an fp32 dest it also packs
-    //     the K-loop partials as Float32, so PACKER_L1_ACC sums the K-blocks in fp32: bf16
-    //     partials left MiMo-V2 layer-5 per-token norm ratios at [0.962, 1.038] (HiFi4) vs
-    //     [0.987, 1.021] with Float32 partials.
-    const tt::DataFormat intermed_df = op.high_precision ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
-    const bool fp32_partials = op.high_precision && kFp32DestAccEn;
-    const tt::DataFormat partials_gu_df = fp32_partials ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const tt::DataFormat partials_d_df = fp32_partials ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
+    const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
-    // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output; bf16 with
-    // high_precision), else it matches x's dtype (bf8_b on the TILE path).
-    const tt::DataFormat in0_x_df =
-        op.x_is_row_major ? (op.high_precision ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b) : x_df;
+    // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output),
+    // else it matches x's dtype (bf8_b on the TILE path).
+    const tt::DataFormat in0_x_df = op.x_is_row_major ? tt::DataFormat::Bfp8_b : x_df;
     const uint32_t in0_x_tile_size = tt::tile_size(in0_x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
     const uint32_t up_tile_size = tt::tile_size(up_df);
@@ -367,8 +354,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         total += static_cast<uint64_t>(M * w_gu * (op.x_is_row_major ? 1 : 2)) *
                  in0_x_tile_size;  // cb_in0_x (RM: single-buf)
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu * 2) *
-                     tt::tile_size(tt::DataFormat::Float16_b);  // cb_x_rm (bf16 staging)
+            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
@@ -1076,9 +1062,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // Clamped SiLU-GLU (DeepSeek V4), with limit=10.0 (ClampedSiluGluConfigDsV4) baked
         // into the kernel.
         compute_defines["CLAMPED_SILU_GLU"] = "1";
-    } else if (op.activation == RoutedExpertActivation::GeluTanh) {
-        // GeGLU (Gemma-4): gelu_tanh(gate) * up. Silu's unary path with gelu_tanh_tile.
-        compute_defines["ROUTED_GELU_TANH"] = "1";  // not GELU_TANH: that name is a KernelActivation enumerator
     }
     if (fuse_bias) {
         // FUSE_BIAS: add gate/up bias (broadcast across rows) before the fused binary
@@ -1087,21 +1070,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         compute_defines["FUSE_BIAS"] = "1";
     }
 
-    // Every variant runs LoFi, except GeluTanh (Gemma-4 bring-up) and the opt-in high_precision
-    // path, which take the caller's math_fidelity: LoFi truncates the bf16 weight mantissa and biases the expert
-    // outputs toward zero (per-token norms up to 7% low on Gemma-4). Other variants stay byte-identical.
-    MathFidelity compute_fidelity = MathFidelity::LoFi;
-    if (honour_compute_config && op.compute_kernel_config.has_value()) {
-        compute_fidelity = ttnn::get_math_fidelity(op.compute_kernel_config);
-    }
-
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/"
         "fused_swiglu.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = compute_fidelity,
+            .math_fidelity = MathFidelity::LoFi,
             .fp32_dest_acc_en = kFp32DestAccEn,
             .math_approx_mode = false,
             .compile_args = compute_ct_args,

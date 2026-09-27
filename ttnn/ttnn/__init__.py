@@ -466,6 +466,13 @@ def auto_register_ttnn_cpp_operations(module):
 
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
 
+# Derived ops of model bring-ups (ttnn/ttnn/bringup/INDEX.md): the ops were registered as ttnn.bringup.* above;
+# add the module's enums and constants beside them.
+_bringup = create_module_if_not_exists("ttnn.bringup")
+for _name in dir(ttnn._ttnn.operations.bringup):
+    if not _name.startswith("_") and not _name.endswith("_t") and not hasattr(_bringup, _name):
+        setattr(_bringup, _name, getattr(ttnn._ttnn.operations.bringup, _name))
+
 import ttnn.operations
 
 import ttnn.experimental_loader

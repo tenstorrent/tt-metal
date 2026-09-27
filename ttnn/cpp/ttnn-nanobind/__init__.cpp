@@ -88,6 +88,11 @@
 
 namespace nb = nanobind;
 
+namespace ttnn::bringup {
+// Derived ops of model bring-ups (ttnn/ttnn/bringup/bringup_nanobind.cpp), exposed as ttnn.bringup.
+void py_module(nb::module_& mod);
+}  // namespace ttnn::bringup
+
 namespace ttnn::operations {
 
 void py_module(nb::module_& mod) {
@@ -194,6 +199,9 @@ void py_module(nb::module_& mod) {
 
     auto m_experimental = mod.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
+
+    auto m_bringup = mod.def_submodule("bringup", "derived ops of model bring-ups (ttnn/ttnn/bringup)");
+    ttnn::bringup::py_module(m_bringup);
 
     auto m_disaggregation =
         m_experimental.def_submodule("disaggregation", "Disaggregation APIs for KV cache management");
