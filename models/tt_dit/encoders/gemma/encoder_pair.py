@@ -190,6 +190,11 @@ class GemmaTokenizerEncoderPair:
             if self.gemma_encoder is not None
             else [os.environ.get("LTX_GEMMA_NATIVE_GQA", "0") == "1"] * self._num_layers
         )
+        feature_mask_after_projection = (
+            self.feature_extractor._mask_after_projection
+            if self.feature_extractor is not None
+            else os.environ.get("LTX_FEATURE_MASK_AFTER_PROJECTION", "0") == "1"
+        )
         connectors = {}
         for axis in ("video", "audio") if self.mode == "av" else ("video",):
             connector = getattr(self, f"{axis}_connector")
@@ -214,6 +219,7 @@ class GemmaTokenizerEncoderPair:
             "code": code,
             "native_binary": cache_module.source_id(ttnn._ttnn.__file__),
             "weight_cache_version": cache_module.CACHE_VERSION,
+            "feature_mask_after_projection": feature_mask_after_projection,
             "model": {
                 "mode": self.mode,
                 "layers": self._num_layers,

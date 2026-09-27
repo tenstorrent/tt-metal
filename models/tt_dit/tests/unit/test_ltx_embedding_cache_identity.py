@@ -87,6 +87,7 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
             _video_dim=4096,
             _audio_dim=2048,
             gemma_encoder=None,
+            feature_extractor=None,
             video_connector=None,
             audio_connector=None,
             mesh_device=SimpleNamespace(shape=(2, tp), arch=lambda: "wormhole_b0"),
@@ -101,6 +102,9 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
         stats = os.environ["LTX_CONNECTOR_QK_STATS"] == "1" and pair.parallel_config.tensor_parallel.factor > 1
         pair.gemma_encoder = SimpleNamespace(
             layers=[SimpleNamespace(self_attn=SimpleNamespace(_native_gqa=native)) for _ in range(pair._num_layers)]
+        )
+        pair.feature_extractor = SimpleNamespace(
+            _mask_after_projection=os.environ.get("LTX_FEATURE_MASK_AFTER_PROJECTION", "0") == "1"
         )
         for axis in ("video", "audio"):
             setattr(
@@ -149,6 +153,28 @@ class EmbeddingCacheIdentityTest(unittest.TestCase):
                 before = pair.embedding_cache_identity()
                 path.write_bytes(b"changed fixture with different size")
                 self.assertNotEqual(before, pair.embedding_cache_identity())
+
+    def test_feature_mask_policy_is_separate_and_tracks_loaded_shell(self):
+        for tp in (1, 4, 8):
+            identities = []
+            for enabled in ("0", "1"):
+                with self.subTest(tp=tp, enabled=enabled), patch.dict(
+                    os.environ,
+                    {
+                        "LTX_GEMMA_NATIVE_GQA": "0",
+                        "LTX_CONNECTOR_QK_STATS": "0",
+                        "LTX_FEATURE_MASK_AFTER_PROJECTION": enabled,
+                    },
+                ):
+                    pair = self.pair(tp)
+                    cold = pair.embedding_cache_identity()
+                    identities.append(cold)
+                    self.load_shells(pair)
+                    self.assertEqual(cold, pair.embedding_cache_identity())
+                    os.environ["LTX_FEATURE_MASK_AFTER_PROJECTION"] = str(1 - int(enabled))
+                    self.assertEqual(cold, pair.embedding_cache_identity())
+                    self.assertNotEqual(cold, self.pair(tp).embedding_cache_identity())
+            self.assertNotEqual(*identities)
 
     def test_prompt_list_boundaries_and_legacy_namespace_are_preserved(self):
         legacy = self.directory / "cache" / "ltx-embeddings" / "old.device.pt"

@@ -12,6 +12,7 @@ Reference: ltx_core.text_encoders.gemma.feature_extractor.FeatureExtractorV2
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -41,6 +42,7 @@ class GemmaFeatureExtractor(Module):
         self.audio_dim = audio_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        self._mask_after_projection = os.environ.get("LTX_FEATURE_MASK_AFTER_PROJECTION", "0") == "1"
         # The aggregate matmuls dominate per-device compute (input_dim=188160). The Gemma output
         # they consume is TP-replicated, so column-fracture the aggregate weights on the TP axis:
         # each device does 1/TP of the projection, then all_gather restores the full embed dim.
@@ -87,8 +89,8 @@ class GemmaFeatureExtractor(Module):
         )
 
     def _normed_concat(self, hidden_states: list[ttnn.Tensor], tt_mask: ttnn.Tensor) -> ttnn.Tensor:
-        """Per-token RMS norm of each hidden state over its hidden dim, concatenated layer-major,
-        with padded tokens zeroed — matches FeatureExtractorV2.norm_and_concat_per_token_rms."""
+        """Per-token RMS norm, concatenated layer-major. Padding is removed here
+        unless the projection selects its bias on padded rows instead."""
         normed = [
             ttnn.experimental.dit_rms_norm_unary_fused(
                 hs, weight=None, epsilon=1e-6, compute_kernel_config=self.rmsnorm_cc
@@ -99,17 +101,31 @@ class GemmaFeatureExtractor(Module):
         for hs in normed:
             ttnn.deallocate(hs)
 
+        if self._mask_after_projection:
+            return tt_normed
         out = ttnn.multiply(tt_normed, tt_mask)
         ttnn.deallocate(tt_normed)
         return out
 
-    def _aggregate(self, aggregate_embed: ColParallelLinear, tt_normed: ttnn.Tensor, out_dim: int) -> ttnn.Tensor:
+    def _aggregate(
+        self,
+        aggregate_embed: ColParallelLinear,
+        tt_normed: ttnn.Tensor,
+        out_dim: int,
+        tt_mask: ttnn.Tensor,
+    ) -> ttnn.Tensor:
         """Rescale by sqrt(out_dim / embedding_dim), project (TP-fractured), then all_gather the
         embed dim back to full. tt_normed is shared across the video/audio calls, so multiply
         produces a fresh tensor and leaves it intact."""
         rescaled = ttnn.multiply(tt_normed, math.sqrt(out_dim / self.embedding_dim))
         out = aggregate_embed(rescaled)
         ttnn.deallocate(rescaled)
+        if self._mask_after_projection:
+            # The original zero-input projection returns its learned bias on
+            # padded rows. Select that local TP slice, not zero, before gather.
+            selected = ttnn.where(tt_mask, out, aggregate_embed.bias.data)
+            ttnn.deallocate(out)
+            out = selected
         if self.tp_factor > 1:
             out = ttnn.unsqueeze(out, 0)
             out = self.ccl_manager.all_gather(out, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=True)
@@ -120,9 +136,9 @@ class GemmaFeatureExtractor(Module):
         """Returns (video_features, audio_features) at the connector input dims. ``tt_mask`` is the
         device padding mask (build_mask), passed in so the whole encode can be a single trace."""
         tt_normed = self._normed_concat(hidden_states, tt_mask)
-        video = self._aggregate(self.video_aggregate_embed, tt_normed, self.video_dim)
+        video = self._aggregate(self.video_aggregate_embed, tt_normed, self.video_dim, tt_mask)
         audio = (
-            self._aggregate(self.audio_aggregate_embed, tt_normed, self.audio_dim)
+            self._aggregate(self.audio_aggregate_embed, tt_normed, self.audio_dim, tt_mask)
             if self.audio_aggregate_embed is not None
             else None
         )
