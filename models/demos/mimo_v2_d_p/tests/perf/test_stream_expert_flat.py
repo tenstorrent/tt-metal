@@ -29,7 +29,32 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.mimo_v2_d_p.tests.perf.test_dram_read_fwd import noc_hops
 from models.demos.mimo_v2_d_p.tests.perf.test_stream_expert_spatial import _bank_sharded
-from models.demos.mimo_v2_d_p.tests.perf.test_stream_matmul import BF8_TILE, _crs
+from models.demos.mimo_v2_d_p.tests.perf.test_stream_matmul import BF8_TILE
+from models.demos.mimo_v2_d_p.tests.perf.test_stream_matmul import _crs as _crs_single
+
+
+def _crs(cores):
+    """Cores packed into maximal rectangles (greedy: widest x run, then grow in y). One CoreRange per core
+    turns every binary / launch-message write into a per-core unicast; rectangles let dispatch multicast."""
+    if os.environ.get("MIMO_FL_CRS_SINGLE"):
+        return _crs_single(cores)
+    left = {(c.x, c.y) for c in cores}
+    rects = []
+    for x0, y0 in sorted(left, key=lambda t: (t[1], t[0])):
+        if (x0, y0) not in left:
+            continue
+        x1 = x0
+        while (x1 + 1, y0) in left:
+            x1 += 1
+        y1 = y0
+        while all((x, y1 + 1) in left for x in range(x0, x1 + 1)):
+            y1 += 1
+        for x in range(x0, x1 + 1):
+            for y in range(y0, y1 + 1):
+                left.discard((x, y))
+        rects.append(ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)))
+    return ttnn.CoreRangeSet(rects)
+
 
 try:
     from tracy import signpost
@@ -1513,6 +1538,25 @@ def test_stream_expert_flat(device, m, wdtype):
             arena_cb(17, XO_OFF, MT * pcx * BF8_TILE, dn_crs, ttnn.bfloat8_b, BF8_TILE),
         ]
     program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+    if os.environ.get("MIMO_FL_SHOW_KERNELS"):  # dispatch anatomy: per kernel its cores, rectangles, runtime-arg words
+        tot_rt = 0
+        for kd_ in kernels:
+            crs_ = kd_.core_ranges
+            ranges_ = crs_.ranges()
+            ncores_ = crs_.num_cores()
+            rt_words = 0
+            for rg in ranges_:
+                for x_ in range(rg.start.x, rg.end.x + 1):
+                    for y_ in range(rg.start.y, rg.end.y + 1):
+                        try:
+                            rt_words += len(kd_.runtime_args[x_][y_])
+                        except Exception:
+                            pass
+            tot_rt += rt_words
+            logger.info(
+                f"KERNEL {str(kd_.kernel_source).split('/')[-1]:16s} cores {ncores_:3d} rects {len(ranges_):3d} rt words {rt_words:5d}"
+            )
+        logger.info(f"KERNELS {len(kernels)} total rt words {tot_rt}, cbs {len(cbs)}")
 
     for set_i, (label, cs) in enumerate(count_sets):
         if DYN and set_i:  # same buffers (the program's addresses), new contents

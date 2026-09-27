@@ -435,3 +435,24 @@ down recv / weights / compute per column-width group) over fragmented core range
 ~100 cores (gate/up / down cores carry 20-70 words of core coordinates). Not yet fixed; ideas: merge each role's
 kernels into one binary with the role / width as runtime args (the SDXL diag-matmul fix: 16-19 -> ~1 us), fewer
 per-core coordinate lists (derive from a base + stride), and measure under trace.
+
+**Correction (dispatch cost is ~0.6 us, same as unified).** The "+17 / +37 us" above was a metric artifact: it spanned
+from the 2nd launch's *FW start*, but on back-to-back launches some cores open the next launch's FW zone ~240 us
+(M=512; ~112 at M=32) before the previous launch ends while they wait for it, so the span over-counted by 240/7 per
+launch. Measured from the raw per-core device log instead (`b2b_launch_gap.py`: kernel-start-to-kernel-start
+period and last-kernel-end -> next-first-kernel-start gap over 8 back-to-back launches; all cores start within
+~1.2 us of each other):
+| op | M 32 period / gap | M 512 period / gap |
+|---|---|---|
+| flat K2 | 496.8 / 0.60 | 1035.4 / 0.61 |
+| flat TP4 (2 subgrids) | 175.0 / 0.47 | 506.1 / 0.50 |
+| flat TP2 (3 subgrids + l1acc) | | 894.6 / 0.54 |
+| unified | 1021.6 / 0.60 | 1185.5 / 0.58 |
+| fused | 674.2 / 6.11 | 1508.4 / 6.12 |
+(E8, K2, bf4 unless noted; unified/fused per `test_expert_ref_k2.py` defaults.) So the 13 kernels / 15 CBs /
+~6.2K runtime-arg words (`MIMO_FL_SHOW_KERNELS=1` prints the anatomy: se5_recv 41 and se6_drecv 87 words per core
+are the big ones) cost nothing measurable on device: the launch messages / binaries are staged while the previous
+launch runs. Also tried: packing each kernel's cores into maximal rectangles (`_crs`, 257 -> 66 core ranges, keep
+`MIMO_FL_CRS_SINGLE=1` for the old one-range-per-core) - no change (16.0 vs 16.1 on the flawed metric, gap
+unchanged), kept since it is fewer dispatch writes. Real remaining cost is host-side only (~30 us enqueue vs ~6),
+hidden behind >= 175 us kernels and removed entirely by trace. The earlier 77 us host-copy gap was real (op-to-op).
