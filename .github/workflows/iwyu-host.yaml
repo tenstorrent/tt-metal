@@ -4,7 +4,7 @@ name: "IWYU (host)"
 # code is JIT-compiled at runtime and is covered separately by
 # kernel-clang-tidy.yaml. Nothing gates on the findings yet: the
 # recommendations are summarised on the run and uploaded as an artifact.
-# Third-party umbrella-header exceptions live in .iwyu.imp.
+# Third-party umbrella-header exceptions live in .github/iwyu-host.imp.
 
 on:
   schedule:
@@ -62,7 +62,10 @@ jobs:
 
       - name: 🔍 Analyze with include-what-you-use
         timeout-minutes: 240
-        run: .github/scripts/utils/run_host_iwyu.sh .build/iwyu ${{ inputs.source-filter }}
+        env:
+          SOURCE_FILTER: ${{ inputs.source-filter }}
+        # Unquoted on purpose: the input is a space-separated list of paths.
+        run: .github/scripts/utils/run_host_iwyu.sh .build/iwyu $SOURCE_FILTER
 
       - name: Upload IWYU report
         if: always()
