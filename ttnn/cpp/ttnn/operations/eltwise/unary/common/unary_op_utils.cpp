@@ -771,6 +771,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
         case UnaryOpType::TANH: return {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)};
         case UnaryOpType::RELU:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"relu_tt_poly_bf16_tile_init();", fmt::format("relu_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             // For unsigned inputs, relu is the identity. Emit an empty op so the tile is just copied.
