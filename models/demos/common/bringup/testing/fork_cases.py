@@ -75,7 +75,8 @@ def run_tests(forks: list[str]) -> int:
         return 1
     if not dirs:
         return 0
-    return subprocess.run(["scripts/run_safe_pytest.sh", "--run-all", *dirs], cwd=REPO).returncode
+    # --no-precompile: the up-front collect pass would run each test's host-side input building a second time.
+    return subprocess.run(["scripts/run_safe_pytest.sh", "--run-all", "--no-precompile", *dirs], cwd=REPO).returncode
 
 
 def main(argv=None) -> int:
