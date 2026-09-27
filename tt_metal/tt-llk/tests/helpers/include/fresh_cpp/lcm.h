@@ -167,9 +167,11 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
 
             // result = q * bx through the typed 24x24 primitive (header
             // piece 3).
-            const sfpi::vInt p_lo = sfpi::fractional_mul(q, bx, sfpi::FractionalHalf::Low);
-            const sfpi::vInt p_hi = sfpi::fractional_mul(q, bx, sfpi::FractionalHalf::High);
-            const sfpi::vInt lcm  = sfpi::shft(p_hi, 23, sfpi::ShiftMode::Logical) + p_lo;
+            const sfpi::vUInt uq   = sfpi::as<sfpi::vUInt>(q);
+            const sfpi::vUInt ubx  = sfpi::as<sfpi::vUInt>(bx);
+            const sfpi::vUInt p_lo = sfpi::fractional_mul(uq, ubx, sfpi::FractionalHalf::Low);
+            const sfpi::vUInt p_hi = sfpi::fractional_mul(uq, ubx, sfpi::FractionalHalf::High);
+            const sfpi::vInt lcm   = sfpi::as<sfpi::vInt>(p_lo + (p_hi << 23));
 
             sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = lcm;
             sfpi::dst_reg++;
