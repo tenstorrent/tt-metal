@@ -167,3 +167,6 @@ Local artifact commit hooks skip trailing-whitespace and end-of-file-fixer to
 preserve raw evidence bytes, and check-large-files for five required raw input/
 phase JSON artifacts exceeding 500 KB (largest 2.4 MB). Other applicable hooks
 pass; Python/docs-only changes need no C++ build.
+
+Final measurements, incomplete-accuracy evidence and report commit: `886fa4f8a9c706e13df289013684cee5018c7857`.
+The goal remains incomplete; neither an aggregate score nor a passing stage is claimed.
