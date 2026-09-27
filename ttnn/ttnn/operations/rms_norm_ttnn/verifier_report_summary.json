@@ -1,0 +1,82 @@
+{
+  "op": "ttnn.operations.rms_norm_ttnn",
+  "phase": 0,
+  "date": "2026-09-05",
+  "device": {
+    "arch": "blackhole_p150b",
+    "grid": "11x10 = 110 cores",
+    "measured_aiclk_mhz": 1350,
+    "reference_aiclk_mhz": 1350,
+    "clock_scale_factor": 1.0
+  },
+  "how_the_run_was_made": "Full 121438-cell collected set. The whole golden directory does not fit one tool call, so it was run in 18 `-k` shards via scripts/verifier_golden_shards.sh and merged by nodeid with scripts/verifier_merge_golden_shards.py. Full JSON (75 MB) at generated/verifier_results/verifier_report.json (gitignored).",
+  "counts": {
+    "total": 121438,
+    "supported_pass": 23325,
+    "supported_fail": 10,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 97840,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 231,
+    "no_axes_found": 32
+  },
+  "supported_fail_all_harness_attributed": [
+    {
+      "case": "1x1x0x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4",
+      "failure_category": "other",
+      "message": "RuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument."
+    },
+    {
+      "case": "0x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-rank=2",
+      "failure_category": "other",
+      "message": "RuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument."
+    },
+    {
+      "case": "1x1x32x0-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=none-gamma_layout=none-gamma_mode=no_gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4",
+      "failure_category": "other",
+      "message": "RuntimeError: max(): Expected reduction dim to be specified for input.numel() == 0. Specify the reduction dim with the 'dim' argument."
+    },
+    {
+      "case": "1x1x384x768-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-rank=4",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    },
+    {
+      "case": "1x1x64x1536-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4_0",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    },
+    {
+      "case": "1x1x384x768-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=BLOCK_SHARDED-rank=4",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    },
+    {
+      "case": "1x1x64x1536-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4_1",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    },
+    {
+      "case": "1x1x256x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=HEIGHT_SHARDED-rank=4",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    },
+    {
+      "case": "1x1x64x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    },
+    {
+      "case": "1x1x256x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=BLOCK_SHARDED-rank=4",
+      "failure_category": "signature",
+      "message": "AttributeError: 'CoreRange' object has no attribute 'end_coord'"
+    }
+  ],
+  "perf_ranking": "# perf-group ranking (worst measured/ceiling first) \u2014 19 cases\n# clock scale: x1.0000\n  ratio    measured     ceiling  cores   status  case\n  1.060        5812        5481   28.0   passed  MISS 1x1x32x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4\n  1.050        6882        6555   32.0   passed  MISS 1x1x32x5120-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma_bias_residual-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4\n  1.014        5339        5267   32.0   passed  MISS 1x1x32x5120-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4\n  0.984       34008       34569   64.0   passed  ok 1x1x7168x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma_bias_residual-layout=TILE-memory_layout=BLOCK_SHARDED-rank=4\n  0.978        4517        4617    9.0   passed  ok 1x1x32x2304-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4\n  0.939        3860        4110    8.0   passed  ok 1x1x32x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4\n  0.930       89992       96744  110.0   passed  ok 1x1x8192x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.921      194606      211345  110.0   passed  ok 1x1x8192x2304-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.886     1628773     1837678  110.0   passed  ok 1x1x8192x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma_bias_residual-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.856       24497       28619   64.0   passed  ok 1x1x8192x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=BLOCK_SHARDED-rank=4\n  0.612        9118       14894   22.0   passed  ok 1x1x32x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.573      423285      738307  110.0   passed  ok 1x1x8192x5120-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.571      589591     1032281  110.0   passed  ok 1x1x8192x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.539        4932        9149    8.0   passed  ok 1x1x32x1024-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.527      692618     1314426  110.0   passed  ok 1x1x8192x5120-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma_bias_residual-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.336        5715       17003   22.0   passed  ok 1x1x32x2304-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.183       11950       65349   32.0   passed  ok 1x1x128x4096-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.104        7870       75825   22.0   passed  ok 1x1x32x5120-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=INTERLEAVED-rank=4\n  0.067       10599      157570   22.0   passed  ok 1x1x32x5120-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma_bias_residual-layout=TILE-memory_layout=INTERLEAVED-rank=4\n\n# 3 of 19 miss their ceiling; 0 unmeasured (profiler off, or the case did not run)\n# worst: eval/golden_tests/rms_norm_ttnn/test_golden.py::test_op_loose[1x1x32x7168-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=4]\n"
+}
