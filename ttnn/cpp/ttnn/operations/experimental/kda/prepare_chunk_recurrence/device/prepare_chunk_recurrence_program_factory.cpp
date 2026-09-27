@@ -377,7 +377,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const auto& chronology_tensor = in.actual_start ? *in.actual_start : in.q;
     reader.compile_time_args.insert({"has_actual_start", uint32_t(in.actual_start.has_value())});
     kda_factory_detail::bind_chronology(spec, run_args, chronology_tensor, reader, compute);
-    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, chronology_tensor, reader);
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
     const m2::DFBSpecName writer_chronology{"chronology_writer"};
     spec.dataflow_buffers.push_back(
         {.unique_id = writer_chronology,
