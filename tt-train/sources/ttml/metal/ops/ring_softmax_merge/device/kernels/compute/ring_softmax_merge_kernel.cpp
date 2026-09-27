@@ -94,8 +94,8 @@ void kernel_main() {
         add_binary_tile(3, 2, 3);  // the new lse
         binop_with_scalar_tile_init();
         add_unary_tile(4, kOneBits);  // 1 + e
-        recip_tile_init<false>();
-        recip_tile<false>(4);
+        recip_tile_init();
+        recip_tile(4);
         mul_binary_tile_init();
         mul_binary_tile(0, 4, 0);  // w_a
         mul_binary_tile(1, 4, 1);  // w_b
