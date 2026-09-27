@@ -412,3 +412,11 @@ Drive this ledger with
   builds the full stack; check_hf's default prefix.
 - Also: CPU gates set torch threads to physical cores (`core.metrics.cpu_threads()`), not `os.cpu_count()` (SMT
   siblings made MoE GEMMs ~6x slower, found by the MiMo R.2 agent).
+
+## F41 (2026-09-27): the serving contract serves the layer subset
+- MiMo K.1 (layers 0-5 of 48) failed three attempts on "acks ... (12 vs 96)": `testing/contract.py` expected acks and
+  set `PREFILL_NUM_LAYERS` for all 48 layers while the device model and golden cover 6. The contract agent found it and
+  proposed the fix (outside its paths). `served_layers(s)` returns (first, count) of a contiguous subset (a
+  non-contiguous one is refused); `run_contract_test`, `engine_env` and `gqa_independent_pcc` use it. Selftest.
+- Same class as F40: every framework path that counts layers must use `spec.layers()`, not `num_layers`. Remaining
+  `num_layers` uses were checked: ladder, profile and positions compare against it only to detect a full stack.
