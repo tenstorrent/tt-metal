@@ -208,3 +208,43 @@ def test_teletext_carousel(records, tmp_path):
     assert screen_timeline(page, 50, "@10:h") == [(idx, 9), ("Hold on", 41)]
     assert screen_timeline(page, 50, "@15:ArrowDown") == [(idx, 35), (graph, 15)]
     assert screen_timeline(page, 50, "@5:ArrowRight")[-1] == ("Page 101, Gate ladder", 45)
+
+
+def test_op_rows_keep_execution_order():
+    """F43: op mode books each outermost ttnn call to its layer's section, merging only back-to-back repeats."""
+    from models.demos.common.bringup.testing import profiler as P
+
+    P._P.update(mesh=None, current_full="L3.attention.rope", op_ns={}, dev_to_chip={0: 0, 1: 1})
+    for op, shape in [("slice", "a"), ("slice", "a"), ("rotary_embedding", "b"), ("slice", "a")]:
+        P._book_op(op, shape, {0: 1e6, 1: 2e6}, 1)
+    rows = P._P["op_ns"]["L3.attention.rope"]
+    assert [(r["op"], r["calls"]) for r in rows] == [("slice", 2), ("rotary_embedding", 1), ("slice", 1)]
+    assert rows[0]["ns"] == 4e6 and rows[0]["ns_dev"] == {0: 2e6, 1: 4e6}  # slowest chip per call, summed
+
+
+def test_profile_views_per_block_type(fx, tmp_path):
+    """F43: with op rows the profile gets one tab per block type (per layer, mean over its layers) and every section
+    lists its ttnn ops in execution order."""
+    from models.demos.common.bringup.dashboard.export import load_profile
+
+    s = Spec.load(fx())  # fixture: 3 layers, block types from its spec
+    bts = s.data["block_types"]
+    op = lambda o, ms: {"op": o, "shape": "8x8 bf16", "calls": 1, "programs": 1, "ms": ms, "ms_per_chip": {"0": ms}}
+    ops = {f"L{i}.attn": [op("linear", 1.0 + i), op("add", 0.5)] for i in range(3)}
+    prof = {
+        "chunk": [0, 64],
+        "layers": [0, 1, 2],
+        "wall_ms": 9.0,
+        "sections_ms": {"attn": 4.5 + 1.5},
+        "sections_ms_per_chip": {"attn": {"0": 7.5}},
+        "programs": {"attn": 6},
+        "ops": ops,
+    }
+    (tmp_path / "X.3_profile.json").write_text(json.dumps(prof))
+    P = load_profile(s, tmp_path, {})
+    assert P["views"][0]["id"] == "all" and [o["op"] for o in P["steps"][0]["ops"]] == ["linear", "add"]
+    assert P["steps"][0]["ops"][0]["ms"] == 6.0  # summed over the 3 layers
+    assert [v["id"] for v in P["views"][1:]] == list(bts)
+    for v in P["views"][1:]:
+        lays = v["layers"]
+        assert v["steps"][0]["ms"] == round(sum(1.5 + i for i in lays) / len(lays), 2)  # per layer

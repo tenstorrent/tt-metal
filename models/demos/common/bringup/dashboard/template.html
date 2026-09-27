@@ -109,6 +109,27 @@ footer{color:var(--muted);font-size:12px}
 @media (max-width:900px){.pmain{grid-template-columns:minmax(0,1fr)}}
 .psteps{display:flex;flex-direction:column;gap:2px;max-height:620px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--bg)}
 @media (max-width:900px){.psteps{max-height:none}}
+.ptabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
+.ptab{font:500 13px/1 var(--f-sans);border:1px solid var(--line);background:var(--surface);color:var(--ink2);border-radius:999px;padding:7px 12px;cursor:pointer}
+.ptab:hover{background:var(--surface2)}
+.ptab[aria-selected="true"]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.ptab:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.ptab .pt-ms{font:12px var(--f-mono);opacity:.75;margin-left:6px;font-variant-numeric:tabular-nums}
+.pops{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+.pops-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.pops-head h4{margin:0;font-size:14px}
+.pops-head span{font-size:12.5px;color:var(--muted)}
+.opchain{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:0}
+.opchain li{display:grid;grid-template-columns:26px minmax(0,1fr) minmax(90px,200px) 78px;gap:4px 10px;align-items:center;padding:7px 4px;position:relative}
+.opchain li+li::before{content:"";position:absolute;left:12px;top:-6px;height:12px;border-left:1.5px solid var(--line)}
+.opchain .oi{font:12px var(--f-mono);color:var(--muted);text-align:center;border:1.5px solid var(--line);border-radius:50%;width:22px;height:22px;line-height:19px;background:var(--surface)}
+.opchain .on{font:500 13px/1.3 var(--f-mono);overflow-wrap:anywhere}
+.opchain .os{display:block;font:11.5px/1.35 var(--f-mono);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.opchain .ob{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
+.opchain .ob i{display:block;height:100%;border-radius:4px}
+.opchain .om{font:12px var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.opchain .om small{display:block;color:var(--muted);font-size:11px}
+@media (max-width:640px){.opchain li{grid-template-columns:26px minmax(0,1fr) 70px}.opchain .ob{grid-column:2/4}}
 .pgrp{font:500 11px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:10px 8px 4px}
 .pstep{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;cursor:pointer;color:var(--ink);font:inherit;font-size:13px}
 .pstep:hover{background:var(--surface2)}
@@ -209,6 +230,7 @@ footer{color:var(--muted);font-size:12px}
   <section aria-labelledby="s-prof" id="prof-sec">
     <div class="sec-head"><h2 id="s-prof"></h2><span class="tl-total" id="p-total"></span></div>
     <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
+    <div class="ptabs" id="p-tabs" role="tablist" aria-label="Layers shown"></div>
     <div class="pbar" id="p-bar"></div>
     <div class="pparts" id="p-parts"></div>
     <div class="legend">
@@ -228,6 +250,10 @@ footer{color:var(--muted);font-size:12px}
             <dl class="pkv"><dt>One chip reads</dt><dd id="pd-in"></dd><dt>One chip writes</dt><dd id="pd-out"></dd><dt>Programs</dt><dd id="pd-progs"></dd></dl>
             <div class="pnav"><button type="button" id="p-prev">← Previous phase</button><button type="button" id="p-next">Next phase →</button></div>
           </div>
+        </div>
+        <div class="pops" id="pd-ops-wrap">
+          <div class="pops-head"><h4>TTNN operations, in execution order</h4><span id="pd-ops-note"></span></div>
+          <ol class="opchain" id="pd-ops"></ol>
         </div>
       </article>
     </div>
@@ -504,11 +530,26 @@ function profile(){
   const P = D.profile, secEl = $("#prof-sec");
   if (!P){ secEl.hidden = true; return; }
   $("#s-prof").textContent = P.heading;
-  const S = P.steps, BN = {compute:"maths", memory:"on-chip data movement", comm:"chip-to-chip", other:"norms / adds / misc"};
+  const V = P.views && P.views.length ? P.views : [{id:"all", label:"All layers", n:1, steps:P.steps}];
+  const tabs = $("#p-tabs");
+  tabs.hidden = V.length < 2;
+  let vi = 0;
+  try { const k = localStorage.getItem("prof-view"); const j = V.findIndex(v => v.id === k); if (j >= 0) vi = j; } catch (e) {}
+  const vms = v => v.steps.reduce((a, s) => a + s.ms, 0);
+  tabs.innerHTML = V.map((v, i) => `<button type="button" class="ptab" role="tab" data-v="${i}" aria-selected="${i === vi}">${esc(v.label)}<span class="pt-ms">${vms(v).toFixed(0)} ms${v.n > 1 ? " / layer" : ""}</span></button>`).join("");
+  tabs.querySelectorAll(".ptab").forEach(t => t.addEventListener("click", () => { vi = +t.dataset.v;
+    tabs.querySelectorAll(".ptab").forEach(u => u.setAttribute("aria-selected", u === t ? "true" : "false"));
+    try { localStorage.setItem("prof-view", V[vi].id); } catch (e) {}
+    view(V[vi]); }));
+  tabs.onkeydown = e => { if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return; e.preventDefault(); e.stopPropagation();
+    const n = (vi + (e.key === "ArrowRight" ? 1 : -1) + V.length) % V.length; const t = tabs.querySelector(`[data-v="${n}"]`); t.click(); t.focus(); };
+  view(V[vi]);
+  function view(v){
+  const S = v.steps, BN = {compute:"maths", memory:"on-chip data movement", comm:"chip-to-chip", other:"norms / adds / misc"};
   const parts = [...new Set(S.map(s => s.part))];
   const total = S.reduce((a, s) => a + s.ms, 0);
-  $("#p-total").textContent = `${(total / 1e3).toFixed(2)} s device · ${(P.wall_ms / 1e3).toFixed(2)} s wall`;
-  $("#p-note").textContent = P.note;
+  $("#p-total").textContent = v.id === "all" ? `${(total / 1e3).toFixed(2)} s device · ${(P.wall_ms / 1e3).toFixed(2)} s wall` : `${total.toFixed(1)} ms device per layer`;
+  $("#p-note").textContent = v.id === "all" ? P.note : `Device kernel time of one ${v.label.split(" · ")[0]} layer during the same chunk` + (v.n > 1 ? `, averaged over its ${v.n} profiled layers (${v.label.split(" · ")[1]}).` : ` (${v.label.split(" · ")[1]}).`) + ` Per chip = that chip's own programs; the bar uses the slowest chip per section. Click a phase to see the TTNN operations it ran.`;
   const order = [...S].sort((a, b) => b.ms - a.ms);
   const bar = $("#p-bar");
   bar.innerHTML = order.map(s => `<button type="button" class="pseg" data-k="${esc(s.key)}" style="flex-grow:${s.ms};background:var(--b-${s.bound})" title="${esc(s.name)} · ${s.ms.toFixed(1)} ms" aria-label="${esc(s.name)}, ${s.ms.toFixed(1)} milliseconds"></button>`).join("");
@@ -562,15 +603,29 @@ function profile(){
     const pl = $("#pd-pill"); pl.textContent = BN[s.bound]; pl.style.background = `var(--b-${s.bound}-soft)`; pl.style.color = `var(--b-${s.bound})`;
     $("#pd-ms").textContent = `${s.ms.toFixed(1)} ms · ${(100 * s.ms / total).toFixed(1)}%`;
     $("#pd-what").textContent = s.what; $("#pd-in").textContent = s.inp || "—"; $("#pd-out").textContent = s.out || "—";
-    $("#pd-progs").textContent = `${s.programs} device programs (all layers, all chips)` + (s.before_ms != null ? ` · before: ${s.before_ms.toFixed(1)} ms` : "");
+    $("#pd-progs").textContent = `${s.programs} device programs (${v.id === "all" ? "all layers" : v.n > 1 ? "per layer" : "this layer"}, all chips)` + (s.before_ms != null ? ` · before: ${s.before_ms.toFixed(1)} ms` : "");
     const msg = draw(s);
-    $("#pd-cap").textContent = `What each chip holds during this phase, and its measured device time summed over the profiled layers. ${msg.charAt(0).toUpperCase() + msg.slice(1)}.`;
+    $("#pd-cap").textContent = `What each chip holds during this phase, and its measured device time ${v.id === "all" ? "summed over the profiled layers" : v.n > 1 ? "per layer" : "in this layer"}. ${msg.charAt(0).toUpperCase() + msg.slice(1)}.`;
+    opsList(s);
+  }
+  function opsList(s){
+    const O = s.ops || [], wrap = $("#pd-ops-wrap");
+    wrap.hidden = !O.length;
+    if (!O.length) return;
+    const mx = Math.max(...O.map(o => o.ms), 1e-9), sum = O.reduce((a, o) => a + o.ms, 0);
+    $("#pd-ops-note").textContent = `${O.length} distinct call${O.length > 1 ? "s" : ""} · ${sum.toFixed(sum >= 10 ? 1 : 2)} ms · shapes are per chip` + (v.id === "all" ? " · summed over layers" : v.n > 1 ? " · per layer" : "");
+    const fm = x => x >= 10 ? x.toFixed(1) : x >= 0.1 ? x.toFixed(2) : x.toFixed(3);
+    $("#pd-ops").innerHTML = O.map((o, i) => { const c = o.calls, cs = Math.abs(c - 1) > 1e-6 ? ` ×${Number.isInteger(c) ? c : c.toFixed(1)}` : "";
+      return `<li><span class="oi">${i + 1}</span><span><span class="on">ttnn.${esc(o.op)}${cs}</span><span class="os">${esc(o.shape || "—")}</span></span>` +
+        `<span class="ob" title="${fm(o.ms)} ms"><i style="width:${(100 * o.ms / mx).toFixed(1)}%;background:var(--b-${s.bound})"></i></span>` +
+        `<span class="om">${fm(o.ms)} ms<small>${(100 * o.ms / (sum || 1)).toFixed(0)}%</small></span></li>`; }).join("");
   }
   bar.querySelectorAll(".pseg").forEach(b => b.addEventListener("click", () => select(S.findIndex(s => s.key === b.dataset.k))));
   $("#p-steps").querySelectorAll(".pstep").forEach(b => b.addEventListener("click", () => select(+b.dataset.i)));
   $("#p-prev").onclick = () => select(cur - 1); $("#p-next").onclick = () => select(cur + 1);
   secEl.onkeydown = e => { if (e.key === "ArrowRight"){ select(cur + 1); e.preventDefault(); } if (e.key === "ArrowLeft"){ select(cur - 1); e.preventDefault(); } };
   select(cur);
+  }
 }
 function render(){ header(); profile(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml, findings.yaml) by models/demos/common/bringup/dashboard/export.py.`; }

@@ -83,6 +83,42 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     return {"tokens": seq, "chunk": chunk, "ms": total * 1e3, "chunk_ms": per}
 
 
+def want_ops(s) -> bool:
+    """The per-op breakdown (spec perf.op_profile or BRINGUP_PROFILE_OPS=1; the final X.3 sets it)."""
+    return bool(s.get("perf.op_profile", False)) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
+
+
+def op_profile(mesh, run) -> dict:
+    """One more warm run in op mode: per layer and section ("L3.attention.qkv"), the ttnn ops in execution order with
+    calls, device programs and device ms (slowest chip per call, summed) and ms per chip (F43)."""
+    profiler.enable(mesh, ops=True)
+    try:
+        run()
+        profiler.set_layer(None)
+        profiler.signpost("end")
+        res = profiler.result()
+    finally:
+        profiler.disable()
+    out = {}
+    for sec, rows in res["op_ns"].items():
+        if sec == "end":
+            continue
+        out[sec] = [
+            {
+                "op": r["op"],
+                "shape": r["shape"],
+                "calls": r["calls"],
+                "programs": r["programs"],
+                "ms": round(r["ns"] / 1e6, 4),
+                "ms_per_chip": {str(c): round(v / 1e6, 4) for c, v in sorted(r["ns_dev"].items())},
+            }
+            for r in rows
+        ]
+    total = sum(r["ms"] for rows in out.values() for r in rows)
+    print(f"op profile: {sum(len(v) for v in out.values())} op rows over {len(out)} sections, {total:.1f} ms device")
+    return out
+
+
 def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     rung_name = rung_name or profile_rung(s)
     rung = s.rung(rung_name)
@@ -106,6 +142,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
                 if h is not None:
                     model.free(h)
                 h = model.embed(tokens) if i == 0 else model.from_host(g.layer(g.n_chunks - 1, i)["in"].float())
+            profiler.set_layer(i)
             if count:
                 with HostTransfers() as ht:
                     h2 = model.layer(i, h, start, state)
@@ -136,6 +173,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     profiler.signpost("end")
     prof = profiler.result()
     profiler.disable()
+    ops = op_profile(mesh, run) if want_ops(s) else None
 
     total = sum(prof["kernel_ns"].values())
     assert total > 0, f"device profiler returned no durations; set {profiler.PROFILER_ENV}"
@@ -172,6 +210,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         "programs": prof["programs"],
         "settings": getattr(model, "perf_settings", lambda: {})(),
         "full_prefill": full,
+        **({"ops": ops} if ops else {}),
     }
     path = metrics.results_dir() / f"{metrics.task_id()}_profile.json"
     path.parent.mkdir(parents=True, exist_ok=True)

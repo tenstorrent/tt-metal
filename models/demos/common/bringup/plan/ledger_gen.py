@@ -322,7 +322,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "perf",
         ["X.2"],
         f"BRINGUP_RUNG={full['name']} {SAFE} models/demos/common/bringup/tests/test_ladder.py"
-        f" && BRINGUP_FULL_PREFILL=1 {PROFILE_ENV} {SAFE} models/demos/common/bringup/tests/test_profile.py"
+        f" && BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 {PROFILE_ENV} {SAFE} models/demos/common/bringup/tests/test_profile.py"
         f" && {SAFE} models/demos/common/bringup/tests/test_positions.py",
         fm,
         device=True,

@@ -428,3 +428,18 @@ Drive this ledger with
   (final norm only when it ends at the last layer), and `prefill_layers` records the layer count. Selftest.
 - Third subset bug in a row (F40 goldens/parity, F41 contract): a sweep of `num_layers` uses in `testing/` found no
   other; ladder, profile and positions use it only to detect a full stack.
+
+## F43 (2026-09-27): the TTNN operations behind every profile section, per layer
+- Owner: clicking a section (e.g. attention.qkv) should show the ttnn ops it was made of; different layer types get
+  their own tabs under "Where the time goes".
+- `testing/profiler.py` op mode (`enable(mesh, ops=True)`): wraps `ttnn.decorators.FastOperation.__call__`; every
+  outermost ttnn call syncs, drains the device profiler and books its programs to (layer, section, op, per-chip
+  shapes of the first two tensor args), merging only back-to-back repeats, so rows are in execution order. Programs
+  launched outside a wrapped op go to "(other)". `profile.py` sets the layer per `model.layer` call and, with
+  `BRINGUP_PROFILE_OPS=1` / spec `perf.op_profile`, adds one extra warm op-mode run and writes `ops` into the profile
+  JSON ("L3.attention.qkv" -> rows). Kernel durations are device-side, so the per-op syncs do not change them: the
+  MiMo op-mode total (225.6 ms) equals the section profile (225.6 ms).
+- The final X.3 task now sets BRINGUP_PROFILE_OPS=1 (ledger_gen). Exporter: `profile.views` = all layers (summed)
+  plus one tab per block type (per layer, mean over its profiled layers); each step carries its `ops`. Standard page:
+  tabs above the bar, and an execution-order op list (op, per-chip shapes, calls, ms, share) in the detail panel.
+- MiMo re-measured ad hoc (tuned model, 51200->56320 chunk): results/X.3_ops_profile.json.
