@@ -2314,7 +2314,7 @@ class MiniMaxH3Pipeline:
             return ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
 
         for seq_len in seq_lens:
-            text = zeros((1, seq_len, hidden))
+            text = zeros((1, seq_len // self.sp_factor, hidden))
             below = 0
             for size in tower_sizes:
                 if below // merge >= seq_len:
