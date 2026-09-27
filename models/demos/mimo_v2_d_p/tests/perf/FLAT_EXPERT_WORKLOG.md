@@ -168,3 +168,62 @@ No measurable cost (the activation hides under the next matmul). Not done: GPT-O
   | G2 + 2 helpers | 198 | 253 | 675 | 520 |
   | G4 + 2 helpers | 285 | 344 | 756 | 569 |
   Real routing is small-expert dominated, so G 1 stays the default; G 2 + 2 helpers is the opt-in for large M.
+
+### Regression found by the E / token study: auto-HBUF margin
+The study (below) showed PIN=1 13-19% slower than PIN=0 at 512 tokens/expert even for balanced counts (no pinning
+happens there): my auto-HBUF rule kept a 128 KB margin, so with PIN's 2-expert down ring the down cores silently
+dropped to HBUF 2 (the K2 arena with HBUF 3 is 1382 KB of 1427 and always fit). Margin removed; E8 bal512
+1176 -> 1029 us (PIN0 1018). All PIN=1 numbers taken since the auto-HBUF commit (e417c68: the 12-shape matrix, the
+TP G=1/G=2 tables) carry it at large M; rerun below. Small-M numbers (weight-bound) were unaffected.
+
+### Tokens x experts x raggedness study (K2 7168x2048, bf4, capacity 4096, pinned build, after the HBUF fix)
+Sets per E: mean 32 / 128 / 512 tokens per expert; balanced, zipf (1/i), spike (one expert half the tokens, rest
+equal), real (E counts sampled from the pooled K2.6 per-expert distribution, rescaled). us per launch; ratio to
+the balanced set of the same total.
+| E | mean | bal | zipf | spike | real |
+|---|---|---|---|---|---|
+| 4 | 32 | 272 | 272 (1.00) | 274 (1.01) | 280 (1.03) |
+| 4 | 128 | 316 | 301 (0.95) | 313 (0.99) | 320 (1.01) |
+| 4 | 512 | 570 | 572 (1.00) | 585 (1.03) | 580 (1.02) |
+| 8 | 32 | 511 | 516 (1.01) | 520 (1.02) | 529 (1.04) |
+| 8 | 128 | 581 | 577 (0.99) | 587 (1.01) | 595 (1.02) |
+| 8 | 512 | 1006 | 1022 (1.02) | 1100 (1.09) | 1082 (1.08) |
+| 16 | 32 | 996 | 1010 (1.01) | 1013 (1.02) | 1023 (1.03) |
+| 16 | 128 | 1110 | 1174 (1.06) | 1146 (1.03) | 1189 (1.07) |
+| 16 | 512 | 1914 | 2032 (1.06) | 2181 (1.14) | 2067 (1.08) |
+| 28 | 32 | 1719 | 1747 (1.02) | 1754 (1.02) | 1685 (0.98) |
+| 28 | 128 | 1910 | 2043 (1.07) | 1967 (1.03) | 2032 (1.06) |
+| 28 | 512 | 3249 | 3577 (1.10) | 3360 (1.03) | 3524 (1.08) |
+PIN=0 for comparison (same sets): E8 real512 1118, spike512 1105; E16 real512 2071, zipf128 1152; E28 zipf512
+3627, real512 3524 -> pinning is at par or better everywhere after the fix.
+- Takeaways: the per-launch cost is set by the weight floor (~64 us/expert) for small experts and by compute
+  (~24 us per 128-row sub-block) for large ones; raggedness costs <= 4% at small means, 6-14% at 512/expert.
+- Remaining ragged cost is sub-block granularity, not weight streaming: E16 spike512 = 1 x 4096 + 15 x 273 tokens
+  -> 77 sub-blocks vs 64; the partial tail sub-blocks (17 rows = 1 row tile) still cost most of a full sub-block on
+  the gate/up side (the K loop streams 2 weight tiles per K step whatever the rows). Interleaving threshold
+  `MIMO_FL_PIN_SMALL` 3 / 4 changed nothing (2177-2183 us), profile: the relays wait on gate/up slots.
+  Candidate next step: 64-row sub-blocks for tails (MT 2 costs ~5% balanced, H 6144 test) or packing tails of
+  several experts into one sub-block (needs per-row expert weights: not possible in one matmul).
+
+### Shape matrix (8 experts, capacity 4096, pinned, rerun after the HBUF fix), us per launch
+| model shape (per device) | act | split | uni32 | uni128 | uni512 | rag [2000,40,90,60,30,300,20,50] |
+|---|---|---|---|---|---|---|
+| K2 / DSv3 7168x2048 | silu | NP1 G1 64 | 511 | 579 | 1024 | 824 |
+| K2 TP2 7168x1024 | silu | NP1 G1 32 | 283 | 340 | 827 | 601 |
+| K2 TP4 7168x512 | silu | NP1 G1 16 | 182 | 238 | 794 | 560 |
+| GLM-5 6144x2048 | silu | NP1 G1 64 | 441 | 502 | 924 | 760 |
+| MiniMax-M3 6144x3072 | swigluoai | NP2 G1 48, MT2 | 645 | 712 | 1411 | 996 |
+| MiniMax-M3 TP2 6144x1536 | swigluoai | NP1 G1 48 | 341 | 399 | 737 | 581 |
+| DSv4-Flash 4096x2048 | clamped_silu | NP1 G1 64 | 287 | 332 | 714 | 574 |
+| DSv4-Pro 7168x3072 | clamped_silu | NP2 G1 48, MT2 | 758 | 827 | 1660 | 1189 |
+| MiniMax-M2.7 3072x1536 | silu | NP1 G1 48 | 182 | 213 | 537 | 409 |
+| Qwen3.5 4096x1024 | silu | NP1 G1 32 | 162 | 197 | 489 | 352 |
+| Kimi K3 3584x3072 | situ | NP2 G1 48, MT2 | 403 | 463 | 997 | 744 |
+| Kimi K3 TP2 3584x1536 | situ | NP1 G1 48 | 203 | 243 | 619 | 452 |
+uni32 per expert vs the bf4 weight floor at 512 GB/s: K2 64 us (24.8 MB: 76% of peak BW), GLM5 55 (21.2 MB, 75%),
+M3 81 (31.9 MB, 77%), DSv4P 95 (37.2 MB, 77%), DSv4F 36 (14.2 MB, 77%), K3 50 (18.6 MB, 72%); the TP / small-I
+shapes sit lower (K2 TP4 23 us for 6.2 MB: 53%, Qwen3.5 20 us for 7.1 MB: 69%): the per-expert fixed costs
+(pipeline fill, h exchange) weigh more when the weights are small. Every shape passes the per-expert PCC >= 0.99
+check (0.9942-0.9966) and the discriminating activation check where the activation differs from SiLU-GLU.
+Not supported: GPT-OSS 2880 (Ht 90: KBLK 8 does not divide it; also needs gate/up/down biases), Gemma-4 704
+(It 22), I/TP pair-set counts that are not a multiple of 16 (e.g. 3072 / 4 = 768).

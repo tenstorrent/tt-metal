@@ -330,11 +330,7 @@ def test_stream_expert_flat(device, m, wdtype):
         )
     )
     out_bytes = al(2 * out_tiles * (BF8_TILE if E2E else 2048))
-    HBUF = (
-        int(HBUF_ENV)
-        if HBUF_ENV
-        else (3 if H_OFF + al(3 * h_tiles * H_TILE) + out_bytes + 2048 + 128 * 1024 <= L1_BANK else 2)
-    )
+    HBUF = int(HBUF_ENV) if HBUF_ENV else (3 if H_OFF + al(3 * h_tiles * H_TILE) + out_bytes + 2048 <= L1_BANK else 2)
     O_OFF = H_OFF + al(HBUF * h_tiles * H_TILE)
     D_OFF = O_OFF + out_bytes  # the output double buffer (bfp8 end to end)
     dn_bytes = D_OFF + 2048
@@ -838,6 +834,9 @@ def test_stream_expert_flat(device, m, wdtype):
 
     dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
     FP = ttnn.KernelDescriptor.SourceType.FILE_PATH
+    SE_MAX_E = 16 if E <= 16 else 32  # schedule arrays (se_meta.hpp); the meta page holds 3 + 3 x 2 SE_MAX_E words
+    META_BYTES = 512 if E <= 16 else 1024
+    assert E <= 32
     DYN_HALF = int(os.environ.get("MIMO_FL_DYN_HALF", "512"))  # >= 4 x global experts (the counts row)
     assert 4 * (2 * E + 2) <= DYN_HALF
     # pinned down weights too when every down ring holds exactly NREG experts (MIMO_FL_DRING / _R = 2 with PIN)
@@ -852,6 +851,7 @@ def test_stream_expert_flat(device, m, wdtype):
     dyn_def = (
         (
             [("SE_DYN", "1"), ("SE_DYN_HALF", str(DYN_HALF)), ("SE_RPS", str(MT * 32))]
+            + [("SE_MAX_E", str(SE_MAX_E)), ("SE_META_BYTES", str(META_BYTES))]
             + [("SE_GU_NREG", str(ring_g // nk_gu))]
             + ([("SE_PIN_MIN", str(PIN)), ("SE_PIN_SMALL", os.environ.get("MIMO_FL_PIN_SMALL", "2"))] if PIN else [])
             + ([("SE_DN_REG", "1")] if dn_reg else [])
@@ -1306,7 +1306,9 @@ def test_stream_expert_flat(device, m, wdtype):
     ):  # CB 6: the counts page a data-movement kernel hands its compute; CB 7: DM scratch (BRISC low / NCRISC high half)
         all_crs = _crs(arena_cores)
         cbs += [
-            ttnn.CBDescriptor(total_size=512, core_ranges=all_crs, format_descriptors=fmt(6, ttnn.uint32, 512)),
+            ttnn.CBDescriptor(
+                total_size=META_BYTES, core_ranges=all_crs, format_descriptors=fmt(6, ttnn.uint32, META_BYTES)
+            ),
             ttnn.CBDescriptor(
                 total_size=4 * DYN_HALF, core_ranges=all_crs, format_descriptors=fmt(7, ttnn.uint32, 4 * DYN_HALF)
             ),

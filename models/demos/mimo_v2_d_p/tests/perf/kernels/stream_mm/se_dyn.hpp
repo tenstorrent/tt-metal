@@ -206,7 +206,10 @@ inline uint32_t se_dyn_rps(const SeDyn& d) { return d.rps; }
 // Hands the schedule to this core's compute kernel: one page of CB META_CB in the se_meta.hpp layout (read there
 // with read_tile_value). EMPTY publishes no entries (the core has no compute work this launch).
 inline void se_dyn_publish(const SeDyn& d, uint32_t meta_cb, bool empty = false) {
-    static_assert(SE_META_WORDS * 4 <= 512, "CB 6 page (host) is 512 B");
+#ifndef SE_META_BYTES
+#define SE_META_BYTES 512
+#endif
+    static_assert(SE_META_WORDS * 4 <= SE_META_BYTES, "CB 6 page (host: SE_META_BYTES)");
     cb_reserve_back(meta_cb, 1);
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(meta_cb));
     p[0] = empty ? 0 : d.n_act;
