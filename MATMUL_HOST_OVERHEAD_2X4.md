@@ -89,6 +89,27 @@ Profiling perturbs this workload. Even the lighter streaming capture raised the 
 
 The streaming captures used `TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_TRACY=1`, `DS_PERF_UNTRACED_HOST=1`, and the exact pytest node ID for `blackhole-glm_5_2-warm-sparse-kv_scaled_fp8-fabric2d-loudbox_sp2xtp4`. The test passed in both. The repository's `python -m tracy -r` postprocessor subsequently errored because it expects legacy device profiler CSV files; the `.tracy` files were saved and inspected directly with `tracy-csvexport`.
 
+### Which host dispatches precede the gaps
+
+The lighter capture already records each `EnqueueProgram op_id` as a Tracy message. Joining that ID to the TTNN op metadata in the same trace identifies all 47 programs without adding per-op Python zones. Each worker-kernel-free interval was split at enqueue timestamps and assigned to the **next** program launch. Across ten measured forwards, the median gap was 597 µs: about 554 µs occurred before the last launch and about 45 µs after it. Only 93 µs of the gap median overlapped `EnqueueProgram`; approximately 504 µs was outside that C++ enqueue zone. The per-category medians below are independently computed and should not be summed as an exact total.
+
+| Next program launched | Median kernel-free time before its launches |
+| --- | ---: |
+| Matmul (11 launches) | 120 µs |
+| High-bandwidth all-gather (5) | 110 µs |
+| Layer norm (3) | 86 µs |
+| Reduce-scatter (4) | 68 µs |
+| Rotary embedding (4) | 54 µs |
+| Fast reduce (1) | 40 µs |
+| Mesh partition (1) | 36 µs |
+| After the final launch | 45 µs |
+
+The largest *individual* recurring intervals precede the second reduce-scatter (~61 µs median) and the third high-bandwidth all-gather (~62 µs median). A label here means that the host has not yet launched that program; the interval can include cleanup after the preceding op, model Python work, and preparation inside the following TTNN call. It is not the execution time of the named device op.
+
+For host function attribution, a separate capture placed `time.perf_counter_ns()` around each `FastOperation.__call__` in only the first measured forward and used two timestamped Tracy messages to align those samples to the device timeline. It is `build/profiler/build_wasm/traces/-s_2026_09_27_06_43_57.tracy`; the corresponding host times are in `generated/profiler/glm52_untraced_matmul_host/dde52cf3864e_warm.json`. That 3.773 ms forward contained 67 TTNN calls taking 3.198 ms in total, including 0.513 ms inside 47 `EnqueueProgram` zones. The remaining ~0.576 ms lay between those TTNN calls in model/control code. The biggest host-call groups were nine `linear` calls (559 µs), four reduce-scatters (425 µs), four rotary embeddings (322 µs), and five high-bandwidth all-gathers (287 µs). Twenty `deallocate` calls consumed 187 µs without launching programs. The earlier one-forward Python trace placed model-side gap time in config selection and indexer flow; TTNN's `FastOperation.__call__` also covers its C++ binding and native preparation work.
+
+The per-op timestamp wrapper raised its first forward to 5.125 ms versus a 4.886 ms median for the other nine forwards in the same capture. It also changed the device gap distribution, so its host-call totals explain the work on the host but **do not provide an exact decomposition** of the lighter capture's 597 µs gap. The lighter capture establishes the launch boundaries and affected operation sequence; the instrumented captures identify the host functions active around them. A causal speedup claim requires changing one of those host paths and remeasuring clean E2E.
+
 ## Host call duration by operation instance
 
 The forward invokes two `ttnn.matmul` and nine `ttnn.linear` calls. Instance numbers are in call order within each operation type. Values below are the per-instance minima in µs from the separate host-call pass in the first two pairs.

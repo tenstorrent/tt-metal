@@ -118,6 +118,9 @@ affect the reported E2E samples.
 For Tracy streaming-profiler captures, DS_PERF_TRACY_MARKERS=1 marks measured forward/replay
 boundaries. DS_PERF_TRACY_PYTHON_ONE=1 profiles Python functions during only the first measured
 untraced forward; use it with `python -m tracy -p` and expect that one sample to be perturbed.
+DS_PERF_TRACY_OP_ONE=1 records host start/end timestamps for every FastOperation in the first
+measured forward, plus two timestamped Tracy messages for clock alignment. The samples are in
+the host benchmark JSON and perturb that first E2E sample.
 
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
@@ -206,6 +209,7 @@ UNTRACED_HOST_BENCH = os.environ.get("DS_PERF_UNTRACED_HOST", "") == "1"
 HOST_BREAKDOWN = os.environ.get("DS_PERF_HOST_BREAKDOWN", "") == "1"
 TRACY_MARKERS = os.environ.get("DS_PERF_TRACY_MARKERS", "") == "1"
 TRACY_PYTHON_ONE = os.environ.get("DS_PERF_TRACY_PYTHON_ONE", "") == "1"
+TRACY_OP_ONE = os.environ.get("DS_PERF_TRACY_OP_ONE", "") == "1"
 
 
 def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
@@ -916,6 +920,30 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             from tracy import Profiler
 
             tracy_python_profiler = Profiler()
+        if TRACY_OP_ONE:
+            original_fast_call = ttnn.decorators.FastOperation.__call__
+            fast_call_depth = 0
+            tracy_op_timestamps = []
+            tracy_clock_beacons = {}
+
+            def tracy_fast_call(operation, *args, **kwargs):
+                nonlocal fast_call_depth
+                if fast_call_depth:
+                    return original_fast_call(operation, *args, **kwargs)
+                fast_call_depth += 1
+                op_start_ns = time.perf_counter_ns()
+                try:
+                    return original_fast_call(operation, *args, **kwargs)
+                finally:
+                    tracy_op_timestamps.append(
+                        {
+                            "name": operation.python_fully_qualified_name,
+                            "start_ns": op_start_ns,
+                            "end_ns": time.perf_counter_ns(),
+                        }
+                    )
+                    fast_call_depth -= 1
+
         warmups = measured_runs = 10
         for _ in range(warmups):
             _one_forward(cache)
@@ -927,10 +955,17 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         for run_index in range(measured_runs):
             if TRACY_MARKERS:
                 ttnn.tracy_message(f"GLM52_UNTRACED_START_{run_index}")
+            if TRACY_OP_ONE and run_index == 0:
+                tracy_clock_beacons["start_ns"] = time.perf_counter_ns()
+                ttnn.tracy_message(f"GLM52_CLOCK_START_{tracy_clock_beacons['start_ns']}")
             if TRACY_PYTHON_ONE and run_index == 0:
                 tracy_python_profiler.enable()
             start_ns = time.perf_counter_ns()
-            _one_forward(cache)
+            if TRACY_OP_ONE and run_index == 0:
+                with patch.object(ttnn.decorators.FastOperation, "__call__", tracy_fast_call):
+                    _one_forward(cache)
+            else:
+                _one_forward(cache)
             forward_end_ns = time.perf_counter_ns()
             ttnn.synchronize_device(mesh_device)
             end_ns = time.perf_counter_ns()
@@ -938,6 +973,9 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
                 tracy_python_profiler.disable()
             if TRACY_MARKERS:
                 ttnn.tracy_message(f"GLM52_UNTRACED_END_{run_index}")
+            if TRACY_OP_ONE and run_index == 0:
+                tracy_clock_beacons["end_ns"] = time.perf_counter_ns()
+                ttnn.tracy_message(f"GLM52_CLOCK_END_{tracy_clock_beacons['end_ns']}")
             forward_ns.append(forward_end_ns - start_ns)
             completion_ns.append(end_ns - forward_end_ns)
             e2e_ns.append(end_ns - start_ns)
@@ -1105,6 +1143,8 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             "trace_phase_runs": trace_phase_runs,
             "per_op": per_op,
             "all_op_runs": all_op_runs,
+            "tracy_op_timestamps": tracy_op_timestamps if TRACY_OP_ONE else [],
+            "tracy_clock_beacons": tracy_clock_beacons if TRACY_OP_ONE else {},
         }
         out_dir = _output_dir("glm52_untraced_matmul_host")
         report_path = os.path.join(out_dir, f"{(head['commit'] or 'unknown')[:12]}_warm.json")
