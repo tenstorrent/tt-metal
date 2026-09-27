@@ -194,6 +194,8 @@ class TtDistributedRmsNorm(LightweightModule):
         self._use_fused = False
         self.fused_weight = None
         self.tt_ccl = None
+        self._fused_resource_signature = None
+        self._fused_resource_state = None
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -291,9 +293,19 @@ class TtDistributedRmsNorm(LightweightModule):
             logger.debug("Moved input to specified memory config")
 
         if self.use_fused:
-            semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
-                x, self.fused_weight, self.cluster_axis, self.num_links
-            )
+            # The CCL state is shared across layers so its semaphore/stats
+            # ping-pong remains global. Cache only the lookup in this module;
+            # refresh it if a later forward uses a different input geometry.
+            signature = (tuple(x.shape), tuple(x.padded_shape), x.dtype)
+            if signature != self._fused_resource_signature:
+                self._fused_resource_state = self.tt_ccl.get_fused_rmsnorm_resource_state(
+                    x, self.fused_weight, self.cluster_axis, self.num_links
+                )
+                self._fused_resource_signature = signature
+            resources = self._fused_resource_state
+            index = resources["next"]
+            resources["next"] = 1 - index
+            semaphores, stats = resources["pairs"][index]
             return ttnn.experimental.dit_fused_distributed_rmsnorm(
                 x,
                 self.cluster_axis,

@@ -176,7 +176,7 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
-    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+    def get_fused_rmsnorm_resource_state(self, x, weight, cluster_axis, num_links):
         key = (
             tuple(x.shape),
             tuple(x.padded_shape),
@@ -200,9 +200,7 @@ class TT_CCL:
             ttnn.synchronize_device(self.mesh_device)
             resources = {"pairs": pairs, "next": 0}
             self.fused_rmsnorm_resources[key] = resources
-        index = resources["next"]
-        resources["next"] = 1 - index
-        return resources["pairs"][index]
+        return resources
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.
