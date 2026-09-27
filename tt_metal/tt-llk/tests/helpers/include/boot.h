@@ -50,6 +50,27 @@ TT_ALWAYS_INLINE void configure_gathering()
 #endif
 }
 
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+// STREAM_SCRATCH_0 of overlay streams 0..3 (24 bits, host readable): TRISC completion flags in slots 0..2 and the
+// BRISC command counter in slot 3, so the host can wait on a kernel without reading its L1.
+namespace host_signal
+{
+#if defined(ARCH_WORMHOLE)
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 248;
+#else
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 36;
+#endif
+constexpr std::uint32_t NOC_OVERLAY_START_ADDR    = 0xFFB40000;
+constexpr std::uint32_t NOC_STREAM_REG_SPACE_SIZE = 0x1000;
+constexpr std::uint32_t BRISC_COUNTER_SLOT        = 3;
+
+TT_ALWAYS_INLINE void write(std::uint32_t slot, std::uint32_t value)
+{
+    *reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + slot * NOC_STREAM_REG_SPACE_SIZE + STREAM_SCRATCH_REG_INDEX * 4) = value;
+}
+} // namespace host_signal
+#endif
+
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 {
     asm volatile(
