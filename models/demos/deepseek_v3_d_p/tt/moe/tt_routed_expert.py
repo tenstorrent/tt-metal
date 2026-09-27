@@ -832,8 +832,8 @@ class TtRoutedExpert(LightweightModule):
     ) -> ttnn.Tensor:
         """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
 
-        Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf16 tiles, which
-        is what combine's untilizers read. The threshold splits the experts as in forward(), except that the
+        Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf8 tiles, as it does
+        for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
         fused-only sentinel is not available: the one-program op always runs the unified half.
         """
         if not self._is_blackhole:

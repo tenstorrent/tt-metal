@@ -81,7 +81,7 @@ constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
 // what the hand-placed control tables have to clear.
 uint32_t untilizer_cb_end(uint32_t base, uint32_t token_size_bytes, const CombineFabric2dInputs& tensor_args) {
     uint32_t end = align_l1(base) + hyb_cmbf2d::UNT_RING_BATCHES * hyb_cmbf2d::UNT_BATCH_ROWS * token_size_bytes;
-    end = align_l1(end) + tile_size_bytes(tensor_args);  // the batch count
+    end = align_l1(end) + BATCH_COUNT_PAGE_BYTES;  // the batch count
     end = align_l1(end) + 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args);
     return align_l1(end);
 }
@@ -342,19 +342,19 @@ void add_untilizer_cbs(
             .page_size = token_size_bytes(tensor_args),
         }}}});
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = tile_size_bytes(tensor_args),
+        .total_size = BATCH_COUNT_PAGE_BYTES,
         .core_ranges = core,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = hyb_cmbf2d::UNT_CB_BATCHES,
             .data_format = tt::DataFormat::UInt32,
-            .page_size = tile_size_bytes(tensor_args),
+            .page_size = BATCH_COUNT_PAGE_BYTES,
         }}}});
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args),
         .core_ranges = core,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = hyb_cmbf2d::UNT_CB_IN,
-            .data_format = tt::DataFormat::Float16_b,
+            .data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.dispatched_buffer.dtype()),
             .page_size = tile_size_bytes(tensor_args),
         }}}});
     if (arena != nullptr) {

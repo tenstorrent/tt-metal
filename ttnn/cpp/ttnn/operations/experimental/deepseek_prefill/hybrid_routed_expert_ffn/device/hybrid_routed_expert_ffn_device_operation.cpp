@@ -19,10 +19,10 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
     TT_FATAL(
         !t.l1_arena.has_value(),
         "hybrid routed expert overlapped with combine owns its L1 arena; the caller must not pass one");
-    // Combine's untilizers read the routed expert's output as bfloat16 tiles and nothing else.
+    // Combine's untilizers read the routed expert's output as bfloat8_b tiles, as combine does back to back.
     TT_FATAL(
-        t.output.layout() == tt::tt_metal::Layout::TILE && t.output.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "hybrid routed expert overlapped with combine writes a bfloat16 TILE output, got {} {}",
+        t.output.layout() == tt::tt_metal::Layout::TILE && t.output.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "hybrid routed expert overlapped with combine writes a bfloat8_b TILE output, got {} {}",
         t.output.dtype(),
         t.output.layout());
     // The framework resolves cache-hit bindings by buffer, and x and the output are both inputs here.
