@@ -1,5 +1,5 @@
 {
-  "op": "ttnn.operations.rms_norm_ttnn",
+  "op": "ttnn.bringup.rms_norm_ttnn",
   "phase": 0,
   "date": "2026-09-05",
   "device": {

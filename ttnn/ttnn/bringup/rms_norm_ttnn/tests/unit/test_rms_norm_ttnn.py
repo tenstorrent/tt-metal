@@ -26,7 +26,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn
 
 # PCC keyed by dtype — the same thresholds the golden suite uses.
 PCC = {
@@ -356,7 +356,7 @@ def test_rms_norm_ttnn_zero_volume(device, shape):
 
 def test_rms_norm_ttnn_default_compute_config_is_exported(device):
     """`None` resolves through one exported factory (see references/precision_convention.md)."""
-    from ttnn.operations.rms_norm_ttnn import default_compute_kernel_config
+    from ttnn.bringup.rms_norm_ttnn import default_compute_kernel_config
 
     cfg = default_compute_kernel_config()
     assert cfg.math_fidelity == ttnn.MathFidelity.HiFi4

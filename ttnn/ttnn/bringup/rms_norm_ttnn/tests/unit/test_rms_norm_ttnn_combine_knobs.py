@@ -27,7 +27,7 @@ import torch
 
 import ttnn
 
-from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
+from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (
     COMBINE_TREE_F0_MAX,
     COMBINE_TREE_F0_MIN,
     _PC_NONE,
@@ -166,7 +166,7 @@ def test_combine_noc_is_gated_on_a_resident_x(device, shape, memory_layout, shar
 #   COMBINE_MCAST_FACES         faces the IDENTITY-path multicast carries (3 = faces 0..2,
 #                               one transaction covering both column-carrying faces).
 
-from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
+from ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
     COMBINE_FIN_SPREAD,
     COMBINE_MCAST_FACES,
     COMBINE_MCAST_FIRE_AND_FORGET,
@@ -189,7 +189,7 @@ def test_fin_spread_default_is_the_root_and_is_byte_identical():
 
 def test_fin_spread_is_still_a_live_knob():
     """Parked, not deleted: flipping the module constant must actually move the CT arg."""
-    import ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor as PD
+    import ttnn.bringup.rms_norm_ttnn.rms_norm_ttnn_program_descriptor as PD
 
     saved = PD.COMBINE_FIN_SPREAD
     try:

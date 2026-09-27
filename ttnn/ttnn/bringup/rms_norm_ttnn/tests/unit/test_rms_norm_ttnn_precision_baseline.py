@@ -39,7 +39,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
+from ttnn.bringup.rms_norm_ttnn import rms_norm_ttnn, torch_rms_norm_ttnn
 
 EPSILON = 1e-5
 
