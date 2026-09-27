@@ -125,7 +125,25 @@ class _STFTFn(Module):
         padded = ttnn.pad(flat, [(0, 0), (0, 0), (0, 0), (self.left_pad, tail)], 0.0)
         gathered = ttnn.gather(padded, 3, indices, sub_core_grids=self._gather_grid)
         frames = indices.shape[-1] // self.win_length
-        return ttnn.reshape(gathered, (batch, frames, self.win_length))
+        # RM reshape stages an entire source row, twice per data-movement
+        # kernel. Reshaping all 1202 production windows at once needs ~9.8 MB
+        # per core. Device slices stage only their output width: bound each
+        # source row to 64 * 512 FP32 values (128 KiB), keeping the dual-kernel
+        # reshape scratch below 530 KiB. Concatenate already-shaped windows
+        # along time so the final RM row remains only 512 values wide.
+        strip_frames = 64
+        if frames <= strip_frames:
+            return ttnn.reshape(gathered, (batch, frames, self.win_length))
+        strips = []
+        for start in range(0, frames, strip_frames):
+            end = min(start + strip_frames, frames)
+            strip = ttnn.slice(
+                gathered,
+                [0, 0, 0, start * self.win_length],
+                [1, 1, batch, end * self.win_length],
+            )
+            strips.append(ttnn.reshape(strip, (batch, end - start, self.win_length)))
+        return ttnn.concat(strips, dim=1)
 
     def forward(self, y_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``y_BTC``: ``(B, T, 1)`` ROW_MAJOR waveform → ``magnitude``,

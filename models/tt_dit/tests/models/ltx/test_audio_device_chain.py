@@ -72,7 +72,8 @@ def _collect_framing(mesh_device, capture_only):
     results = {}
     # Causal MelDecoder maps T=151 to 4*T-3=601 mel frames, then *160 samples.
     # Also cover the uncropped 604-frame extent, beyond the production boundary.
-    for length in (80, 159, 160, 1025, 96160, 96640):
+    # Include the 64-window reshape strip boundary and its first partial strip.
+    for length in (80, 159, 160, 1025, 5119, 5120, 5200, 96160, 96640):
         values = _frame_inputs(length)
         stft.prepare_device_windows(2, length)
         input_dev = ttnn.from_torch(values["a"], device=mesh_device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -216,7 +217,7 @@ def _verify_c07(path, inputs, baseline):
         assert base["metadata"]["commit"] == meta["commit"], "collect both routes at the same source revision"
         assert base["metadata"]["harness_sha256"] == meta["harness_sha256"], "baseline/candidate harness mismatch"
         assert base["metadata"]["bwe_source_sha256"] == meta["bwe_source_sha256"], "baseline/candidate source mismatch"
-        assert set(result["framing"]) == {80, 159, 160, 1025, 96160, 96640}
+        assert set(result["framing"]) == {80, 159, 160, 1025, 5119, 5120, 5200, 96160, 96640}
         for length, saved in result["framing"].items():
             values = _frame_inputs(length)
             assert set(saved) == {"eager_a", "a0", "b", "a1"}
