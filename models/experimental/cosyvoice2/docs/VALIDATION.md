@@ -147,6 +147,9 @@ reference run (`scripts/run_reference.py`, after the fixes in `0d687d840e`). Bot
 - **The CAM++ cosine is recorded in `scores.json` as a diagnostic only.** It is self-referential, because the model
   conditions on it. Its means are 76.19 (reference, seven utterances) and 84.13 (TT, six).
 - **The CosyVoice1-parity sentence** was run by the reference only: WER 0 %, SIM 94.86.
+- **The transformers pin changed nothing measurable.** Pinning the reference venv to upstream's transformers 4.51.3
+  removed its two behaviour shims. Upstream then reproduced this reference run's tokens and audio bit for bit on
+  all seven cases. Re-scoring both runs with the pinned scorer gave identical transcripts and scores.
 
 ## The PyTorch reference, for scale
 

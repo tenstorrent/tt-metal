@@ -19,8 +19,8 @@ and corpus-level comparison is printed as a Markdown table.
   - Normalization: NFKC, lowercase, punctuation stripped, then word-level edit distance. Chinese, Japanese and
     Korean are scored per character (CER).
   - Corpus-level WER is total errors over total reference words, not a mean of per-utterance rates.
-- **Speaker similarity:** `microsoft/wavlm-base-plus-sv` (`WavLMForXVector`) x-vectors, cosine x 100, between
-  the generated wav and the case's prompt wav, both at 16 kHz.
+- **Speaker similarity:** `microsoft/wavlm-base-plus-sv` (`WavLMForXVector`, revision pinned) x-vectors,
+  cosine x 100, between the generated wav and the case's prompt wav, both at 16 kHz.
   - This is not the paper's SIM model (a WavLM-large SV checkpoint), so compare TT with the PyTorch reference
     scored here, never with the paper's figure.
   - The CAM++ cosine is reported as a diagnostic only. The model conditions on CAM++ embeddings, so that score
@@ -44,6 +44,8 @@ import reference_env  # noqa: E402
 
 ASR_MODEL = "large-v3"
 SIM_MODEL = "microsoft/wavlm-base-plus-sv"
+# pinned: reproducible scores, and docs/security.md (transformers advisories)
+SIM_REVISION = "feb593a6c23c1cc3d9510425c29b0a14d2b07b1e"
 CER_LANGS = {"zh", "yue", "ja", "ko"}
 
 # CosyVoice1's punctuation class, hyphen escaped (unescaped, `_-–` is a range that swallows a-z)
@@ -105,8 +107,8 @@ class SpeakerSim:
 
         print(f"[sim] loading {name} (cpu)", flush=True)
         self.torch = torch
-        self.fe = AutoFeatureExtractor.from_pretrained(name)
-        self.model = WavLMForXVector.from_pretrained(name).eval()
+        self.fe = AutoFeatureExtractor.from_pretrained(name, revision=SIM_REVISION)
+        self.model = WavLMForXVector.from_pretrained(name, revision=SIM_REVISION).eval()
         self.name = name
         self._cache: dict[str, np.ndarray] = {}
 

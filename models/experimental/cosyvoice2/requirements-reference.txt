@@ -27,14 +27,13 @@
 #   4. wetext deliberately NOT installed: upstream's text_normalize then skips it ("no frontend is avaliable"),
 #      exactly as the device-side normalizer does, so both sides normalize text identically.
 #   5. Versions: CosyVoice1's advisory-cleared pins where it had them (diffusers, hydra-core, lightning,
-#      modelscope, pyarrow); transformers matches python_env (5.12.1); onnxruntime is held at 1.18.0 on purpose
-#      -- CosyVoice1 measured a different speech-token sequence from a newer onnxruntime for the same audio, and
-#      speech tokens reroute everything downstream. transformers >= 5 loads from_pretrained in the checkpoint
-#      config's dtype (bfloat16 for CosyVoice-BlankEN) where upstream's pinned 4.51 loaded fp32; scripts/
-#      reference_env.py restores fp32 for the Qwen2 backbone, so llm.pt's fp32 weights load unrounded. And
-#      transformers >= 5 right-pads a too-short 2D attention mask with zeros where 4.51 dropped an all-ones one;
-#      upstream's non-streaming decode loop passes a length-1 mask, so without the mask shim in reference_env.py
-#      every decode step attends to position 0 only and generation runs to max_len.
+#      modelscope, pyarrow); onnxruntime is held at 1.18.0 on purpose -- CosyVoice1 measured a different
+#      speech-token sequence from a newer onnxruntime for the same audio, and speech tokens reroute everything
+#      downstream. transformers is upstream's own pin, 4.51.3 (with the tokenizers / huggingface-hub it needs), not
+#      python_env's 5.12.1: under 5.x, upstream's LLM loads in bf16 and its decode loop's length-1 attention mask
+#      is right-padded with zeros, so generation runs to max_len. scripts/reference_env.py refuses any other
+#      transformers version. The pin brings transformers advisories that 5.x fixes; docs/security.md dispositions
+#      them (none is on a code path the reference venv runs).
 #   6. setuptools 81.0.0: torch 2.11.0 requires setuptools<82, so CVE-2026-59890 (fixed from 83.0.0) cannot be
 #      cleared while torch is pinned to python_env's; 81.0.0 is the newest release torch accepts and clears the
 #      older setuptools advisories the torch step's copy (78.1.0) carries. Disposition in docs/security.md.
@@ -48,7 +47,9 @@ torchaudio==2.11.0
 numpy==1.26.4
 openai-whisper==20250625
 onnxruntime==1.18.0
-transformers==5.12.1
+transformers==4.51.3
+tokenizers==0.21.4
+huggingface-hub==0.36.2
 inflect==7.5.0
 librosa==0.10.2
 soundfile==0.12.1
