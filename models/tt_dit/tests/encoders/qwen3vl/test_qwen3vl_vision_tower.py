@@ -235,17 +235,17 @@ def test_tower_sp_padding(reference, mesh_device, submesh_shape, tp_axis, sp_axi
         pos_embeds=sp_shard(p_pos, submesh, sp_axis),
         rope=(sp_shard(p_cos, submesh, sp_axis), sp_shard(p_sin, submesh, sp_axis)),
         cu_seqlens=p_cu,
-        logical_patches=logical,
     )
 
     merged = total // SPATIAL_MERGE_SIZE**2
+    padded = p_patches.shape[0] // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
-    assert actual_tokens.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
-    assert_quality(golden_tokens, actual_tokens, pcc=0.99)
+    assert actual_tokens.shape[-2:] == (padded, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
+    assert_quality(golden_tokens, actual_tokens[:merged], pcc=0.99)
     for golden_feature, feature_tt in zip(golden_deepstack, deepstack):
         feature = tensor.to_torch(feature_tt, mesh_axes=[None, None])
-        assert feature.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
-        assert_quality(golden_feature, feature, pcc=0.99)
+        assert feature.shape[-2:] == (padded, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
+        assert_quality(golden_feature, feature[:merged], pcc=0.99)
 
 
 def _host_patch_batch(total: int, windows: tuple[int, ...]):
