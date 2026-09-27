@@ -12,6 +12,9 @@
 //     6 super-blocks this relay sends, 7 XARR semaphore id, 8 STRIDE, 9 OFF (this relay sends super-blocks OFF,
 //     OFF + STRIDE, ... in stream order; a block's ring slot follows its global index), 10 unused
 #include <stdint.h>
+#ifndef SE_SBT
+#define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
+#endif
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
@@ -30,8 +33,9 @@ void kernel_main() {
     constexpr uint32_t x_slots = get_compile_time_arg_val(3);
     constexpr uint32_t word_sem = get_compile_time_arg_val(5);
     constexpr uint32_t kblk = get_compile_time_arg_val(6);
-    constexpr uint32_t per_sb = 32 / kblk;
-    constexpr uint32_t sb_tiles = mt * 32;
+    constexpr uint32_t per_sb = SE_SBT / kblk;
+    constexpr uint32_t sb_tiles = mt * SE_SBT;
+    static_assert(SE_SBT % kblk == 0);
     constexpr uint32_t blk_bytes = mt * kblk * tb, piece = kblk * tb;
     const uint32_t ring = get_arg_val<uint32_t>(0);
     const uint32_t a0 = get_arg_val<uint32_t>(1), a1 = get_arg_val<uint32_t>(2), dests = get_arg_val<uint32_t>(3);
@@ -139,7 +143,11 @@ void kernel_main() {
                     for (uint32_t m = 0; m < mt; ++m) {
                         const bool last = k + 1 == n && m + 1 == mt;  // the chain ends before the next rectangle's
                         noc_async_write_multicast(
-                            src + (m * 32 + (i + k) * kblk) * tb, rects[q] | (dst + m * piece), piece, ndest[q], !last);
+                            src + (m * SE_SBT + (i + k) * kblk) * tb,
+                            rects[q] | (dst + m * piece),
+                            piece,
+                            ndest[q],
+                            !last);
                     }
                 }
                 noc_semaphore_set_multicast(reinterpret_cast<uint32_t>(word), rects[q] | xarr_addr, ndest[q]);

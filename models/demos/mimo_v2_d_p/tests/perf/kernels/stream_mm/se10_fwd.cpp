@@ -11,12 +11,15 @@
 //
 // CT: 0 CB, 1 R, 2 TILE_BYTES, 3 SLOT_TILES (reader CB slot), 4 BLK_TILES (one receiver's block), 5 SLOTS (landing
 //     ring), 6 CREDIT_SEM0, 7 DATA_SEM, 8 TOTAL_CHUNKS (SE_DYN: chunks per expert), 9 CB_SLOTS, 10 DEPTH (<= 15),
-//     11 NUM_E (SE_DYN)
+//     11 NUM_E (SE_DYN), 12 G (M-groups: receiver j gets block j / G of the chunk; G receivers share each block)
 // RT: 0 landing base, 1..R receiver xy, then the se_dyn.hpp args (SE_DYN)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
+#endif
+#ifdef SE_DBG
+#include "api/debug/dprint.h"
 #endif
 
 void kernel_main() {
@@ -42,6 +45,7 @@ void kernel_main() {
 #endif
     constexpr uint32_t cb_slots = get_compile_time_arg_val(9);
     constexpr uint32_t depth = get_compile_time_arg_val(10);
+    constexpr uint32_t groups = get_compile_time_arg_val(12);
     static_assert(depth >= 1 && depth <= 15 && depth <= cb_slots);
     constexpr uint32_t slot_bytes = slot_tiles * tile_bytes;
     constexpr uint32_t blk_bytes = blk_tiles * tile_bytes;
@@ -57,8 +61,23 @@ void kernel_main() {
     }
     const uint32_t cb_base = get_read_ptr(cb);  // nothing popped yet: slot 0 of the reader CB
     uint32_t issued = 0, done = 0;
+    uint32_t dbg_it = 0;
     while (done < total) {
         invalidate_l1_cache();
+#ifdef SE_DBG
+        if (++dbg_it % (1u << 22) == 0) {
+            DPRINT(
+                "fwd issued {} done {} total {} cr {} {} {} {} avail {}\n",
+                issued,
+                done,
+                total,
+                *credit[0],
+                R > 1 ? *credit[1] : 0,
+                R > 2 ? *credit[2] : 0,
+                R > 3 ? *credit[3] : 0,
+                (uint32_t)cb_pages_available_at_front(cb, slot_tiles));
+        }
+#endif
         if (issued < total && issued - done < depth &&
             cb_pages_available_at_front(cb, (issued - done + 1) * slot_tiles)) {
             bool granted = true;
@@ -73,8 +92,12 @@ void kernel_main() {
                 const uint32_t dst = landing + (issued % slots) * blk_bytes;
 #endif
                 const uint32_t trid = 1 + issued % depth;
-                for (uint32_t j = 0; j < R; ++j) {
-                    noc_async_write_one_packet_with_trid(src + j * blk_bytes, recv[j] | dst, blk_bytes, trid);
+                for (uint32_t j = 0; j < R; ++j) {  // (a block may exceed one NoC packet: bursts, one id)
+                    for (uint32_t o = 0; o < blk_bytes; o += NOC_MAX_BURST_SIZE) {
+                        const uint32_t n = blk_bytes - o < NOC_MAX_BURST_SIZE ? blk_bytes - o : NOC_MAX_BURST_SIZE;
+                        noc_async_write_one_packet_with_trid(
+                            src + (j / groups) * blk_bytes + o, recv[j] | (dst + o), n, trid);
+                    }
                 }
                 ++issued;
             }

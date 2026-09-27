@@ -13,6 +13,9 @@
 // order),
 //     then per expert: region row offset, token count
 #include <stdint.h>
+#ifndef SE_SBT
+#define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
+#endif
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
@@ -31,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t mt = get_compile_time_arg_val(3);
     constexpr uint32_t nsb = get_compile_time_arg_val(4);
     constexpr uint32_t batch = get_compile_time_arg_val(6);
-    constexpr uint32_t seg = 2048;
+    constexpr uint32_t seg = SE_SBT * 64;  // one row of a super-block: SE_SBT tiles x 32 bf16
     const InterleavedAddrGen<true> xg = {.bank_base_address = get_arg_val<uint32_t>(0), .page_size = row_bytes};
     uint32_t in_batch = 0, l1 = 0;
     auto flush = [&]() {

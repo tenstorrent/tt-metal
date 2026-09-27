@@ -53,6 +53,9 @@
 #ifdef SE_DYN
 #include "se_dyn.hpp"
 #endif
+#ifdef SE_DBG
+#include "api/debug/dprint.h"
+#endif
 #ifdef SE_ZONES
 #include "tools/profiler/kernel_profiler.hpp"
 #define SE_MARK(name)            \
@@ -136,6 +139,8 @@ void kernel_main() {
 #endif
 #ifdef SE_W_NCRISC
     const bool is_b = true;  // every core's weights are handled by its NCRISC (se7_anc.cpp on A, se5_bnc.cpp on B)
+#elif defined(SE_NO_PARTNER)
+    const bool is_b = false;  // no pairs: every core runs its own ring (RT 14 is then the M-group, SE_GU_ONLY)
 #else
     const bool is_b = get_arg_val<uint32_t>(14) != 0;
 #endif
@@ -207,6 +212,22 @@ void kernel_main() {
         if (++iters % 2048 == 0) {
             SE_MARK("LOOP2K");
         }
+#ifdef SE_DBG
+        if (iters % (1u << 22) == 0) {
+            DPRINT(
+                "recv it {} granted {} pushed {} data {} xarr {} xpub {} xcons {} hsent {} go {} num_v {}\n",
+                iters,
+                granted,
+                pushed,
+                *data_sem,
+                *xarr_sem,
+                x_pub,
+                x_cons,
+                h_sent,
+                *go_sem,
+                num_v);
+        }
+#endif
         while (!is_b && granted < total_w && cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1) * slot) &&
                (no_partner || *bcopy >= granted + 1 - w_slots)) {
             noc_semaphore_inc(credit_noc, 1);

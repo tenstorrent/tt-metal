@@ -54,6 +54,12 @@ constexpr uint32_t in1_cb = tt::CBIndex::c_1;
 constexpr uint32_t h_all_cb = tt::CBIndex::c_2;
 constexpr uint32_t h_local_cb = tt::CBIndex::c_3;
 constexpr uint32_t out_cb = tt::CBIndex::c_16;
+// SE_XMT: row tiles of an x block (all M-groups' rows; this core computes MT of them from row GROUP * MT, RT 0)
+#ifndef SE_XMT
+#define SE_XMT get_compile_time_arg_val(1)
+#endif
+constexpr uint32_t xmt = SE_XMT;
+uint32_t x_row0 = 0;  // first tile of this core's rows in an x block
 
 constexpr uint32_t kblk = get_compile_time_arg_val(0);
 constexpr uint32_t mt = get_compile_time_arg_val(1);
@@ -158,7 +164,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
             if (v == SE_WAITZ) {
                 {
                     DeviceZoneScopedN("W_X");
-                    cb_wait_front(x_cb, mt * kblk);
+                    cb_wait_front(x_cb, xmt * kblk);
                 }
                 {
                     DeviceZoneScopedN("W_W");
@@ -166,16 +172,16 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
                 }
             }
 #endif
-            cb_wait_front(x_cb, mt * kblk);
+            cb_wait_front(x_cb, xmt * kblk);
 #ifdef SE_DYN
             const uint32_t w = wblock_dyn(e * nk_gu + b, ph0 + b);
 #else
             const uint32_t w = wblock(pos_gu(e, b));
 #endif
             for (uint32_t k = 0; k < kblk; ++k) {
-                matmul_block(x_cb, in1_cb, k, w + k * gw, 0, false, gw, rows, kblk);
+                matmul_block(x_cb, in1_cb, x_row0 + k, w + k * gw, 0, false, gw, rows, kblk);
             }
-            cb_pop_front(x_cb, mt * kblk);
+            cb_pop_front(x_cb, xmt * kblk);
             if (last) {  // free the block for the next expert as soon as possible
 #ifdef SE_DYN
                 cb_pop_front(in1_cb, slot);
@@ -327,6 +333,8 @@ FORCE_INLINE void down(uint32_t v) {
 
 void kernel_main() {
     constexpr uint32_t num_v = num_experts * sub;
+    const uint32_t grp = get_arg_val<uint32_t>(0);  // M-group (RT 0)
+    x_row0 = grp * mt * kblk;
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, in1_cb, out_cb);
     matmul_block_init(x_cb, in1_cb, false, gw, mt, kblk);
 #ifndef SE_NO_ACT
@@ -359,7 +367,10 @@ void kernel_main() {
         const bool last_use = (gu >> 16) & 1;
         const uint32_t lmt = read_tile_value(tt::CBIndex::c_6, 0, SE_META_LMT + a);
         for (uint32_t s = 0; s < subs; ++s, ++v) {
-            gate_up(v, ld, last_use && s + 1 == subs, ph0, s + 1 == subs ? lmt : mt);
+            // this group's row tiles holding tokens (none: one garbage row, the down cores never write it out)
+            const uint32_t lr = s + 1 == subs ? lmt : xmt;
+            const uint32_t rows = lr > grp * mt ? (lr - grp * mt < mt ? lr - grp * mt : mt) : 1;
+            gate_up(v, ld, last_use && s + 1 == subs, ph0, rows);
         }
     }
     cb_pop_front(tt::CBIndex::c_6, 1);

@@ -11,6 +11,9 @@
 //     (SE_DYN)
 // RT: 0 primary xy, 1 landing ring address, 2 super-blocks, 3.. se_dyn.hpp args (SE_DYN)
 #include <stdint.h>
+#ifndef SE_SBT
+#define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
+#endif
 #include "api/dataflow/dataflow_api.h"
 #ifdef SE_DYN
 #include "se_dyn.hpp"
@@ -23,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t land_slots = get_compile_time_arg_val(3);
     constexpr uint32_t data_sem = get_compile_time_arg_val(4);
     constexpr uint32_t credit_sem = get_compile_time_arg_val(5);
-    constexpr uint32_t sb_tiles = mt * 32, sb_bytes = sb_tiles * tb;
+    constexpr uint32_t sb_tiles = mt * SE_SBT, sb_bytes = sb_tiles * tb;
     const uint32_t pxy = get_arg_val<uint32_t>(0), land = get_arg_val<uint32_t>(1);
 #ifdef SE_DYN
     // Dynamic counts: the odd super-blocks of the active experts' stream (CT 6 NUM_E, 7 NSB; RT 3.. se_dyn.hpp args,
