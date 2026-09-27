@@ -36,9 +36,12 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     """The whole target prefill, warm, with nothing read back: embed -> every layer -> final norm for every chunk, one
     device sync at the end. A first pass compiles every position-dependent program; the second is timed
     (prefill_ms_full, prefill_tok_s); a third syncs after each chunk for the per-chunk curve (prefill_chunk_ms_c<nn>).
-    Excludes the LM head and sampling (a host LM head would not be device time). Needs the full layer stack."""
-    if layers != list(range(s.num_layers)):
+    Excludes the LM head and sampling (a host LM head would not be device time). Needs a stack that starts at layer 0
+    with no gaps: the full model, or a prefix subset such as MiMo's 0-5 of 48 (F42; the final norm only when the stack
+    ends at the last layer, and prefill_layers records how many layers were timed)."""
+    if not layers or layers != list(range(len(layers))):
         return None
+    full_stack = len(layers) == s.num_layers
     seq, chunk = rung["seq"], rung["chunk"]
     n = seq // chunk
 
@@ -51,7 +54,7 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
                 h2 = model.layer(i, h, s0, state)
                 model.free(h)
                 h = h2
-            if c == n - 1:
+            if c == n - 1 and full_stack:
                 h2 = model.final_norm(h)
                 model.free(h)
                 h = h2
@@ -69,12 +72,13 @@ def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
     metrics.record("prefill_seq", seq)
     metrics.record("prefill_chunk", chunk)
     metrics.record("prefill_tok_s", round(seq / total, 1))
+    metrics.record("prefill_layers", len(layers))
     t = once(sync_each=True)
     per = [round((b - a) * 1e3, 1) for a, b in zip(t[:-2], t[1:-1])]
     for c, ms in enumerate(per):
         metrics.record(f"prefill_chunk_ms_c{c:02d}", ms)
     print(
-        f"full prefill {seq} tokens in {n} chunks of {chunk}: {total:.2f}s warm ({seq / total:.0f} tok/s); per chunk {per}"
+        f"full prefill {seq} tokens in {n} chunks of {chunk}, {len(layers)} layers: {total:.2f}s warm ({seq / total:.0f} tok/s); per chunk {per}"
     )
     return {"tokens": seq, "chunk": chunk, "ms": total * 1e3, "chunk_ms": per}
 
