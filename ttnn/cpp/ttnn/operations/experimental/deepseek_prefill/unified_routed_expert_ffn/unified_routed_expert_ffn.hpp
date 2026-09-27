@@ -70,7 +70,11 @@ ttnn::Tensor unified_routed_expert_moe(
     // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
     // op and moe_fused_swiglu split the experts by load over ONE shared counts vector.
     uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    // Opt-in precise path: honour compute_kernel_config's math_fidelity / fp32_dest_acc_en for
+    // every activation, keep x, intermediates and the output in bf16 (ROW_MAJOR x only; the
+    // returned buffer is TILE bf16 instead of bf8_b). Default false = unchanged behaviour.
+    bool high_precision = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

@@ -91,13 +91,21 @@ def build_router(mesh, loader, cfg, layer: int, max_chunk: int):
     return TtRouter(mesh, w, b, max_chunk, top_k=cfg.num_experts_per_tok, route_scale=rs, mode=mode)
 
 
+# P.1: the fused kernel with high_precision replaced the per-expert loop (experts 958.7 -> 94 ms per 5120-token chunk).
+EXPERTS_MODE_DEFAULT = "unified"
+EXPERTS_FIDELITY_DEFAULT = "HiFi4"
+
+
 def build_experts(mesh, loader, cfg, layer: int, max_chunk: int):
-    """TtExperts (EP=4, 64 experts per chip, bfp8). Defaults: loop mode, bf16 input, fp32 intermediates, HiFi4.
-    MIMO_EXPERTS_MODE / MIMO_EXPERTS_ACT=bfp8 / MIMO_EXPERTS_MID=bf16 / MIMO_EXPERTS_FIDELITY=HiFi2 for comparison."""
+    """TtExperts (EP=4, 64 experts per chip, bfp8). Default: mode 'unified' (one fused unified_routed_expert_moe with
+    high_precision=True: bf16 x / intermediates / output, fp32 partials, HiFi4 + fp32 dest). MIMO_EXPERTS_MODE=loop
+    (the previous default: per-expert ttnn.linear, P.1 baseline), unified_lofi, fused; MIMO_EXPERTS_FIDELITY=HiFi3
+    (same accuracy on the goldens, ~11 ms faster) / HiFi2 (fails the layer-5 norm ratio); loop-only MIMO_EXPERTS_ACT=bfp8
+    / MIMO_EXPERTS_MID=bf16 for comparison."""
     from models.demos.mimo_v2_6_d_p.tt.experts import LazyExpertWeights, TtExperts
 
     weights = LazyExpertWeights(loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts)
-    mode = os.environ.get("MIMO_EXPERTS_MODE", "loop")
+    mode = os.environ.get("MIMO_EXPERTS_MODE", EXPERTS_MODE_DEFAULT)
     act = ttnn.bfloat8_b if os.environ.get("MIMO_EXPERTS_ACT", "bf16") == "bfp8" else ttnn.bfloat16
     mid = ttnn.bfloat16 if os.environ.get("MIMO_EXPERTS_MID", "fp32") == "bf16" else ttnn.float32
     return TtExperts(
@@ -111,7 +119,7 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int):
         mode=mode,
         loop_act_dtype=act,
         loop_mid_dtype=mid,
-        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("MIMO_EXPERTS_FIDELITY", "HiFi4")),
+        math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("MIMO_EXPERTS_FIDELITY", EXPERTS_FIDELITY_DEFAULT)),
     )
 
 

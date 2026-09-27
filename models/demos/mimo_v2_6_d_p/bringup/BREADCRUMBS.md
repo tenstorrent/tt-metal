@@ -1154,3 +1154,34 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   need about 320 GB against 128 GB on the box. The golden also has only 6 layers. Acking the missing 42 layers would fake
   the check. Retrying this role cannot pass. The fix belongs to the framework (findings.yaml K1-contract-layer-count).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py`
+
+## P.1 perf: fused routed experts (attempt 1), 2026-09-27
+- ttnn change (`unified_routed_expert_ffn/`): a new opt-in op kwarg `high_precision` (default False) in the nanobind,
+  top-level op, prim, params and program-cache key. When True: every activation takes the caller's math_fidelity and
+  fp32_dest_acc_en (before, only GeluTanh did); x is tilized in-kernel to bf16 instead of bf8; the gate/activated
+  intermediates are bf16; the output buffer is TILE bf16; with fp32 dest the gate/up/down partials CBs are Float32.
+  It needs a ROW_MAJOR x (TT_FATAL otherwise). The kernels needed no change: they take tile sizes and formats from the CBs.
+  The cb_x_rm L1 footprint term now uses the bf16 tile size explicitly, not partials_gu_tile_size. Rebuilt with ./build_metal.sh.
+- Why a flag, not "honour the config for Silu": ERNIE (`ernie45_d_p/tt/moe_unified.py`) passes HiFi2 + fp32 dest with
+  Silu and relies on it being ignored, so the brief's plain extension would have changed ERNIE. DeepSeek's default is LoFi,
+  bf16 dest.
+- Measured on the frozen layer-5 experts test (limit ratio [0.97, 1.03]):
+  - HiFi2 + fp32 dest + bf16 x / intermediates, bf16 partials: rel 0.0156, ratio [0.967, 1.059], FAIL.
+  - Same at HiFi4: rel 0.0118, ratio [0.962, 1.038], FAIL.
+  - HiFi4 + Float32 partials: rel 0.0071, ratio [0.987, 1.021], pass. Adding fp32 intermediates on top: 0.0066, [0.987, 1.018]. Not kept.
+  - HiFi3 + Float32 partials: 0.0071, [0.987, 1.020], pass.
+  - HiFi2 + Float32 partials: 0.0133, [0.960, 1.060], FAIL. So HiFi2, which the brief asked for, is not usable on layer 5.
+- Default is now `MIMO_EXPERTS_MODE=unified` at `MIMO_EXPERTS_FIDELITY=HiFi4` (tt/model.py EXPERTS_MODE_DEFAULT /
+  EXPERTS_FIDELITY_DEFAULT). HiFi4 is the fidelity the loop baseline used; HiFi3 is about 11 ms faster (experts 83.3 vs
+  94.0 ms) with the same accuracy on both goldens. perf_settings() records experts_mode and experts_fidelity.
+  `MIMO_EXPERTS_MODE=loop` is the P.1 baseline; `unified_lofi` is the op without high_precision.
+- Gate: PASS. pcc_experts_L01 0.999985 (rel 0.0059, ratio [0.994, 1.008]); pcc_experts_L05 0.999978 (rel 0.0071, ratio [0.987, 1.021]).
+  Ladder worst layer 0.99964, pcc_state_min 0.99941, pcc_chunk_out 0.99971, host_transfers_per_layer 0.
+  Profile: chunk wall 258 ms, device 257 ms (baseline 1288 / 1122), experts 94.0 ms (baseline 958.7).
+  Attention is now the largest section at 141.9 ms (55%).
+- Op unit tests run: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/
+  test_single_routed_expert.py::test_single_routed_expert_functional, test_routed_expert_bias.py and
+  test_swigluoai_routed_expert.py (59 passed); test_routed_expert_hybrid.py (84 passed). None of them exercises
+  high_precision.
+- Re-run: the brief's gate command, with `PYTHONPATH=$PWD`. Compare with `MIMO_EXPERTS_MODE=loop` (baseline) or
+  `MIMO_EXPERTS_FIDELITY=HiFi3`.

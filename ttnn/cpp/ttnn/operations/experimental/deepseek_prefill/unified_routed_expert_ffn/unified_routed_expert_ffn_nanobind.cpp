@@ -64,6 +64,11 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 Silu (default, DeepSeek), SwiGluOai (clamped, MiniMax-M3 / gpt-oss),
                 SituGlu (tanh-capped, Kimi K3; Blackhole only), or ClampedSiluGlu
                 (silu(min(gate,10)) * clamp(up,+/-10), DeepSeek V4; Blackhole only).
+            high_precision (bool, optional): default False. When True, every activation
+                honours compute_kernel_config's math_fidelity and fp32_dest_acc_en (by
+                default only GeluTanh does; the others run LoFi with a bf16 dest), and x
+                (tilized in-kernel), the intermediates and the output stay bf16 instead of
+                bf8_b. Needs a ROW_MAJOR bf16 dispatched_buffer; returns a TILE bf16 buffer.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -88,7 +93,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("up_biases") = nb::none(),
         nb::arg("down_biases") = nb::none(),
         nb::arg("min_active_tokens") = 0,
-        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max(),
+        nb::arg("high_precision") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail
