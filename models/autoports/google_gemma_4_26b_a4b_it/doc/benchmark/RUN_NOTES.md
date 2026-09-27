@@ -120,7 +120,7 @@ are prerequisites, not benchmark results.
 The operator-provisioned client resolves the prior blocker. All prior run/ files
 are preserved under setup-previous/; historical paths above refer there.
 The fresh runner will create run/ and include the first32-slot server launch.
-No supplied server remains alive. Stage10 startup was approximately190seconds
+No supplied server remains alive. Stage10 startup was approximately 190 seconds
 (candidate_server_runner.log); its settings are inherited with explicit pinned
 model/tokenizer revisions. Hardware is the enclosing local run’s exposed four
 Blackhole devices; no external reservation was acquired or released.
@@ -131,3 +131,39 @@ greedy performance uses device sampling. No live device profiler is enabled.
 Timed attempt01: startup succeeded, but configuration endpoint /server_info returned404.
 All evidence retained at attempts/01-configuration-endpoint/. Elapsed178.00277232471853seconds, no accuracy/performance inference. Hook stopped its owned server.
 Preparation commit4fa30800a4f2ac5994986f3bcbc16bd15285f974;33host tests passed.
+
+The second timed run used3432e2048c20b80aa2f72dc6f801f4d4d722db7d.
+The actual core wheel is0.26.0+empty (no embedded commit); the imported TT plugin
+checkout is7f72b1c6e905f5137fe3377f2e7b42738d3f271d. Their provenance is
+separate in identity.json. No push occurred.
+
+Accuracy was interrupted at942.54seconds after8/536responses to preserve time
+for required performance. No question, generation cap or sampling setting changed.
+The report remains failed/incomplete; no claim is made that its scores represent
+the frozen subsets. All 536inputs and 8 upstream per-question scores are retained.
+The performance-only continuation uses the original conservative process-start
+monotonic clock in run/lifecycle.json. It does not restart the one-hour deadline.
+
+AutoFix accounting audit verified one additional executed model warm pass on
+trace rebinding. Trace capture itself records into the host bypass queue; it is
+not a third execution. Existing synchronization inside trace capture is unchanged;
+the observer adds no device synchronization. C32 raw events were exported before
+its server stopped. Offline reaccounting uses that unchanged export and records
+its original export time and identity, adding 3 warm passes across 381 decode
+submissions. Four capture-accounting tests supplement the original 7 collector tests.
+Raw measured time and token counts were not edited. Source arithmetic and
+approximation limits remain explicit in WORK_ACCOUNTING.md.
+
+## Final evidence handoff
+
+Both serving profiles passed actual-token, configuration and host-phase checks.
+Accuracy remains incomplete: 8/280 MMLU-Pro and 0/256 IFEval responses.
+All 536 inputs, eight responses and upstream per-question scores are retained.
+The evidence check exits 2 on incomplete status; context verification exits 0.
+All 42 host tests pass after import formatting (run/host_tests_post_format.log).
+Both owned servers were stopped after collection. No reservation changed; no push.
+
+Local artifact commit hooks skip trailing-whitespace and end-of-file-fixer to
+preserve raw evidence bytes, and check-large-files for five required raw input/
+phase JSON artifacts exceeding 500 KB (largest 2.4 MB). Other applicable hooks
+pass; Python/docs-only changes need no C++ build.

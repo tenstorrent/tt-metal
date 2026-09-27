@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TILE_BYTES = {"bfloat4_b": 576, "bfloat8_b": 1088, "bfloat16": 2048, "float32": 4096}
 SOURCES = (
     "tt/model.py",
+    "tt/generator.py",
+    "tt/generator_vllm.py",
     "tt/multichip_decoder.py",
     "tt/optimized_decoder.py",
     "tests/config.json",

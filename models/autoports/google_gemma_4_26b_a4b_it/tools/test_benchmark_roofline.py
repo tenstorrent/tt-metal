@@ -23,7 +23,7 @@ class FakeWork:
         return {"useful_flops": sum(lengths) * 100}
 
     def decode(self, positions, batch_slots):
-        return {"dram_bytes": sum(positions) * batch_slots}
+        return {"dram_bytes": sum(positions) * batch_slots, "terms": {"synthetic": sum(positions) * batch_slots}}
 
     def peaks(self):
         return {
@@ -78,6 +78,7 @@ def fixture(root, n):
         "pending": [],
         "requests": requests,
         "events": events,
+        "export_time_ns": timestamp,
     }
 
 

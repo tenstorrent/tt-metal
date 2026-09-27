@@ -109,3 +109,40 @@ Validation: `python models/autoports/google_gemma_4_26b_a4b_it/tools/test_benchm
 Tests cover independent prefill reconciliation, BFP exponents, actual per-row versus
 batched weight sharing, partial batches, KV window boundaries,127 decode steps,
 unsupported configurations and four-ASIC peaks. No hardware or profiler is used.
+
+Source audit during the run: the non-DP runner compacts live request slots and
+pads wire positions with trailing -1. On every membership reset, the autoport
+trims to the last nonnegative position plus one (generator_vllm.py, decode_forward).
+Thus31 active requests have32 wire rows but31 logical model slots. The observer's
+len(request_ids) is the correct logical batch; physical head tiles still round
+to32 in WorkAccounting.payload. Substituting wire_rows was investigated and
+refuted; no runtime or accountant change was made.
+
+## Trace rebinding work correction
+
+Full-phase decode work includes the extra warm model execution when a trace is
+rebound. `generator_vllm.prefill_forward` calls `configure_sampling`, which releases
+the existing trace (`generator.py:142–152`). The next decode therefore binds and
+calls `_capture`. `_capture` executes one warm `_forward`, records the graph, and
+`decode_forward` subsequently calls `_replay` (`generator.py:377–405,423–440,462`).
+Recording is **not** another device model execution: `FDMeshCommandQueue::record_begin`
+enables bypass (`tt_metal/distributed/fd_mesh_command_queue.cpp:1315`) and
+`SystemMemoryManager::issue_queue_reserve` redirects commands to host storage
+(`tt_metal/impl/dispatch/system_memory_manager.cpp:520`). `record_end` restores
+normal submission without replay (`fd_mesh_command_queue.cpp:1640–1666`).
+
+For this compact DP1 greedy workload the collector reconstructs binding state from
+the entire recorded dispatch sequence, anchored by an observed initial prefill.
+The first following decode and each changed logical-batch size have two executed
+model passes; subsequent unchanged decode batches have one. A later prefill resets
+the anchor even at the same batch size. Both passes use the same positions because
+capture setup restores token and position buffers. Plugin compaction marks layout
+changes (`vllm_tt_plugin/model_runner.py:718–723`); trailing wire padding is trimmed
+by `generator_vllm._decode_inputs:158–168`. No arbitrary holes, non-DP assumptions,
+or unanchored streams are silently accepted. Runtime measurement time is unchanged.
+
+`model_executions`, `warm_model_executions`, and `dram_bytes_per_execution` are
+retained for every decode submission. Actual executed work rather than merely
+emitted tokens determines DRAM totals. Sampler precompile and trace upload bytes
+remain approximate/excluded as described above; warm execution duplicates the
+model estimate, not a measured memory-controller count.

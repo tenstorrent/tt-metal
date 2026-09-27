@@ -1,0 +1,20 @@
+["/home/mvasiljevic/.venvs/gemma4-benchmark/bin/python", "-m", "benchmark_stage", "evaluate", "--model", "google/gemma-4-26B-A4B-it", "--base-url", "http://127.0.0.1:8000", "--manifest", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/manifest.json", "--task", "mmlu_pro,ifeval", "--output", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run", "--generation", "{\"max_gen_toks\": 4096, \"temperature\": 1.0, \"top_p\": 0.95, \"top_k\": 64, \"do_sample\": true, \"until\": [], \"chat_template_kwargs\": {\"enable_thinking\": false}, \"logprobs\": true, \"top_logprobs\": 0}", "--shared"]
+/home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/requests/__init__.py:113: RequestsDependencyWarning: urllib3 (2.7.0) or chardet (6.0.0.post1)/charset_normalizer (3.5.1) doesn't match a supported version!
+  warnings.warn(
+generation_kwargs: {'max_gen_toks': 4096, 'temperature': 1.0, 'top_p': 0.95, 'top_k': 64, 'do_sample': True, 'until': [], 'chat_template_kwargs': {'enable_thinking': False}, 'logprobs': True, 'top_logprobs': 0} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+  0%|          | 0/17 [00:00<?, ?it/s]100%|██████████| 17/17 [00:00<00:00, 4011.66it/s]
+  0%|          | 0/18 [00:00<?, ?it/s]100%|██████████| 18/18 [00:00<00:00, 6683.56it/s]
+  0%|          | 0/26 [00:00<?, ?it/s]100%|██████████| 26/26 [00:00<00:00, 6596.01it/s]
+  0%|          | 0/9 [00:00<?, ?it/s]100%|██████████| 9/9 [00:00<00:00, 5550.47it/s]
+  0%|          | 0/20 [00:00<?, ?it/s]100%|██████████| 20/20 [00:00<00:00, 6350.20it/s]
+  0%|          | 0/23 [00:00<?, ?it/s]100%|██████████| 23/23 [00:00<00:00, 6498.42it/s]
+  0%|          | 0/19 [00:00<?, ?it/s]100%|██████████| 19/19 [00:00<00:00, 6483.22it/s]
+  0%|          | 0/9 [00:00<?, ?it/s]100%|██████████| 9/9 [00:00<00:00, 4981.36it/s]
+  0%|          | 0/26 [00:00<?, ?it/s]100%|██████████| 26/26 [00:00<00:00, 6299.94it/s]
+  0%|          | 0/31 [00:00<?, ?it/s]100%|██████████| 31/31 [00:00<00:00, 6846.58it/s]
+  0%|          | 0/21 [00:00<?, ?it/s]100%|██████████| 21/21 [00:00<00:00, 6742.22it/s]
+  0%|          | 0/12 [00:00<?, ?it/s]100%|██████████| 12/12 [00:00<00:00, 5956.41it/s]
+  0%|          | 0/30 [00:00<?, ?it/s]100%|██████████| 30/30 [00:00<00:00, 6880.04it/s]
+  0%|          | 0/19 [00:00<?, ?it/s]100%|██████████| 19/19 [00:00<00:00, 6586.10it/s]
+  0%|          | 0/256 [00:00<?, ?it/s] 74%|███████▍  | 189/256 [00:00<00:00, 930.93it/s]100%|██████████| 256/256 [00:00<00:00, 1254.45it/s]
+Requesting API:   0%|          | 0/536 [00:00<?, ?it/s]Requesting API:   0%|          | 1/536 [07:13<64:24:22, 433.39s/it]Requesting API:   0%|          | 2/536 [07:55<30:06:55, 203.02s/it]Requesting API:   1%|          | 3/536 [09:21<22:08:33, 149.56s/it]Requesting API:   1%|          | 4/536 [09:54<15:20:45, 103.85s/it]Requesting API:   1%|          | 5/536 [10:44<12:25:58, 84.29s/it] Requesting API:   1%|          | 6/536 [11:08<9:24:48, 63.94s/it] Requesting API:   1%|▏         | 7/536 [11:38<7:44:46, 52.71s/it]Requesting API:   1%|▏         | 8/536 [12:13<6:53:42, 47.01s/it]
