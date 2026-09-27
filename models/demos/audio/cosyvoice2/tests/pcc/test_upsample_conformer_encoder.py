@@ -10,7 +10,7 @@ a shared one; `NUM_UP_BLOCKS=4` hardcoded in real source, not a yaml parameter).
 Streaming (`streaming=True`/`context=`, added 2026-09-23) tests are below the
 non-streaming ones -- real chunk-causal masking (`subsequent_chunk_mask_torch`) and
 real-lookahead `context` for `pre_lookahead_layer`, verified against a real checkpoint
-in `scripts/perf_2026_09_23/bucket_padding_boundary_check_v2.py` before being ported
+in `notes/cosyvoice2:scripts/perf_2026_09_23/bucket_padding_boundary_check_v2.py` before being ported
 here as permanent regression tests (random-init weights here, matching this file's own
 convention -- these check structural/masking correctness, not weight-specific accuracy,
 which the real-checkpoint script already covers).
@@ -264,7 +264,7 @@ def test_bucket_length_rounds_up_to_step():
 @needs_l1_small
 def test_device_streaming_encoder_naive_lookahead_corrupts_real_lookahead_recovers(device):
     """The core streaming-correctness regression (ported from the real-checkpoint
-    verification in `scripts/perf_2026_09_23/bucket_padding_boundary_check_v2.py`, random-
+    verification in `notes/cosyvoice2:scripts/perf_2026_09_23/bucket_padding_boundary_check_v2.py`, random-
     init weights here). Ground truth: real chunk-causal-masked encoder run on the WHOLE
     eventual `F`-token sequence at once (matches upstream's `finalize=True`). Compared
     against a `T`-token chunk (`finalize=False`) two ways:

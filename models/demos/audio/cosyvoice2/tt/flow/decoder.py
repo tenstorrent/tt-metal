@@ -716,9 +716,9 @@ class TtBasicTransformerBlock:
         `attn_mask`: `None` (non-streaming: all keys valid) or the full `[B, 1, T, T]` bf16 DRAM bias the
         decoder builds in streaming mode -- the op validates exactly that form (a key-only `[B, 1, 1, T]`
         padding row is rejected). Measured at the real `[2, 8, T, 64]` shape, real bucket sizes
-        (scripts/perf_2026_09_25/masked_sdpa_investigation.py): PCC 0.9997 vs float64 at chunk-aligned and
-        non-aligned valid lengths alike, and 2.2x / 4.9x / 7.1x faster than the explicit chain with the same
-        mask at T=384 / 768 / 1536. A mask costs ~2.1-3.5x over no mask at the same T, which is why the
+        (notes/cosyvoice2:scripts/perf_2026_09_25/masked_sdpa_investigation.py): PCC 0.9997 vs float64 at
+        chunk-aligned and non-aligned valid lengths alike, and 2.2x / 4.9x / 7.1x faster than the explicit chain
+        with the same mask at T=384 / 768 / 1536. A mask costs ~2.1-3.5x over no mask at the same T, which is why the
         non-streaming path keeps passing `None` rather than an all-zero mask."""
         dt = q.dtype
         if dt != ttnn.bfloat16:
@@ -1017,7 +1017,7 @@ class TtCausalConditionalCFM:
     `chunk_bias_buf`), but conv weights / program-cache entries never are. Holding several
     traces safely needs every geometry warmed and every slot captured up front, before any
     persistent allocation that must survive a replay -- not built. What it would buy, per
-    scripts/perf_2026_09_25/cfm_trace_cache_thrashing_simulation.py (real hop schedule,
+    notes/cosyvoice2:scripts/perf_2026_09_25/cfm_trace_cache_thrashing_simulation.py (real hop schedule,
     measured costs): every chunk of an utterance lands in a distinct bucket, any capacity
     below an utterance's full bucket range gives zero hits, and the full range would cut
     CFM time by ~19% over back-to-back utterances.
