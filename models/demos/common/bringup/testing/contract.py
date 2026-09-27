@@ -37,6 +37,15 @@ def contract_rung(s) -> str:
     return s.get("contract.rung") or s.data["ladder"][0]["name"]
 
 
+def served_layers(s) -> tuple[int, int]:
+    """(first layer, layer count) the engine serves: the spec's layer subset, which must be one contiguous run (F41).
+    The runtime acks, and the producer reads back, only the layers the device model runs."""
+    sel = s.layers()
+    if sel != list(range(sel[0], sel[0] + len(sel))):
+        raise ValueError(f"the serving contract needs a contiguous layer subset, got {sel}")
+    return sel[0], len(sel)
+
+
 def engine_env(s) -> dict:
     rung = s.rung(contract_rung(s))
     env = {
@@ -45,7 +54,7 @@ def engine_env(s) -> dict:
         "PREFILL_TP": str(s.mesh[1]),
         "PREFILL_CHUNK_SIZE": str(rung["chunk"]),
         "PREFILL_MAX_SEQ_LEN": str(rung["seq"]),
-        "PREFILL_NUM_LAYERS": str(s.num_layers),
+        "PREFILL_NUM_LAYERS": str(served_layers(s)[1]),
         "PREFILL_NUM_USERS": str(s.get("contract.num_users", 2)),
     }
     os.environ.update(env)
@@ -97,7 +106,7 @@ def run_contract_test(s, mesh) -> list[str]:
     slot = int(s.get("contract.slot", 1))
     tail = int(s.get("tests.contract_tail_pad", BLOCK))
     actual_len = seq - tail
-    L = s.num_layers
+    first, L = served_layers(s)
     failed = []
 
     adapter = get_adapter(os.environ["PREFILL_MODEL"])
@@ -105,7 +114,7 @@ def run_contract_test(s, mesh) -> list[str]:
     params = PrefillRunParams(
         mesh_shape=tuple(s.mesh),
         num_layers=L,
-        first_layer_idx=0,
+        first_layer_idx=first,
         is_first_rank=True,
         is_last_rank=True,
         max_seq_len=seq,
@@ -193,7 +202,7 @@ def gqa_independent_pcc(s, table, dmap, slot, length, g, n_kv: int, head_dim: in
     from models.demos.common.prefill.runners import prefill_producer as producer
 
     out = {"k": 1.0, "v": 1.0}
-    for layer in range(s.num_layers):
+    for layer in s.layers():
         st = g.state(layer)
         for kind, base, name in (("k", 0, "key"), ("v", n_kv, "value")):
             dev = torch.stack(
