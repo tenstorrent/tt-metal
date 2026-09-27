@@ -26,6 +26,7 @@ import yaml
 
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.ledger import Ledger
+from models.demos.common.bringup.core.spec import parse_layers
 from models.demos.common.bringup.reference.golden import load_spec
 from models.demos.common.bringup.testing.harness import DEFAULT_THRESHOLDS
 from models.demos.common.bringup.testing.profiler import phase_of
@@ -275,6 +276,13 @@ def build(spec) -> dict:
     }
 
 
+def layer_label(lays: list[int]) -> str:
+    """[1, 2, 3, 4] -> 'L1-4', [5] -> 'L5', [0, 5, 11] -> 'L0,5,11'."""
+    if len(lays) > 1 and lays == list(range(lays[0], lays[-1] + 1)):
+        return f"L{lays[0]}\u2013{lays[-1]}"
+    return "L" + ",".join(map(str, lays))
+
+
 def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     """The newest profile (a picked perf task's, else X.1) with X.1 as the before-comparison."""
     profs = sorted(res.glob("*_profile.json"), key=lambda p: p.stat().st_mtime)
@@ -286,33 +294,94 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     base = json.loads(base_p.read_text()) if base_p.exists() and base_p != prof_p else None
     meta = plan_doc.get("profile_sections") or {}
     nch = spec.mesh[0] * spec.mesh[1]
-    steps = []
-    for key, ms in prof["sections_ms"].items():
+    ops = prof.get("ops") or {}
+
+    def step(key, ms, pc, op_rows, programs):
         m = meta.get(key) or {}
-        pc = prof["sections_ms_per_chip"].get(key, {})
         b = m.get("bound") or bound_of(key)
-        steps.append(
+        return {
+            "key": key,
+            "name": m.get("name", key),
+            "part": m.get("part", phase_of(key)),
+            "bound": b,
+            "pat": m.get("pat", "ring" if b == "comm" else "local"),
+            "what": m.get("what", ""),
+            "inp": m.get("inp", ""),
+            "out": m.get("out", ""),
+            "cells": m.get("cells") or [[f"chip {c}", ""] for c in range(nch)],
+            "ms": round(ms, 2),
+            "per_chip": [round(pc.get(str(c), 0.0), 2) for c in range(nch)],
+            "programs": programs,
+            "ops": op_rows,
+            **({"before_ms": round(base["sections_ms"][key], 2)} if base and key in base["sections_ms"] else {}),
+        }
+
+    def merged_ops(layers, key, n):
+        """The section's ttnn ops over these layers, in the first layer's execution order, per layer (sum / n)."""
+        rows = {}
+        for li in layers:
+            for r in ops.get(f"L{li}.{key}", []):
+                k = (r["op"], r["shape"])
+                acc = rows.setdefault(k, {"op": r["op"], "shape": r["shape"], "calls": 0, "ms": 0.0, "pc": {}})
+                acc["calls"] += r["calls"]
+                acc["ms"] += r["ms"]
+                for c, v in r.get("ms_per_chip", {}).items():
+                    acc["pc"][c] = acc["pc"].get(c, 0.0) + v
+        return [
             {
-                "key": key,
-                "name": m.get("name", key),
-                "part": m.get("part", phase_of(key)),
-                "bound": b,
-                "pat": m.get("pat", "ring" if b == "comm" else "local"),
-                "what": m.get("what", ""),
-                "inp": m.get("inp", ""),
-                "out": m.get("out", ""),
-                "cells": m.get("cells") or [[f"chip {c}", ""] for c in range(nch)],
-                "ms": round(ms, 2),
-                "per_chip": [round(pc.get(str(c), 0.0), 2) for c in range(nch)],
-                "programs": prof.get("programs", {}).get(key, 0),
-                **({"before_ms": round(base["sections_ms"][key], 2)} if base and key in base["sections_ms"] else {}),
+                "op": r["op"],
+                "shape": r["shape"],
+                "calls": round(r["calls"] / n, 2),
+                "ms": round(r["ms"] / n, 3),
+                "per_chip": [round(r["pc"].get(str(c), 0.0) / n, 3) for c in range(nch)],
             }
+            for r in rows.values()
+            if r["ms"] > 0 or r["calls"]
+        ]
+
+    layers_all = prof.get("layers", [])
+    steps = [
+        step(
+            key,
+            ms,
+            prof["sections_ms_per_chip"].get(key, {}),
+            merged_ops(layers_all, key, 1),
+            prof.get("programs", {}).get(key, 0),
         )
+        for key, ms in prof["sections_ms"].items()
+    ]
     steps.sort(key=lambda s: (s["part"], -s["ms"]))
+    views = [{"id": "all", "label": f"All {len(layers_all)} layers", "layers": layers_all, "n": 1, "steps": steps}]
+    if ops:  # one tab per block type: that type's sections, per layer (mean over its profiled layers)
+        for bt, info in (spec.data.get("block_types") or {}).items():
+            lays = [i for i in parse_layers(info["layers"], spec.num_layers) if i in layers_all]
+            if not lays:
+                continue
+            secs = []
+            for key in prof["sections_ms"]:
+                rows = [r for li in lays for r in ops.get(f"L{li}.{key}", [])]
+                if not rows:
+                    continue
+                pc = {}
+                for li in lays:
+                    for r in ops.get(f"L{li}.{key}", []):
+                        for c, v in r.get("ms_per_chip", {}).items():
+                            pc[c] = pc.get(c, 0.0) + v / len(lays)
+                ms = sum(r["ms"] for r in rows) / len(lays)
+                st = step(
+                    key, ms, pc, merged_ops(lays, key, len(lays)), round(sum(r["programs"] for r in rows) / len(lays))
+                )
+                st.pop("before_ms", None)
+                secs.append(st)
+            secs.sort(key=lambda s: (s["part"], -s["ms"]))
+            views.append(
+                {"id": bt, "label": f"{bt} · {layer_label(lays)}", "layers": lays, "n": len(lays), "steps": secs}
+            )
     a, b = prof.get("chunk", [0, 0])
     return {
         "wall_ms": round(prof["wall_ms"], 1),
         "steps": steps,
+        "views": views,
         "source": prof_p.name,
         "heading": f"Where the time goes: one {a:,}→{b:,} chunk",
         "note": f"Device kernel time per section, summed over {len(prof.get('layers', []))} layers of one {b - a:,}-token chunk "
