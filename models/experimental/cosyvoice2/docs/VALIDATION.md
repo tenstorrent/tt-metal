@@ -96,7 +96,24 @@ seeds. No trace was alive after any call. The repeats reproduced their tokens an
   (same seeds, same tokens), yet the pytest processes recompiled HiFT for every one of them. The flow was reused in
   one case: call 2 (494 tokens) found the demo's flow kernels, while calls 3 and 5 recompiled theirs. Call 4 has the
   same flow length as call 2, so its warm flow is an in-process reuse. Two pytest processes running the same
-  sequence of calls did reuse each other's kernels. The mechanism is not identified.
+  sequence of calls did reuse each other's kernels.
+- **Why (identified 2026-09-27):** the conv reader kernels and the halo (`untilize_with_halo`) reader kernels take
+  their config tensors' DRAM addresses as compile-time arguments when `config_tensors_in_dram=True`, which this
+  port uses for every conv. So a binary on disk is reused only by a process whose config tensors land at the same
+  DRAM addresses:
+  - `conv2d_op_sharded_program_factory.cpp:871`, `conv2d_op_width_sharded_program_factory.cpp:562`;
+  - `untilize_with_halo_program_factory.cpp:307-316`.
+
+  Three fresh processes, each running the pipeline and then the same two-sentence warm-up (N150):
+
+  | process | first call s | second call s | whole process s | kernel binaries compiled |
+  |---|---|---|---|---|
+  | 1: first run of these lengths | 270.1 | 274.1 | 566.5 | 2,373 |
+  | 2: the identical sequence | 12.6 | 11.3 | 46.1 | **0** |
+  | 3: identical, but 1 MiB allocated first | 220.4 | 222.6 | 464.6 | 1,132, all in `halo_gather` and the two conv reader kernels |
+
+  A standalone `ttnn.conv1d` reproduces it. With the config in DRAM, a 1 MiB shift recompiles the conv reader and
+  `halo_gather`. With the config in L1, the same shift compiles nothing.
 
 ## HiFT F0 predictor and NSF source: fp32 (default) vs bf16
 
