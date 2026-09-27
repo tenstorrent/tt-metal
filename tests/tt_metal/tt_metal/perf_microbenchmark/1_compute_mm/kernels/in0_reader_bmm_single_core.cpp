@@ -15,6 +15,14 @@ void kernel_main() {
 
     // DPRINT("{}\n", TSLICE(cb_id_in0, 0, SliceRange::h0_w0_32()));
 
+#ifdef FUSE_BIAS
+    // Bias is host-populated and remains resident; publish it once for the compute kernel.
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_bias = 3;
+    cb_reserve_back(cb_id_bias, bias_ntiles);
+    cb_push_back(cb_id_bias, bias_ntiles);
+#endif
+
     for (uint32_t block = 0; block < num_blocks; block++) {
         cb_reserve_back(cb_id_in0, in0_block_tiles);
         cb_push_back(cb_id_in0, in0_block_tiles);

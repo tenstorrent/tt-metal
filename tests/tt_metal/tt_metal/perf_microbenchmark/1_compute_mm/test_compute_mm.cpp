@@ -103,6 +103,7 @@ using namespace tt;
 //     --fast-dispatch (set to use fast dispatch mode)
 //     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
+//     --fuse-bias (validate row-broadcast bias; requires --one-core 1 --block 1 --dtype 1)
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////
@@ -179,7 +180,10 @@ tt_metal::Program create_program_single_core(
     bool matmul_block,
     bool packer_l1,
     uint32_t num_blocks,
-    uint32_t interm_cb_dtype);
+    uint32_t interm_cb_dtype,
+    bool fuse_bias,
+    bool row_broadcast_bias,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& bias_cb_addr);
 
 tt_metal::Program create_program(
     tt_metal::distributed::MeshDevice* device,
@@ -214,7 +218,8 @@ bool validation_single_core(
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& out_buffer);
+    const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& out_buffer,
+    const std::vector<float>& bias_row);
 
 bool validation(
     tt_metal::distributed::MeshDevice* device,
@@ -272,6 +277,7 @@ int main(int argc, char** argv) {
         uint32_t subblock_choice = 0;
         bool single_core = false;
         bool fast_dispatch_mode = false;
+        bool fuse_bias = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
             std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
@@ -299,6 +305,9 @@ int main(int argc, char** argv) {
             std::tie(fast_dispatch_mode, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--fast-dispatch");
 
+            std::tie(fuse_bias, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--fuse-bias");
+
             std::tie(bypass_check, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
 
@@ -310,6 +319,15 @@ int main(int argc, char** argv) {
         if (not single_core) {
             TT_FATAL(dtype == 0, "multi core test only supports bfp8_b");
             TT_FATAL(packer_l1 == 0, "multi core test does not support packer_l1 arg");
+        }
+
+        // Bias validation requires the single-core fp16 copy kernel with L1 and FP32 accumulation disabled.
+        if (fuse_bias) {
+            TT_FATAL(single_core, "--fuse-bias is only supported in the single core test (--one-core 1)");
+            TT_FATAL(matmul_block, "--fuse-bias requires the copy compute kernel (--block 1)");
+            TT_FATAL(dtype == 1, "--fuse-bias requires fp16 for a bit-exact golden (--dtype 1)");
+            TT_FATAL(packer_l1 == 0, "--fuse-bias does not support packer_l1 (--packer 0)");
+            TT_FATAL(fp32 == 0, "--fuse-bias does not support fp32_dest_acc (--fp32 0)");
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -399,6 +417,10 @@ int main(int argc, char** argv) {
         std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> input_buffer0;
         std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> input_buffer1;
         std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> output_buffer;
+        std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> bias_buffer;
+        // Per-column bias shared by the device input and CPU golden.
+        constexpr bool row_broadcast_bias = true;
+        std::vector<float> bias_row;
         SHAPE shape_in0 = {1, 1, M, K};
         tt::deprecated::Tensor<bfloat16> tensor_in0_fp16 = tt::deprecated::initialize_tensor<bfloat16>(
             shape_in0,
@@ -452,6 +474,24 @@ int main(int argc, char** argv) {
                     std::chrono::system_clock::now().time_since_epoch().count());
                 vector<uint32_t> outputs = pack_bfloat16_vec_into_uint32_vec(out_tensor.get_values());
                 output_buffer = create_and_transfer_data_sharded_cb(device.get(), outputs, Mt, Nt);
+
+                if (fuse_bias) {
+                    // Zero bias rows 1..31 to distinguish row broadcast from elementwise addition.
+                    // Small integer values keep the BF16 golden comparison exact.
+                    const uint32_t bias_w = Nt * 32;
+                    bias_row.assign(bias_w, 0.0f);
+                    std::vector<bfloat16> bias_vals(32 * bias_w, bfloat16(0.0f));
+                    for (uint32_t j = 0; j < bias_w; ++j) {
+                        float bval = static_cast<float>((j % 8) + 1);  // 1..8
+                        bias_row[j] = bval;
+                        bias_vals[j] = bfloat16(bval);  // row 0 only
+                    }
+                    auto bias_tilized = tilize_swizzled(bias_vals, 32, bias_w);
+                    auto bias_tile_layout =
+                        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(bias_tilized));
+                    vector<uint32_t> bias_packed = pack_bfloat16_vec_into_uint32_vec(bias_tile_layout);
+                    bias_buffer = create_and_transfer_data_sharded_cb(device.get(), bias_packed, 1, Nt);
+                }
 
             } else {
                 // in0
@@ -531,7 +571,10 @@ int main(int argc, char** argv) {
                 matmul_block,
                 packer_l1,
                 num_blocks,
-                interm_cb_dtype);
+                interm_cb_dtype,
+                fuse_bias,
+                row_broadcast_bias,
+                bias_buffer);
         } else {
             program = create_program(
                 device.get(),
@@ -666,6 +709,10 @@ int main(int argc, char** argv) {
         if (rmax_per_rpeak < 0.9) {
             performance_result = false;
         }
+        // Bias validation uses a small shape; gate on correctness rather than throughput.
+        if (fuse_bias) {
+            performance_result = true;
+        }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -674,7 +721,7 @@ int main(int argc, char** argv) {
         if (single_core) {
             if (dtype == 1) {
                 validation_result = validation_single_core(
-                    device.get(), tensor_in0_fp16, tensor_in1_fp16, num_blocks, Mt, Nt, Kt, output_buffer);
+                    device.get(), tensor_in0_fp16, tensor_in1_fp16, num_blocks, Mt, Nt, Kt, output_buffer, bias_row);
             } else {
                 validation_result = validation_single_core_fp8(
                     device.get(), tensor_in0_fp8, tensor_in1_fp8, num_blocks, Mt, Nt, Kt, output_buffer);
@@ -910,7 +957,10 @@ tt_metal::Program create_program_single_core(
     bool matmul_block,
     bool packer_l1,
     uint32_t num_blocks,
-    uint32_t interm_cb_dtype) {
+    uint32_t interm_cb_dtype,
+    bool fuse_bias,
+    bool row_broadcast_bias,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& bias_cb_addr) {
     tt_metal::Program program{};
 
     log_debug(tt::LogTest, "cb_data_format: {} ", cb_data_format);
@@ -953,13 +1003,20 @@ tt_metal::Program create_program_single_core(
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
         1,                       // batch
-        Mt * Nt,
-        0};
+        Mt * Nt,                 // out_block_num_tiles
+        0};                      // untilize_out
 
     vector<uint32_t> reader_kernel_args = {
         Mt * Kt,
         num_blocks,
     };
+
+    if (fuse_bias) {
+        // Copy kernel reads row_broadcast_bias as positional compile-arg 14 (only under FUSE_BIAS).
+        compute_kernel_args.push_back(static_cast<uint32_t>(row_broadcast_bias));  // arg 14
+        // Publish one bias tile per output column through the input reader.
+        reader_kernel_args.push_back(in1_per_core_w);  // arg 2: bias_ntiles
+    }
     vector<uint32_t> writer_kernel_args = {
         Nt * Kt,
         num_blocks,
@@ -1042,6 +1099,16 @@ tt_metal::Program create_program_single_core(
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
 
+    // Host-populated bias occupies one tile row and is published once by the input reader.
+    if (fuse_bias) {
+        uint32_t bias_cb_index = tt::CBIndex::c_3;
+        tt_metal::CircularBufferConfig cb_bias_config =
+            tt_metal::CircularBufferConfig(in1_per_core_w * single_tile_size, {{bias_cb_index, cb_data_format}})
+                .set_page_size(bias_cb_index, single_tile_size)
+                .set_globally_allocated_address(*bias_cb_addr->get_backing_buffer());
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_bias_config);
+    }
+
     log_debug(tt::LogTest, "in0_CB_size: {}", in0_CB_tiles * single_tile_size);
     log_debug(tt::LogTest, "in1_CB_size: {}", in1_CB_tiles * single_tile_size);
     log_debug(tt::LogTest, "interm_CB_size: {}", out_CB_tiles * 4096);
@@ -1052,6 +1119,10 @@ tt_metal::Program create_program_single_core(
         in0_CB_tiles * single_tile_size + in1_CB_tiles * single_tile_size + out_CB_tiles * 4096 + out_CB_size);
 
     // Create reader and writer kernels per core
+    std::map<std::string, std::string> reader_kernel_defines;
+    if (fuse_bias) {
+        reader_kernel_defines["FUSE_BIAS"] = "1";
+    }
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
@@ -1060,7 +1131,8 @@ tt_metal::Program create_program_single_core(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_kernel_args});
+            .compile_args = reader_kernel_args,
+            .defines = reader_kernel_defines});
 
     tt_metal::CreateKernel(
         program,
@@ -1080,6 +1152,9 @@ tt_metal::Program create_program_single_core(
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (fuse_bias) {
+        mm_kernel_defines["FUSE_BIAS"] = "1";
     }
     bool math_approx_mode = false;
     tt_metal::CreateKernel(
@@ -1483,7 +1558,8 @@ bool validation_single_core(
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& out_buffer) {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& out_buffer,
+    const std::vector<float>& bias_row) {
     bool pass = true;
 
     std::vector<uint32_t> result;
@@ -1492,6 +1568,9 @@ bool validation_single_core(
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
+
+    // Add one bias value per output column. Small integer inputs and bias keep the BF16 result exact.
+    const bool fuse_bias = !bias_row.empty();
 
     std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0);  // Initialize with zeros
     const auto& values0 = tensor_in0.get_values();
@@ -1503,7 +1582,11 @@ bool validation_single_core(
             for (size_t k = 0; k < Kt * 32; ++k) {
                 sum += to_float(values0[(i * Kt * 32) + k]) * to_float(values1[(k * Nt * 32) + j]);
             }
-            golden_vec[(i * Nt * 32) + j] = sum * num_blocks;
+            float acc = sum * num_blocks;
+            if (fuse_bias) {
+                acc += bias_row[j];
+            }
+            golden_vec[(i * Nt * 32) + j] = acc;
         }
     }
 

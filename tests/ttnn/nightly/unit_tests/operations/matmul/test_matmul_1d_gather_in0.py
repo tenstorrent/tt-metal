@@ -18,7 +18,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID_BH,
 )
 
-
 random.seed(10)
 
 
@@ -304,6 +303,8 @@ def run_multi_core_matmul_1d(
 
     in0 = torch.randn(in0_shape)
     in1 = torch.randn(in1_shape)
+    if activation == ttnn.UnaryOpType.SQRT:
+        in0, in1 = in0.abs(), in1.abs()
 
     in0_t = ttnn.from_torch(
         in0,
@@ -369,6 +370,10 @@ def run_multi_core_matmul_1d(
             pt_out = torch.nn.functional.gelu(pt_out)
         elif activation == ttnn.UnaryOpType.TANH:
             pt_out = torch.tanh(pt_out)
+        elif activation == ttnn.UnaryOpType.MISH:
+            pt_out = torch.nn.functional.mish(pt_out)
+        elif activation == ttnn.UnaryOpType.SQRT:
+            pt_out = pt_out.sqrt()
         else:
             raise ValueError(f"Unsupported activation type: {activation}")
 
@@ -1241,6 +1246,31 @@ def test_matmul_1d_ring_llama_lm_head(
         hop_grid=hop_grid,
         in1_is_dram_interleaved=in1_is_dram_interleaved,
         in1_is_in_dram=in1_is_in_dram,
+    )
+
+
+@pytest.mark.parametrize("activation", [None, ttnn.UnaryOpType.GELU, ttnn.UnaryOpType.MISH, ttnn.UnaryOpType.SQRT])
+@pytest.mark.parametrize("packer_l1_acc", [False, True])
+@pytest.mark.parametrize("untilize_out", [False, True])
+def test_matmul_gather_typed_activation(device, activation, packer_l1_acc, untilize_out):
+    torch.manual_seed(0)
+    run_multi_core_matmul_1d(
+        device,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        ttnn.MathFidelity.HiFi4,
+        False,
+        False,
+        packer_l1_acc,
+        1,
+        32,
+        128,
+        128,
+        activation,
+        (2, 1),
+        False,
+        2,
+        untilize_out=untilize_out,
     )
 
 

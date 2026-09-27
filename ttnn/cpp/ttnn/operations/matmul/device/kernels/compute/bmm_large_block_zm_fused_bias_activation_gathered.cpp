@@ -12,7 +12,7 @@
 #include "internal/mod_div_lib.h"
 
 #ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul/matmul.hpp"
 #endif
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
@@ -269,7 +269,8 @@ void kernel_main() {
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
 #ifdef SFPU_ACTIVATION
-    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+    using Activation =
+        compute_kernel_lib::MatmulActivation<activation_type, activation_param0, activation_param1, activation_param2>;
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
@@ -283,6 +284,9 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_ids[0]);
     matmul_block_init(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
+#ifdef SFPU_ACTIVATION
+    Activation::init();
+#endif
     for (uint32_t b = 0; b < batch; b++) {
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
         uint32_t in1_dfb_start_addr = 0;
@@ -418,16 +422,15 @@ void kernel_main() {
                         if constexpr (untilize_out) {
                             pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_dfb_id);
                         }
+#if not defined FUSE_BIAS and defined SFPU_ACTIVATION
+                        Activation::before_commit(out_subblock_num_tiles);
+#endif
                         tile_regs_commit();
                         // Pack out to output buffer
                         mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if not defined FUSE_BIAS and defined SFPU_ACTIVATION
-                        apply_activation_from_pack<
-                            activation_type,
-                            activation_param0,
-                            activation_param1,
-                            activation_param2>(out_subblock_num_tiles);
+                        Activation::after_commit(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif
