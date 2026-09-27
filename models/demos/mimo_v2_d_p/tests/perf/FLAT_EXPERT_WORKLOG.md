@@ -93,3 +93,21 @@ Uniform 12 x M unchanged within noise (32: 754, 128: 845, 512: 1467, 1024: 2466)
 only adds switches) -> small-only interleave. PIN 1 vs 2 vs 3: p99 1122 / 1128 / 1136 (before row-tile skipping).
 Balanced 12 x 512 profile: 23.6 us per sub-block steady; ~140 us launch fill (expert 0's gate/up weights share DRAM
 with 16.6 MB of down weights), boundary jitter from DRAM at ~85-90% (weights + bf16 x + y ~375 GB/s).
+
+### Activation functions (se3_compute.cpp `SE_ACT`, host `MIMO_FL_ACT`)
+Run on the PACK thread's SFPU over the raw gate / up DST accumulators (as SiLU was, so MATH starts the next
+sub-block's matmul): the unified_routed_expert_ffn variants, same SFPU functions, invoked from PACK:
+`silu` (0), `swigluoai` (1, GPT-OSS / MiniMax-M3: (clamp(u,+-7)+1) g' sigmoid(1.702 g'), g' = min(g, 7), via
+moe_gpt's swiglu_sfpu.h), `situ` (2, Kimi K3: 4 tanh(g/4) sigmoid(g) * 25 tanh(u/25), calculate_situ_glu),
+`clamped_silu` (3, DeepSeek V4: silu(min(g,10)) clamp(u,+-10)), `gelu_tanh` (4, Gemma 4: gelu_tanh_tile_pack + mul).
+Check is discriminating: the test also computes the PCC against the SiLU-GLU reference and asserts the chosen
+activation's reference matches strictly better (weights scaled with `MIMO_FL_WSTD` so the clamps / tanh engage:
+0.06 -> gate std ~5; GeGLU vs SiLU-GLU only separate at small gates: 0.006).
+| act | min PCC (own ref) | min PCC (silu-glu ref) | uni128 us | tot-p99 us |
+|---|---|---|---|---|
+| silu | 0.9947 | - | 844.1 | 1093.9 |
+| swigluoai | 0.9923 | 0.9021 | 844.0 | 1084.3 |
+| situ | 0.9935 | 0.9328 | 848.5 | 1077.9 |
+| clamped_silu | 0.9928 | 0.9751 | 843.7 | 1089.2 |
+| gelu_tanh | 0.9938 | 0.9777 | 848.0 | 1080.5 |
+No measurable cost (the activation hides under the next matmul). Not done: GPT-OSS gate/up/down biases.

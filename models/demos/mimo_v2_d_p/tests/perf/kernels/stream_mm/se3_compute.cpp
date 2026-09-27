@@ -24,9 +24,26 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
+// Gate/up activation (SE_ACT), on the PACK thread's SFPU over the raw gate / up accumulators in DST:
+//   0 SiLU-GLU silu(g) * u (default)          1 SwiGLU-OAI (clamp(u, +-7) + 1) * g' sigmoid(1.702 g'), g' = min(g, 7)
+//   2 SiTU-GLU 4 tanh(g / 4) sigmoid(g) * 25 tanh(u / 25) (Kimi K3)
+//   3 clamped SiLU-GLU silu(min(g, 10)) * clamp(u, +-10) (DeepSeek V4)    4 GeGLU gelu_tanh(g) * u (Gemma 4)
+#ifndef SE_ACT
+#define SE_ACT 0
+#endif
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
+#if SE_ACT == 1
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#elif SE_ACT == 2
+#include "ckernel_sfpu_situ_glu.h"
+#elif SE_ACT == 3
+#include "ckernel_sfpu_clamped_silu_glu.h"
+#endif
+#endif
+#if SE_ACT == 4
+#include "api/compute/eltwise_unary/gelu.h"
 #endif
 #ifdef SE_ZONES
 #include "tools/profiler/kernel_profiler.hpp"
@@ -187,8 +204,39 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
         tile_regs_wait();
 #ifndef SE_NO_ACT
         PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-        for (uint32_t t = 0; t < rows * gw; t += 2) {
+#if SE_ACT == 1 || SE_ACT == 2 || SE_ACT == 3
+        for (uint32_t t = 0; t < rows * gw; t += 2) {  // one binary op: gate t, up t + 1 -> t
+#if SE_ACT == 1
+            PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu<DST_ACCUM_MODE>(t, t + 1, t)));
+#elif SE_ACT == 2
+            PACK((SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_situ_glu,
+                (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi),
+                t,
+                t + 1,
+                t,
+                VectorMode::RC)));
+#else
+            PACK((SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_clamped_silu_glu,
+                (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4),
+                t,
+                t + 1,
+                t,
+                VectorMode::RC)));
+#endif
+        }
+#else
+        for (uint32_t t = 0; t < rows * gw; t += 2) {  // unary gate activation, then gate * up
+#if SE_ACT == 4
+            gelu_tanh_tile_pack(t);
+#else
             silu_tile_pack(t);
+#endif
         }
         for (uint32_t t = 0; t < rows * gw; t += 2) {
             PACK((SFPU_BINARY_CALL(
@@ -201,6 +249,7 @@ FORCE_INLINE void gate_up(uint32_t v, uint32_t e, bool last, uint32_t ph0 = 0, u
                 t,
                 VectorMode::RC)));
         }
+#endif
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 #endif
         pack_reconfig_data_format(out_cb, h_local_cb);
@@ -281,8 +330,20 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, in1_cb, out_cb);
     matmul_block_init(x_cb, in1_cb, false, gw, mt, kblk);
 #ifndef SE_NO_ACT
+#if SE_ACT == 1
+    PACK((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
+#elif SE_ACT == 2
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
+#elif SE_ACT == 3
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::clamped_silu_glu_init)));
+#else
+#if SE_ACT == 4
+    gelu_tanh_tile_init_pack();
+#else
     silu_tile_init_pack();
+#endif
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
+#endif
 #endif
     // Pipelined order: gate/up of v + 1 before down of v hides the h exchange of v.
 #ifdef SE_GU_ONLY

@@ -96,7 +96,27 @@ XCOL_ENV = os.environ.get(
     "MIMO_FL_XCOL", "auto"
 )  # e2e: n relays in column 1, each tilizing 1/n of x for both rectangles  # two x relays per rectangle (auto: e2e with reader-down)
 FWD_DIR = int(os.environ.get("MIMO_FL_FWD_DIR", "0"))  # per-reader forwarding NoC by direction (else all NOC1)
-XNOC = int(os.environ.get("MIMO_FL_XNOC", "0"))  # NoC of the x relays' multicasts (their DRAM reads use the other)
+XNOC = int(os.environ.get("MIMO_FL_XNOC", "0"))
+ACT = os.environ.get("MIMO_FL_ACT", "silu")  # gate/up activation (se3_compute.cpp SE_ACT)
+ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3, "gelu_tanh": 4}
+W_STD = float(os.environ.get("MIMO_FL_WSTD", "0.02"))  # weight init std (larger: the clamping activations clamp)
+
+
+def act_ref(g, u):
+    """Reference gate/up activation (unified_routed_expert_ffn's fused_swiglu.cpp variants)."""
+    F = torch.nn.functional
+    if ACT == "silu":
+        return F.silu(g) * u
+    if ACT == "swigluoai":  # GPT-OSS / MiniMax-M3: alpha 1.702, limit 7
+        g = g.clamp(max=7.0)
+        return (u.clamp(-7.0, 7.0) + 1) * g * torch.sigmoid(1.702 * g)
+    if ACT == "situ":  # Kimi K3: beta 4 (gate), 25 (up)
+        return 4 * torch.tanh(g / 4) * torch.sigmoid(g) * 25 * torch.tanh(u / 25)
+    if ACT == "clamped_silu":  # DeepSeek V4: limit 10
+        return F.silu(g.clamp(max=10.0)) * u.clamp(-10.0, 10.0)
+    if ACT == "gelu_tanh":  # Gemma 4
+        return F.gelu(g, approximate="tanh") * u
+    raise ValueError(ACT)  # NoC of the x relays' multicasts (their DRAM reads use the other)
 
 
 def _chains(cores, n, phys, noc):
@@ -306,15 +326,15 @@ def test_stream_expert_flat(device, m, wdtype):
     )
 
     torch.manual_seed(0)
-    Wg, Wu, Wd = torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02
+    Wg, Wu, Wd = torch.randn(H, I) * W_STD, torch.randn(H, I) * W_STD, torch.randn(I, H) * 0.02
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=w_dtype, layout=ttnn.TILE_LAYOUT)).float()
     if not DYN:  # (dynamic mode builds its x per count set, below)
         xs = torch.randn(E, m_pad, H)
         xs[:, m:] = 0
         xs = xs.view(V, MT * 32, H)
         x_last = xs[(E - 1) * S :].reshape(m_pad, H)[:m]
-        ref = (torch.nn.functional.silu(x_last @ Wg) * (x_last @ Wu)) @ Wd
-        ref_q = (torch.nn.functional.silu(x_last @ q(Wg)) * (x_last @ q(Wu))) @ q(Wd)
+        ref = (act_ref(x_last @ Wg, x_last @ Wu)) @ Wd
+        ref_q = (act_ref(x_last @ q(Wg), x_last @ q(Wu))) @ q(Wd)
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
     Wg_t, Wu_t, Wd_t = tiles(Wg), tiles(Wu), tiles(Wd)
 
@@ -1063,7 +1083,7 @@ def test_stream_expert_flat(device, m, wdtype):
                 core_ranges=gu_crs,
                 compile_time_args=[KBLK, MT, nk_gu, 0, 1, E, S, slot, 1, 1, 1, 0, ring_g],
                 runtime_args=[],
-                defines=zones + dyn_def + [("SE_GU_ONLY", "1")],
+                defines=zones + dyn_def + [("SE_GU_ONLY", "1"), ("SE_ACT", str(ACTS[ACT]))],
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
             ),
         ]
@@ -1216,6 +1236,7 @@ def test_stream_expert_flat(device, m, wdtype):
                 ttnn.copy_host_to_device_tensor(ttnn.from_torch(h_, dtype=dt_, layout=ttnn.ROW_MAJOR_LAYOUT), d_)
         tag = (
             f"streamfl_H{H}_M{m}_E{E}_w{wdtype}"
+            + (f"_{ACT}" if ACT != "silu" else "")
             + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
             + ("_e2e" if E2E else "")
             + ("_pp" if PREPASS else "")
@@ -1295,8 +1316,15 @@ def test_stream_expert_flat(device, m, wdtype):
                         xs_e = xs.view(E, m_pad, H)
                         xin = {e: xs_e[e, : cnts[e]] for e in act}
                         yout = {e: yh[e * tok_pad : e * tok_pad + cnts[e]] for e in act}
-                    refs_q = {e: (torch.nn.functional.silu(xin[e] @ qg) * (xin[e] @ qu)) @ qd for e in act}
+                    refs_q = {e: (act_ref(xin[e] @ qg, xin[e] @ qu)) @ qd for e in act}
                     pccs = [comp_pcc(refs_q[e], yout[e], 0.99) for e in act]
+                if ACT != "silu":  # the device must match the chosen activation better than plain SiLU-GLU
+                    alt = [
+                        comp_pcc((torch.nn.functional.silu(xin[e] @ qg) * (xin[e] @ qu)) @ qd, yout[e], 0)[1]
+                        for e in act
+                    ]
+                    logger.info(f"{ACT}: min PCC {min(p_[1] for p_ in pccs):.5f} vs silu-glu reference {min(alt):.5f}")
+                    assert min(p_[1] for p_ in pccs) > max(alt), "activation not distinguishable / wrong"
                     logger.info(f"e2e per-expert PCC {[round(float(p_[1]), 5) for p_ in pccs]}")
                     assert all(p_[0] for p_ in pccs) or os.environ.get("MIMO_FL_XRD_SKIP")
                     if DYN:
@@ -1389,7 +1417,7 @@ def test_stream_expert_flat(device, m, wdtype):
                     )
                     for v in range(V):
                         xv = xs[v]
-                        rv = (torch.nn.functional.silu(xv @ q(Wg)) * (xv @ q(Wu))) @ q(Wd)
+                        rv = (act_ref(xv @ q(Wg), xv @ q(Wu))) @ q(Wd)
                         logger.info(
                             f"v{v}: |y| {yall[v].abs().mean():.4g} |ref| {rv.abs().mean():.4g} pcc {comp_pcc(rv, yall[v], 0)[1]}"
                             f" nan {torch.isnan(yall[v]).sum()} cols-pcc {[round(float(comp_pcc(rv[:, d*256:(d+1)*256], yall[v][:, d*256:(d+1)*256], 0)[1]), 3) for d in range(0, ND, 7)]}"
