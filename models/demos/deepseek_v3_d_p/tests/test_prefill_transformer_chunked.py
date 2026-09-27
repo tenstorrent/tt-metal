@@ -2184,7 +2184,7 @@ def run_chunked_transformer_updated(
                 rows = sorted(
                     (
                         (self_time, count, path.rsplit("/", 1)[-1], line, function)
-                        for (path, line, function), (_, count, self_time, _) in stats.stats.items()
+                        for (path, line, function), (_, count, self_time, _, _) in stats.stats.items()
                         if "/models/demos/deepseek_v3_d_p/tt/" in path or path.endswith("/ttnn/ttnn/decorators.py")
                     ),
                     reverse=True,
