@@ -525,10 +525,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
         # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
         # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
+        _slow_log = os.environ.get("QWEN36_DECODE_SLOW_LOG", "0") == "1"  # perf triage: log slow decode steps
+        _td0 = time.perf_counter() if _slow_log else 0.0
+        _t_remap = 0.0
         if model.use_tp and model.args.max_batch_size > 1:
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
                 model._remap_gdn_slots(slot_remap)
+                if _slow_log:
+                    ttnn.synchronize_device(self.mesh_device)
+                    _t_remap = time.perf_counter() - _td0
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
@@ -580,7 +586,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 _sm = getattr(_m, "sampling", None)
                 if _sm is not None and hasattr(_sm, "set_trace_bucket"):
                     _sm.set_trace_bucket(B)
-        return super().decode_forward(*args, **kwargs)
+        if not _slow_log:
+            return super().decode_forward(*args, **kwargs)
+        out = super().decode_forward(*args, **kwargs)
+        _dt = time.perf_counter() - _td0
+        if _dt > 0.15 or kwargs.get("slot_remap") is not None:
+            logger.info(
+                f"[DECODE_SLOW] {1e3 * _dt:.0f} ms B={int(tokens.shape[0]) if tokens is not None else None} "
+                f"remap={'yes' if kwargs.get('slot_remap') is not None else 'no'} remap_ms={1e3 * _t_remap:.0f} "
+                f"kw={sorted(k for k in kwargs if kwargs[k] is not None and k not in ('tokens', 'page_table', 'kv_cache'))}"
+            )
+        return out
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
