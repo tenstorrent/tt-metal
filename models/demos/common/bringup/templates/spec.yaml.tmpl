@@ -5,6 +5,8 @@ hf_id: $hf_id
 model_dir: models/demos/$model
 hooks: models.demos.$model.bringup.hooks
 num_layers: $num_layers
+prior: null                        # models/demos/<slug> of an earlier bring-up of this checkpoint (other mesh or config):
+                                   #   shares its hf/ and goldens, briefs list its files (`new --prior` writes this)
 layers: all                        # or a subset, e.g. "0-1,29" (a subset result is never reported as full-model)
 box:
   mesh: $mesh                      # [rows, cols]

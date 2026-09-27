@@ -44,6 +44,23 @@ def run_starts(selected: list[int]) -> list[int]:
     return [layer for k, layer in enumerate(selected) if k == 0 or selected[k - 1] != layer - 1]
 
 
+def reuse(spec, rung: dict, out) -> None:
+    """A spec with a prior bring-up shares its goldens (same checkpoint and reference): check that this one is for the
+    same rung and layers and is intact, and record the gate's metrics instead of regenerating it."""
+    from models.demos.common.bringup.reference.golden import Golden
+
+    m = json.loads((out / "manifest.json").read_text())
+    want = {"seq": rung["seq"], "chunk": rung["chunk"], "layers": spec.layers(), "model": spec.data["hf_id"]}
+    bad = {k: (m.get(k), v) for k, v in want.items() if m.get(k) != v}
+    if bad:
+        raise SystemExit(f"{out}: the prior's golden does not match this rung (got, want): {bad}")
+    metrics.record("golden_layers", len(m["layers"]))
+    metrics.record("golden_chunks", m["n_chunks"])
+    metrics.record("golden_hash_ok", int(Golden(out).verify()))
+    metrics.record("golden_reused", 1)
+    print(f"reused the prior bring-up's golden {out} (content_hash {m.get('content_hash')})")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec")
@@ -58,6 +75,8 @@ def main(argv=None):
     seq, chunk = rung["seq"], rung["chunk"]
     out = rung_dir(spec, rung)
     if (out / "manifest.json").exists():
+        if spec.prior:
+            return reuse(spec, rung, out)
         raise SystemExit(f"{out} exists; goldens are generated once. Delete it to regenerate.")
     tmp = out.with_name(out.name + ".partial")
     (tmp / "kv_cache").mkdir(parents=True, exist_ok=True)
