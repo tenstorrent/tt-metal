@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "run_id": "a95719f5-5b74-4ada-8f74-a45ba3c25747",
+  "stage": "11-benchmark",
+  "attempt_id": "cd1d4c14-8a15-4d42-8c6f-5e751234d3c6",
+  "kind": "vllm",
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "selected_mesh": null,
+  "layer_types": {},
+  "performance": {
+    "source": "vllm",
+    "ttft_ms": null,
+    "decode_tps": null,
+    "prefill_device_us": null,
+    "decode_device_us": null,
+    "prefill_flops_pct": null,
+    "decode_dram_pct": null,
+    "evidence": [
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/setup_inventory.json",
+      "f6c796a2beba4421ad4daba8ee7b9c4808a9009a"
+    ]
+  },
+  "accuracy": [],
+  "missing_reasons": {
+    "performance": "Stage 11 not run: upstream lm_eval unavailable and dependency installation prohibited. Stage 10 server already stopped; historical C1 used 32 slots, not the required one-slot profile.",
+    "accuracy": "No upstream evaluation requests or scoring executed.",
+    "roofline": "No matching device measurements; live vLLM profiling prohibited. Required host-phase collector and both host-phase measurements also unavailable.",
+    "identity": "No running server to prove imported module, tokenizer revision or effective configuration."
+  },
+  "notes": [
+    "Blocked during setup; benchmark_stage run not invoked. No one-hour completion claim. No accuracy verdict.",
+    "Four device nodes observed; no mesh opened and no server owned by this attempt."
+  ]
+}

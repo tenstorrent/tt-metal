@@ -1,0 +1,11 @@
+{
+  "evidence_check": {
+    "exit_code": 2,
+    "log": "evidence_check.log",
+    "initial_exit_code": 1
+  },
+  "context_check": {
+    "exit_code": 0,
+    "log": "context_check.log"
+  }
+}

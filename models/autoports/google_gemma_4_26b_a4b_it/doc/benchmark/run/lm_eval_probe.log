@@ -1,0 +1,4 @@
+$ python -m lm_eval --help
+/home/container_app_user/tt-metal/python_env/bin/python: No module named lm_eval
+
+exit=1

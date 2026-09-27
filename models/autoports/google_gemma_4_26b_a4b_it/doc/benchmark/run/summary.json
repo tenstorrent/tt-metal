@@ -1,0 +1,9 @@
+{
+  "status": "blocked_setup",
+  "runner_invoked": false,
+  "elapsed_seconds": null,
+  "accuracy": {},
+  "performance": {},
+  "failure": "Required upstream lm-evaluation-harness is unavailable; repository instructions prohibit dependency installation. No supplied live Stage 10 server. No phase collector prepared or validated.",
+  "setup_inventory": "setup_inventory.json"
+}

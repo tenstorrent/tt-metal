@@ -1,0 +1,16 @@
+{
+  "owned_pids": [
+    88237,
+    88260,
+    88297
+  ],
+  "alive_after_shutdown": [],
+  "signal": "SIGINT to shared runner",
+  "server_stop_note": "API abort/timeout=0 may force-stop EngineCore; no graceful-device-teardown claim.",
+  "baseline_owned_pids": [
+    63645,
+    63675,
+    63714
+  ],
+  "baseline_alive_after_shutdown": []
+}
