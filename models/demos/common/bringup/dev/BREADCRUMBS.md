@@ -443,3 +443,23 @@ Drive this ledger with
   plus one tab per block type (per layer, mean over its profiled layers); each step carries its `ops`. Standard page:
   tabs above the bar, and an execution-order op list (op, per-chip shapes, calls, ms, share) in the detail panel.
 - MiMo re-measured ad hoc (tuned model, 51200->56320 chunk): results/X.3_ops_profile.json.
+
+## F44 (2026-09-27): operation time, not only kernel time: the pipelined device timeline per op
+- Owner: per op, show dispatch and host cost on top of device kernel time. DeepWiki's options: Tracy
+  (`ops_perf_results` op-to-op / dispatch columns; needs a `-p` build and its host capture crashed on this box),
+  `ttnn.graph` capture (host wall per call, no device side), perf_counter + sync per op (serializes the pipeline and
+  inflates exactly the dispatch time being measured). Chosen: rebuild the device timeline of an un-synced run.
+- Device perf records carry start/end timestamps (device clock; cycles per ns taken from end-start vs duration).
+  `profiler.enable(mesh, timeline=True)`: no syncs; each outermost ttnn call's host dispatch time is timed; one read
+  at the end (`collect_timeline`). `align_timeline` splits each chip's programs (launch order) per call with the
+  op-mode run's per-chip program counts (the model is deterministic; sequences and totals are checked, a mismatch
+  is an error, not a guess). Per call on the critical chip (longest timeline): kernel, idle gap before it, slot
+  (end - previous end); kernels + gaps = the device timeline. The critical chip's own kernel is used because in a
+  pipelined run an early chip's collective waits inside its kernel (MiMo all_reduce: 10.6 ms synced, 25.0 ms as max
+  over chips pipelined).
+- `op_profile` runs op mode, then the timeline run; op rows get gap_ms, slot_ms, host_ms; the profile gets
+  `timeline` (device_timeline_ms, kernel_ms, gap_ms, host_dispatch_ms, host_wall_ms). Metrics op_rows,
+  timeline_ok, timeline_*; the final X.3 gates op_rows >= 1 and timeline_ok == 1, so every bring-up ends with them.
+- Dashboard: a pipeline line under "Where the time goes" and, per op, "device idle before it · host dispatch".
+- MiMo 50k->55k: device timeline 225.6 ms = kernels 225.4 + gaps 0.2 ms; host dispatch 27.8 ms for 611 calls, hidden
+  behind device work (host wall 226.6 ms): device-bound.

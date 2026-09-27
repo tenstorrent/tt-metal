@@ -313,6 +313,8 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         "pcc_state_min": thr(spec, "state"),
         "prefill_ms_full": "> 0",
         "pos_chunk": ">= 1",
+        "op_rows": ">= 1",  # the per-op breakdown (F43) and the pipelined timeline (F44) behind the dashboard
+        "timeline_ok": "== 1",
     }
     if max(full.get("layers") or spec.layers()) == spec.num_layers - 1:
         fm.update(pcc_final_hidden=thr(spec, "final_hidden"), top5_overlap=thr(spec, "top5"))

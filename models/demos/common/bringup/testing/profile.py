@@ -88,9 +88,12 @@ def want_ops(s) -> bool:
     return bool(s.get("perf.op_profile", False)) or os.environ.get("BRINGUP_PROFILE_OPS") == "1"
 
 
-def op_profile(mesh, run) -> dict:
-    """One more warm run in op mode: per layer and section ("L3.attention.qkv"), the ttnn ops in execution order with
-    calls, device programs and device ms (slowest chip per call, summed) and ms per chip (F43)."""
+def op_profile(mesh, run) -> tuple[dict, dict | None]:
+    """Two more warm runs. Op mode (F43): per layer and section ("L3.attention.qkv"), the ttnn ops in execution order
+    with calls, device programs, device ms (slowest chip per call, summed) and ms per chip. Timeline (F44): the same
+    chunk with no syncs; each op row also gets gap_ms (device idle before its programs on the critical chip: dispatch
+    and host cost the pipeline did not hide), slot_ms (its end minus the previous op's end) and host_ms (host
+    dispatch time of the call)."""
     profiler.enable(mesh, ops=True)
     try:
         run()
@@ -99,6 +102,20 @@ def op_profile(mesh, run) -> dict:
         res = profiler.result()
     finally:
         profiler.disable()
+    op_seq, dev_to_chip = res["seq"], res["dev_to_chip"]
+    profiler.enable(mesh, timeline=True)
+    try:
+        t0 = time.perf_counter()
+        run()
+        host_wall = time.perf_counter() - t0
+        progs = profiler.collect_timeline()
+        tl_seq = profiler.result()["seq"]
+    finally:
+        profiler.set_layer(None)
+        profiler.disable()
+    tl = profiler.align_timeline(op_seq, tl_seq, progs, dev_to_chip)
+    if "error" in tl:
+        print(f"timeline: {tl['error']}")
     out = {}
     for sec, rows in res["op_ns"].items():
         if sec == "end":
@@ -116,7 +133,45 @@ def op_profile(mesh, run) -> dict:
         ]
     total = sum(r["ms"] for rows in out.values() for r in rows)
     print(f"op profile: {sum(len(v) for v in out.values())} op rows over {len(out)} sections, {total:.1f} ms device")
-    return out
+    summary = None
+    if "calls" in tl:
+        # the same merge as the op rows (per section, back-to-back repeats of op + shape), then zip onto them
+        agg = {}
+        for c in tl["calls"]:
+            if c["key"] is None:
+                continue
+            rows = agg.setdefault(c["key"], [])
+            if rows and rows[-1]["op"] == c["op"] and rows[-1]["shape"] == c["shape"]:
+                r = rows[-1]
+            else:
+                r = {"op": c["op"], "shape": c["shape"], "gap": 0.0, "slot": 0.0, "host": 0.0, "kernel": 0.0, "n": 0}
+                rows.append(r)
+            r["gap"] += c["gap_ns"]
+            r["slot"] += c["slot_ns"]
+            r["host"] += c["host_ns"]
+            r["kernel"] += c["kernel_ns"]
+            r["n"] += 1
+        for sec, rows in out.items():
+            trow = [r for r in agg.get(sec, []) if r["kernel"] > 0 or r["op"] != "(other)"]
+            trow = [r for r in trow if any(o["op"] == r["op"] and o["shape"] == r["shape"] for o in rows)]
+            if len(trow) != len(rows):
+                continue
+            for o, t in zip(rows, trow):
+                o.update(
+                    gap_ms=round(t["gap"] / 1e6, 4),
+                    slot_ms=round(t["slot"] / 1e6, 4),
+                    host_ms=round(t["host"] / 1e6, 4),
+                    timeline_kernel_ms=round(t["kernel"] / 1e6, 4),
+                )
+        summary = dict(tl["summary"], host_wall_ms=round(host_wall * 1e3, 3))
+        print(
+            f"timeline: device {summary['device_timeline_ms']:.1f} ms = kernels {summary['kernel_ms']:.1f} + gaps "
+            f"{summary['gap_ms']:.1f} (chip {summary['critical_chip']}); host dispatch {summary['host_dispatch_ms']:.1f} ms; "
+            f"host wall {summary['host_wall_ms']:.1f} ms"
+        )
+    else:
+        summary = {"error": tl["error"]}
+    return out, summary
 
 
 def run_profile(s, mesh, rung_name: str | None = None) -> dict:
@@ -173,7 +228,13 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     profiler.signpost("end")
     prof = profiler.result()
     profiler.disable()
-    ops = op_profile(mesh, run) if want_ops(s) else None
+    ops, timeline = op_profile(mesh, run) if want_ops(s) else (None, None)
+    if ops is not None:
+        metrics.record("op_rows", sum(len(v) for v in ops.values()))
+        metrics.record("timeline_ok", int(bool(timeline) and "error" not in timeline))
+        if timeline and "error" not in timeline:
+            for k in ("device_timeline_ms", "kernel_ms", "gap_ms", "host_dispatch_ms", "host_wall_ms"):
+                metrics.record(f"timeline_{k}", timeline[k])
 
     total = sum(prof["kernel_ns"].values())
     assert total > 0, f"device profiler returned no durations; set {profiler.PROFILER_ENV}"
@@ -211,6 +272,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         "settings": getattr(model, "perf_settings", lambda: {})(),
         "full_prefill": full,
         **({"ops": ops} if ops else {}),
+        **({"timeline": timeline} if timeline else {}),
     }
     path = metrics.results_dir() / f"{metrics.task_id()}_profile.json"
     path.parent.mkdir(parents=True, exist_ok=True)
