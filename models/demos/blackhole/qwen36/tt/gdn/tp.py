@@ -1253,8 +1253,9 @@ class TPGatedDeltaNet:
             )
         else:
             # Upstream has no GQA step and folds scale/norm itself, so expand here and pass neither.
-            # Blackhole already expanded q/k above, as on main.
-            if rf > 1 and not bh:
+            # The Blackhole prep above already expanded q/k, so this only runs on the Wormhole leg
+            # whose shape is over the fork's L1 budget.
+            if not bh and rf > 1:
                 # repeat_interleave is TILE-native only at dim < rank-2, hence the reshape either side.
                 q = ttnn.reshape(ttnn.repeat_interleave(ttnn.reshape(q, (B, Nk, Dk)), rf, dim=1), (B, 1, Nv, Dk))
                 k = ttnn.reshape(ttnn.repeat_interleave(ttnn.reshape(k, (B, Nk, Dk)), rf, dim=1), (B, 1, Nv, Dk))
