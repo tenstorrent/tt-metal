@@ -2286,20 +2286,20 @@
   "agent": {
    "defs": {
     "models/demos/common/bringup/agents/bringup-engineer.md": {
-     "blob": "ea5d71e22314ecef77d0ba70e7262cc3830fb9a1",
+     "blob": "d16e869364d823125c06779d789dbc39c303fea4",
      "dirty": false
     },
     "models/demos/common/bringup/briefs/brief.md": {
-     "blob": "952af9ecbb5c0f59a17b4aef22965f68739e199f",
+     "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
      "dirty": false
     },
     "models/demos/common/bringup/briefs/roles.yaml": {
-     "blob": "4b2608fea6e5788622a08d4405dd1bbbf566d63a",
+     "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
      "dirty": false
     }
    },
    "model": "claude-opus-5-5[1m]",
-   "session_id": "ca5cd266-9e80-4c07-920d-15c1fe69fe71"
+   "session_id": "d6ea5343-770d-4f06-97bf-e0ed4509e083"
   },
   "agent_runs": [
    {
@@ -2328,11 +2328,38 @@
     "seconds": 1127.3,
     "session_id": "ca5cd266-9e80-4c07-920d-15c1fe69fe71",
     "t": "2026-09-27T20:48:58"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "d16e869364d823125c06779d789dbc39c303fea4",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 358.1,
+    "session_id": "d6ea5343-770d-4f06-97bf-e0ed4509e083",
+    "t": "2026-09-27T23:15:13"
    }
   ],
   "attempt": 1,
   "attempts": 1,
-  "duration_s": 243.0,
+  "duration_s": 214.9,
   "history": [
    {
     "status": "FAIL",
@@ -2341,39 +2368,51 @@
    {
     "status": "PASS",
     "t": "2026-09-27T20:53:08"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-27T23:08:32"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-27T23:09:15"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-27T23:18:52"
    }
   ],
-  "last_run": "2026-09-27T20:53:08",
+  "last_run": "2026-09-27T23:18:52",
   "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/O.1.log",
   "metrics": {
-   "chunk_seconds_c10": 0.699,
+   "chunk_seconds_c10": 0.522,
    "covered_layers": 6,
    "device_model_hybrid": 0,
-   "fork_calls": 4,
+   "fork_calls": 5,
    "fork_calls_uncovered": 0,
    "fork_tests_failed": 0,
-   "forks_used": 4,
-   "model_load_s": 10.7,
-   "pcc_layer_L00": 0.9985762145700803,
-   "pcc_layer_L01": 0.9984483358959573,
-   "pcc_layer_L02": 0.99842650198841,
-   "pcc_layer_L03": 0.9985144496091846,
-   "pcc_layer_L04": 0.998788522071786,
-   "pcc_layer_L05": 0.9984105253430613,
-   "pcc_state_key_L00": 0.9999995793244213,
-   "pcc_state_key_L01": 0.9996960656718088,
-   "pcc_state_key_L02": 0.9993951006130937,
-   "pcc_state_key_L03": 0.9994640675439765,
-   "pcc_state_key_L04": 0.9997617902501601,
-   "pcc_state_key_L05": 0.9998861646411106,
-   "pcc_state_min": 0.9992800725345158,
-   "pcc_state_value_L00": 0.9999995835028725,
-   "pcc_state_value_L01": 0.9996410709131164,
-   "pcc_state_value_L02": 0.9992800725345158,
-   "pcc_state_value_L03": 0.9993574536301779,
-   "pcc_state_value_L04": 0.9995310587976669,
-   "pcc_state_value_L05": 0.9995508746907869,
-   "prefill_seconds": 0.699,
+   "forks_used": 5,
+   "model_load_s": 10.9,
+   "pcc_layer_L00": 0.9985762910256748,
+   "pcc_layer_L01": 0.9984540712492636,
+   "pcc_layer_L02": 0.9984236941059318,
+   "pcc_layer_L03": 0.9985107092057905,
+   "pcc_layer_L04": 0.9987970121593072,
+   "pcc_layer_L05": 0.9984347168702258,
+   "pcc_state_key_L00": 0.9999994401903,
+   "pcc_state_key_L01": 0.9996957425103429,
+   "pcc_state_key_L02": 0.9993954560815294,
+   "pcc_state_key_L03": 0.9994640752652887,
+   "pcc_state_key_L04": 0.9997620187059548,
+   "pcc_state_key_L05": 0.9998898372061794,
+   "pcc_state_min": 0.9992834110380344,
+   "pcc_state_value_L00": 0.9999994433461658,
+   "pcc_state_value_L01": 0.9996366935798281,
+   "pcc_state_value_L02": 0.9992834110380344,
+   "pcc_state_value_L03": 0.9993558488430258,
+   "pcc_state_value_L04": 0.9995297168246405,
+   "pcc_state_value_L05": 0.9995616187888463,
+   "prefill_seconds": 0.522,
    "rung_chunk": 5120,
    "rung_seq": 56320,
    "rung_start": 51200,
@@ -2382,7 +2421,7 @@
   "rc": 0,
   "reason": [],
   "role": "optests",
-  "started": "2026-09-27T20:49:05",
+  "started": "2026-09-27T23:15:17",
   "status": "PASS",
   "waiting": null
  },
