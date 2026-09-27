@@ -389,7 +389,6 @@ def test_device_cfm_traces_pass_allocation_tracker():
         COSYVOICE2_RUN_TRACE_ALLOC_TRACKER=1 pytest <this file>::test_device_cfm_traces_pass_allocation_tracker
     """
     import os
-    import signal
     import subprocess
     import sys
 
@@ -401,21 +400,16 @@ def test_device_cfm_traces_pass_allocation_tracker():
     env.pop("COSYVOICE2_RUN_TRACE_ALLOC_TRACKER")
     cmd = [sys.executable, "-m", "pytest", __file__, "-q", "-p", "no:cacheprovider"]
     cmd += ["-k", "device_cfm and trace and not allocation_tracker"]
-    # On timeout, interrupt the child rather than kill it: `subprocess.run(timeout=...)` would SIGKILL a
-    # process that holds the device, and a SIGKILL mid-op can wedge the card. SIGINT lets the child's pytest
-    # unwind its fixtures and close the device; SIGKILL only if it is still alive after the grace period.
-    timeout_s, grace_s = 1800, 120
+    # No timeout and never a SIGKILL: the child holds the device, and a SIGKILL mid-op can wedge the card.
+    # (Not `subprocess.run`, which SIGKILLs the child on any exception, Ctrl+C included.) A Ctrl+C in the
+    # terminal reaches the child directly (same process group), so on KeyboardInterrupt keep draining its
+    # output until its pytest has unwound and closed the device, then re-raise.
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        out, err = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        proc.send_signal(signal.SIGINT)
-        try:
-            out, err = proc.communicate(timeout=grace_s)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out, err = proc.communicate()
-        pytest.fail(f"tracker subprocess timed out after {timeout_s}s\n{out[-6000:]}{err[-3000:]}")
+        out, err = proc.communicate()
+    except KeyboardInterrupt:
+        proc.communicate()
+        raise
     summary = [l for l in out.splitlines() if " passed" in l or " failed" in l or " error" in l][-1:]
     print(f"\n  tracker subprocess: {summary}")
     assert proc.returncode == 0, out[-6000:] + err[-3000:]
