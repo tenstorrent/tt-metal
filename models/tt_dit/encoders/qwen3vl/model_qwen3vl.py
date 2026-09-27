@@ -66,8 +66,8 @@ def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[in
     `image_token_id` may be several ids, which `ref2va` needs: its presentation mixes
     `<|image_pad|>` runs (one per image reference) with `<|video_pad|>` runs (one per merged frame
     pair of a video reference). Runs come back in sequence order regardless of pad id, in one
-    interleaved list, because `_scatter_rows` consumes the tower's rows in run order and the caller
-    assembles that output in presentation order.
+    interleaved list, because `Qwen3VlTextEncoder.merge_vision` consumes the tower's rows in run order
+    and the caller assembles that output in presentation order.
 
     A run boundary is a change of token, so two adjacent runs of different pad ids are two runs. That
     does not arise in a MiniMax-H3 presentation, where a `"<{t} seconds>"` label separates two video
@@ -97,37 +97,26 @@ def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[in
     return runs
 
 
-def _scatter_rows(base: ttnn.Tensor, values: ttnn.Tensor, runs: Sequence[tuple[int, int]], *, add: bool) -> ttnn.Tensor:
-    """Write `values` into the row ranges `runs` of `base`, either replacing or adding.
+def vision_gather_indices(
+    runs: Sequence[tuple[int, int]], seq_len: int, *, vision_offset: int, keep_text: bool
+) -> torch.Tensor:
+    """Source-table row of each of `seq_len` sequence rows, for a gather that places vision tokens.
 
-    Done by slicing and concatenating rather than a masked scatter: the vision positions are contiguous
-    runs, so this is exact, and row slicing on the sequence axis is already how this module trims its
-    padding. `values` rows are consumed in run order.
+    The rows of `runs` take consecutive table rows from `vision_offset`, in run order. Every other
+    row maps to itself when `keep_text`, else to row 0.
     """
-    # The vision tower emits `(rows, hidden)` while the sequence buffer is `(batch, seq, hidden)`;
-    # normalize so the slicing below is rank-agnostic.
-    if len(values.shape) == 2:
-        values = ttnn.reshape(values, (1, values.shape[0], values.shape[1]))
-
-    total = sum(length for _, length in runs)
-    if values.shape[-2] != total:
-        msg = f"runs cover {total} rows but values has {values.shape[-2]}"
-        raise ValueError(msg)
-
-    pieces: list[ttnn.Tensor] = []
+    indices = torch.arange(seq_len) if keep_text else torch.zeros(seq_len, dtype=torch.int64)
     cursor = taken = 0
     for start, length in runs:
         if start < cursor:
             msg = f"runs must be sorted and disjoint; {start} overlaps {cursor}"
             raise ValueError(msg)
-        if start > cursor:
-            pieces.append(base[:, cursor:start, :])
-        chunk = values[:, taken : taken + length, :]
-        pieces.append(ttnn.add(base[:, start : start + length, :], chunk) if add else chunk)
+        if start + length > seq_len:
+            msg = f"run ({start}, {length}) ends past the sequence length {seq_len}"
+            raise ValueError(msg)
+        indices[start : start + length] = torch.arange(vision_offset + taken, vision_offset + taken + length)
         cursor, taken = start + length, taken + length
-    if cursor < base.shape[-2]:
-        pieces.append(base[:, cursor:, :])
-    return ttnn.concat(pieces, dim=-2) if len(pieces) > 1 else pieces[0]
+    return indices.to(torch.int32)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L769
@@ -315,19 +304,12 @@ class Qwen3VlTextEncoder(Module):
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
 
+        deepstack_rows: list[ttnn.Tensor] = []
         if vision_embeds is not None:
-            input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
+            input_embeds, deepstack_rows = self.merge_vision(input_embeds, vision_embeds, vision_runs, deepstack_embeds)
 
-        deepstack_sharded: list[ttnn.Tensor] | None = None
         if self._sp_axis is not None:
-            if deepstack_embeds:
-                zero_base = ttnn.zeros_like(input_embeds)
-                deepstack_sharded = [
-                    ttnn.mesh_partition(
-                        _scatter_rows(zero_base, ds, vision_runs, add=False), dim=1, cluster_axis=self._sp_axis
-                    )
-                    for ds in deepstack_embeds
-                ]
+            deepstack_rows = [ttnn.mesh_partition(x, dim=1, cluster_axis=self._sp_axis) for x in deepstack_rows]
             input_embeds = ttnn.mesh_partition(input_embeds, dim=1, cluster_axis=self._sp_axis)
             pos_embeds = tuple(ttnn.mesh_partition(x, dim=2, cluster_axis=self._sp_axis) for x in pos_embeds)
 
@@ -342,11 +324,8 @@ class Qwen3VlTextEncoder(Module):
             )
             # Vision also enters here, not only at the embeddings: the tower's intermediate features are
             # added to the vision rows of the first few layers.
-            if deepstack_embeds and layer_idx < len(deepstack_embeds):
-                if self._sp_axis is not None:
-                    hidden_states = ttnn.add(hidden_states, deepstack_sharded[layer_idx])
-                else:
-                    hidden_states = _scatter_rows(hidden_states, deepstack_embeds[layer_idx], vision_runs, add=True)
+            if layer_idx < len(deepstack_rows):
+                hidden_states = ttnn.add(hidden_states, deepstack_rows[layer_idx])
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 
@@ -363,6 +342,55 @@ class Qwen3VlTextEncoder(Module):
             captured = [x[:, :seq_len, :] for x in captured]
 
         return captured
+
+    def merge_vision(
+        self,
+        input_embeds: ttnn.Tensor,
+        vision_embeds: ttnn.Tensor,
+        vision_runs: Sequence[tuple[int, int]],
+        deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
+        """`input_embeds` with the `vision_runs` rows replaced by the tower's tokens, and each deepstack
+        feature laid out along the sequence (zeros off the vision rows), ready to add to the hidden states.
+
+        A row gather from `[text | tower rows]` rather than slicing around each run, so every program is
+        keyed only on the sequence length and the tower's row count; the run layout lives in the index
+        values. `vision_embeds` may carry the tower's SP pad rows after the real tokens: nothing indexes
+        them.
+        """
+        seq_len, hidden = input_embeds.shape[-2], input_embeds.shape[-1]
+        real_tokens = sum(length for _, length in vision_runs)
+        if real_tokens > vision_embeds.shape[-2]:
+            msg = f"runs cover {real_tokens} rows but the tower emitted {vision_embeds.shape[-2]}"
+            raise ValueError(msg)
+
+        def gather(parts: list[ttnn.Tensor], indices: ttnn.Tensor) -> ttnn.Tensor:
+            table = ttnn.concat(parts, dim=0)
+            rows = ttnn.embedding(indices, table, layout=ttnn.TILE_LAYOUT)
+            ttnn.deallocate(table)
+            return ttnn.reshape(rows, (1, seq_len, hidden))
+
+        def upload(indices: torch.Tensor) -> ttnn.Tensor:
+            return tensor.from_torch(
+                indices.reshape(1, -1),
+                device=self._device,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=[None, None],
+            )
+
+        text_rows = ttnn.reshape(input_embeds, (seq_len, hidden))
+        merged = gather(
+            [text_rows, vision_embeds],
+            upload(vision_gather_indices(vision_runs, seq_len, vision_offset=seq_len, keep_text=True)),
+        )
+
+        deepstack_rows = []
+        if deepstack_embeds:
+            zeros = tensor.from_torch(torch.zeros(ttnn.TILE_SIZE, hidden), device=self._device, mesh_axes=[None, None])
+            indices = upload(vision_gather_indices(vision_runs, seq_len, vision_offset=ttnn.TILE_SIZE, keep_text=False))
+            deepstack_rows = [gather([zeros, feature], indices) for feature in deepstack_embeds]
+        return merged, deepstack_rows
 
     def create_rope_tensors(
         self, batch_size: int, sequence_length: int, attention_mask: torch.Tensor | None

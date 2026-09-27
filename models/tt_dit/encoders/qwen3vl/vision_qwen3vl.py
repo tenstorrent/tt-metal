@@ -282,7 +282,7 @@ def pad_patches_for_sp(
     patches and always append a phantom window (empty when nothing is padded), so every batch at one
     padded size takes the same windowed-attention programs.
 
-    The pad is trimmed after the SP gather via `Qwen3VlVisionModel.forward(logical_patches=...)`.
+    The pad tokens stay in the tower's output; the text encoder's `merge_vision` gathers past them.
     """
     total = patches.shape[0]
     mult = sp_factor * _TILE
@@ -395,13 +395,6 @@ def _with_batch_axis(x: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
 
 def _drop_batch_axis(x: ttnn.Tensor, added: bool) -> ttnn.Tensor:
     return ttnn.reshape(x, (x.shape[-2], x.shape[-1])) if added else x
-
-
-def _trim_tokens(x: ttnn.Tensor, real_tokens: int | None) -> ttnn.Tensor:
-    """Drop the SP-alignment pad's merged garbage tokens from a gathered `(tokens, hidden)` tensor."""
-    if real_tokens is None or x.shape[-2] <= real_tokens:
-        return x
-    return x[:real_tokens, :]
 
 
 def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
@@ -1036,14 +1029,14 @@ class Qwen3VlVisionModel(Module):
         pos_embeds: ttnn.Tensor,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         cu_seqlens: Sequence[int] | None = None,
-        logical_patches: int | None = None,
     ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
         """`cu_seqlens` confines attention to one image or video frame; see [`vision_cu_seqlens`].
 
         Omitting it treats the whole input as one block, which is correct for a single image and wrong
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
 
-        `logical_patches` is the real patch count if the input was padded by [`pad_patches_for_sp`].
+        Input padded by [`pad_patches_for_sp`] comes back with its pad tokens after the real ones; the
+        text encoder's `merge_vision` never reads them.
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
 
@@ -1056,21 +1049,19 @@ class Qwen3VlVisionModel(Module):
         #     f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
         # )
 
-        real_tokens = None if logical_patches is None else logical_patches // self.spatial_merge_size**2
-
         deepstack_features: list[ttnn.Tensor] = []
         for layer_idx, block in enumerate(self.blocks):
             hidden_states = block.forward(hidden_states, pos_embeds=rope, cu_seqlens=cu_seqlens)
             if layer_idx in self.deepstack_visual_indexes:
                 merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
-                deepstack_features.append(_trim_tokens(self._gather_tokens(merger.forward(hidden_states)), real_tokens))
+                deepstack_features.append(self._gather_tokens(merger.forward(hidden_states)))
 
-        return _trim_tokens(self._gather_tokens(self.merger.forward(hidden_states)), real_tokens), deepstack_features
+        return self._gather_tokens(self.merger.forward(hidden_states)), deepstack_features
 
     def _gather_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Reassemble merged tokens across the SP axis.
 
-        The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
+        The decoder consumes these through `merge_vision`, which walks `vision_runs` over the whole
         token sequence, so the tower must hand back every token on every device -- SP ends here. Safe as
         a plain concatenation because SP shards rows contiguously, so device order equals token order.
 
