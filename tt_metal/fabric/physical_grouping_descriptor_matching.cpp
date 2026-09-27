@@ -2909,10 +2909,73 @@ AssignedMeshes decode_sat_placement(const MappingResult<GlobalMeshId, const Cand
 constexpr std::size_t kGrowBudgetPerVariant = 32;
 constexpr std::size_t kMaxGrowthCycles = 4;
 
+// True when this grouping's committed footprint (mesh_node_to_asic_position) satisfies every one of a mesh's
+// pins. A pin group is many-to-many: its fabric_nodes may land on any of its asic_positions, and the topology
+// solve enforced a bijection, so the footprint satisfies the group iff the set of positions it assigns to the
+// group's chips equals the group's declared positions. Mirrors the all-to-all semantics of
+// add_mgd_asic_position_pinning_constraints, which produced these footprints at commit time. A chip the
+// footprint does not place (empty/foreign-mesh footprint) fails immediately.
+bool grouping_footprint_satisfies_pins(
+    const GroupingInfo& grouping,
+    const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& mesh_pins) {
+    for (const auto& group : mesh_pins) {
+        std::set<tt::tt_metal::ASICPosition> footprint_positions;
+        for (const auto& fabric_node : group.fabric_nodes) {
+            const auto it = grouping.mesh_node_to_asic_position.find(fabric_node.chip_id);
+            if (it == grouping.mesh_node_to_asic_position.end()) {
+                return false;
+            }
+            footprint_positions.insert(it->second);
+        }
+        const std::set<tt::tt_metal::ASICPosition> required(group.asic_positions.begin(), group.asic_positions.end());
+        if (footprint_positions != required) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Select, from a mesh definition's shared (definition-keyed) candidate list, only the groupings whose committed
+// footprint satisfies THIS mesh's pins. Several instances of one definition (e.g. "M0" mesh 0 and mesh 1) share
+// a single list; a mesh pinned to one footprint must never see another instance's footprint. Each committed
+// grouping already records where its pin-set pass placed it (mesh_node_to_asic_position), so de-unionization
+// reads straight off that footprint -- no separate per-mesh tag. A mesh with no pins matches everything (the
+// previous unioned behaviour, preserved for the unpinned case). Falls back to the full list if nothing matches,
+// so no consumer is ever left with an empty candidate set.
+std::vector<GroupingInfo> select_groupings_for_mesh(
+    const std::vector<GroupingInfo>& all,
+    const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& mesh_pins) {
+    if (mesh_pins.empty()) {
+        return all;
+    }
+    std::vector<GroupingInfo> selected;
+    selected.reserve(all.size());
+    for (const auto& grouping : all) {
+        if (grouping_footprint_satisfies_pins(grouping, mesh_pins)) {
+            selected.push_back(grouping);
+        }
+    }
+    if (selected.empty()) {
+        return all;
+    }
+    return selected;
+}
+
+// The pins for one mesh, or an empty vector when the mesh is unpinned / no pinnings were supplied.
+std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pins_for_mesh(
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings, MeshId mesh_id) {
+    if (!pinnings.has_value()) {
+        return {};
+    }
+    const auto it = pinnings->find(mesh_id);
+    return it == pinnings->end() ? std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>{} : it->second;
+}
+
 void apply_valid_groupings_map(
     const ValidGroupingsMap& valid_groupings,
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const std::vector<MeshId>& mesh_ids,
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
     std::map<MeshId, std::vector<GroupingInfo>>& primary) {
     const std::unordered_map<InstanceName, std::vector<GroupingInfo>>* mesh_groupings = nullptr;
     if (valid_groupings.contains("MESH")) {
@@ -2936,7 +2999,7 @@ void apply_valid_groupings_map(
             "Internal error: SAT placement: mesh '{}' (mesh {}) has no grouping in the provided valid-groupings map",
             name_it->second,
             *mesh_id);
-        primary.emplace(mesh_id, groupings_it->second);
+        primary.emplace(mesh_id, select_groupings_for_mesh(groupings_it->second, pins_for_mesh(pinnings, mesh_id)));
     }
 }
 
@@ -3003,8 +3066,14 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
             "Internal error: SAT placement: mesh '{}' (mesh {}) has no PGD grouping and no embeddable MGD fallback",
             grouping_key,
             *mesh_id);
-        global_mesh_groupings_.emplace(
-            mesh_id, has_pgd ? groupings_it->second : std::vector<GroupingInfo>{*mgd_fallback});
+        // Per-mesh de-unionization: instances of one mesh definition ("M0" mesh 0 and mesh 1) share a single
+        // definition-keyed candidate list, so select only the groupings whose committed footprint satisfies THIS
+        // mesh's pins, never the union across instances. The MGD fallback is a single per-mesh grouping, so it
+        // needs no selection.
+        std::vector<GroupingInfo> selected =
+            has_pgd ? select_groupings_for_mesh(groupings_it->second, pins_for_mesh(pinnings, mesh_id))
+                    : std::vector<GroupingInfo>{*mgd_fallback};
+        global_mesh_groupings_.emplace(mesh_id, std::move(selected));
         sat_intra_mesh_mode_by_mesh_.emplace(
             mesh_id,
             mesh_graph_descriptor.is_intra_mesh_policy_relaxed(mesh_id) ? ConnectionValidationMode::RELAXED
@@ -3045,6 +3114,7 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
             mesh_graph_descriptor, physical_system_descriptor, pinnings),
         mesh_graph_descriptor,
         mesh_ids,
+        pinnings,
         global_mesh_groupings_);
     fallbacks_in_ = true;
     relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
