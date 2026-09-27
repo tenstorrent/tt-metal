@@ -50,6 +50,20 @@ TT_ALWAYS_INLINE void configure_gathering()
 #endif
 }
 
+// Blackhole RISCs boot with the L1 data cache on, and its self invalidation every 128 transactions changes the timing
+// from launch to launch. Bit 3 turns it off, as the tt-metal firmware does (configure_l1_data_cache).
+TT_ALWAYS_INLINE void configure_l1_data_cache()
+{
+#if defined(ARCH_BLACKHOLE)
+    asm(R"ASM(
+        fence
+        li t1, 0x8
+        csrrs zero, 0x7c0, t1
+         )ASM" ::
+            : "t1");
+#endif
+}
+
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 // STREAM_SCRATCH_0 of overlay streams 0..3 (24 bits, host readable): TRISC completion flags in slots 0..2 and the
 // BRISC command counter in slot 3, so the host can wait on a kernel without reading its L1.
@@ -85,6 +99,7 @@ __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 
     // Before any global constructor or Tensix instruction can run.
     configure_gathering();
+    configure_l1_data_cache();
 
     // Initialize .bss
     for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
