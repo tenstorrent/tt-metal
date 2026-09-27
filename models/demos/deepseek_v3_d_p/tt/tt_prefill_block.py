@@ -570,6 +570,8 @@ class TtPrefillBlock(LightweightModule):
         return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        ack_layer_idx: Optional[int] = None,
+        force_kv_only: bool = False,
     ):
         """
         Args:
@@ -591,6 +593,8 @@ class TtPrefillBlock(LightweightModule):
                 after MLA writes the chunk this block zeros the pad window past actual_end, flushes, then
                 fires this. Used by pipelined prefill (the layer-completion router), which the device-side
                 d2h_service path does not cover.
+            ack_layer_idx: global layer id this block acks under, overriding its own. MTP replays one
+                block per level, so each level needs a distinct id on the host-callback path.
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -608,15 +612,18 @@ class TtPrefillBlock(LightweightModule):
                 sees the ROTATED block-cyclic layout, so the per-chip real-token split depends on
                 BOTH values (see MoeGate.build_padding_config).
             padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
+            force_kv_only: run this one call KV-only on top of the construction-time flag -- MLA
+                fills the cache and returns, no FFN/MoE, no block output. For MTP's last level.
 
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
+        kv_only = self.kv_only or force_kv_only
         # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
         # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
         # Skip kv_only layers (they run no FFN and return early below).
-        _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
+        _timing = _BLOCK_TIMING_ENABLED and not kv_only
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_start = time.perf_counter()
@@ -637,12 +644,13 @@ class TtPrefillBlock(LightweightModule):
             return_indexer_indices=return_indexer_indices,
             index_kv_cache=index_kv_cache,
             metadata=metadata,
+            force_kv_only=kv_only,
         )
         kv_intermediates = None
         mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
         # A kv_only layer's MLA returns None (it fills the cache and stops before attention/output), so it
         # has nothing to unpack; the kv_only short-circuit below returns the matching (None, ...) arity.
-        if not self.kv_only:
+        if not kv_only:
             if return_kv_intermediates and return_indexer_indices:
                 mla_out, kv_intermediates, mla_indices = mla_out
             elif return_kv_intermediates:
@@ -663,7 +671,7 @@ class TtPrefillBlock(LightweightModule):
             layer_num=self.mla.layer_num,
             sp_factor=self.mla.sp_factor,
             sp_axis=self.mla.sp_axis,
-            global_layer_idx=self.mla.layer_idx,
+            global_layer_idx=self.mla.layer_idx if ack_layer_idx is None else ack_layer_idx,
             seq_len_local=seq_len_local,
             actual_end=actual_end,
             metadata=metadata,
@@ -673,13 +681,11 @@ class TtPrefillBlock(LightweightModule):
             trace_controller=getattr(self, "_trace_controller", None),
         )
 
-        if self.kv_only:
-            # KV cache filled (by MLA), migration callback fired. The block
-            # output is unused (no FFN, no further layers). Return (None, None)
-            # so the transformer can short-circuit.
+        if kv_only:
+            kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
             if return_indexer_indices:
-                return None, None, None
-            return None, None
+                return None, kv_cache, None
+            return None, kv_cache
 
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)

@@ -132,10 +132,16 @@ m2::KernelSpec make_dm_kernel(const std::string& name, const std::string& source
         .num_threads = num_threads,
     };
     if (is_quasar_arch()) {
-        kernel.hw_config = m2::DataMovementGen2Config{};
+        kernel.hw_config = m2::DataMovementHardwareConfig{};
     } else {
         TT_FATAL(num_threads == 1, "Non-Quasar PrefetcherPipe tests only support 1 DM thread");
-        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        kernel.hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::NOC_0,
+                },
+        };
     }
     return kernel;
 }
@@ -147,10 +153,10 @@ m2::KernelSpec make_compute_kernel(const std::string& name, const std::string& s
         .num_threads = num_threads,
     };
     if (is_quasar_arch()) {
-        kernel.hw_config = m2::ComputeGen2Config{};
+        kernel.hw_config = m2::ComputeHardwareConfig{};
     } else {
         TT_FATAL(num_threads == 1, "Non-Quasar PrefetcherPipe tests only support 1 compute thread");
-        kernel.hw_config = m2::ComputeGen1Config{};
+        kernel.hw_config = m2::ComputeHardwareConfig{};
     }
     return kernel;
 }
@@ -2584,7 +2590,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // A must resize before any receiver is enqueued. This would time out if
     // set_entry_size still contained an acked == sent barrier.
-    const auto device_id = mesh_device->get_devices()[0]->id();
+    const auto device_id = mesh_device->get_device_ids()[0];
     const auto physical_sender = mesh_device->worker_core_from_logical_core(sender_core);
     bool resized = false;
     for (uint32_t i = 0; i < 10000; ++i) {

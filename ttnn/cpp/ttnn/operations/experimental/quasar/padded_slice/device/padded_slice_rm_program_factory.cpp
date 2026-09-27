@@ -300,8 +300,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "num_read_per_barrier"}};
     // Per-dim geometry tail (num_output_sticks_per_dim, num_input_sticks_per_dim, id_per_dim).
     reader.advanced_options.num_runtime_varargs = 3 * num_dims;
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // Writer: drain/commit the OUTPUT DFB (non-pad). Reuses the ported i2s sharded writer.
     KernelSpec writer{
@@ -311,8 +310,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "writer_unary_sharded.cpp"};
     writer.dfb_bindings = {ConsumerOf(PS_OUT_DFB, "out")};
     writer.runtime_arg_schema = {.runtime_arg_names = {"num_units"}};
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     spec.kernels = {reader, writer};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {PS_READER, PS_WRITER}, .target_nodes = total_cores}};

@@ -59,7 +59,12 @@ using TensorPrefetcherQueueTensor =
 // when start_tensor_prefetcher would otherwise raise.
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
+void start_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    std::optional<uint32_t> free_sender_mpfe_weight = std::nullopt,
+    std::optional<uint32_t> noc1_sender_mpfe_weight = std::nullopt,
+    std::optional<uint32_t> ordinary_mpfe_weight = std::nullopt,
+    std::optional<bool> dynamic_mpfe_weighting = std::nullopt);
 
 // `capture_into_trace` selects whether this request may be captured into a trace: when true
 // and the calling thread's current command queue is mid trace-capture, the request is captured
