@@ -3912,6 +3912,15 @@ class Qwen36Model:
             else None
         )
         _cap = getattr(self, "_capture_layer", None)
+        # QWEN36_EAGER_FULL_CHUNK_UNMASKED (default 1): a FULL eager chunk (valid_len == bucket, e.g. every 2048-token
+        # chunk of the tp2-dflash2 eager prompt prefill, _prefill_for_spec_b1) runs its GDN layers unmasked
+        # (valid_len=None), i.e. exactly the traced chunk's ops: fused KDA conv instead of the masked FIR conv + host-built
+        # one-hot carry select (an all-ones scan mask is bit-identical to no mask; the carry is the same last K-1 rows).
+        # The eager prompt prefill thereby computes the same numerics as the plain tp2 traced chunk, and drops the FIR
+        # chain (~65 ms per 2048-token chunk at TP=2, lane Q). =0 restores the masked FIR full chunk.
+        _gdn_valid_len = valid_len
+        if valid_len == bucket and not gdn_recurrent and os.environ.get("QWEN36_EAGER_FULL_CHUNK_UNMASKED", "1") == "1":
+            _gdn_valid_len = None
         if self._dflash_tap:
             # DFlash2 prompt/seed taps (eager path only; gated OFF by default). Fresh list per
             # chunk; the consumer (DFlash2Decoder) takes and frees them via take_dflash_eager_taps.
@@ -3937,7 +3946,7 @@ class Qwen36Model:
                     x,
                     mode="prefill",
                     chunk_size=self.args.gdn_chunk_size,
-                    valid_len=valid_len,
+                    valid_len=_gdn_valid_len,
                     gdn_recurrent=gdn_recurrent,
                 )
             ttnn.deallocate(x)
