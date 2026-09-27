@@ -12,15 +12,17 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
-    constexpr auto mc = McastArgs</*CT=*/2, /*RT=*/2>();              // mcast config (CT 2..) + dest rect (RT 2..)
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7, right after the mcast CT block
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();  // mcast config (CT 2..) + dest rect (RT 2..)
+    constexpr uint32_t SCALARS = 2;
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);
@@ -37,6 +39,17 @@ void kernel_main() {
     CircularBuffer cb_src_obj(cb_src);
     CircularBuffer cb_dst_obj(cb_dst);
 
+    auto pipe = mc.sender(noc);
+#ifdef MCAST_TEST_CONTROL
+    constexpr uint32_t control_value = get_named_compile_time_arg_val("control_value");
+    for (uint32_t iter = 0; iter < num_iters; ++iter) {
+        if constexpr (control_value == INVALID) {
+            pipe.send_signal();
+        } else {
+            pipe.send_signal(control_value);
+        }
+    }
+#else
     // stage the payload into cb_src (read from DRAM input)
     const auto in = TensorAccessor(in_args, input_addr);
     cb_src_obj.reserve_back(payload_pages);
@@ -50,8 +63,6 @@ void kernel_main() {
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
 
-    auto pipe = mc.sender(noc);
-
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         if constexpr (guard_source_l1) {
             pipe.send(src_addr, dst_addr, payload_bytes);
@@ -61,4 +72,5 @@ void kernel_main() {
             pipe.send<SourceL1Guard::CallerManaged>(src_addr, dst_addr, payload_bytes);
         }
     }
+#endif
 }
