@@ -21,6 +21,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import stream_resume
+
 TWO32 = 1 << 32
 _SHA_RE = re.compile(r"output_sha256=([0-9a-f]{64})")
 _RUNS_RE = re.compile(r"runs=(\d+)")
@@ -47,12 +49,21 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
 
     Returns (sha, wall, runs, corr) where corr is the parsed 3-way sidecar dict (or None
     when --golden is off / the op is unchecked)."""
+    out_sha_file = Path(out_sha_file)
     corr_file = str(out_sha_file) + ".corr"
-    if Path(out_sha_file).exists():
-        txt = Path(out_sha_file).read_text()
+    metadata = Path(str(out_sha_file) + ".provenance.json")
+    cache_record = stream_resume.cache_record(
+        Path(__file__), args, node, start, count, leg or ""
+    )
+    if stream_resume.require_matching_cache(out_sha_file, metadata, cache_record):
+        txt = out_sha_file.read_text()
         m = _SHA_RE.search(txt)
-        if m:
-            return m.group(1), 0.0, 0, parse_corr(corr_file)  # resumed
+        corr = parse_corr(corr_file)
+        if not m:
+            raise RuntimeError(f"provenance-matched cache has no output SHA: {out_sha_file}")
+        if args.golden and corr is None:
+            raise RuntimeError(f"golden cache has no correctness sidecar: {corr_file}")
+        return m.group(1), 0.0, 0, corr
     env = dict(os.environ)
     env.update(
         CHIP_ARCH="blackhole",
@@ -67,7 +78,8 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
         SFPU_STREAM=f"{start},{count},{out_sha_file}",
     )
     if args.golden and leg:
-        # host-side TRUE-MATH golden + bf16 ULP-contract leg rides along on this pass.
+        # Host-side TRUE-MATH tolerance leg rides along.  Its max-ULP value is
+        # diagnostic; no ULP budget is certified by this campaign.
         env["SFPU_GOLDEN"] = f"{args.golden},{leg}"
     inner = (
         # --compile-consumer: use the prebuilt ELFs in RUNNER_TEMP; never invoke the
@@ -82,19 +94,29 @@ def run_band_leg(args, node, start, count, out_sha_file, log_file, leg=None):
     # a slow first dispatch) usually clears on a fresh attempt, so one bad band should not
     # abandon the whole op's sweep.
     m = None
+    txt = ""
     for _ in range(3):
-        subprocess.run(cmd, cwd=args.farm, env=env, timeout=args.timeout)
-        txt = Path(out_sha_file).read_text() if Path(out_sha_file).exists() else ""
+        # A failed pytest may have emitted a partial result.  Never let that file
+        # satisfy a later retry which itself produced nothing.
+        out_sha_file.unlink(missing_ok=True)
+        Path(corr_file).unlink(missing_ok=True)
+        run = subprocess.run(cmd, cwd=args.farm, env=env, timeout=args.timeout)
+        txt = out_sha_file.read_text() if out_sha_file.exists() else ""
         m = _SHA_RE.search(txt)
-        if m:
+        if run.returncode == 0 and m:
             break
+        m = None
     dt = time.time() - t0
     r = _RUNS_RE.search(txt)
     if not m:
         raise RuntimeError(
             f"band [{start},{start+count}) leg {node} produced no SHA; see {log_file}"
         )
-    return m.group(1), dt, int(r.group(1)) if r else 0, parse_corr(corr_file)
+    corr = parse_corr(corr_file)
+    if args.golden and corr is None:
+        raise RuntimeError(f"golden run produced no correctness sidecar: {corr_file}")
+    stream_resume.write_cache_record(metadata, cache_record)
+    return m.group(1), dt, int(r.group(1)) if r else 0, corr
 
 
 def main():
@@ -120,8 +142,8 @@ def main():
     ap.add_argument(
         "--golden",
         default="",
-        help="op key for the host-side TRUE-MATH 3-way leg (threeway_golden.REGISTRY); "
-        "when set, each band folds device-vs-torch bf16 ULP and writes CORRECTNESS-LEDGER.tsv",
+        help="op key for the host-side TRUE-MATH 3-way tolerance leg "
+        "(threeway_golden.REGISTRY); max ULP is diagnostic, not certified",
     )
     args = ap.parse_args()
 
@@ -149,7 +171,7 @@ def main():
                 f"OP={args.op} VERDICT=REFUSED-IDENTITY(no-idmap-row)\n"
             )
             print(f"OP={args.op} REFUSED-IDENTITY no-idmap-row", flush=True)
-            return
+            return 2
         sv, ss, hv, hs = row[1], row[2], row[3], row[4]
 
         def _text(v):
@@ -170,7 +192,7 @@ def main():
                 f"OP={args.op} VERDICT=REFUSED-IDENTITY({reason})\n"
             )
             print(f"OP={args.op} REFUSED-IDENTITY {reason}", flush=True)
-            return
+            return 2
     band = 1 << args.band_bits
     n_bands = (args.total + band - 1) // band
     ledger = out / f"{args.op}-STREAM-LEDGER.tsv"
@@ -242,7 +264,8 @@ def main():
                 fh.write("\t".join(str(x) for x in row) + "\n")
 
     wall = time.time() - t_all
-    assert covered == args.total, f"coverage gap: {covered} != {args.total}"
+    if covered != args.total:
+        raise RuntimeError(f"coverage gap: {covered} != {args.total}")
     verdict = "BIT-EXACT-ALL-INPUTS" if all_equal else "DIVERGENT"
     summary = (
         f"OP={args.op} VERDICT={verdict} bands={n_bands} covered={covered} "
@@ -251,8 +274,12 @@ def main():
     print(summary, flush=True)
     (out / f"{args.op}-VERDICT.txt").write_text(summary + "\n")
 
+    numeric_ok = True
     if args.golden:
-        write_correctness_ledger(out, args.op, verdict, corr_legs, covered)
+        numeric_ok = write_correctness_ledger(
+            out, args.op, verdict, corr_legs, covered
+        )
+    return 0 if verdict == "BIT-EXACT-ALL-INPUTS" and numeric_ok else 1
 
 
 def _new_leg():
@@ -302,32 +329,44 @@ def _fold_leg(acc, corr):
 
 
 def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
-    """Emit the per-op 3-way CORRECTNESS-LEDGER: per-leg max ULP + within-contract + verdict."""
+    """Emit the tolerance ledger; max ULP is diagnostic, not a certified bound."""
     sem, hand = corr_legs["sem"], corr_legs["hand"]
     equiv = equiv_verdict == "BIT-EXACT-ALL-INPUTS"
 
-    def leg_in(a):
-        return a["checked"] and a["n_out"] == 0
+    def leg_complete(a):
+        return a["checked"] and a["patterns"] == covered
 
-    if not (sem["checked"] or hand["checked"]):
+    def leg_in(a):
+        return leg_complete(a) and a["n_out"] == 0
+
+    if not leg_complete(sem) or not leg_complete(hand):
         reason = sem["unchecked_reason"] or hand["unchecked_reason"] or "no golden"
-        verdict = f"UNCHECKED({reason})"
+        verdict = (
+            "INCOMPLETE-TOLERANCE-COVERAGE"
+            f"(sem={sem['patterns']}/{covered},hand={hand['patterns']}/{covered};{reason})"
+        )
     else:
         sem_in, hand_in = leg_in(sem), leg_in(hand)
         if sem_in and hand_in:
-            verdict = "LICENSED-BOTH-CORRECT" if not equiv else "CORRECT-AND-EQUAL"
+            verdict = (
+                "TOLERANCE-BOTH-PASS"
+                if not equiv
+                else "TOLERANCE-PASS-AND-EQUAL"
+            )
         elif sem_in and not hand_in:
-            verdict = "SEM-MORE-ACCURATE(hand out-of-contract)"
+            verdict = "SEM-TOLERANCE-PASS(hand fails tolerance)"
         elif hand_in and not sem_in:
-            verdict = "SEM-BUG(sem out-of-contract)"
+            verdict = "SEM-TOLERANCE-FAIL"
         else:
-            verdict = "BOTH-OUT-OF-CONTRACT(approx/see-note)"
+            verdict = "BOTH-TOLERANCE-FAIL"
 
     p = out / f"{op}-CORRECTNESS-LEDGER.tsv"
     with open(p, "w") as fh:
         fh.write(
-            "# laneMR three-way: device (certified pin-59 ELF) vs sem/hand equivalence "
-            "AND vs torch TRUE-MATH golden (bf16 ULP contract). covered=%d full_2^32=%s\n"
+            "# three-way tolerance check: device vs sem/hand equivalence AND vs "
+            "torch TRUE-MATH golden. max_bf16_ulp is diagnostic only; "
+            "numeric_certification=tolerance-only-not-ulp-certified. "
+            "covered=%d full_2^32=%s\n"
             % (covered, covered == TWO32)
         )
         fh.write(
@@ -377,7 +416,15 @@ def write_correctness_ledger(out, op, equiv_verdict, corr_legs, covered):
         f"hand_max_ulp={hand['max_ulp']:.0f} sem_out={sem['n_out']} hand_out={hand['n_out']}",
         flush=True,
     )
+    gate_ok = leg_in(sem) and leg_in(hand)
+    (out / f"{op}-CORRECTNESS-VERDICT.txt").write_text(
+        f"OP={op} NUMERIC_GATE={'PASS' if gate_ok else 'FAIL'} "
+        "CONTRACT=TOLERANCE-ONLY-NOT-ULP-CERTIFIED "
+        f"sem_patterns={sem['patterns']} hand_patterns={hand['patterns']} covered={covered} "
+        f"verdict={verdict}\n"
+    )
+    return gate_ok
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

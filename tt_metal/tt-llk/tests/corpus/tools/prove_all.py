@@ -116,6 +116,45 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def source_state_digest():
+    """Bind cached proofs to the exact tracked and untracked tt-llk source state."""
+    root = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=TESTS,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "--binary", "HEAD", "--", "tt_metal/tt-llk"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "--", "tt_metal/tt-llk"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    digest = hashlib.sha256()
+    digest.update(head.encode())
+    digest.update(diff)
+    for relative in sorted(untracked):
+        path = Path(root) / relative
+        digest.update(relative.encode())
+        digest.update(path.read_bytes() if path.is_file() else b"<non-file>")
+    return head, digest.hexdigest()
+
+
 def read_tsv(path):
     rows, hdr = [], None
     for line in Path(path).read_text().splitlines():
@@ -181,6 +220,13 @@ def active_cc1plus():
 def provenance_gate(strict=True):
     prov = {"pin": PIN, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "shas": {}}
     problems = []
+
+    try:
+        source_head, source_digest = source_state_digest()
+        prov["shas"]["tt_metal_source_state"] = source_digest
+        prov["tt_metal_head"] = source_head
+    except (OSError, subprocess.SubprocessError) as error:
+        problems.append(f"cannot fingerprint tt-metal source state: {error}")
 
     cc = active_cc1plus()
     if cc is None:
@@ -338,6 +384,8 @@ def run_formal(op, man_row, out_dir, flags, timeout):
                 "reason": e2,
                 "wall_s": round(time.time() - t0, 1),
             }
+        vj = out_dir / f"{op}-verdict.json"
+        vj.unlink(missing_ok=True)
         r = subprocess.run(
             [
                 "python3",
@@ -357,8 +405,7 @@ def run_formal(op, man_row, out_dir, flags, timeout):
             text=True,
             timeout=timeout + 120,
         )
-        vj = out_dir / f"{op}-verdict.json"
-        if not vj.exists():
+        if r.returncode != 0 or not vj.exists():
             return {
                 "op": op,
                 "engine": "formal_equiv",
@@ -408,8 +455,10 @@ def run_bitexact_batch(rows, out_dir, flags, jobs, timeout):
     bdir = out_dir / "bitexact"
     bdir.mkdir(parents=True, exist_ok=True)
     log = bdir / "bitexact.log"
+    ledger = bdir / "BIT-EXACT-LEDGER.tsv"
+    ledger.unlink(missing_ok=True)
     with log.open("w") as fh:
-        subprocess.run(
+        run = subprocess.run(
             [
                 str(VENV_PY),
                 str(BITEXACT_ENGINE),
@@ -431,9 +480,8 @@ def run_bitexact_batch(rows, out_dir, flags, jobs, timeout):
             stdout=fh,
             stderr=subprocess.STDOUT,
         )
-    ledger = bdir / "BIT-EXACT-LEDGER.tsv"
     out = {}
-    if ledger.exists():
+    if run.returncode == 0 and ledger.exists():
         for r in read_tsv(ledger):
             out[r["row"]] = r
     jn_map = {
@@ -514,22 +562,52 @@ def verdict_path(out_dir, op):
     return out_dir / "verdicts" / op / "prove_all_verdict.json"
 
 
-def valid_cached(out_dir, op):
+def verdict_cache_key(prov, flags, op, manifest_row):
+    payload = {
+        "schema": 1,
+        "pin": prov["pin"],
+        "shas": prov["shas"],
+        "flags": flags,
+        "op": op,
+        "manifest_row": manifest_row,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def valid_cached(out_dir, op, expected_key):
     p = verdict_path(out_dir, op)
     if not p.exists():
         return None
     try:
         d = json.loads(p.read_text())
-        if d.get("class") in RANK and d.get("engine"):
+        if (
+            d.get("class") in RANK
+            and d.get("class") != "UNSWEPT"
+            and d.get("engine")
+            and d.get("cache_key") == expected_key
+        ):
             return d
     except Exception:
         return None
     return None
 
 
-def save_verdict(out_dir, op, rec):
+def operational_failures(records):
+    """Return engine rows that did not produce an auditable classification."""
+    return {
+        op: rec
+        for op, rec in records.items()
+        if rec.get("class") == "UNSWEPT"
+    }
+
+
+def save_verdict(out_dir, op, rec, cache_key):
     p = verdict_path(out_dir, op)
     p.parent.mkdir(parents=True, exist_ok=True)
+    rec = dict(rec)
+    rec["cache_key"] = cache_key
     p.write_text(json.dumps(rec, indent=1))
 
 
@@ -765,6 +843,9 @@ def main():
     man = load_manifest(board)
     prov = provenance_gate(strict=not args.no_gate)
     flags = on_flags()
+    cache_keys = {
+        op: verdict_cache_key(prov, flags, op, man[op]) for op in man
+    }
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "verdicts").mkdir(exist_ok=True)
@@ -794,7 +875,7 @@ def main():
     to_run = []
     for op in ops:
         if not args.force:
-            c = valid_cached(out_dir, op)
+            c = valid_cached(out_dir, op, cache_keys[op])
             if c is not None:
                 engine_recs[op] = c
                 continue
@@ -810,7 +891,7 @@ def main():
         rec["arity_space"] = man[op]["arity_space"]
         rec["evidence_ptr"] = "manifest-classification"
         engine_recs[op] = rec
-        save_verdict(out_dir, op, rec)
+        save_verdict(out_dir, op, rec, cache_keys[op])
         print(f"  [classify] {op:28s} -> {rec['class']}")
 
     # bitexact batch (sim-only, parallel inside the engine)
@@ -824,7 +905,7 @@ def main():
             rec["arity_space"] = man[op]["arity_space"]
             rec["evidence_ptr"] = f"bitexact/BIT-EXACT-LEDGER.tsv:{op}"
             engine_recs[op] = rec
-            save_verdict(out_dir, op, rec)
+            save_verdict(out_dir, op, rec, cache_keys[op])
             print(f"  [bitexact] {op:28s} -> {rec['class']} ({rec.get('verdict')})")
 
     # formal (serial: the instrumented sim + z3 are shared, deep queries are CPU-bound)
@@ -838,7 +919,7 @@ def main():
         rec["arity_space"] = man[op]["arity_space"]
         rec["evidence_ptr"] = f"formal/{op}/{op}-verdict.json"
         engine_recs[op] = rec
-        save_verdict(out_dir, op, rec)
+        save_verdict(out_dir, op, rec, cache_keys[op])
         print(f"      -> {rec['class']} ({rec.get('verdict')}, {rec.get('wall_s')}s)")
 
     # join
@@ -854,7 +935,15 @@ def main():
     print("\n" + summ)
     print(f"\nledger  -> {lp}")
     print(f"summary -> {out_dir/'SUMMARY.txt'}")
+    failed = operational_failures(engine_recs)
+    if failed:
+        details = ", ".join(
+            f"{op}:{rec.get('verdict', 'UNKNOWN')}" for op, rec in sorted(failed.items())
+        )
+        print(f"FAIL: incomplete engine results: {details}", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

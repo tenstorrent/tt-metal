@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # galaxy_shard.sh — shard ONE op's full input space across the 32 chips of a
-# galaxy node, both certified legs per chip, then combine to one verdict.
-# Run-to-completion-and-quit (exit frees the node).  Resume-safe (cached band
-# SHAs), so a re-run picks up where a killed one stopped.
+# galaxy node, both identity-gated legs per chip, then combine to one verdict.
+# Run-to-completion-and-quit (exit frees the node).  Resume-safe only for band
+# SHAs carrying exact campaign provenance, so a re-run cannot adopt old caches.
 #
 # This is the only 32-chip leg.  The per-op runners (run_op.sh, one job per
 # op) pass --chip 0 and fan out across OPS, one chip per node — fine for
@@ -81,7 +81,9 @@ fi
 if [ -n "${IDMAP:-}" ]; then
   # same row layout the streamers read: op, sem_variant, sem_sha, hand_variant, hand_sha
   _sv=$(awk -F'\t' -v o="$OP" '$1==o{print $2}' "$IDMAP")
+  _ss=$(awk -F'\t' -v o="$OP" '$1==o{print $3}' "$IDMAP")
   _hv=$(awk -F'\t' -v o="$OP" '$1==o{print $4}' "$IDMAP")
+  _hs=$(awk -F'\t' -v o="$OP" '$1==o{print $5}' "$IDMAP")
   [ -n "$_sv" ] && SEM_VARIANT=$_sv
   [ -n "$_hv" ] && HAND_VARIANT=$_hv
 fi
@@ -91,6 +93,7 @@ fi
   echo "FATAL: no build variants for '$OP' — set SEM_VARIANT and HAND_VARIANT, or pass IDMAP" >&2; exit 2; }
 
 mkdir -p "$OUT"
+[ "$NPAR" -gt 0 ] 2>/dev/null || { echo "FATAL: NPAR must be positive" >&2; exit 2; }
 echo "HOST=$(hostname) OP=$OP SWEEP=$SWEEP NPAR=$NPAR BAND_BITS=$BAND_BITS SPACE=$SPACE $(date -u +%H:%M:%SZ)" \
   | tee "$OUT/DRIVER.log"
 
@@ -107,15 +110,28 @@ if [ -z "$sha_sem" ] || [ -z "$sha_hand" ] || [ "$sha_sem" = "$sha_hand" ]; then
   echo "OP=$OP VERDICT=REFUSED-IDENTITY(sem==hand or empty)" | tee "$OUT/$OP-VERDICT.txt"
   exit 1
 fi
+if [ -n "${IDMAP:-}" ] && { [ "$sha_sem" != "${_ss:-}" ] || [ "$sha_hand" != "${_hs:-}" ]; }; then
+  echo "OP=$OP VERDICT=REFUSED-IDENTITY(text-mismatch)" | tee "$OUT/$OP-VERDICT.txt"
+  exit 1
+fi
+
+# Every resumable slice is bound to this exact object identity map.  Direct
+# variant arguments get a generated one; legacy bare-SHA caches are refused by
+# the streamer rather than silently adopted.
+ACTIVE_IDMAP="${IDMAP:-$OUT/IDENTITY-MAP.tsv}"
+if [ -z "${IDMAP:-}" ]; then
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$OP" "$SEM_VARIANT" "$sha_sem" "$HAND_VARIANT" "$sha_hand" > "$ACTIVE_IDMAP"
+fi
 
 SLICE=$(( SPACE / NPAR ))
 [ $(( SLICE * NPAR )) -eq "$SPACE" ] \
   || { echo "FATAL: SPACE=$SPACE is not divisible by NPAR=$NPAR — slices would not cover it" >&2; exit 2; }
 echo "SLICE=$SLICE inputs/chip" | tee -a "$OUT/DRIVER.log"
 
-idmap_args=()
-[ -n "${IDMAP:-}" ] && idmap_args=(--idmap "$IDMAP")
-# The ULP/golden leg rides this pass at no extra device cost; GOLDEN=0 opts out.
+idmap_args=(--idmap "$ACTIVE_IDMAP")
+# The golden tolerance leg rides this pass at no extra device cost; max ULP is
+# diagnostic, not certified. GOLDEN=0 opts out.
 golden_args=()
 [ "${GOLDEN:-1}" = 1 ] && golden_args=(--golden "$OP")
 
@@ -131,7 +147,7 @@ for k in $(seq 0 $((NPAR-1))); do
   sdir="$OUT/slice-$k"
   ( SFPU_WAIT_TIMEOUT="${SFPU_WAIT_TIMEOUT:-600}" \
     "$VENV" "$STREAMER" \
-      --op "$OP-s$k" --sem-node "$SEM" --hand-node "$HAND" \
+      --op "$OP" --sem-node "$SEM" --hand-node "$HAND" \
       --farm "$PYDIR" --venv "$VENV" --llk-home "$LLK_HOME" --runner-temp "$RT" \
       --band-bits "$BAND_BITS" --chip "$k" --start-bit "$start" --total "$SLICE" \
       --out "$sdir" \
@@ -141,26 +157,15 @@ for k in $(seq 0 $((NPAR-1))); do
   sleep "$STAGGER"
 done
 echo "launched $NPAR chip-slices $(date -u +%H:%M:%SZ)" | tee -a "$OUT/DRIVER.log"
-for p in "${pids[@]}"; do wait "$p"; done
+shard_rc=0
+for p in "${pids[@]}"; do
+  wait "$p" || shard_rc=1
+done
 echo "all slices done $(date -u +%H:%M:%SZ)" | tee -a "$OUT/DRIVER.log"
 
 # ---- combine ----
-"$VENV" - "$OUT" "$NPAR" "$SPACE" "$OP" <<'PY' | tee "$OUT/$OP-VERDICT.txt"
-import sys, re, pathlib
-out, npar, space, op = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
-covered = 0; all_eq = True; witness = []; missing = []
-for k in range(npar):
-    v = pathlib.Path(out)/f"slice-{k}"/f"{op}-s{k}-VERDICT.txt"
-    if not v.exists():
-        missing.append(k); all_eq = False; continue
-    t = v.read_text()
-    m = re.search(r"covered=(\d+)", t); covered += int(m.group(1)) if m else 0
-    if "VERDICT=BIT-EXACT-ALL-INPUTS" not in t:
-        all_eq = False
-        wb = re.search(r"witness_bands=(\[.*\])", t)
-        witness.append((k, wb.group(1) if wb else "?"))
-full = covered == space and not missing
-verdict = "BIT-EXACT-ALL-INPUTS" if (all_eq and full) else ("DIVERGENT" if not all_eq and not missing else "INCOMPLETE")
-print(f"OP={op} VERDICT={verdict} slices={npar} covered={covered} "
-      f"(full {space}={covered==space}) missing={missing} witness={witness}")
-PY
+"$VENV" "$TOOLS/galaxy_combine.py" \
+  "$OUT" "$NPAR" "$SPACE" "$OP" "${GOLDEN:-1}" "$shard_rc" \
+  | tee "$OUT/$OP-VERDICT.txt"
+combine_rc=$?
+[ "$shard_rc" -eq 0 ] && [ "$combine_rc" -eq 0 ]
