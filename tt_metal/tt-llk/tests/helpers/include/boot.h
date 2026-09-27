@@ -26,6 +26,20 @@ extern void (*__init_array_end[])(void);
 // even though -fno-asynchronous-unwind-tables -fno-exceptions flags are set
 void* __gxx_personality_v0;
 
+// Blackhole RISCs boot with the L1 data cache on, and its self invalidation every 128 transactions changes the timing
+// from launch to launch. Bit 3 turns it off, as the tt-metal firmware does (configure_l1_data_cache).
+TT_ALWAYS_INLINE void configure_l1_data_cache()
+{
+#if defined(ARCH_BLACKHOLE)
+    asm(R"ASM(
+        fence
+        li t1, 0x8
+        csrrs zero, 0x7c0, t1
+         )ASM" ::
+            : "t1");
+#endif
+}
+
 // Mirror of tt-metal firmware's configure_gathering() (tt_metal/hw/inc/internal/firmware_common.h).
 // Blackhole boots with instruction gathering on; tt-metal firmware disables it on every RISC.
 // The guard matches tt-metal's, so defining ENABLE_GATHERING both leaves gathering on and
@@ -64,6 +78,7 @@ __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 
     // Before any global constructor or Tensix instruction can run.
     configure_gathering();
+    configure_l1_data_cache();
 
     // Initialize .bss
     for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
