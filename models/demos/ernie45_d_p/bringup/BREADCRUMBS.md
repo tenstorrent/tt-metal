@@ -137,3 +137,23 @@ Workflow for any agent picking up a step:
 - Gotcha: the first-ever run with new SDPA kernels compiles one program per chunk offset (the scalar chunk_start is part of
   the program), about 1.5 s per chunk. Cold 55k TTFT read 22 s. For serving, switch to `chunk_start_idx_tensor` (the
   runtime-tensor form, trace-safe) so one program serves every offset.
+
+## O.1 (2026-09-27): a fork-test case for each of the 3 ttnn.bringup calls. Gate PASSES
+- ERNIE was brought up by hand, so there is no spec or O.1 task; the checker runs with `--model ernie45_d_p`.
+- Captured calls (`results/fork_calls.json`, `test_model_chunked.py -k lastchunk`, the 5120-token chunk after the
+  51200-token golden prefix), 27 calls each (one per MoE layer): dispatch 2d214aafb9, combine e0cf1f2a07,
+  offset_cumsum 3dc366d176. 1x4 mesh, S 5120, H 2560, E 64, top-6, 16 experts per chip, a 31200-row dispatch
+  buffer, BFLOAT8_B combine buffer (the unforked `unified_routed_expert_moe` output).
+- Appended one ernie45_d_p case to each fork's `tests/cases.py`, values written out literally, with the model's device
+  params (`FABRIC_1D_RING`, `l1_small_size` 24576). The fork tests already take the fabric config per case, so no test
+  file changed and the MiMo / Gemma cases (FABRIC_2D) are untouched. `ExpertMapping.create_dispatch_table(64, 1, 4)`
+  equals the tests' `dispatch_table(64, 4)`.
+- All three checks are exact (pure data movement / integer prefix sums).
+- Fail checks (temporary edits, reverted): one zeroed dispatch buffer row fails (1/7707 rows), combine output x1.01
+  fails (7870/30720 (token, slot) rows), offsets +1 on one element fails (1/64). Each only failed the ERNIE case.
+- Gate: 9 passed (3 ERNIE + 6 MiMo / Gemma). `{"forks_used": 3, "fork_calls": 3, "fork_calls_uncovered": 0,
+  "fork_tests_failed": 0}`.
+- Re-run: `python -m models.demos.common.bringup.testing.fork_cases --capture
+  models/demos/ernie45_d_p/bringup/results/fork_calls.json --model ernie45_d_p --run-tests`, or the tests only:
+  `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/{dispatch,combine,offset_cumsum}/tests`.
+- The capture run rewrites `results/P2.11.json`; restore it with `git checkout`.
