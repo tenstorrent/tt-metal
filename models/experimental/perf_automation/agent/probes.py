@@ -599,12 +599,26 @@ def _pgroup_io_counters(pgid) -> tuple:
     ttnn.from_torch call, with syscr and syscw unchanged across a twenty-second window and
     read_bytes/write_bytes flat. Its stall clock never fired because CPU movement reset it on every
     poll.
+
+    THE RUN IS THE GROUP AND EVERYTHING ITS LEADER STARTED. Every caller starts its run with
+    start_new_session=True and passes that group, so pgid is also the leader's pid -- and a
+    descendant that moved itself into a session of its own is still the run's work. tracy does
+    exactly that (tools/tracy/__main__.py: the workload is Popen'd with preexec_fn=os.setsid), so a
+    group-only sum saw the launcher and the capture tool, both idle during a device-profiler
+    read-back, and never the test doing the reading. Measured 2026-09-27 on a WH Galaxy: over 30 s
+    of a read-back the watched group moved 0 syscalls while the profiled test moved 13,240 and read
+    90 MB; the stall check then killed it as "no forward progress" three times running. The kill
+    (_kill_tree) already walks this same tree; the progress count now sees what the kill reaches.
+    A leader that has exited has no descendants left to find, so that case counts the group alone.
     """
     calls = 0
     total = 0
-    for pid, fields in _proc_stat_fields():
-        if len(fields) <= 2 or fields[2] != str(pgid):
-            continue
+    members = {pid for pid, fields in _proc_stat_fields() if len(fields) > 2 and fields[2] == str(pgid)}
+    try:
+        members.update(_descendant_pids(int(pgid)))
+    except (TypeError, ValueError):
+        pass
+    for pid in members:
         try:
             with open("/proc/%d/io" % pid) as fh:
                 for line in fh:
