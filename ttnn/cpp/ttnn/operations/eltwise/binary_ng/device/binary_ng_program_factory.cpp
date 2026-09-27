@@ -943,6 +943,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // Complete backward markers are cache keys, never unary preprocessing.
     const auto tt_poly_complete_init = [](unary::UnaryOpType type) -> const char* {
         switch (type) {
+            case unary::UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "celu_bw_tt_poly_bf16_tile_init();";
+            case unary::UnaryOpType::TT_POLY_BACKWARD_ELU_BW: return "elu_bw_tt_poly_bf16_tile_init();";
             case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_tile_init();";
             default: return nullptr;
         }
@@ -1258,6 +1260,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // Selected backward transport in the existing binary kernel.
     const auto tt_poly_gradient_entry = [](unary::UnaryOpType type) -> const char* {
         switch (type) {
+            case unary::UnaryOpType::TT_POLY_BACKWARD_CELU_BW: return "celu_bw_tt_poly_bf16_gradient";
+            case unary::UnaryOpType::TT_POLY_BACKWARD_ELU_BW: return "elu_bw_tt_poly_bf16_gradient";
             case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW: return "erf_bw_tt_poly_bf16_gradient";
             default: return nullptr;
         }
@@ -1305,6 +1309,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 "Complete backward callback requires raw operands without preprocessing");
             compute_kernel_defines["BINARY_SFPU_INIT"] = init;
             switch (operation_attributes.lhs_activations[0].type()) {
+                case unary::UnaryOpType::TT_POLY_BACKWARD_CELU_BW:
+                    compute_kernel_defines["TT_POLY_BACKWARD_CELU_BW_INCLUDE"] = "1";
+                    break;
+                case unary::UnaryOpType::TT_POLY_BACKWARD_ELU_BW:
+                    compute_kernel_defines["TT_POLY_BACKWARD_ELU_BW_INCLUDE"] = "1";
+                    break;
                 case unary::UnaryOpType::TT_POLY_BACKWARD_ERF_BW:
                     compute_kernel_defines["TT_POLY_BACKWARD_ERF_BW_INCLUDE"] = "1";
                     break;
