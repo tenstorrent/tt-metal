@@ -1,0 +1,90 @@
+artifact,candidate,status,host_us,min_pcc,all_local_top1_equal,error
+terminal_lm_head.json,baseline,passed,955.5045515298843,1.0,True,
+terminal_lm_head.json,c8192_b1_r1,passed,1625.2042725682259,0.9999991108353936,True,
+terminal_lm_head.json,c8192_b1_r2,passed,1407.1992598474026,0.9999991108353936,True,
+terminal_lm_head.json,c8192_b1_r3,passed,1534.9144116044044,0.9999991108353936,True,
+terminal_lm_head.json,c8192_b2_r1,passed,1512.1971257030964,0.9999991036559097,True,
+terminal_lm_head.json,c8192_b2_r2,passed,1497.1544966101646,0.9999991036559097,True,
+terminal_lm_head.json,c8192_b2_r3,passed,1553.238183259964,0.9999991036559097,True,
+terminal_lm_head.json,c8192_b4_r1,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception
+info:
+Statically allocated circular buffers in program 46 clash with L1 buffers on core range [0-0 - 5-9]. L1 buffer allocated at 1187840 and static circular buffer region ends at 1233920
+"
+terminal_lm_head.json,c8192_b4_r2,passed,1532.263308763504,0.9999991003655659,True,
+terminal_lm_head.json,c8192_b4_r3,passed,1594.8845073580742,0.9999991003655659,True,
+terminal_lm_head.json,c8192_b11_r1,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2810880 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head.json,c8192_b11_r2,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception
+info:
+Statically allocated circular buffers in program 56 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1476608 and static circular buffer region ends at 1496064
+"
+terminal_lm_head.json,c8192_b11_r3,passed,1549.994107335806,0.9999993867852387,True,
+terminal_lm_head_large.json,baseline,passed,955.7279758155346,1.0,True,
+terminal_lm_head_large.json,c32768_b1_r1,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1737728 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_large.json,c32768_b1_r2,passed,1245.463453233242,0.9999991108353936,True,
+terminal_lm_head_large.json,c32768_b1_r3,passed,1347.2992926836014,0.9999991108353936,True,
+terminal_lm_head_large.json,c32768_b2_r1,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 5-9] grow to 2552832 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_large.json,c32768_b2_r2,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception
+info:
+Statically allocated circular buffers in program 42 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 987136 and static circular buffer region ends at 1348608
+"
+terminal_lm_head_large.json,c32768_b2_r3,passed,1445.3588984906673,0.9999991036559097,True,
+terminal_lm_head_large.json,c65536_b1_r1,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 3298304 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_large.json,c65536_b1_r2,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1719296 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_large.json,c65536_b1_r3,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1932: tt::exception
+info:
+Statically allocated circular buffers in program 58 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1021952 and static circular buffer region ends at 1184768
+"
+terminal_lm_head_large.json,c65536_b2_r1,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 5-9] grow to 4887552 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_large.json,c65536_b2_r2,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] grow to 2515968 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_large.json,c65536_b2_r3,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-9] grow to 1717248 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_interleaved.json,baseline,passed,956.6637687385082,1.0,True,
+terminal_lm_head_interleaved.json,interleaved_b4,passed,937.5683963298798,0.9999999984157126,True,
+terminal_lm_head_interleaved.json,interleaved_b8,passed,955.17598092556,1.0,True,
+terminal_lm_head_interleaved.json,interleaved_b11,passed,963.7392126023769,0.9999999988093087,True,
+terminal_lm_head_interleaved.json,interleaved_b22,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-8] grow to 2030592 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_interleaved.json,interleaved_b44,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-8] grow to 3832832 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_interleaved.json,interleaved_b88,allocation_rejected,,,,"TT_THROW @ /workspace/tt-metal/tt_metal/impl/program/program.cpp:1875: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 10-8] grow to 3832832 B which is beyond max L1 size of 1572864 B
+"
+terminal_lm_head_adapted.json,baseline,passed,956.4284235239029,1.0,True,
+terminal_lm_head_adapted.json,c1024_b22_r3,passed,2624.949160963297,0.9999994585110955,True,
+terminal_lm_head_adapted.json,c1024_b44_r3,passed,2790.3257869184017,0.9999995551861508,True,
+terminal_lm_head_adapted.json,c1024_b88_r3,passed,3098.0114825069904,0.999999995717441,True,
+terminal_lm_head_grids.json,baseline,passed,955.3041774779558,1.0,True,
+terminal_lm_head_grids.json,interleaved_g8x8_b4,passed,1053.2536543905735,0.9999999984157126,True,
+terminal_lm_head_grids.json,interleaved_g8x8_b8,passed,1083.8934686034918,1.0,True,
+terminal_lm_head_grids.json,interleaved_g8x10_b4,passed,1040.3911583125591,0.9999999984157126,True,
+terminal_lm_head_grids.json,interleaved_g8x10_b8,passed,1061.0925499349833,1.0,True,
+terminal_lm_head_grids.json,interleaved_g11x10_b4,passed,936.8455968797207,0.9999999984157126,True,
+terminal_lm_head_grids.json,interleaved_g11x10_b8,passed,954.1661012917757,1.0,True,

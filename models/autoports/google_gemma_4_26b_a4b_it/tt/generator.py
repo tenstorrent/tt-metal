@@ -61,6 +61,8 @@ class Gemma4Generator(Generator):
             format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=1.0), 32)
         )
         self.trace_id = None
+        self.output_trace_id = None
+        self.output_buffer = None
         self.cache = None
         self.table_host = None
         self.owned_cache = None
@@ -139,6 +141,10 @@ class Gemma4Generator(Generator):
         return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1)).float()
 
     def _release_trace(self):
+        if self.output_trace_id is not None:
+            ttnn.release_trace(self.mesh, self.output_trace_id)
+            self.output_trace_id = None
+            self.output_buffer = None
         self.sampler.reset_trace()
         if self.trace_id is not None:
             ttnn.release_trace(self.mesh, self.trace_id)
@@ -364,6 +370,45 @@ class Gemma4Generator(Generator):
             self.counters["sampling_replays"] = self.counters.get("sampling_replays", 0) + 1
         return self.tokens
 
+    def _record_token(self):
+        # Both the destination row and token values are device-owned. Capture
+        # owns the temporary indexed_fill output; replay allocates no tensors.
+        updated = ttnn.indexed_fill(self.output_index, self.output_buffer, self.tokens, dim=0)
+        ttnn.copy(updated, self.output_buffer)
+        ttnn.plus_one(self.output_index)
+
+    def _prepare_output_buffer(self, steps):
+        if self.output_trace_id is not None and self.output_buffer.shape[0] < steps:
+            ttnn.release_trace(self.mesh, self.output_trace_id)
+            self.output_trace_id = None
+            self.output_buffer = None
+        if self.output_trace_id is None:
+            self.output_buffer = self.model.upload(
+                torch.zeros(steps, 1, 1, 32, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            )
+            self.output_index = self.model.upload(torch.zeros(1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            self._record_token()
+        self._copy(torch.zeros(1, dtype=torch.int32), self.output_index, "request_output_refreshes")
+
+    def _capture_output_buffer(self):
+        if self.output_trace_id is None:
+            ttnn.synchronize_device(self.mesh)
+            self.output_trace_id = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._record_token()
+            ttnn.end_trace_capture(self.mesh, self.output_trace_id, cq_id=0)
+            self._copy(torch.zeros(1, dtype=torch.int32), self.output_index, "request_output_refreshes")
+
+    def _generate_buffered(self, steps):
+        for _ in range(steps):
+            self._replay()
+            ttnn.execute_trace(self.mesh, self.output_trace_id, cq_id=0, blocking=False)
+            self.counters["output_replays"] = self.counters.get("output_replays", 0) + 1
+        # Public generate returns the sequence, so exactly one final transfer is
+        # required. There is no readback or host input refresh between replays.
+        self.counters["token_readbacks"] += 1
+        output = ttnn.to_torch(ttnn.get_device_tensors(self.output_buffer)[0])
+        return output[:steps, 0, 0, 0].tolist()
+
     def generate(
         self,
         prompt_token_ids,
@@ -373,6 +418,7 @@ class Gemma4Generator(Generator):
         enable_trace=True,
         sampling_params=None,
         stop_on_eos=True,
+        buffer_tokens=True,
         **kwargs,
     ):
         if not enable_trace:
@@ -385,6 +431,7 @@ class Gemma4Generator(Generator):
             raise ValueError("Invalid prompt or generation length")
         if max_new_tokens == 0:
             return []
+        buffered = buffer_tokens and not stop_on_eos and next_input is None and not self.host_sampling
         started = request_started = time.perf_counter()
         params = sampling_params or SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
         self._validate_sampling(params)
@@ -395,6 +442,9 @@ class Gemma4Generator(Generator):
             and self.cache is self.owned_cache
             and self.owned_table.shape[1] * 32 >= len(prompt_token_ids) + max_new_tokens
             and params == SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+            and (
+                not buffered or (self.output_trace_id is not None and self.output_buffer.shape[0] >= max_new_tokens - 1)
+            )
         )
         self.reset()
         table = self._standalone_cache(len(prompt_token_ids) + max_new_tokens, reuse_trace=reuse_trace)
@@ -430,10 +480,14 @@ class Gemma4Generator(Generator):
         trace_setup_ms = 0.0
         eos = set([1, 106])
         if max_new_tokens > 1 and not (stop_on_eos and next_input is None and first in eos):
+            capture_started = time.perf_counter()
+            if buffered:
+                self._prepare_output_buffer(max_new_tokens - 1)
             if not reuse_trace:
-                capture_started = time.perf_counter()
                 self._capture()
-                trace_setup_ms = (time.perf_counter() - capture_started) * 1000
+            if buffered:
+                self._capture_output_buffer()
+            trace_setup_ms = (time.perf_counter() - capture_started) * 1000
             self._generation_signature = signature
             # The first token is ready for the caller only after the decode
             # state is prepared; count request trace setup in end-to-end TTFT.
@@ -454,16 +508,19 @@ class Gemma4Generator(Generator):
                 0,
             )
             started = time.perf_counter()
-            for step in range(1, max_new_tokens):
-                if next_input is not None:
-                    forced = next_input(step - 1, result[-1])
-                    ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
-                    ids.flatten()[0] = forced
-                    self._copy(ids, self.tokens, "teacher_forcing_token_refreshes")
-                self._replay()
-                result.append(int(self._read_tokens()[0]))
-                if stop_on_eos and next_input is None and result[-1] in eos:
-                    break
+            if buffered:
+                result.extend(self._generate_buffered(max_new_tokens - 1))
+            else:
+                for step in range(1, max_new_tokens):
+                    if next_input is not None:
+                        forced = next_input(step - 1, result[-1])
+                        ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
+                        ids.flatten()[0] = forced
+                        self._copy(ids, self.tokens, "teacher_forcing_token_refreshes")
+                    self._replay()
+                    result.append(int(self._read_tokens()[0]))
+                    if stop_on_eos and next_input is None and result[-1] in eos:
+                        break
             seconds = time.perf_counter() - started
             if next_input is not None:
                 next_input(max_new_tokens - 1, result[-1])
@@ -483,6 +540,7 @@ class Gemma4Generator(Generator):
             "source": "teacher_forcing" if next_input else "autoregressive",
             "reduced_probe": self.model.reduced_probe,
             "host_sampling": self.host_sampling,
+            "buffered_token_output": buffered,
             "counters": dict(self.counters),
         }
         return result

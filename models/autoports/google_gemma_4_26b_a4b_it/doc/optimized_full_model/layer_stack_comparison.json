@@ -1,0 +1,27 @@
+{
+  "basis": "Cross-run diagnostic using unchanged Stage05 policy at4096 context plus BF16 tied head weights. Not measured full-model device time.",
+  "layer_stack_ms": 19.842905000000002,
+  "layer_counts": {
+    "sliding_attention": 25,
+    "full_attention": 5
+  },
+  "layer_decode_ms": {
+    "sliding_attention": 0.653344,
+    "full_attention": 0.701861
+  },
+  "estimated_decode_dram_bytes": 5541455488.0,
+  "aggregate_peak_dram_bytes_per_s": 2048000000000.0,
+  "roofline_ms_per_token_estimate": 2.7057888125000003,
+  "sources": [
+    "../optimized_multichip_decoder/README.md",
+    "../optimized_multichip_decoder/final_perf_summary.json",
+    "../context_contract.json"
+  ],
+  "limitations": [
+    "Layer byte estimates count selected expert8/128 reads and rounded cache reads at the profiled context; terminal adds head weights only. Embedding rows, norm/state and recorder traffic are small but omitted; controller rereads/NoC are not modeled.",
+    "Layer timings are host-wall replay medians, not device-time subtraction. Do not convert this cross-run comparison into full-model roofline percentage."
+  ],
+  "full_model_token_out_ms": 20.261750087200657,
+  "difference_ms": 0.41884508720065483,
+  "relative_difference_percent": 2.1108052838062497
+}

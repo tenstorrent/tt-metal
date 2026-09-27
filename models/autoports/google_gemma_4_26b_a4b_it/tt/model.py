@@ -84,6 +84,8 @@ class Gemma4Model:
         self.head_program = _get_lm_head_program_config(
             mesh_device, 1, self.config.hidden_size, self.config.vocab_size // 4
         )
+        # Precision-locked TP4 real-input sweep: K4 beats K8 on the 11x10 grid.
+        self.head_program.in0_block_w = 4
         self.rope_prefill, self.rope_decode = {}, {}
         extent = (self.max_seq_len + 1023) // 1024 * 1024
         rotary = Gemma4TextRotaryEmbedding(self.config)
@@ -101,9 +103,9 @@ class Gemma4Model:
             layout=layout,
             device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
-            if shard is None
-            else ttnn.ShardTensorToMesh(self.mesh, dim=shard),
+            mesh_mapper=(
+                ttnn.ReplicateTensorToMesh(self.mesh) if shard is None else ttnn.ShardTensorToMesh(self.mesh, dim=shard)
+            ),
         )
 
     def allocate_cache(self, *, slots, context):

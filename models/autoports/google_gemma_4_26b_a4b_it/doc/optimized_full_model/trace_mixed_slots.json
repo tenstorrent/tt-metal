@@ -1,0 +1,43 @@
+{
+  "isolated_slot_comparison": [
+    {
+      "slot": 0,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 1.0,
+      "second_decode_pcc": 0.9999999403953552,
+      "top5_match": true
+    },
+    {
+      "slot": 2,
+      "prefill_pcc": 1.0,
+      "decode_pcc": 0.9999999403953552,
+      "second_decode_pcc": 1.0,
+      "top5_match": true
+    }
+  ],
+  "batch": 3,
+  "active_slots": [
+    0,
+    2
+  ],
+  "mixed_lengths": [
+    31,
+    63,
+    127
+  ],
+  "feedback": true,
+  "inactive_cache_unchanged": true,
+  "layer_count": 2,
+  "counters": {
+    "model_replays": 2,
+    "sampling_replays": 2,
+    "token_refreshes": 1,
+    "position_refreshes": 0,
+    "cache_position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "synchronizations": 0,
+    "token_readbacks": 0,
+    "full_logits_readbacks": 9,
+    "teacher_forcing_token_refreshes": 0
+  }
+}

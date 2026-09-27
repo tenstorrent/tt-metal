@@ -1,0 +1,32 @@
+{
+  "shared_0": {
+    "same_tokens_as_stage06": true,
+    "streaming_tokens": 20,
+    "buffered_prefix_equal": true
+  },
+  "shared_1": {
+    "same_tokens_as_stage06": true,
+    "streaming_tokens": 128,
+    "buffered_prefix_equal": true
+  },
+  "shared_2": {
+    "same_tokens_as_stage06": true,
+    "streaming_tokens": 128,
+    "buffered_prefix_equal": true
+  },
+  "shared_3": {
+    "same_tokens_as_stage06": true,
+    "streaming_tokens": 128,
+    "buffered_prefix_equal": true
+  },
+  "shared_4": {
+    "same_tokens_as_stage06": true,
+    "streaming_tokens": 99,
+    "buffered_prefix_equal": true
+  },
+  "shared_5": {
+    "same_tokens_as_stage06": true,
+    "streaming_tokens": 128,
+    "buffered_prefix_equal": true
+  }
+}

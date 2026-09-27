@@ -1,0 +1,24 @@
+{
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 4096,
+    "gen_len": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "source": "autoregressive",
+  "ttft_ms": 2113.192867487669,
+  "decode_ms_per_token_e2e": 20.261750087200657,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": 2.7057888125000003,
+  "named_limitations": [
+    "Full all-layer profiler collection prohibited; device time not inferred from reduced profile.",
+    "Roofline byte estimate uses unchanged layer policy plus BF16 head; cross-run estimate, not a full-model utilization measurement.",
+    "Warmed token-out includes one final sequence readback; streaming EOS and teacher forcing retain caller-required token readbacks."
+  ],
+  "evidence": [
+    "performance.json",
+    "performance_comparison.json",
+    "layer_stack_comparison.json"
+  ]
+}

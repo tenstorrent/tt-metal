@@ -1,0 +1,136 @@
+{
+  "scope": "Reduced real layers0/5 plus embedding, final norm, LM head, split sampler and recorder; NOT all-layer model",
+  "source": "models/autoports/google_gemma_4_26b_a4b_it/doc/optimized_full_model/profile/reports/reduced_full_path/2026_09_27_08_30_38/ops_perf_results_reduced_full_path_2026_09_27_08_30_38.csv",
+  "sha256": "a50e43ab22e47b6a83858308a62ac01e168ed1aa79193da67ff8823a7dfc8a7f",
+  "basis": "Maximum per-device first firmware start to final firmware end, including all internal gaps; per-device cycles/ns inferred from firmware durations",
+  "windows": {
+    "PERF_PREFILL": {
+      "devices": {
+        "3": {
+          "whole_window_us": 666991.2874074074,
+          "cycles_per_ns": 1.35,
+          "traces": {}
+        },
+        "2": {
+          "whole_window_us": 667123.9674074074,
+          "cycles_per_ns": 1.35,
+          "traces": {}
+        },
+        "1": {
+          "whole_window_us": 667161.3540740741,
+          "cycles_per_ns": 1.35,
+          "traces": {}
+        },
+        "0": {
+          "whole_window_us": 667191.5903703703,
+          "cycles_per_ns": 1.35,
+          "traces": {}
+        }
+      },
+      "max_device_window_us": 667191.5903703703,
+      "host_signpost_window_ms": 667.644404
+    },
+    "PERF_DECODE": {
+      "devices": {
+        "3": {
+          "whole_window_us": 3082.766412244345,
+          "cycles_per_ns": 1.3500030308719135,
+          "traces": {
+            "6": {
+              "duration_us": 2544.3794728234952,
+              "first_op": "SliceDeviceOperation",
+              "last_op": "FillPadDeviceOperation",
+              "op_count": 254
+            },
+            "7": {
+              "duration_us": 514.066994021323,
+              "first_op": "TopkRoutePrepDeviceOperation",
+              "last_op": "SamplingDeviceOperation",
+              "op_count": 27
+            },
+            "8": {
+              "duration_us": 9.744422567335798,
+              "first_op": "IndexedFillDeviceOperation",
+              "last_op": "PlusOneDeviceOperation",
+              "op_count": 3
+            }
+          }
+        },
+        "2": {
+          "whole_window_us": 3080.311849327274,
+          "cycles_per_ns": 1.3499948068271648,
+          "traces": {
+            "6": {
+              "duration_us": 2543.768303872929,
+              "first_op": "SliceDeviceOperation",
+              "last_op": "FillPadDeviceOperation",
+              "op_count": 254
+            },
+            "7": {
+              "duration_us": 512.2004888486406,
+              "first_op": "TopkRoutePrepDeviceOperation",
+              "last_op": "SamplingDeviceOperation",
+              "op_count": 27
+            },
+            "8": {
+              "duration_us": 9.754852339729025,
+              "first_op": "IndexedFillDeviceOperation",
+              "last_op": "PlusOneDeviceOperation",
+              "op_count": 3
+            }
+          }
+        },
+        "1": {
+          "whole_window_us": 3082.7687251286807,
+          "cycles_per_ns": 1.3500055862368594,
+          "traces": {
+            "6": {
+              "duration_us": 2553.024250519873,
+              "first_op": "SliceDeviceOperation",
+              "last_op": "FillPadDeviceOperation",
+              "op_count": 254
+            },
+            "7": {
+              "duration_us": 505.374945819148,
+              "first_op": "TopkRoutePrepDeviceOperation",
+              "last_op": "SamplingDeviceOperation",
+              "op_count": 27
+            },
+            "8": {
+              "duration_us": 9.792552071470126,
+              "first_op": "IndexedFillDeviceOperation",
+              "last_op": "PlusOneDeviceOperation",
+              "op_count": 3
+            }
+          }
+        },
+        "0": {
+          "whole_window_us": 3081.499259259259,
+          "cycles_per_ns": 1.35,
+          "traces": {
+            "6": {
+              "duration_us": 2550.2377777777774,
+              "first_op": "SliceDeviceOperation",
+              "last_op": "FillPadDeviceOperation",
+              "op_count": 254
+            },
+            "7": {
+              "duration_us": 506.93703703703704,
+              "first_op": "TopkRoutePrepDeviceOperation",
+              "last_op": "SamplingDeviceOperation",
+              "op_count": 27
+            },
+            "8": {
+              "duration_us": 9.82148148148148,
+              "first_op": "IndexedFillDeviceOperation",
+              "last_op": "PlusOneDeviceOperation",
+              "op_count": 3
+            }
+          }
+        }
+      },
+      "max_device_window_us": 3082.7687251286807,
+      "host_signpost_window_ms": 3.28145
+    }
+  }
+}
