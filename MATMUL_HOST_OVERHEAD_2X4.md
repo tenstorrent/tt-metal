@@ -69,6 +69,26 @@ An instrumented eager pass counted **67 TTNN calls** per forward. Their inclusiv
 
 Matmul plus linear account for about 0.46 ms of host-call time, and other calls plus model control account for more than 2 ms. These call times are measured in a separate wrapper pass and include any waits inside a call; they identify places to investigate, not additive contributions to the 1.1 ms E2E gap. Device realtime-profiler timestamps are per program/core and cannot be combined into a trustworthy cross-core E2E span, so this analysis uses host intervals for the traced/untraced comparison.
 
+## Tracy host and device timeline
+
+On 2026-09-27, a follow-up captured the same 2×4 GLM-5.2 scaled-FP8 warm workload with the Blackhole streaming profiler feeding device kernel zones into Tracy. Tracy also captured the host's C++ zones. Optional `DS_PERF_TRACY_MARKERS=1` messages bracket each of the ten measured untraced and traced iterations. The capture used partial Python profiling (`python -m tracy -p`) to keep Python's per-call profiler out of the timing pass. Its trace is `build/profiler/build_wasm/traces/-s_2026_09_27_06_27_17.tracy` in the branch worktree.
+
+| Aligned streaming capture | Result across ten untraced forwards |
+| --- | ---: |
+| Untraced E2E minimum / traced E2E minimum | 4.985 / 3.048 ms |
+| Worker-kernel-free intervals per untraced forward, median | 597 µs |
+| Of those intervals, inside host `EnqueueProgram` zones, median | 93 µs |
+| Program enqueues per forward | 47 |
+| Last `EnqueueProgram` completion from forward start, median | 3.728 ms |
+
+The worker-kernel-free intervals are gaps in the union of all `BRISC-KERNEL`, `NCRISC-KERNEL`, and `TRISC-KERNEL` zones in Tracy, across all chips and cores. Most of their time lies **between** host `EnqueueProgram` zones. For the first measured iteration, 540 µs of such gaps appeared in a 4.994 ms host interval; 94 µs overlapped `EnqueueProgram` and 446 µs fell outside it. The host's 47 enqueues finished by 3.579 ms, then `FDMeshCommandQueue::finish` spent 1.340 ms waiting for completion. This directly shows host pacing between device programs. These union gaps are a conservative visibility measure: a kernel running on any one core masks idle time on other cores, while uninstrumented device activity is invisible.
+
+A second aligned Tracy capture enabled Python function zones for **only the first measured untraced forward** using `DS_PERF_TRACY_PYTHON_ONE=1`. Its trace is `build/profiler/build_wasm/traces/-s_2026_09_27_06_32_08.tracy`. In that forward, the 1.171 ms of worker-kernel-free time before the final device wait aligned mainly with `ttnn.decorators.FastOperation.__call__` (700 µs), then MLA configuration checks and indexer code such as `_cfg_matches`, `score`, and `write_k`. Only about 4 µs of those gaps overlapped the host's `EnqueueProgram` zones. `FastOperation.__call__` includes its call into C++ and therefore does not separate Python, pybind, and C++ time. The full Python probe lengthened this one forward to 5.978 ms and nearly doubled the observed kernel-free time, so its function labels indicate *where* stalls occur, not their uninstrumented duration.
+
+Profiling perturbs this workload. Even the lighter streaming capture raised the untraced minimum from the earlier clean ~4.13 ms to 4.985 ms, while traced replay stayed near 3.05 ms. The ~597 µs kernel-free median in the lighter capture therefore **cannot be equated** to 597 µs of the clean ~1.1 ms traced/untraced gap. It does establish repeated host-side gaps between programs; the remaining gap also reflects changed host/device overlap. The earlier classic Tracy device profiler (`TT_METAL_DEVICE_PROFILER=1`) raised the untraced minimum to 5.714 ms and its exported device times did not align with host markers, so it was excluded from this timeline analysis.
+
+The streaming captures used `TT_METAL_STREAMING_PROFILER=1 TT_METAL_STREAMING_PROFILER_TRACY=1`, `DS_PERF_UNTRACED_HOST=1`, and the exact pytest node ID for `blackhole-glm_5_2-warm-sparse-kv_scaled_fp8-fabric2d-loudbox_sp2xtp4`. The test passed in both. The repository's `python -m tracy -r` postprocessor subsequently errored because it expects legacy device profiler CSV files; the `.tracy` files were saved and inspected directly with `tracy-csvexport`.
+
 ## Host call duration by operation instance
 
 The forward invokes two `ttnn.matmul` and nine `ttnn.linear` calls. Instance numbers are in call order within each operation type. Values below are the per-instance minima in µs from the separate host-call pass in the first two pairs.

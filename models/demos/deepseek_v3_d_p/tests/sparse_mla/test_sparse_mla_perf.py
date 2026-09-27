@@ -115,6 +115,9 @@ Other cases are skipped.
 Set DS_PERF_HOST_BREAKDOWN=1 alongside DS_PERF_UNTRACED_HOST=1 to add separate timed passes for
 all FastOperation calls and trace submission/synchronization. These diagnostic wrappers do not
 affect the reported E2E samples.
+For Tracy streaming-profiler captures, DS_PERF_TRACY_MARKERS=1 marks measured forward/replay
+boundaries. DS_PERF_TRACY_PYTHON_ONE=1 profiles Python functions during only the first measured
+untraced forward; use it with `python -m tracy -p` and expect that one sample to be perturbed.
 
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
@@ -201,6 +204,8 @@ RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
 RT_OPS_DUMP = os.environ.get("DS_PERF_RT_OPS_DUMP", "") not in ("", "0", "false")
 UNTRACED_HOST_BENCH = os.environ.get("DS_PERF_UNTRACED_HOST", "") == "1"
 HOST_BREAKDOWN = os.environ.get("DS_PERF_HOST_BREAKDOWN", "") == "1"
+TRACY_MARKERS = os.environ.get("DS_PERF_TRACY_MARKERS", "") == "1"
+TRACY_PYTHON_ONE = os.environ.get("DS_PERF_TRACY_PYTHON_ONE", "") == "1"
 
 
 def _cache_format_id(cache_format: MlaKvCacheFormat) -> str:
@@ -907,6 +912,10 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
 
     if UNTRACED_HOST_BENCH:
+        if TRACY_PYTHON_ONE:
+            from tracy import Profiler
+
+            tracy_python_profiler = Profiler()
         warmups = measured_runs = 10
         for _ in range(warmups):
             _one_forward(cache)
@@ -915,12 +924,20 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         e2e_ns = []
         forward_ns = []
         completion_ns = []
-        for _ in range(measured_runs):
+        for run_index in range(measured_runs):
+            if TRACY_MARKERS:
+                ttnn.tracy_message(f"GLM52_UNTRACED_START_{run_index}")
+            if TRACY_PYTHON_ONE and run_index == 0:
+                tracy_python_profiler.enable()
             start_ns = time.perf_counter_ns()
             _one_forward(cache)
             forward_end_ns = time.perf_counter_ns()
             ttnn.synchronize_device(mesh_device)
             end_ns = time.perf_counter_ns()
+            if TRACY_PYTHON_ONE and run_index == 0:
+                tracy_python_profiler.disable()
+            if TRACY_MARKERS:
+                ttnn.tracy_message(f"GLM52_UNTRACED_END_{run_index}")
             forward_ns.append(forward_end_ns - start_ns)
             completion_ns.append(end_ns - forward_end_ns)
             e2e_ns.append(end_ns - start_ns)
@@ -1010,11 +1027,15 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             for _ in range(warmups):
                 controller.replay()
                 ttnn.synchronize_device(mesh_device)
-            for _ in range(measured_runs):
+            for run_index in range(measured_runs):
+                if TRACY_MARKERS:
+                    ttnn.tracy_message(f"GLM52_TRACED_START_{run_index}")
                 start_ns = time.perf_counter_ns()
                 controller.replay()
                 ttnn.synchronize_device(mesh_device)
                 traced_e2e_ns.append(time.perf_counter_ns() - start_ns)
+                if TRACY_MARKERS:
+                    ttnn.tracy_message(f"GLM52_TRACED_END_{run_index}")
 
             if HOST_BREAKDOWN:
                 current_trace_phases = []
