@@ -1,0 +1,2 @@
+["/home/container_app_user/tt-metal/python_env/bin/python", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", "--run-dir", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run", "--concurrency", "1", "--action", "check"]
+Collector ready for1 slots; both normal completion paths observed

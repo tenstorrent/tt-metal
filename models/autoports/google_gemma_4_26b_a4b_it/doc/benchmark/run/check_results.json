@@ -1,0 +1,39 @@
+{
+  "evidence_check": {
+    "command": [
+      "python",
+      "-m",
+      "benchmark_stage.check",
+      "--model-dir",
+      "models/autoports/google_gemma_4_26b_a4b_it",
+      "--hf-model",
+      "google/gemma-4-26B-A4B-it"
+    ],
+    "exit_code": 2,
+    "log": "evidence_check.log"
+  },
+  "context_check": {
+    "command": [
+      "python",
+      "/home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/scripts/check_context_contract.py",
+      "--model-dir",
+      "models/autoports/google_gemma_4_26b_a4b_it",
+      "--hf-model",
+      "google/gemma-4-26B-A4B-it",
+      "--stage",
+      "benchmark",
+      "--require-contract"
+    ],
+    "exit_code": 0,
+    "log": "context_check.log"
+  },
+  "host_tests": {
+    "count": 42,
+    "exit_code": 0,
+    "log": "host_tests_post_format.log"
+  },
+  "performance": {
+    "status": "valid_performance_only_accuracy_incomplete",
+    "evidence": "performance-validation.json"
+  }
+}

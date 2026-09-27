@@ -1,0 +1,12 @@
+{
+  "decision": "Preserve incomplete accuracy and recover required performance within unchanged original deadline",
+  "completed_responses": {
+    "mmlu_pro": 8
+  },
+  "required_samples": 536,
+  "elapsed_seconds": 942.5391165409237,
+  "deadline_monotonic": 5315279.6,
+  "reason": "Observed completion rate leaves no credible path to completing frozen536questions and both serving profiles within onehour. No protocol, questions or output cap changed. This remains a failed incomplete stage, not an accuracy verdict.",
+  "terminated_owned_client_pid": 6211,
+  "signal": "SIGTERM"
+}

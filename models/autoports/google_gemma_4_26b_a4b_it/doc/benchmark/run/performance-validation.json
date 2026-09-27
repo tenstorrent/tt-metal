@@ -1,0 +1,33 @@
+{
+  "status": "valid_performance_only_accuracy_incomplete",
+  "profiles": {
+    "1": {
+      "server_slots": 1,
+      "concurrent_requests": 1,
+      "completed_requests": 8,
+      "actual_input_tokens_per_request": [
+        4096
+      ],
+      "actual_output_tokens_per_request": [
+        128
+      ],
+      "prefill_host_roofline_pct": 0.4812085324677778,
+      "decode_host_roofline_pct": 8.728749736736862,
+      "performance_sha256": "e95217ae3bc4ae663106b8aac6980ae8cbc805c636a3d01446f928529f784eb7"
+    },
+    "32": {
+      "server_slots": 32,
+      "concurrent_requests": 32,
+      "completed_requests": 96,
+      "actual_input_tokens_per_request": [
+        4096
+      ],
+      "actual_output_tokens_per_request": [
+        128
+      ],
+      "prefill_host_roofline_pct": 0.4903522933324388,
+      "decode_host_roofline_pct": 6.836196204008248,
+      "performance_sha256": "949abbf920c59ca36486e2f72d156abb6ea4c88d67226f66b81386468150758f"
+    }
+  }
+}

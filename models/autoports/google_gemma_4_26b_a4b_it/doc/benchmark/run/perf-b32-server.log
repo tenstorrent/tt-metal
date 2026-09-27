@@ -1,0 +1,2 @@
+["/home/container_app_user/tt-metal/python_env/bin/python", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_server.py", "--max-num-seqs", "32", "--base-url", "http://127.0.0.1:8000", "--output", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/perf-b32-server.json"]
+{"ready": true, "slots": 32, "pid": 5920}

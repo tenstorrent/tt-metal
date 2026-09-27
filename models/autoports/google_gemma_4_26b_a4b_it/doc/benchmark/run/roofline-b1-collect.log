@@ -1,0 +1,2 @@
+["/home/container_app_user/tt-metal/python_env/bin/python", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tools/benchmark_roofline.py", "--run-dir", "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run", "--concurrency", "1", "--action", "collect"]
+{"profile": 1, "phase_seconds": {"prefill": 17.626158237000002, "decode": 22.526686979000004}, "work": {"prefill": 225126146637824, "decode": 4026978571008}}

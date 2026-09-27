@@ -1,0 +1,8 @@
+{
+  "timed_runner_pid": 5918,
+  "process_start_monotonic": 5311679.6,
+  "recorded_monotonic": 5312465.08694152,
+  "recorded_wall_time": 1790536364.1926405,
+  "deadline_monotonic": 5315279.6,
+  "basis": "Linux /proc PID stat starttime / SC_CLK_TCK. Conservative origin precedes benchmark_stage.run entry and includes Python startup. The original one-hour budget is never restarted for any recovery continuation."
+}

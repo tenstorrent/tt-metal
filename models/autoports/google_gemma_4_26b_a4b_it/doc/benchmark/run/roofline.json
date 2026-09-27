@@ -1,0 +1,60 @@
+{
+  "32": {
+    "performance_sha256": "949abbf920c59ca36486e2f72d156abb6ea4c88d67226f66b81386468150758f",
+    "server_identity_sha256": "32c95b89e057407640d7a1ad075a9928aac955904e2fd635e10bb404972174f3",
+    "requests": 96,
+    "input_tokens": 393216,
+    "output_tokens": 12288,
+    "prefill": {
+      "flops": 2701513759653888,
+      "seconds": 207.569729444,
+      "peak_flops_per_second": 2654208000000000.0,
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Full normal dispatch through actual existing async completion/output construction; same-phase overlap counted once, gaps retained; transition gaps assigned to following phase. No added device waits.",
+      "work_method": "Source-derived full30-layer TP4/EP4 actual invocation shapes and selected stored precision; active MoE weight reads per serial row, shared head per invocation; material activation estimates detailed in WORK_ACCOUNTING.md.",
+      "peak_source": "https://docs.tenstorrent.com/aibs/blackhole/p300.html; Four Blackhole ASICs,120 physical cores/ASIC,4096 LoFi FLOP/core/cycle; mixed-fidelity useful-work ratio against LoFi upper envelope, not FPU utilization; 512GB/s DRAM/ASIC (P3001024GB/s per dual-ASIC card)",
+      "evidence": "phase-accounting-b32.json",
+      "evidence_sha256": "0c243d868e8f008047fe82105bc6b2e42c256cf160b4f1c4c010f4056ec6d617"
+    },
+    "decode": {
+      "dram_bytes": 41731018908672,
+      "seconds": 298.06742621800004,
+      "peak_dram_bytes_per_second": 2048000000000.0,
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Full normal dispatch through actual existing async completion/output construction; same-phase overlap counted once, gaps retained; transition gaps assigned to following phase. No added device waits.",
+      "work_method": "Source-derived full30-layer TP4/EP4 actual invocation shapes and selected stored precision; active MoE weight reads per serial row, shared head per invocation; material activation estimates detailed in WORK_ACCOUNTING.md.",
+      "peak_source": "https://docs.tenstorrent.com/aibs/blackhole/p300.html; Four Blackhole ASICs,120 physical cores/ASIC,4096 LoFi FLOP/core/cycle; mixed-fidelity useful-work ratio against LoFi upper envelope, not FPU utilization; 512GB/s DRAM/ASIC (P3001024GB/s per dual-ASIC card)",
+      "evidence": "phase-accounting-b32.json",
+      "evidence_sha256": "0c243d868e8f008047fe82105bc6b2e42c256cf160b4f1c4c010f4056ec6d617"
+    }
+  },
+  "1": {
+    "performance_sha256": "e95217ae3bc4ae663106b8aac6980ae8cbc805c636a3d01446f928529f784eb7",
+    "server_identity_sha256": "b9f2222fdfe95ca82b6f8b6b254cf613541e3119225c8d8c3c0956a3459ce864",
+    "requests": 8,
+    "input_tokens": 32768,
+    "output_tokens": 1024,
+    "prefill": {
+      "flops": 225126146637824,
+      "seconds": 17.626158237000002,
+      "peak_flops_per_second": 2654208000000000.0,
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Full normal dispatch through actual existing async completion/output construction; same-phase overlap counted once, gaps retained; transition gaps assigned to following phase. No added device waits.",
+      "work_method": "Source-derived full30-layer TP4/EP4 actual invocation shapes and selected stored precision; active MoE weight reads per serial row, shared head per invocation; material activation estimates detailed in WORK_ACCOUNTING.md.",
+      "peak_source": "https://docs.tenstorrent.com/aibs/blackhole/p300.html; Four Blackhole ASICs,120 physical cores/ASIC,4096 LoFi FLOP/core/cycle; mixed-fidelity useful-work ratio against LoFi upper envelope, not FPU utilization; 512GB/s DRAM/ASIC (P3001024GB/s per dual-ASIC card)",
+      "evidence": "phase-accounting-b1.json",
+      "evidence_sha256": "124e99573cb70be4147435b0a7646c33583c73f2f3928ad9f815916329aeb6d3"
+    },
+    "decode": {
+      "dram_bytes": 4026978571008,
+      "seconds": 22.526686979000004,
+      "peak_dram_bytes_per_second": 2048000000000.0,
+      "timing_scope": "full_phase_wall_time",
+      "timing_method": "Full normal dispatch through actual existing async completion/output construction; same-phase overlap counted once, gaps retained; transition gaps assigned to following phase. No added device waits.",
+      "work_method": "Source-derived full30-layer TP4/EP4 actual invocation shapes and selected stored precision; active MoE weight reads per serial row, shared head per invocation; material activation estimates detailed in WORK_ACCOUNTING.md.",
+      "peak_source": "https://docs.tenstorrent.com/aibs/blackhole/p300.html; Four Blackhole ASICs,120 physical cores/ASIC,4096 LoFi FLOP/core/cycle; mixed-fidelity useful-work ratio against LoFi upper envelope, not FPU utilization; 512GB/s DRAM/ASIC (P3001024GB/s per dual-ASIC card)",
+      "evidence": "phase-accounting-b1.json",
+      "evidence_sha256": "124e99573cb70be4147435b0a7646c33583c73f2f3928ad9f815916329aeb6d3"
+    }
+  }
+}
