@@ -1,0 +1,44 @@
+{
+  "observed_at": "2026-09-27T17:57:23.039243+00:00",
+  "consecutive_goal_turns_with_same_client_blocker": 3,
+  "previous_turn_classification": "progress: committed offline setup tooling and verified host tests; no benchmark measurements",
+  "client_probes": [
+    {
+      "python": "/home/container_app_user/tt-metal/python_env/bin/python",
+      "exit_code": 0,
+      "result": {
+        "lm_eval_available": false
+      }
+    },
+    {
+      "python": "/opt/venv/bin/python",
+      "exit_code": 0,
+      "result": {
+        "lm_eval_available": false
+      }
+    }
+  ],
+  "container_runtime": {
+    "docker": null,
+    "podman": null
+  },
+  "docker_socket_exists": false,
+  "serving_processes": [],
+  "localhost_8000_connect_errno": 111,
+  "context_contract_unchanged": true,
+  "context_contract_sha256": "dc2a250ac132929c96ee1e267f51d5ceec9fe982767688f2261548736aaa5fb2",
+  "runner_invoked": false,
+  "blocker": "No provisioned upstream lm-evaluation-harness client; AGENTS.md prohibits dependency installation. No reply authorizing isolated setup or supplying a client path.",
+  "remaining_integration": [
+    "Live server control and observed implementation/configuration identity",
+    "Runtime phase instrumentation, matching model/hardware work accounting, collector readiness",
+    "Native sampling and structured chat transport/scoring integration",
+    "Frozen-subset upstream evaluation at concurrency32",
+    "Both warmed 4096/128 profiles with one and32 slots, all requests completed",
+    "Valid final measurements/report and evidence gate within one-hour runner budget"
+  ],
+  "notes": [
+    "No new hardware commands, resets, process termination, installation, benchmark or profiling.",
+    "Host tests and planning artifacts do not prove stage completion."
+  ]
+}

@@ -24,7 +24,8 @@
       "models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/setup_inventory.json",
       "f6c796a2beba4421ad4daba8ee7b9c4808a9009a",
       "93f3f7dfb88d1147a83781f57295b19ed419ac0a",
-      "45da007fb7b9134226c59ec6cd57cf94af3455f6"
+      "45da007fb7b9134226c59ec6cd57cf94af3455f6",
+      "models/autoports/google_gemma_4_26b_a4b_it/doc/benchmark/run/blocked_audit.json"
     ]
   },
   "accuracy": [],
@@ -32,7 +33,8 @@
     "performance": "Stage 11 not run: upstream lm_eval unavailable and dependency installation prohibited. Stage 10 server already stopped; historical C1 used 32 slots, not the required one-slot profile.",
     "accuracy": "No upstream evaluation requests or scoring executed.",
     "roofline": "No matching device measurements; live vLLM profiling prohibited. Required host-phase collector and both host-phase measurements also unavailable.",
-    "identity": "No running server to prove imported module, tokenizer revision or effective configuration."
+    "identity": "No running server to prove imported module, tokenizer revision or effective configuration.",
+    "execution": "Same missing client/no-install constraint revalidated on three consecutive goal turns; external provisioning or explicit installation authorization required."
   },
   "notes": [
     "Blocked during setup; benchmark_stage run not invoked. No one-hour completion claim. No accuracy verdict.",
