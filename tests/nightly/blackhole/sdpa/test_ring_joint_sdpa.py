@@ -1808,8 +1808,8 @@ def run_ring_joint_sdpa_chunked(
             K_full = fa_rand(b, nhk, total_seq, d_k)
 
         if use_ring_mla:
-            # MLA latent: a single shared K/V tensor; V is its first d_v columns.
-            V_full = K_full[:, :, :, :d_v]
+            # Latent V: K's first d_v columns (MLA), or its last d_v when K is wider than Q (packed KV).
+            V_full = K_full[:, :, :, d_k - d_v :] if d_k > d_q else K_full[:, :, :, :d_v]
         elif num_iterations > 1:
             V_full = deterministic_input_tensor(b, nhv, total_seq, d_v, offset=0.375)
         else:
@@ -1832,13 +1832,13 @@ def run_ring_joint_sdpa_chunked(
         ref_full = None
         if num_iterations == 1 and do_check:
             if sliding_window_size is None and operator_sink is None:
-                ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
+                ref_full = torch_sdpa_reference(Q_full, K_full[..., :d_q], V_full, is_causal=True)
             else:
                 ref_full = torch.cat(
                     [
                         torch_chunked_causal_sdpa_reference(
                             Q_full[:, :, s:e, :],
-                            K_full[:, :, :e, :],
+                            K_full[:, :, :e, :d_q],
                             V_full[:, :, :e, :],
                             s,
                             sliding_window_size=sliding_window_size,
@@ -1968,10 +1968,14 @@ def run_ring_joint_sdpa_chunked(
             )
             return persistent_output_buffer_k, persistent_output_buffer_v
 
-        # ring_mla uses one shared latent K/V tensor (width d_k); V is its first d_v columns.
+        # ring_mla uses one shared latent K/V tensor (width d_k).
         ring_mla_kv_shard_dims = [None, None]
         ring_mla_kv_shard_dims[sp_axis] = 2  # input KV sharded along seq across the ring
-        ring_mla_persistent_shard_dims = [None, None]  # gathered KV is replicated (full seq, single head)
+        ring_mla_persistent_shard_dims = [None, None]  # gathered KV is replicated (full seq)
+        if mesh_config.tp_size > 1 and nhk != 1:
+            # One KV head per TP device; MLA keeps its single head replicated.
+            ring_mla_kv_shard_dims[tp_axis] = 1
+            ring_mla_persistent_shard_dims[tp_axis] = 1
 
         def upload_kv(kv_host):
             return ttnn.from_torch(
@@ -7484,19 +7488,22 @@ GEMMA4_GLOBAL_CHUNKED_MODEL = ModelConfig(
 
 
 @pytest.mark.timeout(900)
+@pytest.mark.parametrize("packed_kv", [False, True], ids=["separate_kv", "packed_kv"])
 @pytest.mark.parametrize("max_k_splits", [1, 3], ids=["unsplit", "ksplit3"])
 @pytest.mark.parametrize(
     "tokens_per_device,q_chunk_size", [(256, 64), (512, 128)], ids=["chunk2048-q64", "chunk4096-q128"]
 )
-def test_ring_joint_attention_gemma4_global_ksplit_accuracy(tokens_per_device, q_chunk_size, max_k_splits):
+def test_ring_joint_attention_gemma4_global_ksplit_accuracy(tokens_per_device, q_chunk_size, max_k_splits, packed_kv):
     """Chunked global attention at Gemma4 prefill shapes. Both give 32 (head, Q chunk) units, three bands; the five
-    chunks cover a split slice empty on every ring iteration (chunk 0), one empty on some, and uneven slices."""
+    chunks cover a split slice empty on every ring iteration (chunk 0), one empty on some, and uneven slices.
+    packed_kv runs Gemma4's cache layout: one 640-wide K/V row, K its first 512 columns and V its last 512."""
     chunk_size = tokens_per_device * MESH_CONFIG.sp_size
     run_ring_joint_sdpa_chunked(
         MESH_CONFIG,
-        GEMMA4_GLOBAL_CHUNKED_MODEL,
+        replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640) if packed_kv else GEMMA4_GLOBAL_CHUNKED_MODEL,
         chunk_size=chunk_size,
         total_seq=5 * chunk_size,
         qk_configs=[(q_chunk_size, 256)],
         max_k_splits=max_k_splits,
+        use_ring_mla=packed_kv,
     )

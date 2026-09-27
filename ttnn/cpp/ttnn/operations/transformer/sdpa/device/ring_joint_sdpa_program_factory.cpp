@@ -539,7 +539,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = k_shape[1];
     const uint32_t NHV = tensor_args.v_num_heads();
-    const bool v_shares_k_buffer = tensor_args.has_latent_v();
+    const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
 
@@ -645,7 +645,7 @@ void apply_ring_joint_scalar_runtime_args(
     // Gather inputs (K, plus V when it isn't the latent-V alias of K). Shared by the indexed-slot
     // and valid-pages patches below.
     const Tensor& input_k = tensor_args.input_k;
-    const uint32_t num_ag_inputs = tensor_args.has_latent_v() ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
+    const uint32_t num_ag_inputs = tensor_args.input_v.has_value() ? 2u : 1u;
     const std::array<const Tensor*, 2> ag_inputs = {
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
@@ -998,7 +998,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
-    const bool v_shares_k_buffer = tensor_args.has_latent_v();
+    const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
     const auto& input_tensor_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_tensor_k;
 
     const RingJointInputParams joint_input_params = resolve_ring_joint_input_params(args, tensor_args);
@@ -1070,8 +1070,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Metadata uses an on-device cache-slot value, but needs the same single-slot program structure.
     const bool slot_from_metadata = tensor_args.has_metadata();
     const bool indexed_kv_cache = ttnn::prim::indexed_kv_cache_active(args, tensor_args);
-    // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
-    // reads only the first vDHt head-dim tiles.
+    // Latent-V mode: V tensors are omitted and the reader reads V from K's buffer.
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
@@ -3032,6 +3031,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
     }
+    reader_kernel.named_compile_time_args.emplace_back(
+        "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
+    reader_kernel.named_compile_time_args.emplace_back(
+        "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -3261,7 +3264,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k};
-    if (!v_shares_k_buffer) {
+    if (tensor_args.input_v.has_value()) {
         all_gather_input_tensors.push_back(input_tensor_v);
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }

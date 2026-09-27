@@ -747,8 +747,13 @@ void kernel_main() {
     // The fused all-gather wrote the active slot to gathered slot 0, so address it as batch-1.
     const uint32_t gathered_kv_batch_dim = indexed_kv_cache ? 1 : B;
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, DHt);
+    // Packed KV: K/V rows can be wider than the head dims; V is the last vDHt columns of its row.
+    constexpr uint32_t k_row_Wt = get_named_compile_time_arg_val("k_row_Wt");
+    constexpr uint32_t v_row_Wt = get_named_compile_time_arg_val("v_row_Wt");
+    constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
+    const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, k_row_Wt);
+    const auto gathered_k_input_tile_logical =
+        TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, k_row_Wt);
     // Joint K/V addressing: full gathered length (Lt rows). Used for the gathered joint buffer on the
     // sharded path and for the local full-L joint tensor on the replicated path.
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
@@ -760,9 +765,10 @@ void kernel_main() {
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
-    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
+    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, v_row_Wt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
-    const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, vDHt);
+    const auto gathered_v_input_tile_logical =
+        TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, v_row_Wt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
     [[maybe_unused]] const auto v_generators =
@@ -1296,7 +1302,8 @@ void kernel_main() {
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
-                    const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
+                    const Slice v_slice(
+                        k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, v_col_offset_t, v_col_offset_t + vDHt);
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
