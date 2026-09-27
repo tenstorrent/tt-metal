@@ -1219,3 +1219,22 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Needs a framework change (findings `X3-full-prefill-layer-subset`): subset-aware full_prefill (like F41's
   `contract.py:served_layers`) or drop `prefill_ms_full` from X.3 in `plan/ledger_gen.py` for subset specs.
 - Re-run: the brief's gate command with `PYTHONPATH=$PWD`.
+
+## O.1 optests, attempt 1 (2026-09-27)
+- None of the 4 forks had a `tests/` folder yet (ernie45 / gemma4 never added cases). Created `tests/{__init__,cases,
+  reference,test_<fork>}.py` for dispatch, combine, offset_cumsum and unified_routed_expert_ffn, one mimo case each
+  (sigs 33e8891784, fa2baf9135, 70b8c49b0a, 31daae9fc6), shapes as captured on the 1x4 mesh (dispatch axis 0 = 1 chip,
+  4 dispatch groups = columns, epc 64, S 5120, K 8, H 4096, I 2048, buffer 42976 rows). FABRIC_2D, l1_small_size 24576.
+- Inputs random per chip: top-8 ids from a per-token random permutation; counts / regions / offsets / metadata built in
+  torch by the dispatch + offset_cumsum rules (reference.py in each fork, vectorized). Each test loads its siblings by
+  file path (pytest runs with `--import-mode=importlib`, and four packages named `tests` would clash).
+- Checks: dispatch exact on every written row (buffer + metadata; positional, token order within an expert);
+  combine exact on the whole [1,1,S,K,H] output (init_zeros, zeros elsewhere); offset_cumsum exact on all 3 outputs;
+  unified_routed_expert_moe (Silu, high_precision, HiFi4 fp32 dest, bfp8 weights rounded on host for the reference)
+  PCC 0.999996 / rel 0.00303 measured on all 4 chips -> limits pcc >= 0.9999, rel <= 0.008.
+- Can-fail check done by hand (not kept): zeroing one dispatch row, scaling one combine row by 1.01, +1 on one offset,
+  scaling the expert output by 1.01 (rel 0.0098) each failed.
+- Gate: PASS, `{"forks_used": 4, "fork_calls": 4, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`; fork tests 4
+  passed in 204 s (unified case ~130 s of host weight generation / bfp8 rounding, plus the precompile collect pass).
+- Re-run: the brief's gate command with `PYTHONPATH=$PWD`; fork tests alone:
+  `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/{dispatch,combine,offset_cumsum,unified_routed_expert_ffn}/tests`.
