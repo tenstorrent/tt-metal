@@ -80,7 +80,10 @@ constexpr uint32_t bpe = nk_gu + nk_dd;             // weight blocks per expert
 constexpr uint32_t ring = ring_ct ? ring_ct : bpe;  // in1 ring capacity (blocks)
 constexpr uint32_t h_all_tiles = kt_d * mt;
 constexpr uint32_t hk = 8;  // h_all K-block width (the gather layout)
-static_assert(mt * gw <= 8 && rt_d * pcd <= 8 && mt % rt_d == 0 && kt_d % kblk_d == 0 && kt_d % hk == 0);
+#ifndef SE_DST_TILES
+#define SE_DST_TILES 8  // DST half: 8 bf16 tiles, 4 with fp32 accumulation (SE_DST_TILES 4)
+#endif
+static_assert(mt * gw <= SE_DST_TILES && rt_d * pcd <= 8 && mt % rt_d == 0 && kt_d % kblk_d == 0 && kt_d % hk == 0);
 
 uint32_t popped = 0;               // weight blocks popped from the in1 ring (absolute block index of its front)
 uint32_t gu_done = 0, d_done = 0;  // experts whose gate/up (down) blocks have all had their last use

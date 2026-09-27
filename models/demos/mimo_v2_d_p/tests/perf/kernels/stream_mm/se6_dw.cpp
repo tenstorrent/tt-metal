@@ -65,8 +65,13 @@ void kernel_main() {
     auto blk = [](uint32_t b) { return b; };
     auto dst = [&](uint32_t, uint32_t i) { return get_write_ptr(cb) + i * slot * tile_bytes; };
 #endif
-    for (uint32_t b = 0; b < total; b += batch) {
-        const uint32_t n = total - b < batch ? total - b : batch;
+    for (uint32_t b = 0; b < total;) {
+        uint32_t n = total - b < batch ? total - b : batch;
+#if defined(SE_DYN) && defined(SE_DN_REG)
+        // a batch must not straddle a load boundary: its reservation could need slots of the load after it, which a
+        // pinned schedule only frees once a later load retires (codex review: DW_BATCH 3, counts 1024,32,32 hung)
+        n = n < per_e - b % per_e ? n : per_e - b % per_e;
+#endif
         uint32_t l1[batch];
         for (uint32_t i = 0; i < n; ++i) {
             cb_reserve_back(cb, (i + 1) * slot);
@@ -99,5 +104,6 @@ void kernel_main() {
             }
         }
 #endif
+        b += n;
     }
 }

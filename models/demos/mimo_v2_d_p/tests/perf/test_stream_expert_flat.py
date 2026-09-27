@@ -99,7 +99,7 @@ XCOL_ENV = os.environ.get(
 FWD_DIR = int(os.environ.get("MIMO_FL_FWD_DIR", "0"))  # per-reader forwarding NoC by direction (else all NOC1)
 XNOC = int(os.environ.get("MIMO_FL_XNOC", "0"))
 ACT = os.environ.get("MIMO_FL_ACT", "silu")  # gate/up activation (se3_compute.cpp SE_ACT)
-ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3, "gelu_tanh": 4}
+ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3, "gelu_tanh": 4, "gate_only": 0}
 W_STD = float(os.environ.get("MIMO_FL_WSTD", "0.02"))  # weight init std (larger: the clamping activations clamp)
 
 
@@ -115,6 +115,8 @@ def act_ref(g, u):
         return 4 * torch.tanh(g / 4) * torch.sigmoid(g) * 25 * torch.tanh(u / 25)
     if ACT == "clamped_silu":  # DeepSeek V4: limit 10
         return F.silu(g.clamp(max=10.0)) * u.clamp(-10.0, 10.0)
+    if ACT == "gate_only":  # debug: with MIMO_FL_NO_ACT the device packs the raw gate accumulator
+        return g
     if ACT == "gelu_tanh":  # Gemma 4
         return F.gelu(g, approximate="tanh") * u
     raise ValueError(ACT)  # NoC of the x relays' multicasts (their DRAM reads use the other)
@@ -137,9 +139,10 @@ def _gu_split(It, Ht=None, w_tile=576, x_slots=24):
     for np_ in (1, 2, 3, 4):
         for g in (1, 2, 4):
             ps = It // np_
-            if It % np_ or ps % 16 or ps * g > 64 or min(8 // (2 * np_), MT_MAX // g) < 1:
+            dst = 4 if int(os.environ.get("MIMO_FL_GU_FP32", "1")) else 8
+            if It % np_ or ps % 16 or ps * g > 64 or min(dst // (2 * np_), MT_MAX // g) < 1:
                 continue
-            mt_ = g * min(8 // (2 * np_), MT_MAX // g)
+            mt_ = g * min(dst // (2 * np_), MT_MAX // g)
             if Ht and 2 * Ht * 2 * np_ * w_tile + x_slots * mt_ * KBLK * BF8_TILE > GU_L1_BUDGET:
                 continue
             cand = ((-g, ps * g, -np_), np_, g)
@@ -216,9 +219,13 @@ def test_stream_expert_flat(device, m, wdtype):
         except AssertionError:
             if X_SLOTS == 12:
                 raise
-    MT_CAP = G * min(8 // (2 * NP), MT_MAX // G)  # a group's rows x 2 NP gate/up tiles fit DST (8)
+    # fp32 DEST accumulation for gate/up (K = H is long: bf16 DEST ties-away rounding gives a norm gain ~1.085 at K
+    # 7168, test_dest_gain_probe.py) halves the DST half to 4 tiles
+    GU_FP32 = bool(int(os.environ.get("MIMO_FL_GU_FP32", "1")))
+    DST_T = 4 if GU_FP32 else 8
+    MT_CAP = G * min(DST_T // (2 * NP), MT_MAX // G)  # a group's rows x 2 NP gate/up tiles fit DST
     MT = int(os.environ["MIMO_FL_MT"]) if os.environ.get("MIMO_FL_MT") else min(MT_CAP, max(G, m // 32 // G * G))
-    assert MT % G == 0 and (MT // G) * 2 * NP <= 8, (MT, G, NP)
+    assert MT % G == 0 and (MT // G) * 2 * NP <= DST_T, (MT, G, NP, DST_T)
     MTG = MT // G
     m_pad = -(-m // (MT * 32)) * MT * 32
     # compute-bound M: readers help with down, end to end only when down would be heavy without them (> 6 output
@@ -384,7 +391,14 @@ def test_stream_expert_flat(device, m, wdtype):
     )
 
     torch.manual_seed(0)
-    Wg, Wu, Wd = torch.randn(H, I) * W_STD, torch.randn(H, I) * W_STD, torch.randn(I, H) * 0.02
+    # independent weights per expert (MIMO_FL_DISTINCT_W=0: one set repeated): a wrong expert id / region / stale
+    # pinned block then shows up in the per-expert check
+    distinct = bool(int(os.environ.get("MIMO_FL_DISTINCT_W", "1")))
+    W_l = []
+    for e in range(E if distinct else 1):
+        W_l.append((torch.randn(H, I) * W_STD, torch.randn(H, I) * W_STD, torch.randn(I, H) * 0.02))
+    W_l = W_l if distinct else W_l * E
+    Wg, Wu, Wd = W_l[E - 1]  # (the static-mode reference checks the last expert)
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=w_dtype, layout=ttnn.TILE_LAYOUT)).float()
     if not DYN:  # (dynamic mode builds its x per count set, below)
         xs = torch.randn(E, m_pad, H)
@@ -394,20 +408,21 @@ def test_stream_expert_flat(device, m, wdtype):
         ref = (act_ref(x_last @ Wg, x_last @ Wu)) @ Wd
         ref_q = (act_ref(x_last @ q(Wg), x_last @ q(Wu))) @ q(Wd)
     tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
-    Wg_t, Wu_t, Wd_t = tiles(Wg), tiles(Wu), tiles(Wd)
+    T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]  # per expert gate / up / down tile views
 
     # ---- gate/up weights: per reader region, per expert, per K-block, its 4 cores' [KBLK x (g, u)] blocks ----
     regions = []
     for r in range(n_rd):
         blocks = []
-        for c in range(nk_gu):
-            ks = slice(c * KBLK, (c + 1) * KBLK)
-            for pl in range(RG):
-                cols = [(r * RG + pl) * NP + p_ for p_ in range(NP)]
-                blocks.append(
-                    torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
-                )
-        regions.append(torch.cat(blocks).repeat(E, 1, 1))
+        for Wg_t, Wu_t, _ in T_l:
+            for c in range(nk_gu):
+                ks = slice(c * KBLK, (c + 1) * KBLK)
+                for pl in range(RG):
+                    cols = [(r * RG + pl) * NP + p_ for p_ in range(NP)]
+                    blocks.append(
+                        torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(-1, 32, 32)
+                    )
+        regions.append(torch.cat(blocks))
     w_dev = _bank_sharded(regions, banks, w_dtype, device)
     region_bytes = regions[0].shape[0] * w_tile
 
@@ -415,8 +430,12 @@ def test_stream_expert_flat(device, m, wdtype):
     def dreg(d):
         p_, k_ = pcds[d], kd_of(pcds[d])
         return torch.cat(
-            [Wd_t[c * k_ : (c + 1) * k_, col0s[d] : col0s[d] + p_].reshape(-1, 32, 32) for c in range(It // k_)]
-        ).repeat(E, 1, 1)
+            [
+                Wd_t[c * k_ : (c + 1) * k_, col0s[d] : col0s[d] + p_].reshape(-1, 32, 32)
+                for _, _, Wd_t in T_l
+                for c in range(It // k_)
+            ]
+        )
 
     dregs = [dreg(d) for d in range(ND)]
     n_max = max(r_.shape[0] for r_ in dregs)
@@ -430,9 +449,10 @@ def test_stream_expert_flat(device, m, wdtype):
                     Wd_t[c * kd_r : (c + 1) * kd_r, rem_cols + i * pcd_r : rem_cols + (i + 1) * pcd_r].reshape(
                         -1, 32, 32
                     )
+                    for _, _, Wd_t in T_l
                     for c in range(nblk_r)
                 ]
-            ).repeat(E, 1, 1)
+            )
             for i in range(n_rdn)
         ]
         wr_dev = _bank_sharded(rregs, banks, w_dtype, device)
@@ -444,8 +464,12 @@ def test_stream_expert_flat(device, m, wdtype):
                 return torch.zeros(E * nblk_x * slot_x, 32, 32)
             c0 = rem_cols + d * pcx
             return torch.cat(
-                [Wd_t[c * kd_x : (c + 1) * kd_x, c0 : c0 + pcx].reshape(-1, 32, 32) for c in range(nblk_x)]
-            ).repeat(E, 1, 1)
+                [
+                    Wd_t[c * kd_x : (c + 1) * kd_x, c0 : c0 + pcx].reshape(-1, 32, 32)
+                    for _, _, Wd_t in T_l
+                    for c in range(nblk_x)
+                ]
+            )
 
         wx_dev = _bank_sharded([xreg(d) for d in range(ND)], banks, w_dtype, device)
         wx_region = E * nblk_x * slot_x * w_tile
@@ -470,6 +494,7 @@ def test_stream_expert_flat(device, m, wdtype):
         x_region = xregs[0].shape[0] * BF8_TILE
     if PREPASS:  # the flat op's x layout is produced on device from the row-major dispatch buffer
         assert not E2E
+        assert SBT == 32, "the pre-pass writer (se12_xwr.cpp) assumes 32-tile super-blocks"
         x_dev = _bank_sharded([torch.zeros_like(r_) for r_ in xregs], banks, ttnn.bfloat8_b, device)
         xs_e = xs.view(E, m_pad, H)
         disp = torch.zeros(cap, H)
@@ -699,6 +724,7 @@ def test_stream_expert_flat(device, m, wdtype):
             )
         )
 
+    qW = {}  # expert -> quantized (gate, up, down) for the reference
     rd_vals, fw_vals, gu_rt, gu_grp = {}, {}, ttnn.RuntimeArgs(), {}
     for r, c in enumerate(readers):
         rd_vals[(c.x, c.y)] = [w_dev.buffer_address(), r % banks, (r // banks) * region_bytes, 0] + dyn_args
@@ -860,7 +886,8 @@ def test_stream_expert_flat(device, m, wdtype):
         else []
     ) + ([("SE_SMALL_T", str(SMALL_T))] if SMALL else [])
     x_ct = [pcx, kd_x, slot_x, ring_x] if SMALL else []
-    FWD = max(FWD_DEPTH, 2) if DYN else FWD_DEPTH  # dynamic counts use the pipelined forwarder
+    # dynamic counts and M-groups (receiver j gets block j / G: only se10_fwd maps it) use the pipelined forwarder
+    FWD = max(FWD_DEPTH, 2) if (DYN or G > 1) else FWD_DEPTH
     e2e_def = [("SE_E2E", "1")] if E2E else []
     tz_rt = ttnn.RuntimeArgs()
     for rl in relays:
@@ -1172,11 +1199,12 @@ def test_stream_expert_flat(device, m, wdtype):
                 core_ranges=gu_crs,
                 compile_time_args=[KBLK, MTG, nk_gu, 0, 1, E, S, slot, 1, 1, NP, 0, ring_g],
                 runtime_args=gu_crt,
-                defines=zones
+                defines=[("SE_DST_TILES", str(DST_T))]
+                + zones
                 + dyn_def
                 + [("SE_GU_ONLY", "1"), ("SE_ACT", str(ACTS[ACT])), ("SE_XMT", str(MT))]
                 + ([("SE_NO_ACT", "1")] if os.environ.get("MIMO_FL_NO_ACT") else []),
-                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=GU_FP32),
             ),
         ]
     )
@@ -1333,6 +1361,11 @@ def test_stream_expert_flat(device, m, wdtype):
         tag = (
             f"streamfl_H{H}_M{m}_E{E}_w{wdtype}"
             + (f"_{ACT}" if ACT != "silu" else "")
+            + (f"_I{I}" if I != 2048 else "")
+            + (f"_np{NP}g{G}" if (NP, G) != (1, 1) else "")
+            + (f"_pin{PIN}" if PIN else "")
+            + (f"_xh{NH}" if NH != 1 else "")
+            + (f"_hb{HBUF}" if HBUF != 3 else "")
             + (f"_mt{MT}" if os.environ.get("MIMO_FL_MT") else "")
             + ("_e2e" if E2E else "")
             + ("_pp" if PREPASS else "")
@@ -1346,7 +1379,9 @@ def test_stream_expert_flat(device, m, wdtype):
                 + (label or "-".join(map(str, cnts)))
                 + (f"_b{band[0]}-{band[1]}" if os.environ.get("MIMO_FL_BAND") else "")
             )
-        w_bytes = E * 3 * H * I * w_tile / 1024
+        # logical weight bytes of the experts this launch streams (active ones; each gate/up / down set once)
+        n_w = len([c for c in cnts if c and band[0] <= c <= band[1]]) if DYN else E
+        w_bytes = n_w * 3 * H * I * w_tile / 1024
         STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with STATS_PATH.open("a") as f:
             f.write(
@@ -1360,8 +1395,22 @@ def test_stream_expert_flat(device, m, wdtype):
                         "flops": 6 * tok_act * H * I,
                         "tokens": tok_act,
                         "counts": cnts,
-                        "x_bytes": tok_act * H * 1.0625,
-                        "y_bytes": tok_act * H * 2,
+                        # logical activation bytes (e2e: bf16 row-major x in, bfp8 y out; pre-tiled: bfp8 x, bf16 y);
+                        # the relays read x once per rectangle team (2x) on top of this
+                        "x_bytes": tok_act * H * (2 if E2E else 1.0625),
+                        "y_bytes": tok_act * H * (1.0625 if E2E else 2),
+                        "config": {
+                            "I": I,
+                            "NP": NP,
+                            "G": G,
+                            "MT": MT,
+                            "PIN": PIN,
+                            "NH": NH,
+                            "HBUF": HBUF,
+                            "X_SLOTS": X_SLOTS,
+                            "DRING": DRING,
+                            "act": ACT,
+                        },
                     }
                 )
                 + "\n"
@@ -1399,11 +1448,21 @@ def test_stream_expert_flat(device, m, wdtype):
                     act = [
                         e for e in range(E) if cnts[e] and band[0] <= cnts[e] <= band[1]
                     ]  # experts this program serves
-                    qg, qu, qd = q(Wg), q(Wu), q(Wd)
-                    if DYN:  # check up to CHK rows at each end of every expert (host reference cost)
-                        CHK = int(os.environ.get("MIMO_FL_CHECK_ROWS", "160"))
+                    for e in act:  # quantized-weight reference per expert (cached across count sets)
+                        if e not in qW:
+                            qW[e] = tuple(q(w_) for w_ in W_l[e])
+                    if DYN:  # rows checked: all up to CHK_ALL per expert, else every other row tile (so every
+                        # sub-block and every pinned chunk) plus the last 32 rows (host reference cost)
+                        CHK_ALL = int(os.environ.get("MIMO_FL_CHECK_ALL", "512"))
                         rows_ = {
-                            e: sorted(set(range(min(CHK, cnts[e]))) | set(range(max(0, cnts[e] - CHK), cnts[e])))
+                            e: (
+                                list(range(cnts[e]))
+                                if cnts[e] <= CHK_ALL
+                                else sorted(
+                                    {r_ for r_ in range(cnts[e]) if (r_ // 32) % 2 == 0}
+                                    | set(range(max(0, cnts[e] - 32), cnts[e]))
+                                )
+                            )
                             for e in act
                         }
                         xin = {e: dyn_xe[e][rows_[e]] for e in act}
@@ -1412,21 +1471,24 @@ def test_stream_expert_flat(device, m, wdtype):
                         xs_e = xs.view(E, m_pad, H)
                         xin = {e: xs_e[e, : cnts[e]] for e in act}
                         yout = {e: yh[e * tok_pad : e * tok_pad + cnts[e]] for e in act}
-                    refs_q = {e: (act_ref(xin[e] @ qg, xin[e] @ qu)) @ qd for e in act}
+                    refs_q = {e: (act_ref(xin[e] @ qW[e][0], xin[e] @ qW[e][1])) @ qW[e][2] for e in act}
                     pccs = [comp_pcc(refs_q[e], yout[e], 0.99) for e in act]
-                    if ACT != "silu":  # the device must match the chosen activation better than plain SiLU-GLU
-                        alt = [
-                            comp_pcc((torch.nn.functional.silu(xin[e] @ qg) * (xin[e] @ qu)) @ qd, yout[e], 0)[1]
-                            for e in act
-                        ]
+                    # magnitude too (PCC is scale-blind): norm ratio and relative error per expert
+                    for e in act:
+                        nr = float(yout[e].norm() / refs_q[e].norm())
+                        rel = float((yout[e] - refs_q[e]).norm() / refs_q[e].norm())
+                        logger.info(f"expert {e} ({cnts[e]} tok): norm ratio {nr:.4f}, rel err {rel:.4f}")
+                        assert os.environ.get("MIMO_FL_NO_NORM_CHECK") or (
+                            0.9 < nr < 1.1 and rel < 0.2
+                        ), f"expert {e}: norm ratio {nr:.3f}, rel err {rel:.3f}"
+                    silu_ref = lambda e: (torch.nn.functional.silu(xin[e] @ qW[e][0]) * (xin[e] @ qW[e][1])) @ qW[e][2]
+                    if ACT != "silu" and act:  # the device must match the chosen activation better than SiLU-GLU
+                        alt = [comp_pcc(silu_ref(e), yout[e], 0)[1] for e in act]
                         logger.info(
                             f"{ACT}: min PCC {min(p_[1] for p_ in pccs):.5f} vs silu-glu reference {min(alt):.5f}"
                         )
                         # (only when the two references differ: e.g. the clamps never engage at small weights)
-                        sep = min(
-                            comp_pcc((torch.nn.functional.silu(xin[e] @ qg) * (xin[e] @ qu)) @ qd, refs_q[e], 0)[1]
-                            for e in act
-                        )
+                        sep = min(comp_pcc(silu_ref(e), refs_q[e], 0)[1] for e in act)
                         if sep < 0.999:
                             assert min(p_[1] for p_ in pccs) > max(alt), "activation not distinguishable / wrong"
                     logger.info(f"e2e per-expert PCC {[round(float(p_[1]), 5) for p_ in pccs]}")
@@ -1441,6 +1503,9 @@ def test_stream_expert_flat(device, m, wdtype):
                     got = ttnn.to_torch(y_dram).float()[(E - 1) * S * MT * 32 :][:m]
                 if not DYN:
                     ok, pcc_q = comp_pcc(ref_q, got, 0.99)
+                    logger.info(
+                        f"static: norm ratio {float(got.norm() / ref_q.norm()):.4f} vs fp32 ref {float(got.norm() / ref.norm()):.4f}"
+                    )
                 if not ok and os.environ.get("MIMO_FL_DEBUG"):
                     yall = ttnn.to_torch(y_dram).float().view(V, MT * 32, H)
                     ar = (
@@ -1521,7 +1586,8 @@ def test_stream_expert_flat(device, m, wdtype):
                     )
                     for v in range(V):
                         xv = xs[v]
-                        rv = (act_ref(xv @ q(Wg), xv @ q(Wu))) @ q(Wd)
+                        Wg_, Wu_, Wd_ = W_l[v // S]
+                        rv = (act_ref(xv @ q(Wg_), xv @ q(Wu_))) @ q(Wd_)
                         logger.info(
                             f"v{v}: |y| {yall[v].abs().mean():.4g} |ref| {rv.abs().mean():.4g} pcc {comp_pcc(rv, yall[v], 0)[1]}"
                             f" nan {torch.isnan(yall[v]).sum()} cols-pcc {[round(float(comp_pcc(rv[:, d*256:(d+1)*256], yall[v][:, d*256:(d+1)*256], 0)[1]), 3) for d in range(0, ND, 7)]}"
@@ -1529,4 +1595,12 @@ def test_stream_expert_flat(device, m, wdtype):
                 pcc = comp_pcc(ref, got, 0.0)[1] if not DYN else "n/a"
                 logger.info(f"{tag}: PCC {pcc_q} vs quantized-weight reference, {pcc} vs fp32")
                 assert ok or os.environ.get("MIMO_FL_XRD_SKIP"), pcc_q
+        if E2E and ITERS and not os.environ.get("MIMO_FL_XRD_SKIP"):  # the measured launches' output too:
+            # every active expert's rows bit-identical to the checked warm-up launch
+            y_last = ttnn.to_torch(y_dram).float()
+            for e in act:
+                o_ = dyn_offs[e] if DYN else e * tok_pad
+                assert torch.equal(
+                    y_last[o_ : o_ + cnts[e]], yh[o_ : o_ + cnts[e]]
+                ), f"launch {ITERS}: expert {e} differs"
         logger.info(f"ran {tag}")

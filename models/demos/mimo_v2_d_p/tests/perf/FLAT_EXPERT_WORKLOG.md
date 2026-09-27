@@ -61,15 +61,17 @@ expert. Sum-of-parts model (per-expert cost from the uniform curve) reproduces t
 - Ring mechanics: loads land in regions; receivers keep granting slots by count; compute pops by count after a
   block's last use and addresses block (region, j) relative to the read pointer (popped % ring). Load l goes to the
   region of the (l - NREG)-th load to retire (retirement order = schedule order of last uses); the builder checks
-  that retirement comes before the load's first use, else drops pinning (never deadlocks).
+  that retirement comes before the load's first use, else drops pinning. (That check models retirement order, not
+  producer batching: see the codex review below, batched down reads could straddle a load boundary and deadlock.)
 - Down weights too (`SE_DN_REG`): pinning only the gate/up weights re-read B's down weights per chunk (8.3 MB) and
   gained just 5%; pinned down rings need 2 whole experts (DRING 2.0, default with PIN) -> did not fit L1 (1434 KB
   vs 1427 KB/bank) until the e2e output double buffer was sized for bfp8 pages (was 2 KB pages: -53 KB, arena 1382 KB).
 - Row tiles: a sub-block's compute (gate/up rows, down row passes) now skips row tiles past the token count (the
   last sub-block of each entry: `SE_META_LMT`); small experts cost 1-3 row tiles instead of 4.
 - Profiling (p99 chip): gate/up MM and down MM both ~24 us per full 128-row sub-block (~18 cyc/tile = LoFi peak);
-  small-expert down 6 us per row tile. After pinning the p99 chip is near its DRAM floor (12 x 24.8 MB weights +
-  75 MB bf16 x / bf8 y at ~420 GB/s ~ 890 us) vs 1068 measured.
+  small-expert down 6 us per row tile. After pinning the p99 chip is within ~20% of an IDEAL DRAM floor (12 x 24.8
+  MB weights + 75 MB logical bf16 x / bf8 y at ~420 GB/s ~ 890 us) vs 1068 measured; this implementation actually
+  moves more (the two rectangle relay teams each read x: +49 MB), so its own floor is ~1010 us.
 - Profiler gotcha: `SE_DOWN` in se3_compute.cpp (unused down path) hash-collided with BRISC-FW once line numbers
   moved -> renamed `SE_DOWN3`.
 - Tried, no gain: `MIMO_FL_DW_DELAY` 40k/80k cycles (down weights start late so expert 0's gate/up weights own DRAM
@@ -110,7 +112,8 @@ activation's reference matches strictly better (weights scaled with `MIMO_FL_WST
 | situ | 0.9935 | 0.9328 | 848.5 | 1077.9 |
 | clamped_silu | 0.9928 | 0.9751 | 843.7 | 1089.2 |
 | gelu_tanh | 0.9938 | 0.9777 | 848.0 | 1080.5 |
-No measurable cost (the activation hides under the next matmul). Not done: GPT-OSS gate/up/down biases.
+No measurable cost on these two workloads at this precision (single runs, the activation hides under the next
+matmul). Not done: GPT-OSS gate/up/down biases.
 
 ### Shape generalization
 - `MIMO_FL_I` (per-device intermediate size, I / TP) and any H with Ht % 8 == 0.
@@ -195,9 +198,12 @@ the balanced set of the same total.
 | 28 | 128 | 1910 | 2043 (1.07) | 1967 (1.03) | 2032 (1.06) |
 | 28 | 512 | 3249 | 3577 (1.10) | 3360 (1.03) | 3524 (1.08) |
 PIN=0 for comparison (same sets): E8 real512 1118, spike512 1105; E16 real512 2071, zipf128 1152; E28 zipf512
-3627, real512 3524 -> pinning is at par or better everywhere after the fix.
+3627, real512 3524 -> pinning helps most large-mean ragged sets, but NOT everywhere: E16 zipf128 is 1174 pinned vs
+1152 unpinned (+2%); single measurements (mean of 3 iterations, no variance estimate), so +-1-2% differences are
+within noise.
 - Takeaways: the per-launch cost is set by the weight floor (~64 us/expert) for small experts and by compute
-  (~24 us per 128-row sub-block) for large ones; raggedness costs <= 4% at small means, 6-14% at 512/expert.
+  (~24 us per 128-row sub-block) for large ones; raggedness costs <= 4% at mean 32, -5..+7% at mean 128 and
+  +1..+14% at mean 512 (worst: E16 spike512).
 - Remaining ragged cost is sub-block granularity, not weight streaming: E16 spike512 = 1 x 4096 + 15 x 273 tokens
   -> 77 sub-blocks vs 64; the partial tail sub-blocks (17 rows = 1 row tile) still cost most of a full sub-block on
   the gate/up side (the K loop streams 2 weight tiles per K step whatever the rows). Interleaving threshold
@@ -227,3 +233,57 @@ shapes sit lower (K2 TP4 23 us for 6.2 MB: 53%, Qwen3.5 20 us for 7.1 MB: 69%): 
 check (0.9942-0.9966) and the discriminating activation check where the activation differs from SiLU-GLU.
 Not supported: GPT-OSS 2880 (Ht 90: KBLK 8 does not divide it; also needs gate/up/down biases), Gemma-4 704
 (It 22), I/TP pair-set counts that are not a multiple of 16 (e.g. 3072 / 4 = 768).
+
+### Strict review (codex --yolo, 2026-09-27) and fixes
+Codex found no counterexample for the ring / pinning mechanism itself (10,000 randomized schedules in a symbolic
+simulation, block-wise and whole-load retirement; the `p + 1 > popped` guard and the unsigned relative unpacker
+offset are sound). Findings and what was done:
+1. P1 counts truncated at 65,536 (`cnt` was made uint16 while `subs` used 32 bits -> schedules disagree, hang).
+   Fixed: `cnt` / `subs` uint32 again.
+2. P1 static (non-dynamic) M-groups used se_forward.cpp, which has no receiver -> block (j / G) map: wrong weights.
+   Fixed: G > 1 always uses the pipelined forwarder (se10_fwd).
+3. P1 PREPASS with 16-tile super-blocks hangs (se12_xwr.cpp hardcodes 32). Fixed: PREPASS asserts SBT == 32.
+4. P2 pinned down rings + DW_BATCH 3 deadlock (counts 1024,32,32, EARLY_POP 0: 63 blocks published, the next batch
+   needs 3 slots, only 1 frees before the pinned expert retires). Fixed: in SE_DN_REG mode a down-weight batch
+   never straddles a load boundary (se6_dw.cpp); the case now runs (validation below).
+5. P1 validation gap: every expert had the same weights (a wrong expert id / region / stale pinned block would pass).
+   Fixed: independent weights per expert (`MIMO_FL_DISTINCT_W`, default 1) and per-expert references.
+6. P2 checks: now every row of experts up to 512 tokens and every other row tile (all sub-blocks, all pinned chunks)
+   plus the last 32 rows above that; a norm-ratio / relative-error bound (PCC is scale-blind); the last measured
+   launch must be bit-identical to the checked one; empty active sets no longer crash the activation check. The
+   activation discrimination still only asserts when the two references differ (clamps idle at small weights):
+   the activation runs use `MIMO_FL_WSTD` to engage them.
+7. P2 stats: tags now carry I / NP,G / PIN / helpers / HBUF; weight bytes count only the active experts; e2e x / y
+   bytes use bf16 / bfp8 (were swapped); the effective config is recorded; the 2x relay x reads are noted.
+Work-log claims qualified above (pinning "everywhere", raggedness ranges, the p99 floor, activation cost).
+
+**The magnitude check found a real accuracy bug (pre-existing, all shapes): output norm 1.27x the quantized-weight
+reference** at PCC 0.994 (rel err 0.30), identical with pinning off, with repeated weights, in the static
+pre-tiled path (1.25) and without the activation (1.11, gate only). Cause: bf16 DEST accumulation (ties-away
+rounding) over the long gate/up K: plain `ttnn.matmul` LoFi bfp8 x bfp4 (test_dest_gain_probe.py) gives norm
+ratio 1.023 at K 2048 and 1.085 at K 7168 with bf16 DEST, 1.000 with fp32 DEST; gate and up each gain ~8.5%,
+silu(g)*u compounds it, down adds ~2%. Fix: fp32 DEST accumulation for the gate/up compute (`MIMO_FL_GU_FP32`,
+default 1; DST half = 4 tiles -> MT 2 for NP 1): norm ratio 1.27 -> 1.041, rel err 0.30 -> 0.074, perf K2.6 E12:
+p50 826 (821), p99 1087 (1068), p100 1599 (1591), uni512 1519 (1467, +3.5%), spike3000 1061 (1107). The
+remaining ~4% is the K 2048 down projection (bf16 DEST, pcd up to 8 columns per DST pass) + bfp8 h.
+All numbers in the tables above were taken with bf16 DEST gate/up (norm gain ~1.27); timing conclusions stand.
+
+### Post-review validation (distinct weights, all new checks, fp32 gate/up DEST), all PASS
+Per-expert PCC 0.9979-0.9984 (was ~0.994 with bf16 DEST), norm ratio 1.02-1.05 (was ~1.27), last launch
+bit-identical to the checked one. us per launch; in brackets the bf16-DEST number from the tables above.
+| config | results |
+|---|---|
+| K2 E12 K2.6 sets | p50 828 (821), p99 1106 (1068), p100 1596 (1591), max-p100 1549 (1543), spike3000 1075 (1107), uni512 1515 (1467), p100-bal 1524 (1457) |
+| codex deadlock case (1024,32,32; DW_BATCH 3; EARLY_POP 0) | 360, no hang |
+| K2 E28 | bal512 3472 (3249), zipf512 3815 (3577), spike512 3736 (3360), real512 3613 (3524), zipf128 1953, real128 1958 |
+| K2 TP4 8 experts, G1 | uni32 168 (182), uni128 257 (238), uni512 900 (794), rag 602 (560) |
+| K2 TP4 G2 + 2 helpers | 198 / 254 / 669 / 517 |
+| K3 3584x3072 situ | 393 (403) / 469 (463) / 1255 (997) / 871 (744) |
+| M3 6144x3072 swigluoai | 638 / 705 / 1463 (1411) / 1048 (996) |
+| DSv4-Flash clamped_silu | 277 / 334 / 786 (714) / 580 (574) |
+| 4096x1024 gelu_tanh | 157 / 200 / 552 / 400 |
+| static G2 (se10_fwd forced) | 424, PCC 0.9945 |
+fp32 gate/up costs where the 4-tile DST half forces smaller sub-blocks: +3-6% on K2 / M3, +10-13% DSv4-F / TP4 at
+512 per expert, +26% on K3 (NP 2 -> MT 1: 32-row sub-blocks). Accuracy first: default on; `MIMO_FL_GU_FP32=0` gives
+the old speed with the ~1.27 norm gain. Candidate follow-up: split the gate/up DST into two passes over the K loop
+(rows 0-1, 2-3) to keep 128-row sub-blocks with fp32, and fp32 for down (pcd column halves).

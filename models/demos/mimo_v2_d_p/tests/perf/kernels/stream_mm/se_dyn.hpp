@@ -41,8 +41,8 @@ struct SeDyn {
     uint32_t n_act = 0;       // schedule entries
     uint32_t num_v = 0;       // sub-blocks over all entries
     uint32_t off[SE_MAX_V];   // entry a's first row in the dispatch buffer (TILE_HEIGHT-aligned)
-    uint16_t cnt[SE_MAX_V];   // its tokens
-    uint16_t subs[SE_MAX_V];  // its sub-blocks
+    uint32_t cnt[SE_MAX_V];   // its tokens
+    uint32_t subs[SE_MAX_V];  // its sub-blocks
     uint8_t eid[SE_MAX_V];    // local expert index of entry a
     uint8_t ld[SE_MAX_V];     // its gate/up weight load
     uint8_t last[SE_MAX_V];   // 1: the load's last use
