@@ -1,0 +1,15 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "base_url": "http://127.0.0.1:8000",
+  "manifest": "manifest.json",
+  "tasks": [
+    "mmlu_pro",
+    "gsm8k_cot",
+    "ifeval"
+  ],
+  "budget_seconds": 3600,
+  "output_tokens": 128,
+  "status": "setup_only_not_invoked",
+  "generation": {},
+  "configuration_limitations": "Candidate task set only. Native thinking policy, generation settings, scorer integration and collector are not validated. This is not an executable finalized runner configuration."
+}

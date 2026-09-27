@@ -1,0 +1,4 @@
+$ python /home/mvasiljevic/.codex-personal-gemma4/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.14/scripts/check_context_contract.py --model-dir models/autoports/google_gemma_4_26b_a4b_it --hf-model google/gemma-4-26B-A4B-it --stage benchmark --require-contract
+Context contract OK for models/autoports/google_gemma_4_26b_a4b_it: target=262144, supported=262144 (full HF context).
+
+exit=0

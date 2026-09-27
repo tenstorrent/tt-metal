@@ -1,0 +1,25 @@
+{
+  "observed_at": "2026-09-27T17:41:41.340942+00:00",
+  "python": "/home/container_app_user/tt-metal/python_env/bin/python",
+  "modules": {
+    "lm_eval": false,
+    "vllm": true,
+    "nltk": true,
+    "transformers": true
+  },
+  "tools": {
+    "docker": null,
+    "tt-smi": null,
+    "vllm": "/home/container_app_user/tt-metal/python_env/bin/vllm"
+  },
+  "device_nodes": [
+    "/dev/tenstorrent/3",
+    "/dev/tenstorrent/2",
+    "/dev/tenstorrent/1",
+    "/dev/tenstorrent/0"
+  ],
+  "context_contract_sha256": "dc2a250ac132929c96ee1e267f51d5ceec9fe982767688f2261548736aaa5fb2",
+  "tt_metal_commit": "f6c796a2beba4421ad4daba8ee7b9c4808a9009a",
+  "vllm_commit": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d",
+  "localhost_8000_connect_errno": 111
+}

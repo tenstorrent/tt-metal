@@ -1,0 +1,31 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "status": "incomplete_no_running_server",
+  "implementation": "models/autoports/google_gemma_4_26b_a4b_it",
+  "model_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "tokenizer_revision": null,
+  "precision": "head4_inner_all4_shared_down4 (inherited Stage 10 policy; not observed in a live Stage 11 server)",
+  "layer_count": 30,
+  "configured_layer_count": null,
+  "source_commits": {
+    "tt-metal": "f6c796a2beba4421ad4daba8ee7b9c4808a9009a",
+    "vllm": "7f72b1c6e905f5137fe3377f2e7b42738d3f271d"
+  },
+  "hardware": null,
+  "available_device_nodes": [
+    "/dev/tenstorrent/3",
+    "/dev/tenstorrent/2",
+    "/dev/tenstorrent/1",
+    "/dev/tenstorrent/0"
+  ],
+  "server_command": null,
+  "prefix_caching": null,
+  "max_num_seqs": null,
+  "max_model_len": null,
+  "inherited_evidence": [
+    "../optimized_vllm/README.md",
+    "run/stage10_server_command.json",
+    "run/stage10_cleanup.json"
+  ],
+  "identity_limitations": "No live server import, effective configuration, or tokenizer revision established for this attempt. Model revision and full layer count are inherited from context_contract.json."
+}
