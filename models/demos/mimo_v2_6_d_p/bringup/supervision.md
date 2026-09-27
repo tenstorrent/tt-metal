@@ -23,3 +23,20 @@ https://claude.ai/artifact/DiE4z2vUUEXV2snyj4sWAf (republish both after every ga
 | 00:42 | P.1 | gate PASS, attempt 1 | review | accepted: opt-in high_precision flag in unified_routed_expert_ffn (default off, program-cache key, 143 existing op tests pass); device 1122 -> 257 ms, experts 959 -> 94 ms, wall 1280 -> 258 ms, PCC unchanged | e3150c04460 |
 | 01:05 | P.2 | gate PASS, attempt 1 | review | accepted: full layers config A (q512/k128), sliding layers streaming HiFi4 preset S (sink logit ~28 above the rest makes HiFi2 lose 3-6% per head); attention 142 -> 111 ms, wall 258 -> 226 ms, chunk PCC 0.9984 | 3c999ad8afa |
 | 01:15 | X.3 | gate FAIL: prefill_ms_full MISSING, every other metric in range | framework | full_prefill skipped any layer subset (fix agent found it); stopped the fix agent and the orchestrator after the gate's device tests; F42; rerun X.3 | bfb77b8ce2e |
+| 01:25 | X.3 | gate PASS on the pre-agent check after F42 | routine | run complete: 60/60 | 2d4df7dd229 |
+
+## Final state (2026-09-27 01:25)
+
+Run1 complete, 60/60 tasks PASS, nothing pushed. Layers 0-5 of 48 (a subset result, not a full-model result).
+- Accuracy, full 56320-token ladder (11 chunks of 5120, all on device, tuned model): min layer PCC 0.9984, state min 0.9963,
+  host transfers per layer 0. HF sanity of the checkpoint on the full 48-layer CPU model: smoke "Paris", top-1 0.955.
+- Warm full prefill 0 -> 55k (6 layers, no readback, no LM head): 2.21 s, 25.5k tok/s; per chunk 175 -> 228 ms.
+- Chunk 50k -> 55k: 226 ms (X.1 baseline 1280 ms): experts 93 ms, attention 111 ms (SDPA 54 ms full + 2.5 ms sliding,
+  qkv 24, o_proj 21), router 7, dense MLP 6.
+- Chunk time by position (5k chunk at 0 / 50k / 100k / 150k / 200k): 175 / 223 / 274 / 324 / 375 ms.
+- Perf picks: P.1 fused experts via opt-in `high_precision` in unified_routed_expert_ffn (1122 -> 257 ms device),
+  P.2 SDPA config A on full layers + streaming HiFi4 on sliding-with-sink layers (257 -> 225 ms).
+- Framework fixes this run: F38 template kwargs (thinking models), F39 custom HF loader, F40 subsets stop at their last
+  layer (goldens, parity) + physical-core threads, F41 contract serves the subset, F42 full prefill of a subset.
+- Open: V padded 128 -> 192 in the KV cache and SDPA (bandwidth); LM head on host; qkv / dense MLP in bf16 (bfp8 is a
+  candidate); the full 48-layer model does not fit the box.
