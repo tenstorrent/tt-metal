@@ -43,11 +43,9 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox calibration at 350413d7a98e (2026-08-31): median across five independent
-# sessions, each using the median of five warm synchronized 10-replay samples.
 _PERF_REFERENCE_MS = {
     "SP1xTP8": 9.597,
-    "SP2xTP4": 9.539,
+    "SP2xTP4": 9.122,
     "SP4xTP2": 9.991,
 }
 _GALAXY_PERF_REFERENCE_MS = 4.195
