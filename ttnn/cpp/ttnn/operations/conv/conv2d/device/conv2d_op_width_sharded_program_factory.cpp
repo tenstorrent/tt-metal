@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul/sfpu_activation_helpers_host.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -23,7 +23,6 @@
 
 namespace ttnn::prim {
 
-namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
 
@@ -410,11 +409,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
 
-    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
-    if (fused_activation.has_value() && !pack_relu) {
-        compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
-    }
+    auto activation_config = compute_kernel_lib::get_activation_kernel_config(fused_activation);
+    bool pack_relu = activation_config.pack_relu;
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
@@ -508,8 +504,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         0,
         0,
         0,
-        0,                              // activation reuse related arguments
-        static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
+        0,                             // activation reuse related arguments
+        static_cast<uint32_t>(false),  // split_reader_cb_shared (not used in width sharded)
+        static_cast<uint32_t>(activation_config.type),
+        activation_config.param0,
+        activation_config.param1,
+        activation_config.param2};
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,

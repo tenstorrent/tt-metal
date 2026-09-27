@@ -16,8 +16,7 @@
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul/sfpu_activation_helpers_host.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -32,7 +31,6 @@
 
 namespace ttnn::prim {
 
-namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::get_num_cores_channels_from_parallel_config;
 using ttnn::operations::conv::is_1d_depthwise_conv;
@@ -916,11 +914,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
-    if (fused_activation.has_value() && !pack_relu) {
-        compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
-    }
+    auto activation_config = compute_kernel_lib::get_activation_kernel_config(fused_activation);
+    bool pack_relu = activation_config.pack_relu;
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
         reader_defines["SPLIT_READER"] = "1";
@@ -1145,6 +1140,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
         }
         compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
+        compute_kernel_args.push_back(static_cast<uint32_t>(activation_config.type));
+        compute_kernel_args.push_back(activation_config.param0);
+        compute_kernel_args.push_back(activation_config.param1);
+        compute_kernel_args.push_back(activation_config.param2);
     }
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());

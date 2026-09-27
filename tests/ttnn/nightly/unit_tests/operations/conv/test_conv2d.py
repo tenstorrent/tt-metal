@@ -136,6 +136,7 @@ def run_conv(
     force_split_reader=None,
     core_grid=None,
     perf_test_mode=False,
+    activation_reference=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -218,7 +219,7 @@ def run_conv(
             groups=groups,
         )
         # Handle UnaryWithParam activation type with direct enum mapping
-        act_func = get_golden_function_for_activation(activation)
+        act_func = activation_reference or get_golden_function_for_activation(activation)
         if act_func:
             ref = act_func(ref)
 
@@ -676,6 +677,97 @@ def test_conv_packer_l1_acc_untilize_activation_without_bias(device, torch_tenso
         packer_l1_acc=True,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSIGMOID),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.MISH, 0.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.MISH, 1.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, -0.5, 0.75),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SELU, 1.05, 1.67),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 2.0, 10.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.125),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.ELU, 1.0),
+    ],
+)
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("packer_l1_acc", [False, True])
+@pytest.mark.parametrize("shard_layout, input_side", [(BS, 32), (WS, 8)])
+def test_conv_activation_thread_policy(
+    device, torch_tensor_map, activation, has_bias, output_layout, packer_l1_acc, shard_layout, input_side
+):
+    # The generic golden helper discards UnaryWithParam parameters. Keep these
+    # explicit so this test catches incorrect scalar encoding as well as dispatch.
+    activation_reference = None
+    if activation is not None:
+        if activation.op_type == ttnn.UnaryOpType.HARDTANH:
+            activation_reference = lambda x: torch.nn.functional.hardtanh(x, -0.5, 0.75)
+        elif activation.op_type == ttnn.UnaryOpType.SELU:
+            activation_reference = lambda x: 1.05 * torch.where(x >= 0, x, 1.67 * torch.expm1(x))
+        elif activation.op_type == ttnn.UnaryOpType.SOFTPLUS:
+            activation_reference = lambda x: torch.nn.functional.softplus(x, beta=2.0, threshold=10.0)
+        elif activation.op_type == ttnn.UnaryOpType.LEAKY_RELU:
+            activation_reference = lambda x: torch.nn.functional.leaky_relu(x, negative_slope=0.125)
+        elif activation.op_type == ttnn.UnaryOpType.ELU:
+            activation_reference = lambda x: torch.nn.functional.elu(x, alpha=1.0)
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        2,
+        128,
+        128,
+        input_side,
+        input_side,
+        3,
+        3,
+        1,
+        1,
+        (1, 1),
+        None,
+        shard_layout=shard_layout,
+        output_layout=output_layout,
+        has_bias=has_bias,
+        packer_l1_acc=packer_l1_acc,
+        activation=activation,
+        activation_reference=activation_reference,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("shard_layout, input_side", [(BS, 32), (WS, 8)])
+@pytest.mark.parametrize("activation", [ttnn.UnaryOpType.LOG])
+def test_conv_activation_rejects_unsupported(
+    device, torch_tensor_map, expect_error, shard_layout, input_side, activation
+):
+    with expect_error(RuntimeError, "Unsupported UnaryOpType for fused activation"):
+        test_conv_activation_thread_policy(
+            device,
+            torch_tensor_map,
+            ttnn.UnaryWithParam(activation),
+            False,
+            ttnn.TILE_LAYOUT,
+            False,
+            shard_layout,
+            input_side,
+        )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -5863,7 +5955,6 @@ def test_conv2d_fp32_input_no_fp16_saturation(device):
     assert passed, msg
 
 
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "shard_layout, output_channels, input_channels, input_height, input_width, config",
@@ -6065,3 +6156,59 @@ def _zero_div_conv2d_act_block_h_override_presharded(device):
 def test_conv2d_invalid_divisor_args_raise(device, expect_error, run, message):
     with expect_error(RuntimeError, message):
         run(device)
+
+
+# Cover shared partial/output storage and dedicated partials for untilized output.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "output_layout, packer_l1_acc, has_bias",
+    [
+        (ttnn.TILE_LAYOUT, False, False),
+        (ttnn.ROW_MAJOR_LAYOUT, False, False),
+        (ttnn.ROW_MAJOR_LAYOUT, True, True),
+        (ttnn.ROW_MAJOR_LAYOUT, False, True),
+        (ttnn.TILE_LAYOUT, True, True),
+        (ttnn.TILE_LAYOUT, False, True),
+        (ttnn.TILE_LAYOUT, True, False),
+    ],
+    ids=[
+        "software_reload_tiled_alias",
+        "software_reload_untilize",
+        "l1acc_bias_untilize",
+        "software_reload_bias_untilize",
+        "l1acc_bias_tiled_alias",
+        "software_reload_bias_alias",
+        "l1acc_tiled_alias",
+    ],
+)
+@pytest.mark.parametrize("act_block_h", [0, 32], ids=["auto-block", "multiple-blocks"])
+def test_conv2d_matmul_partials_storage(
+    device,
+    torch_tensor_map,
+    output_layout,
+    packer_l1_acc,
+    has_bias,
+    act_block_h,
+):
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=320,
+        input_channels=4,
+        input_height=128,
+        input_width=128,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1),
+        config_override={"act_block_h": act_block_h} if act_block_h else None,
+        shard_layout=HS,
+        has_bias=has_bias,
+        packer_l1_acc=packer_l1_acc,
+        output_layout=output_layout,
+    )
