@@ -945,10 +945,28 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)};
         case UnaryOpType::ASIN: return {"asin_tile_init();", fmt::format("asin_tile({});", idst)};
         case UnaryOpType::ASINH: return {"asinh_tile_init();", fmt::format("asinh_tile({});", idst)};
-        case UnaryOpType::ACOS: return {"acos_tile_init();", fmt::format("acos_tile({});", idst)};
-        case UnaryOpType::ACOSH: return {"acosh_tile_init();", fmt::format("acosh_tile({});", idst)};
+        case UnaryOpType::ACOS:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"acos_tt_poly_bf16_tile_init();", fmt::format("acos_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"acos_tile_init();", fmt::format("acos_tile({});", idst)};
+        case UnaryOpType::ACOSH:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"acosh_tt_poly_bf16_tile_init();", fmt::format("acosh_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"acosh_tile_init();", fmt::format("acosh_tile({});", idst)};
         case UnaryOpType::ATAN: return {"atan_tile_init();", fmt::format("atan_tile({});", idst)};
-        case UnaryOpType::ATANH: return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
+        case UnaryOpType::ATANH:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"atanh_tt_poly_bf16_tile_init();", fmt::format("atanh_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"atanh_tile_init();", fmt::format("atanh_tile({});", idst)};
         case UnaryOpType::TAN: return {"tan_tile_init();", fmt::format("tan_tile({});", idst)};
         case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
         case UnaryOpType::FLOOR:
