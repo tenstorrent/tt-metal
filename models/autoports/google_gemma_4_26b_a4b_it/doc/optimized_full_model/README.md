@@ -124,3 +124,5 @@ tracking (`trace_full_batch32.json`, `trace_mixed_slots.json`,
 
 Python-only changes: no native build needed. Source pre-commit checks pass.
 No vLLM adapter, broad datatype frontier search or remote push is included.
+
+Local implementation/evidence checkpoint: `9473a2e1b18be1dc9e5fe0add73a0f62ffcc115f`.
