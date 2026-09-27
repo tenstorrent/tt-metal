@@ -1217,6 +1217,10 @@ class TestConfig:
             return ""
         return '#include "barrier.h"\n'
 
+    def _kernel_placement_include(self) -> str:
+        """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h). The fuser writes its own."""
+        return "" if self.skip_build_header else '#include "kernel_placement.h"\n'
+
     def _kernel_source_include(self) -> str:
         """C++ snippet that pulls in this variant's driver.
 
@@ -1802,6 +1806,7 @@ class TestConfig:
                     TestConfig.TESTS_WORKING_DIR,
                     (
                         f"{self._barrier_reservation_include()}"
+                        f"{self._kernel_placement_include()}"
                         f"{self._kernel_source_include()}#include  <trisc.cpp>\n"
                     ),
                 )
