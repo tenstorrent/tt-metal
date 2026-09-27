@@ -826,7 +826,7 @@ def _build(stub, prompt, references):
 
 
 def test_presentation_orders_vision_patches_by_reference_not_by_batch():
-    """`_scatter_rows` consumes tower rows in run order, so processor-batch order would swap blocks."""
+    """`merge_vision` consumes tower rows in run order, so processor-batch order would swap blocks."""
     stub = _ProcessorStub(_weights_dir())
     video = rp.reference_from_video_file(_real_media(), with_audio=False)
     image = rp.MiniMaxH3Reference(image=_image(1024, 1024))
@@ -865,7 +865,7 @@ def test_presentation_vision_runs_line_up_with_the_towers_rows():
 
     assert len(runs) == sum(int(grid[0]) for grid in grid_thw)
     assert sum(length for _, length in runs) == sum(int(grid.prod()) for grid in grid_thw) // merge
-    # Runs are sorted and disjoint, which `_scatter_rows` requires outright.
+    # Runs are sorted and disjoint, which `vision_gather_indices` requires outright.
     assert all(a[0] + a[1] <= b[0] for a, b in zip(runs, runs[1:]))
     assert stub.tokenizer.decode(input_ids[0]).count("<Audio 1>") == 1
 

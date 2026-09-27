@@ -855,7 +855,7 @@ class MiniMaxH3Pipeline:
 
         Returns `(input_ids [1, L], token_tags [L], mm_token_type_ids [1, L], pixel_values, grid_thw)`,
         with the vision inputs concatenated in **presentation order** -- which is the whole reason this
-        is not two separate tower calls. `_scatter_rows` consumes the tower's merged rows *in run
+        is not two separate tower calls. `merge_vision` consumes the tower's merged rows *in run
         order*, so image and video patches batched separately (images first, then videos) would land in
         the wrong rows for any request whose video reference precedes an image. Concatenating both here,
         in reference order, makes the tower's output already correct and removes the reordering step
@@ -1100,9 +1100,8 @@ class MiniMaxH3Pipeline:
                     bf16_tensor(p_sin, device=self.mesh_device, **sp_kw),
                 ),
                 cu_seqlens=p_cu,
-                logical_patches=logical,
             )
-            # Both pad ids, in sequence order. `_scatter_rows` consumes the tower's rows in run
+            # Both pad ids, in sequence order. `merge_vision` consumes the tower's rows in run
             # order and the patches were concatenated in presentation order, so the two match.
             pad_ids = [self.tokenizer.convert_tokens_to_ids(token) for token in ("<|image_pad|>", "<|video_pad|>")]
             runs = vision_token_runs(input_ids, pad_ids)
@@ -1114,8 +1113,8 @@ class MiniMaxH3Pipeline:
                 len(runs) == expected_runs
             ), f"expected {expected_runs} vision run(s) in the presentation, found {len(runs)}"
             covered = sum(length for _, length in runs)
-            merged_rows = merged.shape[-2]
-            assert covered == merged_rows, f"vision runs cover {covered} rows but the tower emitted {merged_rows}"
+            real_tokens = logical // tower.spatial_merge_size**2
+            assert covered == real_tokens, f"vision runs cover {covered} rows but the tower has {real_tokens} tokens"
             # merged tokens REPLACE the `<|image_pad|>` row embeddings; deepstack features are ADDED to
             # those same rows after the first three decoder layers. Not interchangeable.
             vision_kwargs = {"vision_embeds": merged, "vision_runs": runs, "deepstack_embeds": deepstack}
@@ -2211,6 +2210,7 @@ class MiniMaxH3Pipeline:
 
         warm_image = Image.new("RGB", (64, 64), (127, 127, 127))
         before = self.mesh_device.num_program_cache_entries()
+        tower_sizes = set()
 
         for n_keyframes, canvas in served_envelope(self.task, patch_alignment=alignment):
             if canvas is None:
@@ -2222,7 +2222,8 @@ class MiniMaxH3Pipeline:
                     prepare_keyframe_image(warm_image, height, width, stretch=(i == 0)) for i in range(n_keyframes)
                 ]
                 probe = self._filler_prompt(1)
-                probe_ids, *_ = self._build_presentation(probe, keyframes)
+                probe_ids, _tags, _type_ids, pixel_values, _grid = self._build_presentation(probe, keyframes)
+                tower_sizes.add(align_up(pixel_values.shape[0]))
                 probe_tokens = len(self.tokenizer(probe, add_special_tokens=False)["input_ids"])
                 vision_len = probe_ids.shape[1] - probe_tokens
 
@@ -2237,6 +2238,7 @@ class MiniMaxH3Pipeline:
                 embeds, _ = self.encode_prompt(prompt, keyframes=keyframes)
                 ttnn.deallocate(embeds)
 
+        self._warm_vision_merge(range(alignment, align_up(caps.prompt) + 1, alignment), sorted(tower_sizes))
         self._host_log(
             f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
         )
@@ -2289,10 +2291,42 @@ class MiniMaxH3Pipeline:
             #     f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
             # )
 
+        self._warm_vision_merge(self.presentation_ladder, self.vision_patch_ladder)
         self._host_log(
             f"ref2va prompt encoder envelope warmed: "
             f"+{self.mesh_device.num_program_cache_entries() - before} programs"
         )
+
+    def _warm_vision_merge(self, seq_lens: Sequence[int], tower_sizes: Sequence[int]) -> None:
+        """Compile the text encoder's `merge_vision` for every reachable `(sequence length, tower size)`
+        pair, strictly before trace capture.
+
+        Its programs are keyed only on those two shapes, and the prompt-encoder warm units do not visit
+        every pair. `tower_sizes` is ascending, in padded patches; a size is reachable at a sequence
+        length only if the tokens of the size below it fit.
+        """
+        encoder = self._prepare_text_encoder()
+        tower = self._prepare_vision_tower()
+        merge = tower.spatial_merge_size**2
+        hidden = encoder.embed_tokens.weight.total_shape[-1]
+
+        def zeros(shape: tuple[int, ...]) -> ttnn.Tensor:
+            return ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+
+        for seq_len in seq_lens:
+            text = zeros((1, seq_len, hidden))
+            below = 0
+            for size in tower_sizes:
+                if below // merge >= seq_len:
+                    break
+                vision = zeros((size // merge, hidden))
+                merged, deepstack = encoder.merge_vision(
+                    text, vision, [(0, 1)], [vision] * len(tower.deepstack_visual_indexes)
+                )
+                for x in (merged, *deepstack, vision):
+                    ttnn.deallocate(x)
+                below = size
+            ttnn.deallocate(text)
 
     def _rung_captured(self, rung: int) -> bool:
         transformer = self._transformer
