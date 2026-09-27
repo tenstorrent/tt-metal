@@ -473,3 +473,45 @@ def test_device_generate_traced_matches_untraced(device):
             assert tt_model._trace_id is None, "generate() left its trace alive"
     finally:
         tt_model.release_decode_trace()
+
+
+@pytest.mark.parametrize(
+    "prefix_len, max_tokens, want",
+    [
+        (177, 160, 384),  # 2026-09-23 clip 1 worst case (prefix 177, 20 x 8 target text tokens)
+        (209, 800, 1024),  # 2026-09-23 clip 4 worst case: over the 512 those scripts hardcoded
+        (200, 10, 256),  # prefill padding (200 -> 256) dominates a short decode
+        (128, 0, 128),  # exact multiple, nothing to decode
+    ],
+)
+def test_required_max_seq_len(prefix_len, max_tokens, want):
+    from models.demos.audio.cosyvoice2.tt.llm.qwen2lm import required_max_seq_len
+
+    assert required_max_seq_len(prefix_len, max_tokens) == want
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+def test_device_generate_refuses_request_over_context_budget(device, monkeypatch, expect_error):
+    """`generate()` must refuse a call whose prefix + `max_tokens` does not fit `max_seq_len`,
+    before prefill -- nothing else bounds the decode position, so such a call used to run off
+    the end of the KV cache / RoPE table once generation got long enough. The same model must
+    accept a call sized to exactly `max_seq_len`. The sampler emits a stop token at once, so
+    neither call decodes past the budget whatever the check does: on code without the check,
+    the over-budget call returns [] instead of raising and this test fails."""
+    import models.demos.audio.cosyvoice2.tt.llm.sampling as sampling_module
+    from models.demos.audio.cosyvoice2.tt.llm.qwen2lm import TtQwen2LM, required_max_seq_len
+
+    args, state_dict = _build_args_and_state_dict(device)  # max_seq_len=256
+    tt_model = TtQwen2LM(args, device, state_dict)
+    monkeypatch.setattr(sampling_module, "greedy", lambda weighted_scores: tt_model.eos_token)
+
+    text_ids = torch.randint(0, args.vocab_size, (1, 6))
+    speech_ids = torch.randint(0, 6561, (1, 30))
+    prefix = TtQwen2LM.prefix_len(text_ids, speech_ids)
+    assert prefix == 1 + 6 + 1 + 30
+    fits = args.max_seq_len - prefix
+    assert required_max_seq_len(prefix, fits) == args.max_seq_len
+
+    assert tt_model.generate(text_ids, speech_ids, max_tokens=fits, sampler="greedy") == []
+    with expect_error(ValueError, "needs max_seq_len >= 384"):
+        tt_model.generate(text_ids, speech_ids, max_tokens=fits + 1, sampler="greedy")

@@ -93,6 +93,20 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup, get_rot_m
 PREFILL_SEQ_MULTIPLE = 128
 
 
+def _round_up(n: int, multiple: int) -> int:
+    return -(-n // multiple) * multiple
+
+
+def required_max_seq_len(prefix_len: int, max_tokens: int) -> int:
+    """Smallest `ModelArgs.max_seq_len` one `generate()` call can use without leaving the KV
+    cache / RoPE tables: prefill writes the prefix right-padded to `PREFILL_SEQ_MULTIPLE`, and
+    decode then writes positions `prefix_len .. prefix_len + max_tokens - 1` (the loop decodes
+    every appended token, including the last). Rounded up to `PREFILL_SEQ_MULTIPLE`. Size
+    `ModelArgs` with this from the real inputs (`TtQwen2LM.prefix_len` + the call's
+    `max_tokens`); `generate()` refuses any call that does not fit."""
+    return _round_up(max(_round_up(prefix_len, PREFILL_SEQ_MULTIPLE), prefix_len + max_tokens), PREFILL_SEQ_MULTIPLE)
+
+
 class TtSmallEmbedding(LightweightModule):
     """A small, CosyVoice-specific embedding table (speech tokens, or the
     2-row sos/task_id table) -- not tt_transformers' `Embedding`, which is
@@ -329,11 +343,19 @@ class TtQwen2LM:
         """
         sos_emb = self.embed_llm_tokens_host(torch.tensor([[0]]))
         task_emb = self.embed_llm_tokens_host(torch.tensor([[1]]))
+        # Keep in step with `prefix_len` below, which sizes the context budget from the same parts.
         text_emb = self.embed_text_tokens_host(text_ids)
         parts = [sos_emb, text_emb, task_emb]
         if prompt_speech_ids is not None and prompt_speech_ids.numel() > 0:
             parts.append(self.embed_speech_tokens_host(prompt_speech_ids))
         return torch.cat(parts, dim=1)
+
+    @staticmethod
+    def prefix_len(text_ids: torch.Tensor, prompt_speech_ids: torch.Tensor | None = None) -> int:
+        """Length of the sequence `assemble_prefill_sequence` builds: sos + text + task_id +
+        prompt speech tokens (none when `prompt_speech_ids` is None or empty)."""
+        speech = prompt_speech_ids.shape[1] if prompt_speech_ids is not None and prompt_speech_ids.numel() > 0 else 0
+        return 1 + text_ids.shape[1] + 1 + speech
 
     # ------------------------------------------------------------------
     # Prefill / decode
@@ -597,9 +619,21 @@ class TtQwen2LM:
         is `sampling_ids` masking `eos_token`'s logit to `-inf` before sampling while
         `i < min_len` -- `fill_token`/the unnamed ID are never masked at any point, and
         the break itself is unconditional once any of the three is actually sampled.
+
+        Context budget: raises `ValueError` up front -- before prefill, before any trace -- if
+        the prefix plus `max_tokens` does not fit `args.max_seq_len` (see `required_max_seq_len`).
+        Nothing else bounds the decode position, so an oversized request used to run off the end
+        of the KV cache / RoPE table silently once generation got long enough.
         """
         from .sampling import greedy, ras_sampling
 
+        prefix = self.prefix_len(text_ids, prompt_speech_ids)
+        needed = required_max_seq_len(prefix, max_tokens)
+        if needed > self.args.max_seq_len:
+            raise ValueError(
+                f"generate(): prefix {prefix} + max_tokens {max_tokens} needs max_seq_len >= {needed}, "
+                f"but ModelArgs.max_seq_len is {self.args.max_seq_len}; size it with required_max_seq_len()"
+            )
         if use_trace is None:
             use_trace = self.use_decode_trace
         if seed is not None:
