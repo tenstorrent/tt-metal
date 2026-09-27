@@ -4,22 +4,11 @@
 
 #pragma once
 
-#include <cstdint>
+#include "ttnn/cpp/ttnn/kernel_lib/activation_types.hpp"
 
 namespace ttnn::operations::matmul {
 
-enum class KernelActivation : uint32_t {
-    NONE,
-    GELU,
-    GELU_TANH,
-    TANH,
-    SILU,
-    RELU6,
-    SIGMOID,
-    HARDSIGMOID,
-    HARDTANH,
-    SELU,
-    SOFTPLUS
-};
+using compute_kernel_lib::ActivationThread;
+using compute_kernel_lib::KernelActivation;
 
 }  // namespace ttnn::operations::matmul
