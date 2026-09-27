@@ -157,3 +157,6 @@ Independent final stage review returned clean-pass (stage_review.md), with no
 required work. Python-only implementation: no C++ build required. Host contract
 tests84/84 and code pre-commit passed; evidence pre-commit checked separately.
 Local checkpoint SHAs are recorded in checkpoints.json; no push.
+
+Local implementation/evidence checkpoint: `8148e15d639eaf777953f096f1f570adc53455a7`.
+Unmodified vLLM checkpoint: `7f72b1c6e905f5137fe3377f2e7b42738d3f271d`. Commit hooks passed.
