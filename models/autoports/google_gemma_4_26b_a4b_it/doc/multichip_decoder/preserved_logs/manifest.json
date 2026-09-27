@@ -1853,5 +1853,10 @@
     "source": "final_context_check.log",
     "sha256": "672c8f8e3811cc8a9d8b5d4c1774dd1f34d7c1d3b1e7fe39f40bbe2d963d70f1",
     "compressed": "preserved_logs/final_context_check.log.gz"
+  },
+  {
+    "source": "stage_review_final_cli.log",
+    "sha256": "d686e1d9904c5ed7ba4dde038a25c50a54a0c3ebd198cbc4d92bea6f7384776b",
+    "compressed": "preserved_logs/stage_review_final_cli.log.gz"
   }
 ]

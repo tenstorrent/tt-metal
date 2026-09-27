@@ -1,209 +1,80 @@
-# Stage Review
+# Stage04 Multichip Decoder Stage Review
 
-Verdict: **more-work-needed**
+Verdict: clean-pass
 
-Stage 04, `multichip-decoder`, `google/gemma-4-26B-A4B-it`. Independent,
-source-and-artifact review of the live worktree on branch
-`gemma-4-26b-a4b-it`, starting commit
-`2e3a1779d3271bf33f0083cb03c9bb56feddc03d`, optimized baseline `a9259624f2`.
-Reviewed runtime SHA256:
-`a7c8370500079afd74548628186a565c758a2fd4b37b07993988938ea4479efb`.
-No hardware commands, implementation edits, or additional reviewers were used.
-
-The current documentation correctly calls this an incomplete attempt. The
-paired EP candidate has useful correctness evidence; it is not an accepted
-optimized decoder or a stage pass. No additional model arithmetic defect was
-demonstrated by this inspection. The failed Watcher gate and the incomplete
-capability/performance gates below remain required work.
+Reviewer mode: direct independent reviewer using the local `stage-review` skill. I did not spawn a sub-reviewer, open devices, import TTNN, run hardware tests, reset/profile devices, or edit implementation. This report is the only mutation made by the review turn.
 
 ## Required Work
 
-- **P1: Resolve the fabric exit failure before claiming Watcher acceptance.**
-  Evidence: `ep_watch_noinline.log` prints all numerical checks and
-  `EP_PROBE_PASS`, then captures the device 0, virtual Ethernet core `(28,25)`
-  subordinate packet-tag assertion at `20:41:10.171`. The probe prints its pass
-  marker after Python mesh close (`tests/probe_multichip_expert_parallel.py:166-169`),
-  but the process subsequently aborts. Both `ccl_watcher.log` and
-  `ccl_watcher_single_erisc.log` pass BF16/FP32 reductions and then abort at the
-  same core's firmware heartbeat wait. The latter explicitly enables the
-  supported single-ERISC override. Firmware discovery reports `19.9.0`.
-  Why this matters: correct numerical output and a successful no-payload mesh
-  smoke do not establish the required clean kernel/process handoff. Source
-  confirms the zero-tag assertion after `kernel_main` in
-  `tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc:41-51`; the router teardown
-  drains transactions without an explicit tag clear, whereas the neighboring
-  mux clears tags after its barrier. The proposed infrastructure cause is
-  supported, but its repair has not been applied or verified.
-  Required next step: obtain a repaired infrastructure revision or separately
-  authorized infrastructure work, then rerun the minimal CCL control, original
-  EP probe, and final decoder checks with all Watcher features and normal
-  process exit. Do not suppress checks or classify this as a false positive.
-  `AUTOFIX_watcher.md` records an unsuccessful scoped workaround, so this is an
-  actual external scope blocker, not an uninvestigated first failure. This
-  review does not authorize C++ changes or certify a proposed patch.
+None.
 
-- **P1: Validate the preserved multichip capability contract on the final path.**
-  Evidence: the current EP paired JSONs cover one request, 4096 prefill tokens,
-  128 advancing decode positions, and eight local K/V comparisons per layer
-  kind. The context contract now accurately records the largest exercised
-  multichip context as 4224 and the target 262144 as unvalidated. Short length
-  65 controls exist for earlier TP candidates. The batch/prefix harness
-  (`tests/test_multichip_contracts.py`) and two-layer handoff harness
-  (`tests/test_multichip_stack.py`) have no execution results. No multichip
-  maximum/non-aligned maximum-context or request-reuse stress result exists.
-  Why this matters: inherited single-chip orchestration does not validate the
-  changed local-head ownership, per-rank cache mapping, collectives, trace
-  signatures, and cumulative stack behavior at those boundaries.
-  Required next step: after the infrastructure gate is repaired, run the
-  contract's maximum and non-aligned contexts for both layer kinds, paged
-  prefix/slot preservation and request reuse, larger logical batches, direct
-  stack handoff, and repeated/stress execution with fallback guards. Record
-  source-matched results for the selected path. Preserve 262144 unless a hard
-  physical limit and the largest feasible value are actually demonstrated.
+The final Stage04 multichip-decoder evidence satisfies the original contract for the scoped runtime, tests, docs and context artifacts. I found no correctness, context, cache ownership, trace, watcher, stack-interface, active-expert, or selected-profile evidence gap that requires more work before the stage can pass.
 
-- **P2: Finish topology/geometry selection and reproduce the selected default.**
-  Evidence: recomputed EP host-wall medians give prefill speedups
-  `2.2040718` sliding and `2.1704462` full, but decode speedups only
-  `0.8816024` and `0.9373927`; four-device efficiencies are respectively
-  `0.551018/0.220401` and `0.542612/0.234348`. Sliding TP v2's 864.36 us decode
-  is also slower than its paired 824.99 us TP1 baseline. The only measured
-  hidden-sharded residual control uses full attention at length 65, and the
-  fused-CCL harness is explicitly unrun. `expert_parallel=False` remains the
-  runtime default; no final winner is declared.
-  Why this matters: the stage's practical multichip optimization goal has not
-  been established, and the short residual control does not reject the
-  headline-workload sharded/fused families. A prefill win alone does not prove
-  the primary traced-decode optimization. The documentation appropriately
-  refrains from claiming that it does.
-  Required next step: complete the already-planned compatible residual/CCL
-  families and material role-specific geometry/precision comparisons under
-  the target workload, address applicable native-profile advice, then select
-  and rerun the default against the strongest correct candidates and paired
-  optimized TP1 baseline. A measured, explicit target tradeoff is acceptable;
-  neither an unmeasured hybrid nor an isolated component win is final evidence.
+## Clean-Pass Basis
 
-- **P2: Obtain final target native profiles and matched rooflines.**
-  Evidence: `profile_v0.json` and `profile_v0/provenance.json` describe an older
-  sliding TP v0 candidate at 4096/1. The raw CSV independently reproduces
-  2229 prefill operations per rank and a maximum full-rank span of
-  `825575.946667 us`; one decode replay has 139 operations per rank and a
-  maximum span of `999.845185 us`. These match `whole_layer.json` exactly.
-  Human tables and report CSVs exist, contain advice, and expose the old
-  sparse projection geometry. They do not profile final EP/TP v2 or the full
-  attention target. The telemetry packet correctly leaves target device time
-  and utilization null.
-  Why this matters: valid diagnostic profiling cannot establish the final
-  selected dtype/fidelity, whole-layer device latency, bandwidth/compute
-  utilization, or target performance for both representative kinds.
-  Required next step: profile warmed prefill and traced decode separately for
-  the final selected path and required workload, retain human and CSV reports
-  with exact source/command provenance, and reconcile whole-layer device time,
-  host time, and the declared roofline estimates. Continue to leave unknown
-  target telemetry null until matching evidence exists.
+- Source provenance is consistent. The reviewed runtime is `tt/multichip_decoder.py` at SHA256 `a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255`, matching `source_provenance.json`, final validation JSONs, stress artifacts, watcher artifacts and profile runs. The optimized baseline hash is recorded as `5ff391a2efb6096e7d9eaa499c6d19a8548cf9a60d108425e773d4ded72ee898`.
+- The runtime default policy matches the selected policy: 1x4 mesh, TP4, Linear topology, hybrid EP prefill plus indexed TP decode experts, grouped MoE reduction, fused tail, optimized shared MLP, selected LoFi QKV/output fidelity, BF16 sliding attention CCL, BFP8 full attention CCL, sliding BFP8 grouped MoE CCL, and local paged KV caches.
+- Source inspection re-derived the important contracts: `(1,4)` mesh enforcement, Blackhole worker-grid check, unrestricted logical lengths over the fixed 1024 internal chunk size, context bound checks against `max_position_embeddings`, replicated `[1,1,S,2816]` interface, current-position tensors owned by the runtime, chunk/page-table slicing for prefill, decode cache position use, grouped shared/routed MoE reduction, and indexed decode expert setup.
+- Active expert selection is preserved. Runtime source calls `enable_indexed_decode(...)`; final native `whole_layer.json` files report sparse decode reads with `active: 8`, `indexed: true`, and compact output group dimensions. Dense all-expert decode is not the selected path.
+- Baseline correctness passes for both layer kinds. `final_validation_summary.json` reports all required final checks passing on the reviewed runtime hash. The 4096 input / 128 decode traced stress artifacts pass with duplicate replays: sliding min decode PCC `0.9976112404200184`, min cache PCC `0.9999966584468448`; full min decode PCC `0.9994477563467595`, min cache PCC `0.9999715022296233`.
+- Context preservation is covered. `context_contract.json` and `memory_capacity_plan.json` preserve advertised context `262144`, `capability_reduction: false`, and `logical_length_alignment_required: false`. Final max-context artifacts cover both `262143+1` nonaligned traced decode and `262144+0` prefill for sliding and full layers with resident full-stack reservation bounds and current runtime hash.
+- Cache, positions, page ownership and stack interface are covered. `test_multichip_contracts.py` exercises heterogeneous batch32 logical lengths, prefix preservation, page table/current-position/cache-position rebinding across trace replay, and other-slot preservation. `stack_final_policy.json` passes two-layer sliding/full direct handoff with independent caches, one trace scope, repeat-trace equality and all replicas equal.
+- Watcher evidence is clean. `final_watcher_summary.json` records sliding and full watcher runs with exit code 0, watcher checks enabled, noinline enabled, and passing PCCs on runtime hash `a12a913cf752b765338736dc71f71151ab972af1529a0098455755dd4f499255`.
+- Final target workload profiling is present for both layer kinds. `profile_final_sliding/whole_layer.json` and `profile_final_full/whole_layer.json` both set workload `{input_tokens: 4096, output_tokens: 128, batch: 1, concurrency: 1}`, `target_workload_measured: true`, and selected mesh `[1,4]`. The final device windows are sliding `325830.533 us` prefill and `705.420 us` decode; full `309683.707 us` prefill and `766.584 us` decode.
+- Whole-layer roofline denominators include gaps and all device operations. I inspected `tests/summarize_multichip_perf.py`: it collects rows between `PERF_*` and `PERF_*_END`, groups by replay session/device, computes each device window from first firmware start to last firmware end, then uses the maximum device span per replay. The JSON assumptions explicitly state all padding, inactive prefill-union work, normalization/transcendentals and gaps remain in the time denominator. `capture_integrity.json` passes for both profiles with 128 decode replay sessions per device, stable op sets, and no invalid firmware spans.
+- Profile provenance is adequate. Both final profile directories contain native-derived `whole_layer.json`, `whole_layer.windows.csv`, passing `capture_integrity.json`, `op_accounting.json`, `perf_report_commands.json`, compressed `*_perf_report.csv.gz`, compressed `*_table.txt.gz`, and SHA256 provenance. The final `tt-perf-report` commands use explicit `PERF_PREFILL_END` and `PERF_DECODE_END` filters, and `final_signpost_filter_check.json` confirms merged table row counts match native phase counts. The final telemetry packet mirrors the same workload, mesh and whole-layer profile numbers.
+- Optimization rejection is sufficient for this stage. `final_policy_alternatives.json` compares matched final-policy controls for sliding sparse gate/down/shared options and sharded-residual/Ring/fused-AGMM controls for both layer kinds; all measured alternatives are slower than the selected default while preserving correctness. Broader historical candidates and advice handling are documented in `optimization_advice_audit.md`.
 
 ## Other Concerns
 
-- The two CCL controls show heartbeat timeouts, not second independently
-  captured packet-tag assertions. Their same immediate register cause remains
-  an inference. `AUTOTRIAGE_watcher.md` and `AUTOFIX_watcher.md` preserve this
-  distinction and do not overstate it. The generic minimum-firmware suffix in
-  `tt_metal/llrt/llrt.cpp:588-594` is unconditional on that timeout; it does not
-  contradict the recorded firmware version.
-- The memory plan was corrected during review to include the three full-length
-  BF16 prefill buffers. CPU arithmetic reproduces 8,556,380,160 cache bytes,
-  6,067,486,720 weight/state-bound bytes, 19,858,358,272 resident/reserve bytes,
-  and a 24,287,543,296-byte conservative peak per device. The hypothetical dual
-  layout's 29,085,106,176-byte peak is explicitly unselected and unimplemented.
-  `memory_audit.md` correctly requires shared per-kind RoPE, tied embeddings,
-  and prompt release of old layer/setup buffers. These calculations are not
-  allocator measurements or maximum-context execution proof.
-- The formatted runtime differs from the measured EP snapshot only by
-  formatting and top-level import ordering; removing import nodes gives an
-  identical AST, and the measured snapshot hash matches both EP results.
-  `source_provenance.json` and the revised README/work log now state that
-  narrower equivalence rather than claiming exact AST identity.
+- Final matched optimization controls are representative rather than exhaustive. Given the stage goal, the selected path has current correctness, stress, watcher, memory and native-profile evidence, and slower matched alternatives are recorded. I did not require another exhaustive sweep absent a concrete selected-policy risk.
 
 ## Hard-Check Gaps
 
-- Existing device-only guards cover the measured forwards and trace capture;
-  they are useful evidence for those shapes. They do not replace the missing
-  final context, batch, stack, and stress runs.
-- The paired runner uses identical real checkpoint layers and recorded input
-  fixtures, compares every replicated device output, refreshes input/position
-  buffers between replay steps, and checks bitwise repeated replay output.
-  The EP paired results contain 129 output PCC values and eight local-cache
-  PCC values per layer kind. Recomputed minima and medians match
-  `candidate_summary.json` and the telemetry accuracy rows.
-- Baseline/older TP artifacts lack the newer embedded runtime-hash field.
-  Their retained snapshots and chronology provide candidate context; the
-  source-hashed EP results provide stronger linkage for the current body.
-  This does not invalidate the declared diagnostic use of older artifacts.
-- Existing pre-commit logs show applicable hooks passing. Python/docs-only
-  changes do not require a C++ build. No test or build was rerun by this
-  reviewer. This verdict cannot satisfy the clean-pass gate or authorize a
-  stage-completion commit; preserving an incomplete attempt is a different
-  action.
+- I did not run any hardware, device reset, profiling, or TTNN import in this review, by explicit instruction. Hardware-dependent correctness and performance are accepted from the final artifacts only.
+- Real full-model allocation order and fragmentation remain deferred to the full-model stage, as stated in `context_contract.json`. Stage04 validates each real layer with anonymous full-stack resident reservations; it does not claim full-model generation or vLLM readiness.
+- Generic `tt-perf-report` unclassified-op warnings remain a limitation of those tool subtotals. The accepted denominator path is the native whole-layer summarizer, not the generic tt-perf-report utilization percentages.
 
 ## Anomaly Ledger
 
-- Observed anomaly: numerical EP success followed by packet-tag assertion.
-  Evidence: `ep_watch_noinline.log`, firmware exit assertion and router source.
-  Affected path: fabric kernel/process teardown with Watcher enabled.
-  Control or comparison: model-free RS also fails teardown; single-ERISC
-  fallback does not fix it; a normal recovered mesh open/close succeeds.
-  Likely subsystem: fabric exit-state cleanup, with shared CCL-control cause
-  inferred rather than captured directly.
-  Investigation performed: AutoTriage/source inspection and scoped AutoFix
-  controls; no C++ repair tested.
-  Resolution: **more-work-needed**, external scope blocker.
-
-- Observed anomaly: EP improves prefill but regresses traced decode.
-  Evidence: both paired EP JSONs and independently recomputed medians above.
-  Affected path: active expert execution plus collectives.
-  Control or comparison: paired OptimizedDecoder and prior TP candidates.
-  Likely subsystem: changed expert ownership/geometry, sparse scanning and
-  communication; no single cost attribution is proven for final EP.
-  Investigation performed: TP geometry revisions, EP probe and paired target
-  runs; final topology and native attribution remain open.
-  Resolution: **more-work-needed**, no unsupported performance win accepted.
-
-- Observed anomaly: apparent slow profiler close and an earlier overlapping
-  recovery/reduced-check retry.
-  Evidence: `AUTOTRIAGE.md`, `AUTOFIX_ep.md`, later preserved recovery logs.
-  Affected path: experiment lifecycle.
-  Control or comparison: profiler eventually completed; the overlapped retry
-  did not execute EP and is excluded from acceptance. Subsequent CCL controls
-  and recovery were recorded separately; final normal mesh smoke completes.
-  Likely subsystem: host shutdown/instrumentation and experiment orchestration.
-  Investigation performed: saved triage and bounded reset/list/mesh recovery.
-  Resolution: **controlled for the stated diagnostic use**; does not resolve
-  the independent Watcher failure.
+- Anomaly: Final profile generation was still in progress during review.
+  - Evidence: A `profile_final_full` post-processing process was observed, then later exited; both final profile directories subsequently contained whole-layer, integrity, compressed report and provenance files.
+  - Affected subsystem: Profile packaging.
+  - Investigation performed: Re-polled process state and final profile file trees, then inspected `whole_layer.json`, `capture_integrity.json`, `perf_report_provenance.json` and command logs.
+  - Resolution: Controlled; final artifacts are present and stable at report time.
+- Anomaly: Generic `tt-perf-report` signpost warnings were present in an earlier profile postprocess pass.
+  - Evidence: Review-time `prefill_csv.log` and `decode_csv.log` first showed identical start/end signpost filters; compact prior outputs are preserved under `profile_final_{sliding,full}/prior_signpost_filter/`.
+  - Affected subsystem: Supporting tt-perf-report tables.
+  - Control or comparison: Current final `perf_report_commands.json` uses `PERF_PREFILL_END` and `PERF_DECODE_END`; `final_signpost_filter_check.json` confirms phase row counts; native `capture_integrity.json` sees both end signposts; `summarize_multichip_perf.py` uses the explicit end signposts for accepted whole-layer windows.
+  - Resolution: Fixed before final commit; generic tables remain supporting evidence only.
+- Anomaly: Historical router-placement full-layer divergence under an old full-layer BFP8 path.
+  - Evidence: README anomaly section and `AUTOFIX_full_router1_bfp8.md`.
+  - Affected subsystem: Router placement and sparse MoE decode.
+  - Control or comparison: Final runtime isolates router placement at `(10,9)` and passes full-layer stress, watcher, stack and profile capture integrity.
+  - Resolution: Controlled in selected runtime.
+- Anomaly: Historical sharded RoPE precision/configuration failures.
+  - Evidence: README anomaly section and `AUTOFIX_sharded_rope.md`.
+  - Affected subsystem: Sliding decode RoPE.
+  - Control or comparison: Final default uses the validated selected RoPE policy; final sliding stress, cache checks and watcher pass.
+  - Resolution: Controlled; slower/invalid variants are not selected.
+- Anomaly: Device-converted sliding BFP4 expert packing failed PCC historically.
+  - Evidence: README anomaly section and `AUTOFIX_final_policy_packing.md`.
+  - Affected subsystem: Sliding expert GU packing.
+  - Control or comparison: Final runtime uses raw host BFP4 packing and passes final sliding stress, max-context, watcher and profile evidence.
+  - Resolution: Controlled in selected runtime.
+- Anomaly: Native profiler overflowed at larger capture count historically.
+  - Evidence: README anomaly section and `AUTOFIX_profile_selected_abort.md`.
+  - Affected subsystem: Profile capture capacity.
+  - Control or comparison: Final 100k profile captures close cleanly with per-device/replay metadata and passing capture integrity.
+  - Resolution: Controlled for the final profile workload.
 
 ## Scope Inspected
 
-- Goal/skill paths: supplied Stage 04 contract;
-  `.agents/skills/{stage-review,multichip,optimize,tt-device-usage}/SKILL.md`.
-- Artifacts: stage README/work log, mesh and fused-CCL plans, context contract,
-  memory plan/audit, candidate and paired JSONs, runtime snapshots/provenance,
-  AutoFix/AutoTriage reports, raw EP/CCL Watcher and recovery logs, preserved
-  log hashes, native v0 raw CSV, human reports, CSVs and whole-layer windows;
-  telemetry packet
-  `bringup/artifacts/multigoal-runs/20260925T171711Z/telemetry/packets/cd88dda8-3baa-459f-9ff7-6beb4847565d.json`.
-- Code: `tt/multichip_decoder.py`, inherited optimized/fused decoder and runtime
-  audit paths, paired runner, batch/prefix and stack harnesses, EP/CCL probes,
-  multichip performance summarizer, Gemma4 mesh CCL helpers, and cited firmware,
-  router, mux and heartbeat-wait source.
-- Commands: read-only `git status/rev-parse/branch`, `find`, `cat`, `sed`,
-  `grep`, `nl`, and small Python standard-library scripts to recompute PCC
-  summaries/timing ratios, AST/hash provenance, memory arithmetic, compressed
-  log hashes and native firmware timestamp windows. `rg` was unavailable.
-  Only this report was written by the reviewer.
+- Goal and skill instructions: original Stage04 prompt, `stage-review`, `multichip`, `tt-device-usage`, `optimize`, and relevant LLM multi-device best-practice notes.
+- Runtime and tests: `tt/multichip_decoder.py`, `tests/run_multichip_decoder.py`, `tests/test_multichip_contracts.py`, `tests/test_multichip_stack.py`, `tests/runtime_audit.py`, and `tests/summarize_multichip_perf.py`.
+- Final docs and artifacts: `README.md`, `work_log.md`, `selected_policy_audit.md`, `source_provenance.json`, `mesh_plan.md`, `memory_capacity_plan.json`, `../context_contract.json`, `final_validation_summary.json`, `runtime_fallback_audit.md`, `optimization_advice_audit.md`, `final_policy_alternatives.json`, `final_watcher_summary.json`, final stress/max-context/batch/stack artifacts, final profile directories, and telemetry packet `bff5abf7-6db4-4696-8fc0-a904af9d0396.json`.
+- Read-only commands used: `sed`, `grep`, `find`, `jq`, `sha256sum`, `git status`, `git diff --stat`, `git rev-parse`, `ps`, `head`, `tail`, and `wc`-style file inspection. No device or TTNN command was run.
 
 ## Residual Risk
 
-All accepted claims remain limited to their named candidate runs. No text
-generation/full-model/vLLM result is claimed or required from this decoder-only
-stage. The final hardware path, maximum context, cumulative resource ownership,
-and performance remain unvalidated. After the external repair and outstanding
-contract work, a new independent review must return clean-pass before stage
-completion is claimed.
+Residual risk is limited to hardware-artifact trust, full-model allocation behavior deferred to the full-model stage, and generic tt-perf-report subtotal limitations. Within the Stage04 multichip-decoder scope, the final runtime and evidence are sufficient for clean-pass.
