@@ -34,7 +34,28 @@ EXPERTS = int(os.environ.get("MIMO_KREF_EXPERTS", "4"))
 ITERS = int(os.environ.get("MIMO_KREF_ITERS", "3"))
 H, I = int(os.environ.get("MIMO_KREF_H", "7168")), 2048
 RM = int(os.environ.get("MIMO_KREF_RM", "0"))
+XSTD = float(os.environ.get("MIMO_KREF_XSTD", "0.1"))
+CHECK = int(os.environ.get("MIMO_KREF_CHECK", "0"))  # 1: output vs the quantized-weight reference (norm ratio, PCC)
 STATS_PATH = Path(os.environ.get("MIMO_SE_STATS", "generated/mimo_stream_expert/cases.jsonl"))
+
+
+def _check(y, x, x_host, w, cnts, tok_pad, tag):
+    """Per-expert output vs the quantized-weight fp32 reference: norm ratio (PCC is scale-blind), rel err, PCC."""
+    from models.common.utility_functions import comp_pcc
+
+    q = lambda t, dt: ttnn.to_torch(ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT)).float()
+    # the op stores W^T ([H, I] gate / up, [I, H] down) in bfp4: quantize that layout
+    qg, qu, qd = (q(w[k].T.contiguous(), ttnn.bfloat4_b) for k in ("gate_proj", "up_proj", "down_proj"))
+    xq = q(x_host, ttnn.bfloat8_b)  # tiled bfp8 input, or the op's own bf16 -> bfp8 pack of a row-major input
+    yh = ttnn.to_torch(ttnn.get_device_tensors(y)[0]).float().reshape(-1, x_host.shape[1])
+    for e, c in enumerate(cnts):
+        xe = xq[e * tok_pad : e * tok_pad + c]
+        ref = (torch.nn.functional.silu(xe @ qg) * (xe @ qu)) @ qd
+        got = yh[e * tok_pad : e * tok_pad + c]
+        nr, rel = float(got.norm() / ref.norm()), float((got - ref).norm() / ref.norm())
+        logger.info(
+            f"{tag} expert {e} ({c} tok): norm ratio {nr:.4f}, rel err {rel:.4f}, PCC {comp_pcc(ref, got, 0)[1]:.5f}"
+        )
 
 
 @pytest.mark.timeout(1800)
@@ -86,7 +107,7 @@ def test_expert_ref_k2(mesh_device, path, tokens):
     tt_regions = ttnn.from_torch(regions, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     if RM:  # the model's input: the row-major bf16 dispatch buffer (the op tilizes / packs x itself)
         x = ttnn.from_torch(
-            torch.randn(E * tok_pad, H) * 0.1,
+            x_host := torch.randn(E * tok_pad, H) * XSTD,
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -94,7 +115,7 @@ def test_expert_ref_k2(mesh_device, path, tokens):
         )
     else:
         x = ttnn.from_torch(
-            torch.randn(E * tok_pad, H) * 0.1,
+            x_host := torch.randn(E * tok_pad, H) * XSTD,
             device=mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
@@ -126,6 +147,8 @@ def test_expert_ref_k2(mesh_device, path, tokens):
         ttnn.synchronize_device(mesh_device)
         if it:
             signpost(f"{tag}_end")
+        if it == 0 and CHECK:
+            _check(y, x, x_host, w, counts[0, ids].tolist(), tok_pad, tag)
         if y.buffer_address() != x.buffer_address():
             y.deallocate(True)
     logger.info(f"ran {tag}")

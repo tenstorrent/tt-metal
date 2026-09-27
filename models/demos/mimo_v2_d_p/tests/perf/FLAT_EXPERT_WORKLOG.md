@@ -287,3 +287,21 @@ fp32 gate/up costs where the 4-tile DST half forces smaller sub-blocks: +3-6% on
 512 per expert, +26% on K3 (NP 2 -> MT 1: 32-row sub-blocks). Accuracy first: default on; `MIMO_FL_GU_FP32=0` gives
 the old speed with the ~1.27 norm gain. Candidate follow-up: split the gate/up DST into two passes over the K loop
 (rows 0-1, 2-3) to keep 128-row sub-blocks with fp32, and fp32 for down (pcd column halves).
+
+### Same bias in the existing routed experts (unified / fused), 2026-09-27
+test_expert_ref_k2.py now has `MIMO_KREF_CHECK=1` (per-expert norm ratio / rel err / PCC vs the quantized-weight
+reference, weights quantized in the op's W^T layout). K2 7168x2048, bf4, 2 experts x 128 tokens, both paths bf16 DEST
+(fused hard-codes kFp32DestAccEn = false; unified runs packer_l1_acc = True, fp32_dest_acc_en = False):
+| input / x std | unified norm ratio (PCC) | fused norm ratio (PCC) |
+|---|---|---|
+| tiled bfp8, 0.1 | 1.016 (0.99958) | 1.021 (0.99941) |
+| tiled bfp8, 1.0 | 1.021 (0.99955) | 1.032 (0.99946) |
+| row-major bf16, 0.1 | 1.027 (0.99948) | 1.027 (0.99936) |
+| row-major bf16, 1.0 | 1.033 (0.99944) | 1.038 (0.99941) |
+Flat expert (x std 1.0, row-major): 1.27 (0.994) with bf16 DEST, 1.04 (0.998) with fp32 gate/up DEST.
+Why the references are ~10x less biased: they accumulate K in blocks through L1 (packer L1 accumulation), the flat
+kernel accumulated all of K in DEST. Plain ttnn.matmul (test_dest_gain_probe.py, K blocks of 8 tiles, 4 x 8 cores),
+norm ratio: bf16 DEST without packer L1 acc 1.0230 / 1.0845 at K 2048 / 7168, WITH packer L1 acc 1.0079 / 1.0085,
+fp32 DEST 1.0000 either way. So packer L1 accumulation per K-block (8 bf16 DST tiles, 128-row sub-blocks kept) is a
+cheaper alternative to fp32 DEST for the flat gate/up (~1.01 per matmul instead of 1.00; the final sum then has to
+come back from L1 to DST for the SFPU activation, as the fused op does).
