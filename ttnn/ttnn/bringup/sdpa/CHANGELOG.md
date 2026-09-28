@@ -67,3 +67,11 @@ Build fixes after fork_op.py (no behaviour change):
 - Needed by: mimo_v2_6_d_p (attention V head dim 128; the model calls the fork with V 128 since commit
   "Attention V at its real head dim 128", MIMO_V_PAD=1 restores ttnn.transformer with padded V)
 - Files: `device/sdpa_program_factory.cpp`, `device/sdpa_device_operation.cpp`, `tests/unit/`
+
+### Model cases (O.1 test pass, no op change)
+- What: `tests/cases.py`, `tests/reference.py`, `tests/test_sdpa.py`: one random-input case per captured call
+  (bringup-fork-tests skill), 1x4 mesh, FABRIC_2D. Each case checks the fork's output against a float32 torch
+  reference (PCC + relative L2 error, per device) and bit for bit against the source op run on V zero-padded to K's
+  width.
+- Needed by: mimo_v2_6_d_p O.1 (sigs 239d54bae3 chunked paged at prefix 51200, 3f237ff436 sliding window 128 + sink)
+- Files: `tests/cases.py`, `tests/reference.py`, `tests/test_sdpa.py`

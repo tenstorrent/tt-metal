@@ -1280,3 +1280,12 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - Next: the sliding Q front-pad concat (16x5248x192, 0.17 ms x 4 layers) and the Q rope concat (0.17 ms / layer).
 - Re-run: `BRINGUP_SPEC=models/demos/mimo_v2_6_d_p/bringup/spec.yaml`, the attention component / swap tests, ladder
   `BRINGUP_RUNG=last --no-precompile`, test_contract / test_profile `--no-precompile`; compare with `MIMO_V_PAD=1`.
+
+## O.1 optests (attempt 2 of the gate: sdpa cases)
+- The previous gate run left 2 sdpa calls with no case, and sdpa had no `tests/test_*.py`. Added `ttnn/ttnn/bringup/sdpa/tests/{cases.py,reference.py,test_sdpa.py}`: 2 cases, 1x4 mesh, FABRIC_2D, l1_small_size 24576, captured shapes and configs written out literally.
+  - 239d54bae3 chunked paged SDPA: Q 16x5120x192, cache 880x1x64 (K 192, V 128), chunk_start 51200, scale fp32(192^-0.5), HiFi2 q512/k128 approx exp. Page table: a random permutation per device (the model uses the identity).
+  - 3f237ff436 causal SDPA, window 128 + sink: Q 16x5248, 2 KV heads, scale 2^-4, sink = U(0,3) logit / scale, HiFi4 q128/k128.
+- Checks: per device (the inputs are sharded, so each chip gets its own data), PCC and rel L2 against the float32 torch reference, and bit for bit against `ttnn.transformer.*` on V zero-padded to 192. Measured: chunked PCC 0.99916-0.99921, rel 0.090-0.092 (near-uniform attention, tiny output); sliding PCC 0.99974, rel 0.023. Limits: 0.998/0.12 and 0.9995/0.03. The failure check (output x1.01 fails the exact check; x1.1 without it fails rel) was run by hand and reverted.
+- CHANGELOG of the sdpa fork: added a "Model cases" entry (no op change).
+- Gate: `{"forks_used": 6, "fork_calls": 8, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`, 15 fork tests passed in 242 s.
+- Re-run the sdpa cases alone: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/sdpa/tests/test_sdpa.py` (~75 s, most of it the CPU reference).

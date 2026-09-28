@@ -8,6 +8,96 @@
  },
  "calls": [
   {
+   "sig": "239d54bae3",
+   "count": 2,
+   "op": "ttnn.bringup.chunked_scaled_dot_product_attention",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      16,
+      5120,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      880,
+      1,
+      64,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      880,
+      1,
+      64,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      880
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    51200
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": false,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=512, k_chunk_size=128, exp_approx_mode=true, max_cores_per_head_batch=16)",
+    "scale": 0.07216878235340118
+   }
+  },
+  {
    "sig": "fa2baf9135",
    "count": 5,
    "op": "ttnn.bringup.combine",
@@ -356,6 +446,99 @@
      ],
      "devices": 4
     }
+   }
+  },
+  {
+   "sig": "3f237ff436",
+   "count": 4,
+   "op": "ttnn.bringup.scaled_dot_product_attention",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      16,
+      5248,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      5248,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      5248,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "attention_sink": {
+     "tensor": true,
+     "shape": [
+      1,
+      16,
+      1,
+      1
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": false,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "is_causal": true,
+    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=false, max_cores_per_head_batch=16)",
+    "scale": 0.0625,
+    "sliding_window_size": 128
    }
   },
   {
