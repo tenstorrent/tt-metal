@@ -25,6 +25,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 
 p = argparse.ArgumentParser()
@@ -116,10 +117,13 @@ for f in a.deep:
             deep_fix |= {fx["oid"] for fx in cases[d["id"]]["fix"]}
 
 
+# An include, a comment, or a block-comment continuation (`*`, `* text`, `*/`). Not a bare `#` (a `#define` or `#if`
+# change is configuration logic) and not a bare `*` prefix (`*ptr = value` is a store).
+TRIVIAL_LINE = re.compile(r"^(#\s*include\b|#\s*pragma\s+once\b|//|/\*|\*/|\*(\s|$))")
+
+
 def trivial_diff(oid, files):
     """True when every changed line is an include, a comment or blank: nothing an auditor could have flagged."""
-    import subprocess
-
     d = subprocess.run(
         ["git", "-C", a.git, "show", "-U0", "--format=", oid, "--", *files],
         capture_output=True,
@@ -130,7 +134,7 @@ def trivial_diff(oid, files):
         for ln in d.splitlines()
         if ln[:1] in "+-" and not ln.startswith(("+++", "---"))
     ]
-    return all(not x or x.startswith(("#include", "//", "/*", "*", "#")) for x in body)
+    return all(not x or TRIVIAL_LINE.match(x) for x in body)
 
 
 if a.cmd == "holdout":
@@ -144,6 +148,7 @@ if a.cmd == "holdout":
             or not c["fix"]
             or (only and cid not in only)
             or cid in not_real
+            or cid in excl
         ):
             continue
         if any(fx["oid"] in excl_fix or fx["oid"] in deep_fix for fx in c["fix"]):
@@ -221,6 +226,7 @@ else:
             if (
                 cid in chosen
                 or cid in excl
+                or cid in not_real
                 or cid not in cases
                 or (only and cid not in only)
             ):

@@ -9,7 +9,8 @@ consolidate.py dedupes exact file:line only. Earlier large audits needed a judge
 defect at a call site and at its definition, or in several architecture copies of the same file. Groups are
 directories with every architecture or platform variant component normalised (Grayskull, Wormhole, Blackhole,
 Quasar, tt-Nxx, and generic ones such as x86/arm64/riscv/cuda; add your repo's with --variant), so all copies meet
-in one group. However many variants carry the bug, they MERGE into one entry that lists every site. Before judging, near-identical rows are merged mechanically: same file, same class, within 3 lines.
+in one group. However many variants carry the bug, they MERGE into one entry that lists every site. Nothing is merged mechanically: two findings of one class a few lines apart are often separate defects (two
+mis-bound arguments of one call), so the judge decides them too -- they share a directory, so they share its group.
 All variant copies of one defect are clustered as "arch-copy": ONE merged issue, one fix site per variant. The copies stay listed and are
 never dropped, because each still needs fixing (and per the cross-arch rule, each is judged against its own arch).
 Run it after the hunt is complete, then consolidate.py again.
@@ -91,23 +92,8 @@ def confirmed():
 
 if argv[0] == "inputs":
     rows = confirmed()
-    # mechanical pre-merge: same file + class, within 3 lines
-    auto, seen = {}, []
-    for k, f in sorted(rows.items(), key=lambda kv: (kv[1]["file"], kv[1]["line"])):
-        hit = next(
-            (
-                s
-                for s in seen
-                if s["file"] == f["file"]
-                and s["category"] == f["category"]
-                and abs(s["line"] - f["line"]) <= 3
-            ),
-            None,
-        )
-        if hit:
-            auto[k] = key_of(hit)
-        else:
-            seen.append(f)
+    # no mechanical pre-merge: proximity alone does not make two findings one defect (see the module docstring)
+    auto, seen = {}, sorted(rows.values(), key=lambda f: (f["file"], f["line"]))
     groups = {}
     for f in seen:
         g = ARCH.sub("*", os.path.dirname(f["file"]))

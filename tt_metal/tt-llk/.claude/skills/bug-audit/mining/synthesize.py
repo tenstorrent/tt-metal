@@ -62,6 +62,13 @@ canon = lambda c: known.get(
 
 cases, tri, deep = jl(a.cases), jl(a.triage), jl(a.deep)
 excl = set().union(*[set(jl([f])) for f in a.exclude]) if a.exclude else set()
+# an issue case and its PR case can share one fix commit, so exclude by commit as well as by id (as select.py does)
+excl_fix = {
+    json.loads(x).get("fix_commit")
+    for f in (a.exclude or [])
+    for x in open(f)
+    if x.strip()
+} - {None}
 
 
 def files_of(c):
@@ -70,6 +77,8 @@ def files_of(c):
 
 def keep(cid):
     if cid in excl or cid not in cases:
+        return False
+    if any(fx.get("oid") in excl_fix for fx in cases[cid].get("fix", [])):
         return False
     if not a.path_filter and not a.label_filter:
         return True

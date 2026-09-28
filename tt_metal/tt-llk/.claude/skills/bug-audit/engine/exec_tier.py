@@ -29,6 +29,7 @@ selection greps the test roots for each batch file's stem, or for its module pat
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -150,21 +151,33 @@ def parse(text, tree, tool, kind):
 
 
 def run_cmd(name, cmd, tree, timeout):
+    """Run one configured command through the shell.
+
+    The commands are the ones the user typed at `configure` time and {tree} is the pinned worktree path, so this runs
+    trusted input only: never build `cmd` or `tree` from repository or GitHub content. The command gets its own
+    process group, and a timeout kills the whole group -- killing only the shell would leave a hung build or test
+    running on the device while the reset and the rerun start.
+    """
     cmd = cmd.replace("{tree}", tree)
     logp = os.path.join(EXEC, f"{name}.log")
     t0 = time.time()
     with open(logp, "w") as fh:
+        p = subprocess.Popen(
+            cmd,
+            shell=True,
+            cwd=tree,
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
         try:
-            r = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=tree,
-                stdout=fh,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-            )
-            rc = r.returncode
+            rc = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            p.wait()
             rc = "timeout"
     return rc, open(logp, errors="replace").read(), round(time.time() - t0)
 
@@ -277,6 +290,8 @@ elif argv[0] == "run":
                         f"tests {b}: failed then passed on rerun, logged as flaky, not a signal"
                     )
                     continue
+                # a failure that reproduced: judge the rerun, not the first run (whose output may be a timeout)
+                rc, text = rc2, text2
             found = parse(text, tree, "tests", "test")
             if rc not in (0, "timeout") and not found:
                 found = [

@@ -1,6 +1,6 @@
 # tt-metal — bug-audit knowledge pack
 
-Mined 2026-09-26 from tt-metal's closed issues, PRs and first-parent history: 9,972 fix cases triaged (4,333 code bugs, 884 test bugs), 1,311 deep-read with fix-completeness judged against later history and the current tree. The recall-benchmark holdout (tt-metal-holdout.jsonl) was excluded from every step. Review-thread mining for this repo is pending; see SKILL.md. Class weights are approximate: a post-mortem of benchmark picks found about 12% of triage "code bugs" were not defects (cleanups, lint fixes, feature enablement), so read the table as an ordering, not exact shares.
+Mined 2026-09-26 from tt-metal's closed issues, PRs and first-parent history: 9,972 fix cases triaged (4,333 code bugs, 884 test bugs), 1,311 deep-read with fix-completeness judged against later history and the current tree. The recall-benchmark holdout (tt-metal-holdout.jsonl) was excluded from every step. Reviewer checks were mined from inline review threads on the most-reviewed quarter of PRs (a bounded sample; see the last section of tt-metal.md). Class weights are approximate: a post-mortem of benchmark picks found about 12% of triage "code bugs" were not defects (cleanups, lint fixes, feature enablement), so read the table as an ordering, not exact shares.
 
 Full per-class material for `tt-metal.md`. **Candidate sites** are places where earlier analysis suspected an unfixed copy of a fixed bug. They are leads to verify, never findings to report as-is. Line numbers drift, so re-find each site by its code before trusting it.
 

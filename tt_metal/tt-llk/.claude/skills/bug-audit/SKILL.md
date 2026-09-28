@@ -12,6 +12,9 @@ style or perf review. Synchronization hazards in Tenstorrent LLK/dataflow code g
 `race-audit-all` and its sub-audits. This skill covers breadth: all bug classes, across a whole tree. It hands
 suspicious sync sites to those audits instead of settling them shallowly.
 
+Engine tests: `python3 -m pytest tests -q --noconftest` (hermetic: synthetic run directories, no network, no agents).
+Run them after changing the engine or the mining scripts.
+
 Everything lives in two places:
 - **this skill directory**: the method, the engine (`engine/`), the mining pipeline (`mining/`), the class lists
   (`references/`) and the mined repo packs (`packs/`);
@@ -190,7 +193,7 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
 ## Mining a repo (building `packs/<repo>.md`)
 The same pipeline built the shipped packs. It is repo-agnostic.
 1. **Fetch:** `mining/fetch_repo.py owner/name <mine>/raw` (all closed issues and PRs; resumable; weekly windows).
-2. **Build cases:** `mining/build_cases.py --issues '<mine>/raw/issue/*.jsonl' --prs '<mine>/raw/pr/*.jsonl'
+2. **Build cases:** `mining/make_cases.py --issues '<mine>/raw/issue/*.jsonl' --prs '<mine>/raw/pr/*.jsonl'
    --git <clone> --out <mine>/cases.jsonl` [`--xref-git <clone>` when fixes landed in another repo]. This links each
    bug issue to its fix commits (closing PR, `closes` references, commits citing the issue) and to later history:
    reverts, re-fixes, later fix-like commits to the same files.

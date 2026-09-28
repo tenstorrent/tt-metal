@@ -69,7 +69,13 @@ unc = {
     if k not in by_status["confirmed"]
 }
 unc = list(unc.values())
-ref = [f for k, f in by_status["refuted"].items() if k not in by_status["confirmed"]]
+# uncertainty outranks refutation: a key another pass could not settle stays open, never "do not re-raise"
+unc_keys = {k for s in ("needs_recheck", "uncertain") for k in by_status[s]}
+ref = [
+    f
+    for k, f in by_status["refuted"].items()
+    if k not in by_status["confirmed"] and k not in unc_keys
+]
 
 # semantic dedup (dedup.py + dedup-wave.js): duplicates hang under their canonical finding, never silently dropped
 dj = load(os.path.join(out, "dedup.json"), {"auto": {}, "clusters": []})

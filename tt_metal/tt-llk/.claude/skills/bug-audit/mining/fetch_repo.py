@@ -39,6 +39,11 @@ if "--prs-only" in sys.argv:
     kinds = kinds[1:]
 
 
+FAILED = (
+    []
+)  # windows that could not be fetched (or split): the dump is incomplete until they are rerun
+
+
 def run(kind, quals, a, b):
     out = f"{outdir}/{kind}/{prefix}{a}_{b}.jsonl"
     if os.path.exists(out) and b < dt.date.today():
@@ -63,6 +68,7 @@ def run(kind, quals, a, b):
         run(kind, quals, a, mid)
         run(kind, quals, mid + dt.timedelta(days=1), b)
     elif r.returncode != 0:
+        FAILED.append((kind, str(a), str(b)))
         print("FAIL", kind, a, b, r.stderr[-300:], flush=True)
     else:
         print(kind, r.stdout.strip(), flush=True)
@@ -78,3 +84,8 @@ for kind, quals in kinds:
     with ThreadPoolExecutor(jobs) as ex:
         list(ex.map(lambda w: run(kind, quals, *w), wins))
     print("done", kind)
+if FAILED:
+    # a missing window silently drops its issues/PRs from triage, class weights and the holdout
+    sys.exit(
+        f"INCOMPLETE: {len(FAILED)} window(s) failed; rerun the same command to retry them: {FAILED[:10]}"
+    )

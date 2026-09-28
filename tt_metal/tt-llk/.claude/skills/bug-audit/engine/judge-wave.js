@@ -77,7 +77,9 @@ const results = await pipeline(A.inputs, async (path) => {
   }
   const tb = await parallel(ties.map(([x, y]) => () =>
     agent(tiePrompt(path, x.id, x, y), { label: `tie:${x.id}`, phase: 'Judge', schema: TIE_SCHEMA }).then((v) => ({ id: x.id, v }))))
-  for (const t of tb.filter(Boolean)) if (t.v && t.v.match) matching.push(t.id)
+  // a tie-break that returned no verdict leaves the case unjudged: never read it as "no match"
+  if (tb.length !== ties.length || tb.some((t) => !t || !t.v)) return { path, failed: true }
+  for (const t of tb) if (t.v.match) matching.push(t.id)
   return { path, case_id: j1.case_id, defect: j1.defect, matching, disagreements,
            n_findings: j1.judgments.length }
 })

@@ -94,7 +94,7 @@ def finding(lead, batch):
     ]
     return {
         "file": lead["file"],
-        "line": str(lead["line"]),
+        "line": lead["line"],
         "category": c.get("primary_class") or "history-sibling",
         "severity": "medium",  # a placeholder: re-rate the verified ones with severity-wave.js
         "summary": f"Possible unfixed copy of a past bug: {first['why']}",

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Before filing: find which open findings are ALREADY reported on GitHub, by anyone, as an issue or a PR.
 
-  filed_check.py [--run DIR] candidates [--limit 12] [--max N] [--local 'issues/*.jsonl,prs/*.jsonl,other/repo=other_issues/*.jsonl']   # search GitHub per finding; prints filed-wave.js args
+  filed_check.py [--run DIR] candidates [--limit 12] [--max N] [--max-age-hours 12] [--local 'issues/*.jsonl,prs/*.jsonl,other/repo=other_issues/*.jsonl']   # search GitHub per finding; prints filed-wave.js args
   filed_check.py [--run DIR] persist <raw>             # record the judges' matches as dispositions
   filed_check.py [--run DIR] show
 
@@ -201,6 +201,12 @@ def local_corpus(globs):
 if argv[0] == "candidates":
     limit = int(argv[argv.index("--limit") + 1]) if "--limit" in argv else 12
     corpus = None
+    max_age = (
+        3600 * float(argv[argv.index("--max-age-hours") + 1])
+        if "--max-age-hours" in argv
+        else 12 * 3600
+    )
+    mode = "local" if "--local" in argv else "live"
     if "--local" in argv:
         corpus = local_corpus(argv[argv.index("--local") + 1].split(","))
         print(
@@ -225,9 +231,14 @@ if argv[0] == "candidates":
         p = os.path.join(
             cdir, f"{slug}-{hashlib.sha1(k.encode()).hexdigest()[:10]}.json"
         )
+        # A cached search is reused only while it is fresh and was made the same way: an issue filed since the
+        # last search must be seen, or two sessions file the same bug. Files without a timestamp are re-searched.
         if os.path.exists(p):
-            paths.append(p)
-            continue
+            prev = load(p) or {}
+            age = time.time() - prev.get("searched_at", 0)
+            if age < max_age and prev.get("mode") == mode:
+                paths.append(p)
+                continue
         base = os.path.basename(f["file"])
         found = {}
         if corpus is not None:
@@ -289,6 +300,8 @@ if argv[0] == "candidates":
             },
             "also_at": f.get("also_at", []),
             "candidates": list(found.values()),
+            "searched_at": time.time(),
+            "mode": mode,
         }
         json.dump(rec, open(p, "w"), indent=1)
         paths.append(p)

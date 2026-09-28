@@ -20,44 +20,59 @@ owner, name = repo.split("/")
 BOT = re.compile(
     r"(\[bot\]$|bot$|^github-actions|^copilot|^coderabbit|^codecov|^dependabot)", re.I
 )
-Q = """query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){number title state
- author{login} reviewThreads(first:60){nodes{path line originalLine isResolved isOutdated
-  comments(first:12){nodes{author{login} body diffHunk}}}}}}}"""
+# Both connections are paginated: the most-reviewed PRs are the most valuable input, and a truncated thread can hide
+# the reply that says whether the defect was addressed or disputed.
+Q = """query($o:String!,$n:String!,$p:Int!,$c:String){repository(owner:$o,name:$n){pullRequest(number:$p){number title
+ state author{login} reviewThreads(first:50,after:$c){pageInfo{hasNextPage endCursor} nodes{id path line originalLine
+  isResolved isOutdated comments(first:50){pageInfo{hasNextPage endCursor} nodes{author{login} body diffHunk}}}}}}}"""
+QC = """query($id:ID!,$c:String){node(id:$id){... on PullRequestReviewThread{comments(first:50,after:$c){
+ pageInfo{hasNextPage endCursor} nodes{author{login} body diffHunk}}}}}"""
 nums = [int(x) for x in open(listfile).read().split() if x.strip().isdigit()]
 done = set()
 if os.path.exists(out):
     done = {json.loads(ln)["number"] for ln in open(out) if ln.strip()}
 
 
-def one(n):
+def gql(query, fields):
+    """One GraphQL call with retries; None when it keeps failing."""
+    args = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for k, v in fields.items():
+        if v is not None:
+            args += ["-F" if isinstance(v, int) else "-f", f"{k}={v}"]
     for t in range(8):
-        r = subprocess.run(
-            [
-                "gh",
-                "api",
-                "graphql",
-                "-f",
-                f"query={Q}",
-                "-F",
-                f"o={owner}",
-                "-F",
-                f"n={name}",
-                "-F",
-                f"p={n}",
-            ],
-            capture_output=True,
-            text=True,
-        )
+        r = subprocess.run(args, capture_output=True, text=True)
         if r.returncode == 0 and '"errors"' not in r.stdout[:300]:
-            break
+            return json.loads(r.stdout)["data"]
         time.sleep(
             120 if "rate limit" in (r.stderr + r.stdout).lower() else 10 * (t + 1)
         )
-    else:
-        return None
-    pr = json.loads(r.stdout)["data"]["repository"]["pullRequest"]
+    return None
+
+
+def one(n):
+    pr, nodes, cur = None, [], None
+    while True:
+        d = gql(Q, {"o": owner, "n": name, "p": n, "c": cur})
+        if d is None:
+            return None
+        page = d["repository"]["pullRequest"]
+        pr = pr or page
+        rt = page["reviewThreads"]
+        nodes += rt["nodes"]
+        if not rt["pageInfo"]["hasNextPage"]:
+            break
+        cur = rt["pageInfo"]["endCursor"]
+    for th in nodes:
+        cm = th["comments"]
+        while cm["pageInfo"]["hasNextPage"]:
+            d = gql(QC, {"id": th["id"], "c": cm["pageInfo"]["endCursor"]})
+            if d is None:
+                return None
+            more = d["node"]["comments"]
+            cm["nodes"] += more["nodes"]
+            cm["pageInfo"] = more["pageInfo"]
     threads = []
-    for th in pr["reviewThreads"]["nodes"]:
+    for th in nodes:
         cs = [
             {
                 "author": (c["author"] or {}).get("login", "?"),
@@ -87,11 +102,17 @@ def one(n):
 
 
 todo = [n for n in nums if n not in done]
+failed = []
 with open(out, "a") as fh, ThreadPoolExecutor(jobs) as ex:
-    for i, res in enumerate(ex.map(one, todo)):
+    for i, (n, res) in enumerate(zip(todo, ex.map(one, todo))):
         if res:
             fh.write(json.dumps(res) + "\n")
             fh.flush()
+        else:
+            failed.append(n)
         if i % 100 == 0:
             print(f"{i}/{len(todo)}", flush=True)
-print(f"done: {len(todo)} fetched into {out}")
+print(f"done: {len(todo) - len(failed)} of {len(todo)} fetched into {out}")
+if failed:
+    # rerunning the same command retries exactly these: fetched PRs are skipped
+    sys.exit(f"INCOMPLETE: {len(failed)} PR(s) failed after retries: {failed[:20]}")

@@ -294,11 +294,15 @@ const results = await pipeline(
     if (!res) return { batch, ok: false, hunt: null, judged: [] }
     const sample = traceSample(res)
     let traceAudit = null
-    if (sample.length) {
-      traceAudit = await agent(tracePrompt(batch, sample, rootOf(batch)), { label: `trace:${batch}`, phase: 'Trace audit', schema: TRACE_SCHEMA })
+    // the trace audit is part of the contract: one retry for a dead agent, then record that it did not run --
+    // never as "nothing to sample", which would read as a clean audit
+    for (let attempt = 0; sample.length && !traceAudit && attempt < 2; attempt++) {
+      traceAudit = await agent(tracePrompt(batch, sample, rootOf(batch)), { label: `trace:${batch}${attempt ? ':retry' : ''}`, phase: 'Trace audit', schema: TRACE_SCHEMA })
     }
     const extra = ((traceAudit && traceAudit.findings) || []).map((f) => ({ ...f, source: 'trace-audit' }))
-    res.trace_audit = traceAudit ? { sampled: sample.length, rechecked: traceAudit.rechecked } : { sampled: 0, rechecked: [] }
+    res.trace_audit = traceAudit
+      ? { sampled: sample.length, rechecked: traceAudit.rechecked }
+      : { sampled: sample.length, rechecked: [], died: sample.length > 0 }
     const cands = [...(res.findings || []), ...extra]
     if (!cands.length) return { batch, ok: true, hunt: res, judged: [] }
 

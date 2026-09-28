@@ -2,7 +2,7 @@ export const meta = {
     name: 'bug-mining-deep',
     description:
         'Deep-read selected historical bugs: root cause, whether the fix was complete (history + current tree), unfixed siblings, and the audit check that would have caught it',
-    whenToUse: 'After select_deep.py. args = {repo, git, xgit?, current, classes, experience?, batches: [abs paths]}. Persist with persist_mining.py deep.',
+    whenToUse: 'After `select.py deep`. args = {repo, git, xgit?, current, classes, experience?, batches: [abs paths]}. Persist with persist_mining.py deep.',
     phases: [{title: 'Deep read', detail: 'one agent per batch of ~4 cases'}],
 }
 

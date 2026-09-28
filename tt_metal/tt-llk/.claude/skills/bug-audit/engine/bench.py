@@ -309,10 +309,12 @@ elif len(sys.argv) > 1 and sys.argv[1] == "judged":
             per[k["arm"]]["any"].add(cid)
             if k["status"] == "confirmed":
                 per[k["arm"]]["conf"].add(cid)
-    n = len(cases)
+    # an unjudged case counts in the denominator (as not found), so a judge failure can only LOWER the printed
+    # recall, never inflate it; the command then fails, so the number is not copied anywhere as final
+    n = len(cases) + len(failed)
     disagreements = sum(x.get("disagreements", 0) for x in cases.values())
     print(
-        f"{n} cases judged; {disagreements} finding-level judge disagreements resolved by a third judge"
+        f"{len(cases)} of {n} cases judged; {disagreements} finding-level judge disagreements resolved by a third judge"
     )
     for arm in arms:
         c, y = len(per[arm]["conf"]), len(per[arm]["any"])
@@ -323,5 +325,9 @@ elif len(sys.argv) > 1 and sys.argv[1] == "judged":
         os.path.join(a.dir, "judged-summary.json"),
         {arm: {k: sorted(v) for k, v in d.items()} for arm, d in per.items()},
     )
+    if failed:
+        sys.exit(
+            f"INCOMPLETE: {len(failed)} case(s) unjudged and counted as misses; rerun them before reporting recall"
+        )
 else:
     sys.exit(__doc__)

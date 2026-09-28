@@ -120,10 +120,11 @@ if a.cmd == "inputs":
                     }
                 )
     files = []
-    other = []
+    other, other_reviews = [], []
     for c in sorted(set(by) | set(rv), key=lambda c: -len(by.get(c, []))):
         if len(by.get(c, [])) < a.min and len(rv.get(c, [])) < 2 * a.min:
             other += [{**x, "class": c} for x in by.get(c, [])]
+            other_reviews += [{**x, "class": c} for x in rv.get(c, [])]
             continue
         path = os.path.join(os.path.abspath(a.out_dir), f"class-{c}.json")
         json.dump(
@@ -131,9 +132,12 @@ if a.cmd == "inputs":
             open(path, "w"),
         )
         files.append(path)
-    if other:
+    if other or other_reviews:
         path = os.path.join(os.path.abspath(a.out_dir), "class-other.json")
-        json.dump({"class": "other", "bugs": other, "reviews": []}, open(path, "w"))
+        json.dump(
+            {"class": "other", "bugs": other, "reviews": other_reviews[:80]},
+            open(path, "w"),
+        )
         files.append(path)
     print(json.dumps({"files": files}))
     print(

@@ -46,11 +46,14 @@ _suffix_cache = {}
 
 
 def ledger_site_ok(tree, site):
-    """True if a ledger "other side" names a real place: path[:line | :a-b | :a,b-c] where the path is repo-relative
-    or a unique suffix of a tracked file, and the first line number is within the file.
+    """True if a ledger "other side" names a real place: path:line (or :a-b, :a,b-c) with the first line inside the
+    file, or path:symbol where the symbol occurs in the file. The path is repo-relative or a unique suffix of a tracked
+    file; an absolute path outside the tree (the ISA spec, other docs) is an external reference and needs no line.
     """
     first = site.split(" and ")[0].split(";")[0].strip()
-    m = re.match(r"^(?P<path>[^:\s]+)(?::(?P<line>\d+))?", first)
+    m = re.match(
+        r"^(?P<path>[^:\s]+)(?::(?:(?P<line>\d+)|(?P<sym>[A-Za-z_][\w:~]*)))?", first
+    )
     if not m:
         return False
     path, line = m.group("path"), m.group("line")
@@ -65,10 +68,19 @@ def ledger_site_ok(tree, site):
         if len(hits) != 1:
             return False
         full = os.path.join(tree, hits[0])
+    if os.path.isabs(path) and not os.path.abspath(path).startswith(
+        os.path.abspath(tree) + os.sep
+    ):
+        return True  # an external reference (the ISA spec, a doc outside the tree): a real place, line optional
+    if line is None and m.group("sym"):
+        try:  # path:function -- as checkable as a line number, if the name really is in that file
+            return m.group("sym").split("::")[-1] in open(full, errors="replace").read()
+        except OSError:
+            return False
     if line is None:
-        return True
+        return False  # an in-tree boundary names the LINE (or symbol) the hunter read, not just the file
     n, _ = last_nonblank(full)
-    return n is not None and int(line) <= n + 1
+    return n is not None and 1 <= int(line) <= n
 
 
 reread = load(os.path.join(out, "reread.json"), {})
@@ -124,6 +136,11 @@ for res in r.get("results", []):
         hunt.get("boundaries_skipped", [])
     )
     ta = hunt.get("trace_audit") or {}
+    if ta.get("died"):
+        stats["trace_died"] = stats.get("trace_died", 0) + 1
+        print(
+            f"  !! {b}: the trace auditor died twice; its {ta.get('sampled')} sampled boundaries were not re-traced"
+        )
     stats["trace_rechecked"] = stats.get("trace_rechecked", 0) + len(
         ta.get("rechecked", [])
     )

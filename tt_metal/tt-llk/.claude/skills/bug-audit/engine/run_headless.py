@@ -216,9 +216,17 @@ while True:
             "persist failed: fix it and rerun this command; the wave output is safe on disk"
         )
         sys.exit(3)
-    py(f"{HERE}/consolidate.py", "--run", run)
-    cur["persisted"] = True
+    cur["persisted"] = (
+        True  # the wave's verdicts are on disk; only the derived reports are at stake below
+    )
     save_state(S)
+    r = py(f"{HERE}/consolidate.py", "--run", run)
+    if r.returncode != 0:
+        note(f"consolidate failed: {(r.stderr or r.stdout)[-800:]}")
+        note(
+            "the wave is persisted; fix the error, run consolidate.py, then rerun this command"
+        )
+        sys.exit(4)
     if a.bench_cases:
         r = py(f"{HERE}/bench.py", "score", "--run", run, "--cases", a.bench_cases)
         note(" | ".join(ln for ln in r.stdout.splitlines() if "recall" in ln))
