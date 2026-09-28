@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The host-side setup route must produce the same tensor as device-side construction: equal
-TensorSpec and equal data, for the inputs the sweep helpers build. Needs one device."""
+TensorSpec and equal data, for the inputs the sweep helpers build. Needs one device; the mesh
+case needs two and skips otherwise."""
 
 import sys
 from pathlib import Path
@@ -79,6 +80,39 @@ def test_reshard_from_dram_matches_host_round_trip(device, shape, dtype, layout,
         via_host = ttnn.to_memory_config(dram, memory_config())
     assert via_host.shape == dram.shape and via_host.padded_shape == on_device.padded_shape
     _same(on_device, via_host)
+
+
+@pytest.mark.parametrize("shape, dtype, layout, memory_config", CASES[3:])
+def test_interleaved_to_sharded_from_dram_matches_host_round_trip(device, shape, dtype, layout, memory_config):
+    x = _torch_input(shape, dtype)
+    dram = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    on_device = ttnn.interleaved_to_sharded(dram, memory_config())
+    with host_side_tensor_construction():
+        via_host = ttnn.interleaved_to_sharded(dram, memory_config())
+    assert via_host.shape == dram.shape and via_host.padded_shape == on_device.padded_shape
+    _same(on_device, via_host)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="1x2")], indirect=True)
+@pytest.mark.parametrize(
+    "mapper",
+    [
+        pytest.param(lambda mesh: ttnn.ReplicateTensorToMesh(mesh), id="replicate"),
+        pytest.param(lambda mesh: ttnn.ShardTensorToMesh(mesh, dim=0), id="shard-dim0"),
+    ],
+)
+def test_mesh_mapper_placement_survives_the_host_route(mesh_device, mapper):
+    x = _torch_input((2, 1, 64, 64), ttnn.bfloat16)
+    kwargs = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper(mesh_device))
+    on_device = ttnn.from_torch(x, **kwargs)
+    with host_side_tensor_construction():
+        via_host = ttnn.from_torch(x, **kwargs)
+    assert on_device.spec == via_host.spec
+    a, b = ttnn.get_device_tensors(on_device), ttnn.get_device_tensors(via_host)
+    assert len(a) == len(b) == 2
+    for shard_a, shard_b in zip(a, b):
+        assert shard_a.spec == shard_b.spec
+        assert torch.equal(ttnn.to_torch(shard_a), ttnn.to_torch(shard_b))
 
 
 def test_cq_id_is_forwarded_as_queue_id(device):

@@ -43,9 +43,14 @@ def fake_ttnn(monkeypatch):
         calls.append(("from_device",))
         return types.SimpleNamespace(kind="host")
 
+    def interleaved_to_sharded(tensor, grid_or_memory_config, *args, **kwargs):
+        calls.append(("interleaved_to_sharded", grid_or_memory_config, args, dict(kwargs)))
+        return types.SimpleNamespace(kind="device", memory_config=grid_or_memory_config)
+
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
     monkeypatch.setattr(ttnn, "to_device", to_device)
     monkeypatch.setattr(ttnn, "to_memory_config", to_memory_config)
+    monkeypatch.setattr(ttnn, "interleaved_to_sharded", interleaved_to_sharded)
     monkeypatch.setattr(ttnn, "from_device", from_device)
     monkeypatch.setattr(ttnn, "is_tensor_storage_on_device", lambda t: getattr(t, "kind", None) == "device")
     monkeypatch.setattr(tensor_setup, "_announced", True)
@@ -135,21 +140,55 @@ def test_to_memory_config_inside_the_measuring_bracket_runs_on_device_while_from
     assert [c[0] for c in fake_ttnn] == ["to_memory_config", "from_torch", "to_device", "from_device", "to_device"]
 
 
+# --- interleaved_to_sharded -----------------------------------------------------------------
+
+
+def test_interleaved_to_sharded_with_a_memory_config_round_trips_through_host(fake_ttnn):
+    dev, mc = object(), ttnn.L1_MEMORY_CONFIG
+    with host_side_tensor_construction():
+        out = ttnn.interleaved_to_sharded(device_tensor(dev), mc)
+    assert out.memory_config is mc
+    assert fake_ttnn == [("from_device",), ("to_device", dev, mc, None)]
+
+
+@pytest.mark.parametrize(
+    "args, kwargs",
+    [
+        ((device_tensor(), "grid", [32, 32], "height", "row_major"), {}),
+        ((device_tensor(), ttnn.L1_MEMORY_CONFIG), {"output_dtype": "bf8"}),
+        ((types.SimpleNamespace(kind="host"), ttnn.L1_MEMORY_CONFIG), {}),
+    ],
+    ids=["grid-form", "output_dtype", "host-tensor"],
+)
+def test_interleaved_to_sharded_falls_through_when_the_round_trip_cannot_reproduce_it(fake_ttnn, args, kwargs):
+    with host_side_tensor_construction():
+        ttnn.interleaved_to_sharded(*args, **kwargs)
+    assert fake_ttnn[0][0] == "interleaved_to_sharded"
+
+
+def test_interleaved_to_sharded_inside_the_measuring_bracket_runs_on_device(fake_ttnn):
+    with host_side_tensor_construction():
+        t0 = utils_for_testing.start_measuring_time()
+        ttnn.interleaved_to_sharded(device_tensor(object()), ttnn.L1_MEMORY_CONFIG)
+        utils_for_testing.stop_measuring_time(t0)
+    assert [c[0] for c in fake_ttnn] == ["interleaved_to_sharded"]
+
+
 # --- lifecycle and opt-outs ---------------------------------------------------------------
 
 
 def test_originals_and_listener_restored_after_exit_and_on_error(fake_ttnn):
-    orig = (ttnn.from_torch, ttnn.to_memory_config)
+    orig = (ttnn.from_torch, ttnn.to_memory_config, ttnn.interleaved_to_sharded)
     with host_side_tensor_construction():
         assert ttnn.from_torch is not orig[0]
         assert tensor_setup._window_listener in utils_for_testing._measuring_window_listeners
-    assert (ttnn.from_torch, ttnn.to_memory_config) == orig
+    assert (ttnn.from_torch, ttnn.to_memory_config, ttnn.interleaved_to_sharded) == orig
     assert tensor_setup._window_listener not in utils_for_testing._measuring_window_listeners
     with pytest.raises(RuntimeError):  # allow-pytest.raises: plain Python error, no device error text for CI triage
         with host_side_tensor_construction():
             utils_for_testing.start_measuring_time()
             raise RuntimeError("boom")
-    assert (ttnn.from_torch, ttnn.to_memory_config) == orig
+    assert (ttnn.from_torch, ttnn.to_memory_config, ttnn.interleaved_to_sharded) == orig
     assert tensor_setup._in_measured_window is False
 
 
@@ -191,4 +230,6 @@ def test_real_ttnn_signatures_match_what_the_wrappers_assume():
     assert positional == ["tensor", "dtype"], "wrapper takes dtype as the only positional after tensor"
     assert "queue_id" in ttnn.to_device.__doc__, "wrapper passes the queue as queue_id"
     assert "dtype" in ttnn.to_memory_config.__doc__, "wrapper takes dtype as the third positional"
+    assert "sharded_memory_config" in ttnn.interleaved_to_sharded.__doc__, "wrapper reroutes the MemoryConfig form"
+    assert "output_dtype" in ttnn.interleaved_to_sharded.__doc__, "wrapper falls through on output_dtype"
     assert callable(ttnn.is_tensor_storage_on_device)

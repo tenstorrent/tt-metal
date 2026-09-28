@@ -14,25 +14,33 @@ test. Two setup paths dispatch programs:
   only; the single-device branch builds on host and only writes). The sweep paths that hit
   it are ``mesh_tensor_utils.replicate_with_topology``, ``mesh_tensor_utils.create_tensor_on_mesh``
   and every module that passes ``mesh_mapper`` itself.
-- ``ttnn.to_memory_config`` on a device tensor is a full copy. The two mesh helpers use it to
-  reshard a DRAM-interleaved tensor to the traced sharded config, and fifteen model_traced
-  modules reshard inputs the same way before their op.
+- ``ttnn.to_memory_config`` on a device tensor is a full copy, and ``ttnn.interleaved_to_sharded``
+  with a MemoryConfig is the same copy under another name. The two mesh helpers use the former
+  to reshard a DRAM-interleaved tensor to the traced sharded config; fifteen model_traced
+  modules reshard inputs with the former and eight with the latter before their op.
 
-While device perf is requested both are routed through the host: build with ``from_torch``
+While device perf is requested all three are routed through the host: build with ``from_torch``
 without a device and write with ``to_device``, or read back with ``from_device`` and write
 again. Neither dispatches a program. The result has the same dtype, layout and memory_config;
 for from_torch-produced interleaved sources the whole TensorSpec matches
 (test_tensor_setup_device.py). ``enable_bfloat_opt`` only affects device-side construction and
 is a no-op on this path.
 
-``from_torch`` is never the op under test, so it is rerouted for the whole run().
-``to_memory_config`` can be the op (interleaved_to_sharded_e2e) or part of it
-(global_avg_pool2d converts sharded inputs internally), so it is rerouted only outside the
-module's start_measuring_time() / stop_measuring_time() bracket. Inside the bracket everything
-runs on the device and is counted; outside it is setup or teardown and is not. A module without
-the bracket has to_memory_config rerouted throughout and can set ``_DEVICE_SIDE_SETUP = True``
-to keep device-side construction; ``--device-side-setup`` (``TTNN_SWEEP_DEVICE_SIDE_SETUP=1``)
-does the same for a whole run.
+``from_torch`` is never the op under test, so it is rerouted for the whole run(). The two
+reshards can be the op (interleaved_to_sharded_e2e) or part of it (global_avg_pool2d converts
+sharded inputs internally), so they are rerouted only outside the module's
+start_measuring_time() / stop_measuring_time() bracket. Inside the bracket everything runs on
+the device and is counted. A module without the bracket has the reshards rerouted throughout
+and can set ``_DEVICE_SIDE_SETUP = True`` to keep device-side construction;
+``--device-side-setup`` (``TTNN_SWEEP_DEVICE_SIDE_SETUP=1``) does the same for a whole run.
+
+Scope. Only these three calls are rerouted; the profiler is still read once after run(), so
+any other program a module dispatches outside its bracket is still charged to the op. A scan
+of the 638 bracketed modules finds two that dispatch after their bracket (mul_tensor_pytorch2:
+``full`` and ``eq`` for the check; concat_pytorch2: ``concat``) and three with a setup program
+of another kind (``typecast`` in tilize and tilize_with_zero_padding, ``transpose`` in
+transpose); none is in model_traced. Delimiting the profiler read at the bracket itself would
+close that gap and is the follow-up.
 
 Known asymmetries. e2e_perf measured inside the bracket includes a host round trip where it
 used to include a device program, for modules that build tensors there. Peak-memory capture
@@ -83,6 +91,7 @@ def host_side_tensor_construction():
     global _announced
     orig_from_torch = ttnn.from_torch
     orig_to_memory_config = ttnn.to_memory_config
+    orig_interleaved_to_sharded = ttnn.interleaved_to_sharded
 
     def _from_torch(tensor, dtype=None, **kwargs):
         device = kwargs.pop("device", None)
@@ -117,8 +126,24 @@ def host_side_tensor_construction():
         host = ttnn.from_device(tensor)
         return ttnn.to_device(host, device, memory_config=memory_config)
 
+    def _interleaved_to_sharded(tensor, grid_or_memory_config, *args, **kwargs):
+        # Only the two-argument MemoryConfig form is a plain copy; the grid/shard_shape form and
+        # output_dtype= describe a program the round trip cannot reproduce.
+        if (
+            _in_measured_window
+            or args
+            or kwargs
+            or not isinstance(grid_or_memory_config, ttnn.MemoryConfig)
+            or not ttnn.is_tensor_storage_on_device(tensor)
+        ):
+            return orig_interleaved_to_sharded(tensor, grid_or_memory_config, *args, **kwargs)
+        device = tensor.device()
+        host = ttnn.from_device(tensor)
+        return ttnn.to_device(host, device, memory_config=grid_or_memory_config)
+
     ttnn.from_torch = _named_like(_from_torch, orig_from_torch)
     ttnn.to_memory_config = _named_like(_to_memory_config, orig_to_memory_config)
+    ttnn.interleaved_to_sharded = _named_like(_interleaved_to_sharded, orig_interleaved_to_sharded)
     utils_for_testing._measuring_window_listeners.append(_window_listener)
     if not _announced:
         logger.info(
@@ -131,5 +156,6 @@ def host_side_tensor_construction():
     finally:
         ttnn.from_torch = orig_from_torch
         ttnn.to_memory_config = orig_to_memory_config
+        ttnn.interleaved_to_sharded = orig_interleaved_to_sharded
         utils_for_testing._measuring_window_listeners.remove(_window_listener)
         _window_listener(False)
