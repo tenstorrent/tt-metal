@@ -249,6 +249,26 @@ def test_roll_height_sharded_padded(device, shape, layout, shifts, dims):
     assert torch.equal(ttnn.to_torch(ttnn_output), torch.roll(torch_input, shifts, dims))
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_roll_height_sharded_padded_zero_shift(device, layout):
+    # A shift equal to the logical size is a no-op, so the padded fallback must not copy anything.
+    mem_config = _explicit_height_shard(device, 2, 32, 64)
+    torch_input = torch.randn([1, 40, 64], dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+    )
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        ttnn_output = ttnn.roll(ttnn_input, [40], [1])
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+
+    device_ops = [n for n in ttnn.graph.extract_calltrace(captured) if n.endswith("DeviceOperation")]
+    assert device_ops == []
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch_input)
+
+
 # ─── HEIGHT_SHARDED + TILE, non-tile-aligned (sharded untilize→roll→tilize) ──
 
 
