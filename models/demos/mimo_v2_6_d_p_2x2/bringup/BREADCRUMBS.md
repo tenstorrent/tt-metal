@@ -376,3 +376,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: pcc 0.999999, rel 0.0017, ratio [0.9992, 1.0007], worst 0.0021: PASS. BRINGUP_IMPL=stub: pcc 0: FAIL.
 - The default gate already passes (the device attention is registered from full_dense): pcc 0.999992, rel 0.0052 / first rows 0.0051, ratio [0.9989, 1.0079], worst 0.0093. 1 passed. (The first `FAIL pcc=0` line comes from the precompile collect pass.)
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attention.py`
+
+## S.full_moe.02.test.1 (test review, swap 02 attention, layer 5), 2026-09-28
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_02_attention.py` (same golden). Only the docstring differs: an adoption note. Gate pcc_swap_out >= 0.98. Asserted extras: layer 5 is full attention with no sink; each swapped step vs golden has PCC >= 0.99 and per-token norm ratio [0.97, 1.03]; attn_norm rel <= 0.03; attention rel <= 0.015 on the whole chunk and on the first 128 rows, worst row <= 0.06; block out rel <= 0.01 on the whole chunk and on the first 128 rows.
+- Kept the full-attention limits. The owner-widened sliding limits (rel 0.022, ratio [0.95, 1.08]) apply only to sliding attention with a sink.
+- BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; attention rel 0.0017). BRINGUP_IMPL=stub: FAIL on every check.
+- The default gate already passes (the device attn_norm and attention are already registered): pcc_swap_out 0.999991, out rel 0.0043 / first rows 0.0038, attn_norm rel 0.0029, attention rel 0.0049 / first rows 0.0049, ratio [0.9984, 1.0067], worst row 0.0101. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_02_attention.py`
