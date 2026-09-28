@@ -61,15 +61,17 @@ def read_csv_rows():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workload", type=Path,
-                    default=Path(__file__).with_name("ttnn_ops_workload.py"))
+    ap.add_argument("--workload", type=Path, default=Path(__file__).with_name("ttnn_ops_workload.py"))
     ap.add_argument("--seq", type=int, default=1024)
     ap.add_argument("--hidden", type=int, default=2048)
     ap.add_argument("--ffn", type=int, default=8192)
     ap.add_argument("--heads", type=int, default=16)
-    ap.add_argument("--batches", default="",
-                    help="Comma-separated batch per op, in block order. Defaults to 1 for all. "
-                         "Use the batches the power run actually chose, from its # OP lines.")
+    ap.add_argument(
+        "--batches",
+        default="",
+        help="Comma-separated batch per op, in block order. Defaults to 1 for all. "
+        "Use the batches the power run actually chose, from its # OP lines.",
+    )
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--device-id", type=int, default=0)
     args = ap.parse_args()
