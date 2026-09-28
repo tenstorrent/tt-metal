@@ -74,7 +74,21 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+    program_config = None
+    if hidden_states.padded_shape[-2] == 32 and hidden_states.shape[-1] == 2816 and weights.wqkv.shape[-1] == 2048:
+        # Decode-only (M=32) sweep winner on this board: 1D mcast_in0, 8x6 grid.
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 6),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=1,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config, program_config=program_config)
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
