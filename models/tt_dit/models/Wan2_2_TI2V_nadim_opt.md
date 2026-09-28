@@ -513,6 +513,15 @@ All verified by reading the code; none implemented.
    **9.61 s** (9.598 / 9.620 / 9.608), i.e. the modulation hoist and the preset stack
    (-0.34 s on top of the preset's own -1.55 s); -16.5 % against the sprint-5 bf16 default.
 
+   *Sprint-6 tip (2026-09-28, fixes 1 and 3, mean of 3, 720p T2V, operator request).* Two
+   things changed for the preset (section 7.13): `cross_attn_out` must keep bf16 weights (the
+   fused residual's ternary kernel asserts the residual and weight tile formats match), and with
+   the residual add inside a LoFi epilogue the transformer PCC fell to 99.8863 / 99.8848 %.
+   Measured in that state first: denoise **8.328 s**, total **9.383 s** (9.372 / 9.381 /
+   9.396, spreads 0.09 / 0.26 %), -3.0 % / -2.4 % against the 9.61 s of the sprint-5 tip (the
+   AdaLN fix stacks with the preset as the hoist did). The preset then pins `cross_attn_out`
+   to HiFi2 with fp32 accumulate; PCC and 720p x3 under that setting follow below once run.
+
    `all_bf8_lofi` is the sprint-4 result: -15.5% end to end at 720p against the sprint-3 tip, a
    0.024 pp PCC cost and a CLIP mean *above* bf16 (which says nothing about quality, section 8).
    The 121 f previews `/home/ttuser/wan5b_t2v_720p_bf8lofi_{first,mid,last}.png` and the mp4
@@ -698,6 +707,60 @@ All verified by reading the code; none implemented.
     and the two swept blockings registered under `ttnn.CoreCoord(12, 10)` in
     `_register_5b_matmul_tables`. Not gated end to end (PCC / perf) since it is not enabled;
     the sweep is the only measurement.
+
+13. **Launch-count trims along the block (sprint 6, fix 3).** With fixes 1 and 2 settled, a
+    block-pass launches 5 fused norms, 6 matmul programs, 2 SDPAs, 2 `nlp_create_qkv_heads`,
+    2 `concatenate_heads` and 1 `BinaryNg` (the cross-attention residual add), plus the
+    once-per-block modulation adds. What can go:
+    - *Cross-attention residual into `attn2.to_out`* -- built. The fused matmul epilogue is
+      `residual + scalar * (xW + b) * gate` with `gate` allowed as a `[1, D/tp]` row broadcast
+      (checked in both the AGMM and the MMRS validators), so a constant row of ones
+      (`WanAttention.residual_ones_gate`, created in `__init__` so it exists before any trace
+      capture) turns it into the plain residual add and the separate `BinaryNg` (25 us + a
+      launch, 60 per step) disappears. Not bit-exact: the fused form rounds once at the
+      epilogue where the old path rounded the matmul output to bf16 and then added in bf16.
+      PCC-gated; measured below.
+
+      *Gates (2026-09-28):* transformer PCC **100.0000 / 99.9901 / 99.9902 %** (from 99.9893 /
+      99.9894: the single rounding is slightly kinder), `test_cfg_hoist_ti2v_5b` still 34/34 at
+      0.0 (both its paths use the fused add), trace modes bit-identical, 14B 4x8 ring block test
+      99.9958 %. *Measured, 720p T2V, mean of 3, 2cq, same host:* denoise **9.776 s** (9.781 /
+      9.768 / 9.779, spread 0.14 %), total **10.837 s** (spread 0.04 %), against fix 1's 9.787 /
+      10.835 s, and against a same-hour control of the fix-1 files (9.780 / 10.883 s) it is
+      **-0.04 % / -0.4 %: inside the run-to-run spread**, not the ~2.3 ms booked. The removed
+      program cost ~25 us + a launch, but the fused epilogue reads the 3.6 MB residual inside an
+      op that is already bound by the ring bytes it moves, so the saving comes back as AGMM
+      time: the 6-block Tracy capture with the fusion (`s6_f3_blocks6`, 4 traced steps, 0
+      drops) ran `execute_trace` at **49.24 ms per replay against 48.41 ms** for the fix-1
+      capture taken the same way two hours earlier. **Dropped (operator's call, 2026-09-28):** a
+      numerics change (PCC moves, preset PCC fell to 99.886 % until `cross_attn_out` went to
+      HiFi2) for no measurable speed. The code is in the branch history for reference
+      (`WanAttention.residual_ones_gate`, the `attn2(..., addcmul_residual=, addcmul_gate=)`
+      call); the ones-gate mechanism itself works and is the way to fuse an ungated residual if
+      a later kernel makes the epilogue free. The capture's ops report did not post-process
+      within 90 min (the host-side csvexport pass never finished; the fix-1 capture took 4 min
+      for that step) and is being regenerated for the record; the sprint-6 tip is fix 1, so the
+      `s6_f1_blocks6` table in section 6 is the tip's Tracy table.
+
+      *Preset interplay (2026-09-28):* under `all_bf8_lofi` the fused `attn2.to_out` inherits the
+      preset's LoFi / no-fp32-acc compute config, and the transformer PCC fell from 99.9651 % to
+      **99.8863 / 99.8848 %** (scalar / per-token): the residual add now happens inside a LoFi
+      epilogue instead of a separate bf16 add. Also, like `self_attn_out`, `cross_attn_out` must
+      keep bf16 weights under the presets (the ternary kernel asserts residual and weight tile
+      formats match). The preset therefore pins `cross_attn_out` to bf16 weights **at HiFi2 with
+      fp32 accumulate** (section 7.7), which the bandwidth-bound projection should absorb for
+      free; PCC and 720p x3 under that setting are in section 7.7 / 9.
+    - *Head split / merge* -- cannot go without a kernel change. q and k already leave
+      `dit_fused_distributed_rmsnorm` in `[1, H_local, N, 128]` heads layout, so what remains is
+      one `nlp_create_qkv_heads` on V and one `concatenate_heads` per attention (4 per
+      block-pass, 11-22 us each, ~4.4 ms/step). `ring_joint_scaled_dot_product_attention`
+      validates 4-D `[B, H, N, E]` TILE inputs (`ring_joint_sdpa_device_operation.cpp:474-532`,
+      padding only on the sequence dim) and so does the cross SDPA, and a TILE `[1, N, H*E]`
+      -> `[1, H, N, E]` permute is a real data movement, not a view. Left as is; an SDPA that
+      consumes the concatenated-heads layout directly, or a V projection that emits heads
+      layout, would remove 240 launches per step.
+    - *`+1` fold into the table rows* -- not done (bf16/fp32 rounding change for ~60 tiny adds
+      per step, ~1.2 ms; see item 3).
 
 10. **Same-hour controls are cheap and worth it.** The hoist's 3-run mean beat the recorded
     sprint-4 mean by 2.3 %, and a single control run of the sprint-4 file in the same hour

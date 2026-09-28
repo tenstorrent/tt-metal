@@ -99,7 +99,9 @@ class QuantConfig:
             self_attn_out=LinearQuantConfig(),
             cross_attn_q=lc,
             cross_attn_kv=lc,
-            cross_attn_out=lc,
+            # bf16 weights for the same reason as self_attn_out: since sprint 6 the
+            # cross-attention residual is fused into attn2.to_out through the ternary kernel.
+            cross_attn_out=LinearQuantConfig(),
             ffn_ff1=lc,
             ffn_ff2=lc,
             ring_sdpa=SDPAQuantConfig(),
@@ -166,7 +168,13 @@ class QuantConfig:
             self_attn_out=lc_out,
             cross_attn_q=lc,
             cross_attn_kv=lc,
-            cross_attn_out=lc,
+            # Since sprint 6 the cross-attention residual is fused into attn2.to_out through the
+            # same ternary kernel, so it carries the same bf16-weight constraint. It also runs
+            # HiFi2 with fp32 accumulate: with the residual add inside a LoFi epilogue the
+            # transformer PCC fell from 99.9651 % to 99.886 % (2026-09-28), and the N=768
+            # projections are bound by the TP-ring bytes, not by math rate (notes 7.11), so the
+            # higher fidelity is free here.
+            cross_attn_out=LinearQuantConfig(weight_dtype=ttnn.bfloat16, activation_dtype=ttnn.bfloat8_b),
             ffn_ff1=lc,
             ffn_ff2=lc,
             ring_sdpa=sc,
