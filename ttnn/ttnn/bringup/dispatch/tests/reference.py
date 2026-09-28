@@ -76,3 +76,45 @@ def dispatch(
     lin = chip * num_groups + group
     meta = torch.stack([torch.full_like(t, lin), t, k], dim=1)
     return row, x[t], meta
+
+
+# --- Dispatch groups of more than one device (the source op's own path, fabric on; mimo_v2_6_d_p_2x2 O.1) ----------
+# The mesh columns are the dispatch groups and the rows the chips of a group (cluster_axis 0). Column c's experts are
+# c*dgs*epc .. (c+1)*dgs*epc - 1, chip r of the group holds c*dgs*epc + r*epc .. + epc - 1 (ExpertMapping col-major).
+# Source device (r, c) sends token t / slot k (expert e of group c) to chip table[c][e] of its column, at row
+# offsets[r][e] + (number of r's earlier tokens routed to e); offsets from offset_cumsum over the group (regions of
+# the group totals + the histograms of the group's earlier source devices). Metadata [r * num_groups + c, t, k].
+
+
+def dispatch_table_groups(num_experts: int, dispatch_group_size: int, num_groups: int) -> torch.Tensor:
+    """[num_groups, num_experts + 1] int32, ExpertMapping.create_dispatch_table: group c's experts -> their chip in
+    the group (0 .. dispatch_group_size - 1), every other expert and the sentinel column -> -1."""
+    epg = num_experts // num_groups
+    epc = epg // dispatch_group_size
+    t = torch.full((num_groups, num_experts + 1), -1, dtype=torch.int32)
+    for c in range(num_groups):
+        t[c, c * epg : (c + 1) * epg] = torch.arange(epg, dtype=torch.int32) // epc
+    return t
+
+
+def group_routing(indices: torch.Tensor, table_row: torch.Tensor, experts_per_chip: int):
+    """masked_bincount + offset_cumsum over one dispatch group. indices [D, S, K] (the group's D source devices, in
+    order); table_row [E + 1]. Returns (offsets [D, E], totals [E], regions [E]) int64."""
+    D = indices.shape[0]
+    E = table_row.numel() - 1
+    present = (table_row[:E] != -1).to(torch.int64)
+    hists = torch.stack([torch.bincount(indices[d].reshape(-1), minlength=E)[:E] * present for d in range(D)])
+    totals = hists.sum(0)
+    aligned = ((totals + TILE - 1) // TILE * TILE).reshape(-1, experts_per_chip)
+    regions = (aligned.cumsum(-1) - aligned).reshape(E)
+    before = hists.cumsum(0) - hists
+    return before + regions, totals, regions
+
+
+def group_slots(indices: torch.Tensor, table_row: torch.Tensor, offsets: torch.Tensor, dest_chip: int):
+    """Every (source r, t, k) of the group routed to an expert on chip dest_chip, and its row in that chip's buffer.
+    indices [D, S, K], offsets [D, E]. Returns a list over r of (t, k, e, row) int64 tensors."""
+    E = table_row.numel() - 1
+    mask_row = torch.full_like(table_row, -1)
+    mask_row[:E] = torch.where(table_row[:E] == dest_chip, 0, -1)
+    return [slots(indices[r], mask_row, offsets[r]) for r in range(indices.shape[0])]
