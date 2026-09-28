@@ -90,6 +90,23 @@ def confirmed():
     return rows
 
 
+XGROUP_MAX = 10
+IDENT = re.compile(
+    r"`([A-Za-z_][\w:~]{3,})`|(?<![\w])(_*[a-z][a-z0-9]*_[a-z0-9_]+|[A-Z][a-z]+[A-Z][A-Za-z0-9]+)\b"
+)
+
+
+def idents_of(f):
+    """Code identifiers a finding names (backticked, snake_case or CamelCase), innermost `::` part."""
+    text = f.get("summary", "") + " " + (f.get("failure_scenario") or "")[:400]
+    out = set()
+    for m in IDENT.finditer(text):
+        t = (m.group(1) or m.group(2)).split("::")[-1].strip("_")
+        if len(t) > 5:
+            out.add(t)
+    return out
+
+
 if argv[0] == "inputs":
     rows = confirmed()
     # no mechanical pre-merge: proximity alone does not make two findings one defect (see the module docstring)
@@ -98,6 +115,42 @@ if argv[0] == "inputs":
     for f in seen:
         g = ARCH.sub("*", os.path.dirname(f["file"]))
         groups.setdefault(g, []).append(f)
+    # Cross-directory groups: a defect reported at a call site and at its definition lands in two directories. Two
+    # findings in different directory groups that name at least two of the same identifiers are linked, and each
+    # connected set meets in a group of its own for the judge. One shared name is too weak (`shard_spec`, `padded_shape`
+    # tie unrelated findings together); two picked out the forked copies of one helper on a real run.
+    idents = {key_of(f): idents_of(f) for f in seen}
+    parent = {k: k for k in idents}
+
+    def root(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    ordered = sorted(seen, key=key_of)
+    for i, f in enumerate(ordered):
+        for g2 in ordered[i + 1 :]:
+            a, b = key_of(f), key_of(g2)
+            if (
+                os.path.dirname(f["file"]) != os.path.dirname(g2["file"])
+                and len(idents[a] & idents[b]) >= 2
+            ):
+                parent[root(a)] = root(b)
+    linked = {}
+    for f in ordered:
+        linked.setdefault(root(key_of(f)), []).append(f)
+    for fs in linked.values():
+        dirs = {ARCH.sub("*", os.path.dirname(f["file"])) for f in fs}
+        if len(fs) < 2 or len(dirs) < 2:
+            continue
+        if len(fs) > XGROUP_MAX:
+            print(
+                f"  cross-directory set of {len(fs)} too large to judge as one group; skipped",
+                file=sys.stderr,
+            )
+            continue
+        groups[f"~linked:{key_of(fs[0])}"] = fs
     d = os.path.join(out, "dedup_inputs")
     os.makedirs(d, exist_ok=True)
     paths = []

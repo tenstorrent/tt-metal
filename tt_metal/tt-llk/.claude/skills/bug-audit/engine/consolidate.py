@@ -85,6 +85,20 @@ for c in dj.get("clusters", []):
     for k in c["duplicates"]:
         dup_of[k] = c["canonical"]
         relation[k] = c["relation"]
+
+
+def final_canonical(k):
+    """Follow duplicate -> canonical to the end. Overlapping judge groups (a directory group and a cross-directory one)
+    can chain A -> B -> C; attaching A to B, itself a hidden duplicate, would drop A's site from every report.
+    """
+    seen = set()
+    while k in dup_of and dup_of[k] != k and k not in seen:
+        seen.add(k)
+        k = dup_of[k]
+    return k
+
+
+dup_of = {k: final_canonical(k) for k in dup_of}
 confk = {key_of(f): f for f in conf}
 for f in conf:
     k = key_of(f)
@@ -278,11 +292,16 @@ cand_cls = collections.Counter(
     f["category"] for f in {key_of(x): x for x in rows}.values()
 )
 checked = collections.Counter()
+ledger = collections.Counter()
 for fn in os.listdir(os.path.join(out, "findings")):
     if fn.endswith(".json") and not fn.endswith(".history.jsonl"):
         h = load(os.path.join(out, "findings", fn), {})
         for c in set(h.get("classes_checked", [])):
             checked[c] += len(h.get("files_read", []))
+        ledger["entries"] += len(h.get("boundaries", []))
+        ledger["invalid"] += len(h.get("ledger_invalid", []))
+        ledger["invalid_batches"] += bool(h.get("ledger_invalid"))
+        ledger["trace_died"] += bool((h.get("trace_audit") or {}).get("died"))
 src = collections.Counter(f.get("source", "?") for f in conf)
 prio = collections.Counter(man[f["batch"]]["prio"] for f in conf if f["batch"] in man)
 with open(os.path.join(out, "COVERAGE.md"), "w") as fh:
@@ -302,6 +321,11 @@ with open(os.path.join(out, "COVERAGE.md"), "w") as fh:
     fh.write(
         f"\nOut of {nf} files in scope. A class far below that was not swept everywhere: its coverage is a CAP, "
         "and needs a targeted pass before the run is called exhaustive.\n"
+    )
+    fh.write(
+        f"\n## Contract-trace ledger\n\n{ledger['entries']} boundaries traced; {ledger['invalid']} invalid (not a real "
+        f"file:line or file:symbol) in {ledger['invalid_batches']} batch(es), set aside rather than trusted; "
+        f"{ledger['trace_died']} batch(es) whose trace auditor died twice, so their sample was not re-traced.\n"
     )
     fh.write(
         "\n## By what led to them\n\n"

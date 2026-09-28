@@ -130,7 +130,7 @@ Engine scripts take `--run DIR` (or `BUG_AUDIT_RUN`); paths below are relative t
    recheck the whole refuted pile.
 6. **Dedup, so each bug is filed exactly once.** Two separate steps:
    - **Within the run:** `engine/dedup.py --run <run> inputs`, then `engine/dedup-wave.js`, then
-     `dedup.py persist <output>`, then `consolidate.py`. The same defect reported at several lines becomes one entry.
+     `dedup.py persist <output>`, then `consolidate.py`. The same defect reported at several lines becomes one entry. Groups are directories, plus cross-directory sets of findings that name at least two of the same identifiers (a defect reported at a call site and at its definition), so the judge compares those too.
      The same defect in any number of architecture or platform copies (Grayskull, Wormhole, Blackhole, Quasar,
      or a repo's own variants, added with `--variant`) is MERGED into ONE entry, never dropped:
      - the entry lists every site, with each copy's own failure mode and suggested fix, since copies can differ;

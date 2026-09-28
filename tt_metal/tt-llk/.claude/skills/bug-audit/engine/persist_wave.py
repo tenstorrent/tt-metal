@@ -128,10 +128,17 @@ for res in r.get("results", []):
             )
     # contract-trace ledger: every "other side" must be a real file:line in the tree
     tree = man[b].get("root", st["root"])
+    # An invalid boundary is set aside and reported, not trusted -- and it does not re-hunt the batch: file coverage
+    # is proven by the read check above, and a re-hunt costs a full hunt for one bad line of evidence.
+    invalid = []
     for e in hunt.get("boundaries", []):
         stats["ledger_entries"] = stats.get("ledger_entries", 0) + 1
         if not ledger_site_ok(tree, e.get("other_side", "")):
             stats["ledger_bad"] = stats.get("ledger_bad", 0) + 1
+            invalid.append(e)
+    if invalid:
+        hunt["ledger_invalid"] = invalid
+        save(fpath, {**hunt, "wave": wave_no})
     stats["ledger_skipped"] = stats.get("ledger_skipped", 0) + len(
         hunt.get("boundaries_skipped", [])
     )

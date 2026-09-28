@@ -335,3 +335,116 @@ def test_holdout_honours_excluded_ids(tmp_path):
         tmp_path / "old.jsonl",
     )
     assert not set(PINNED) & {json.loads(x)["id"] for x in open(out)}
+
+
+# ---- dedup: cross-directory groups, and chains across overlapping groups -----------------------------------------
+
+
+def test_duplicate_chains_resolve_to_the_final_canonical(rundir):
+    a, b, c = ("x/a.cpp", 1), ("y/b.cpp", 2), ("z/c.cpp", 3)
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {"findings": [finding(*a), finding(*b), finding(*c, severity="high")]},
+    )
+    key = lambda s: f"{s[0]}:{s[1]}"  # noqa: E731
+    write(
+        str(rundir / "dedup.json"),
+        {
+            "auto": {},
+            "clusters": [
+                {
+                    "canonical": key(b),
+                    "duplicates": [key(a)],
+                    "relation": "same-defect",
+                },
+                {
+                    "canonical": key(c),
+                    "duplicates": [key(b)],
+                    "relation": "same-defect",
+                },
+            ],
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    conf = {
+        f"{f['file']}:{f['line']}": f
+        for f in json.load(open(rundir / "CONFIRMED.json"))
+    }
+    sites = {m["site"] for m in conf[key(c)].get("merged_sites", [])}
+    assert sites == {
+        key(a),
+        key(b),
+    }, "A must reach C through B, not hang off B, which is itself hidden"
+    assert open(rundir / "OPEN.md").read().count("### ") == 1
+
+
+def test_cross_directory_findings_sharing_two_identifiers_meet_in_a_group(rundir):
+    s1 = "Pops the row via `cb_pop_front` before `write_block_sync_granular` flushes"
+    write(
+        str(rundir / "verdicts" / "B-0000.json"),
+        {
+            "findings": [
+                finding("ops/a/k.hpp", 10, summary=s1),
+                finding("train/b/k.hpp", 20, summary=s1 + " (fork)"),
+                finding(
+                    "misc/c/z.cpp", 30, summary="Also calls `cb_pop_front` early"
+                ),  # one shared name: not linked
+            ]
+        },
+    )
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    code, out, err = run(os.path.join(ENGINE, "dedup.py"), "--run", rundir, "inputs")
+    assert code == 0, err
+    groups = [json.load(open(p)) for p in json.loads(out.splitlines()[0])["inputs"]]
+    linked = [g for g in groups if g["group"].startswith("~linked:")]
+    assert len(linked) == 1 and {f["file"] for f in linked[0]["findings"]} == {
+        "ops/a/k.hpp",
+        "train/b/k.hpp",
+    }
+
+
+# ---- persist_wave: an invalid ledger entry is recorded, not trusted, and does not re-hunt the batch ---------------
+
+
+def test_invalid_ledger_entry_is_reported_without_a_rehunt(rundir, tmp_path):
+    tree = tmp_path / "tree"
+    write(str(tree / "k.cpp"), "int a;\nint b;\n")
+    write(
+        str(rundir / "batches" / "manifest.json"),
+        [{"batch": "B-0000", "files": ["k.cpp"], "prio": "A", "root": str(tree)}],
+    )
+    os.makedirs(rundir / "done")
+    hunt = {
+        "files_read": [{"path": "k.cpp", "lines": 2, "last_line": "int b;"}],
+        "boundaries": [
+            {
+                "site": "k.cpp:1",
+                "kind": "call",
+                "other_side": "k.cpp:2",
+                "verdict": "consistent",
+                "note": "",
+            },
+            {
+                "site": "k.cpp:1",
+                "kind": "call",
+                "other_side": "k.cpp",
+                "verdict": "consistent",
+                "note": "",
+            },
+        ],
+        "findings": [],
+    }
+    raw = tmp_path / "wave.json"
+    write(
+        str(raw),
+        {"results": [{"batch": "B-0000", "ok": True, "hunt": hunt, "judged": []}]},
+    )
+    code, out, err = run(os.path.join(ENGINE, "persist_wave.py"), "--run", rundir, raw)
+    assert code == 0, out + err
+    assert os.path.exists(
+        rundir / "done" / "B-0000.done"
+    ), "the read check passed: the batch is done"
+    saved = json.load(open(rundir / "findings" / "B-0000.json"))
+    assert [e["other_side"] for e in saved["ledger_invalid"]] == ["k.cpp"]
+    assert run(os.path.join(ENGINE, "consolidate.py"), "--run", rundir)[0] == 0
+    assert "1 invalid" in open(rundir / "COVERAGE.md").read()
