@@ -121,7 +121,6 @@ struct KernelPlan {
     uint32_t ring_freed_sem = 0;
     uint32_t fwd_arrived_addr = 0;
     uint32_t expert_table_page_base = 0;  // this ring's first row of global_expert_idx_table
-    uint32_t ready_sem = 0;               // see RingSemaphores::ready_gate()
 };
 
 // The other end of one untilizer handshake: the core to address, and the counter that core's peer owns there.
