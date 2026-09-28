@@ -223,27 +223,29 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
     last ``full`` layer selection. Built only on such boundaries, after the activation endpoints and in
     the same receiver-then-sender order, so both ends of each edge pair up. Shares the activation
     socket's worker cores, FIFO and fabric-link lease discipline."""
-    common = dict(
-        global_spec=indexer_indices_global_spec(per_chip_shape, GLOBAL_MESH_SHAPE),
-        mapper=ttnn.create_mesh_mapper(mesh_device, INDEX_MAPPER_CONFIG),
-        fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
-        sender_worker_cores=SYNC_WORKER_CORES,
-        receiver_worker_cores=SYNC_WORKER_CORES,
-        metadata_size_bytes=METADATA_SIZE_BYTES,
-        share_fabric_links=True,
-        socket_buffer_type=ttnn.BufferType.L1,
-    )
+    def _common():
+        return dict(
+            global_spec=indexer_indices_global_spec(per_chip_shape, GLOBAL_MESH_SHAPE),
+            mapper=ttnn.create_mesh_mapper(mesh_device, INDEX_MAPPER_CONFIG),
+            fifo_size_bytes=D2D_FIFO_SIZE_BYTES,
+            sender_worker_cores=SYNC_WORKER_CORES,
+            receiver_worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=METADATA_SIZE_BYTES,
+            share_fabric_links=True,
+            socket_buffer_type=ttnn.BufferType.L1,
+        )
+
     idx_in = None
     if inbound:
         logger.info(f"[pp rank {rank}] [d2d-idx] creating inbound index receiver from rank {rank - 1}")
         idx_in = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **common
+            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
         )
     idx_out = None
     if outbound:
         logger.info(f"[pp rank {rank}] [d2d-idx] creating outbound index sender to rank {rank + 1}")
         idx_out = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **common
+            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
         )
     logger.info(
         f"[pp rank {rank}] [d2d-idx] endpoints up (inbound={'yes' if idx_in else 'no'} "
