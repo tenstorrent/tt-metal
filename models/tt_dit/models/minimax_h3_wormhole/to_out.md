@@ -66,7 +66,8 @@ PCC / rel-RMSE vs fp32 torch, bar 0.9995 / 0.02.
 | relay prefetch (`tools/agmm_relay_prefetch.patch`: receivers request block k+1 right after handing block k to compute, before waiting for the downstream hop) | fused 5.52 vs 5.43 ms, plain 4.60 vs 4.56, fp32-off 4x2 5.32 vs 5.23: **no gain** (slightly worse, within noise) | rejected: the patch removes request latency, not bandwidth; the relay is bandwidth-bound at ~10 GB/s per core |
 | fewer in1 re-reads: M_block 16 (4 M blocks instead of 7) | fp32 off (16,8,6) 4x2: mesh 5.22 vs 5.23; (16,8,6) with fp32 on overflows L1 | no gain: in0, not in1, is the delivered volume that matters |
 | K_block 14 (fewer, larger hops) | fp32 on (8,14,6) 2x2: 5.43 (0); single device 4.00 vs 4.10; the 09-17 sweep had (8,14,6) at 4,568 us, slower | rejected |
-| in0 multicast to the chain instead of store-and-forward (each hop today re-writes 128 KB per iteration), or the fabric-bound strided AGMM path (`strided_all_gather_minimal_matmul_async`, no Wormhole config exists) | not run | **proposed: the only lever of size**, dataflow work |
+| in0 + in1 multicast to the chain instead of store-and-forward, plus CB depth 4 and the injector write deferral | **built and run 2026-09-25** ([to_out_handoff.md](to_out_handoff.md) §7): 5.38 -> 4.89 ms on the shipped grid, 4.71 on 8x7, bit-identical; the K-step-0 wait behind the epilogue was a third of the relay's waits | opt-in env switches on the AGMM factory; awaiting the block-level number and a model switch |
+| the fabric-bound strided AGMM (`strided_all_gather_minimal_matmul_async`) | run 2026-09-25 ([to_out_handoff.md](to_out_handoff.md) §6): +1.3% at the model's fabric payload, -3.9% only at the 7616 B payload that slows the shipped AGMM 11% | parked: its matmul has the same relay; it changes the gather, which is then the limiter (~3 GB/s per worker stream) |
 
 ### 3.2 The K loop (1.1 ms of pipeline issue cost)
 
@@ -108,8 +109,9 @@ Every lever, run or not, with the 2026-09-25 row-parallel (MM+RS) measurements a
 [to_out_handoff.md](to_out_handoff.md).
 
 1. **The one-pass addcmul epilogue** (§3.3): ~0.35 ms, no numerical change, kernel work in `compute.cpp`.
-2. **A higher-bandwidth in0 path** (§3.1): in0 multicast or the strided AGMM; the only lever that reaches the 1.1 ms
-   of waits, and the reason the relay-prefetch patch kept for ff1 can be retired for good.
+2. **A higher-bandwidth in0 path** (§3.1): built 2026-09-25 as in0 + in1 multicast with deeper CBs and the injector
+   write deferral (handoff §7), -0.5 ms on the shipped grid and -0.67 on 8x7 in isolation; the relay-prefetch patch
+   kept for ff1 can be retired. The strided AGMM is not that path: its matmul relays in0 the same way (handoff §6).
 3. **fp32 dest off**: -3.5%, a precision decision; here it should wait for the delivery fix, which is what makes the
    larger subblocks pay.
 

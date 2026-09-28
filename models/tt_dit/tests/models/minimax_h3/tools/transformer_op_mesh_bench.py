@@ -29,6 +29,20 @@ sweep harness: the minimal reproducer for kernel changes. Not a test; pytest lea
             output to the RS through a rolling 2-block L1 window (needs the window shard 2 x M_block x 21 tiles to fit
             beside the matmul CBs: M_block <= 4 at K_block 7); --window 0 is the DRAM handoff. --num-links 2 leaves
             more rows to the matmul (8x8 + one RS row) at half the fabric bandwidth.
+    --sagmm runs an AGMM op (to_out, to_qkv, ff1) as the fabric-bound strided AGMM instead
+            (strided_all_gather_minimal_matmul_async, the way ColParallelLinear._forward_fabric_agmm and the LTX
+            to_out call it): the strided all-gather workers write the remote K slices into a persistent DRAM buffer
+            in the matmul's consumption order and the matmul on --mm-grid reads in0 from that buffer. Its in0 and
+            in1 dataflow is the same store-and-forward relay as the AGMM's (an injector core reads a block, every
+            core forwards it one hop with a semaphore handshake), so what changes is the gather, not the matmul.
+            The gather zone is the rows above --mm-grid, carved row-major from (0, mm_grid.y): --num-links x
+            (--ag-workers + 1 mux) x 2 directions cores (--ag-workers is PER DIRECTION), plus 2 matmul-signal
+            aggregator cores when they fit (--agg-mode auto|on|off). The factory transposes the grid when M > N
+            (every H3 shape): M over the 8 columns, N over the mm_grid rows, so for to_out an 8x7 grid holds 54 x 6
+            tiles per core (no padding) and an 8x6 grid 54 x 7 (N_block 7 forces a 2x1 or 1x7 subblock).
+            --fabric-payload 7616 (the Wormhole cap; the model runs 4096) packs 3 tiles per gather packet instead
+            of 2 and is what lets a 16-core gather zone keep up; it slows the shipped AGMM unless --agmm-buffers is
+            re-tuned.
     --no-fusion runs the same shape as a plain matmul (what the sweep harness's "plain" use case measures).
 
 Bar (ff1 numerics acceptance): pcc > 0.9995, rel-RMSE < 0.02. The golden is computed on the first
@@ -92,11 +106,23 @@ def main() -> None:
     p.add_argument("--rs-workers", type=int, default=None, help="ff2: reduce-scatter workers per link-direction")
     p.add_argument("--rs-chunks", type=int, default=2, help="ff2 unfused: reduce-scatter chunks_per_sync")
     p.add_argument("--rs-buffers", type=int, default=None, help="ff2: reduce-scatter num_buffers_per_channel")
-    p.add_argument("--num-links", type=int, default=None, help="ff2: ring links for the reduce-scatter (default 4)")
+    p.add_argument("--num-links", type=int, default=None, help="ff2 / --sagmm: ring links for the CCL (default 4)")
     p.add_argument(
         "--fused", action="store_true", help="ff2: one minimal_matmul_strided_reduce_scatter_async (+addcmul) per call"
     )
-    p.add_argument("--mm-grid", default="8x7", help="ff2 --fused: matmul grid WxH; the RS takes the rows above it")
+    p.add_argument(
+        "--mm-grid",
+        default=None,
+        help="matmul grid WxH (default: the op's shipped grid; ff2 --fused / --sagmm default 8x7); the CCL workers "
+        "take the rows above it",
+    )
+    p.add_argument("--sagmm", action="store_true", help="AGMM ops: run the fabric-bound strided AGMM instead")
+    p.add_argument("--agmm-buffers", type=int, default=48, help="AGMM: num_buffers_per_channel (model: 48 on WH)")
+    p.add_argument("--ag-workers", type=int, default=1, help="--sagmm: gather workers per link per direction")
+    p.add_argument("--ag-buffers", type=int, default=8, help="--sagmm: gather num_buffers_per_channel")
+    p.add_argument(
+        "--agg-mode", default="auto", choices=["auto", "on", "off"], help="--sagmm: matmul-signal aggregators"
+    )
     p.add_argument("--window", type=int, default=0, help="ff2 --fused: mm_window_blocks (0 = DRAM handoff)")
     p.add_argument(
         "--chunk-width", type=int, default=1, help="ff2 --fused: chunk_width_in_mm_blocks (0 = one chunk per M block)"
@@ -108,6 +134,12 @@ def main() -> None:
         "when calls are enqueued back to back -- the model alternates two of each via CCLManager)",
     )
     p.add_argument("--sync-each", action="store_true", help="synchronize the mesh after every timed call")
+    p.add_argument(
+        "--fabric-payload",
+        type=int,
+        default=None,
+        help="fabric router max packet payload in bytes (default: the wh_4x8_ring config's 4096; Wormhole caps at 7616)",
+    )
     p.add_argument(
         "--fidelity", default="HiFi2", choices=["LoFi", "HiFi2", "HiFi4"], help="LoFi = delivery-floor diagnostic"
     )
@@ -121,12 +153,16 @@ def main() -> None:
         p.error("--with-addcmul needs --with-rs (or --fused, which always fuses the addcmul)")
     if args.gate_broadcast and spec.addcmul_scalar is None:
         p.error("--gate-broadcast applies to to_out only")
+    if args.sagmm and not spec.is_agmm:
+        p.error("--sagmm applies to the AGMM ops only")
     M = args.M or spec.M
     K, N = spec.K, spec.N
     mb, kb, nb, sh, sw = (int(v) for v in (args.blocks or spec.blocks_str()).split(","))
 
-    cfg = resolve_config("wh_4x8_ring")
-    log("opening mesh")
+    cfg = dict(resolve_config("wh_4x8_ring"))
+    if args.fabric_payload:
+        cfg["fabric_router_config_payload"] = args.fabric_payload
+    log(f"opening mesh (fabric payload {cfg['fabric_router_config_payload']} B)")
     parent, mesh = open_mesh(cfg, trace_region_size=0)
     sp_axis, tp_axis = cfg["sp_axis"], cfg["tp_axis"]
     mesh_shape = tuple(mesh.shape)  # the cluster submesh: one TP ring, SP extent 1
@@ -151,7 +187,10 @@ def main() -> None:
         fp32_dest_acc_en=bool(args.fp32_dest),
         packer_l1_acc=True,
     )
-    mm_grid = tuple(int(v) for v in args.mm_grid.split("x")) if args.fused else spec.grid
+    if args.mm_grid is None:
+        mm_grid = (8, 7) if (args.fused or args.sagmm) else spec.grid
+    else:
+        mm_grid = tuple(int(v) for v in args.mm_grid.split("x"))
     mmcfg = ttnn.MinimalMatmulConfig(
         M_block_size=mb,
         K_block_size=kb,
@@ -181,6 +220,79 @@ def main() -> None:
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh_shape, dims=[sp_axis, tp_axis]),
         )
+        use_addcmul = fused and spec.addcmul_scalar is not None
+
+    if spec.is_agmm and args.sagmm:
+        # The fabric-bound strided AGMM, called like ColParallelLinear._forward_fabric_agmm / the LTX to_out: the op
+        # gathers dim 3 of a unit-batch rank-4 input, so widen the activation and the addcmul operands here.
+        links = args.num_links or cfg["num_links"]
+        workers = args.ag_workers
+        mm_gx, mm_gy = mm_grid
+        ag_zone = (grid.y - mm_gy) * grid.x
+        need = links * (workers + 1) * 2
+        if ag_zone < need:
+            die(
+                f"matmul grid {mm_gx}x{mm_gy} leaves {ag_zone} cores for the gather; {links} links x ({workers} "
+                f"workers + 1 mux) x 2 directions need {need}"
+            )
+        agg_fits = ag_zone >= need + 2
+        tx = ttnn.unsqueeze_to_4D(tx)
+        t_extras = {k: ttnn.unsqueeze_to_4D(v) for k, v in t_extras.items()}
+        # CCLManager.get_strided_ag_mm_semaphore: 2 out-ready + 2 directions x links x workers aggregator semaphores
+        # per set, two sets alternated; the gathered-K buffer ping-pongs the same way.
+        n_sems = 2 + 2 * links * workers
+        sem_sets = [[ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(n_sems)] for _ in range(n_sets)]
+        pbufs = [
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, M, K]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            for _ in range(n_sets)
+        ]
+        agg_mode = {
+            "auto": ttnn.MMSignalAggregatorMode.Auto,
+            "on": ttnn.MMSignalAggregatorMode.On,
+            "off": ttnn.MMSignalAggregatorMode.Off,
+        }[args.agg_mode]
+        dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        log(
+            f"strided AGMM: matmul {mm_gx}x{mm_gy}; gather zone {ag_zone} cores from (0,{mm_gy}): {links} links x "
+            f"({workers} workers + 1 mux) x 2 directions = {need} cores, aggregators "
+            f"{'fit' if agg_fits else 'do not fit'} ({args.agg_mode}); {args.ag_buffers} buffers/channel"
+        )
+
+        def run():
+            i = call_idx[0] % n_sets
+            call_idx[0] += 1
+            outs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+                tx,
+                tw,
+                persistent_output_buffer=pbufs[i],
+                dim=3,
+                multi_device_global_semaphore=sem_sets[i],
+                strided_all_gather_core_grid_offset=ttnn.CoreCoord(0, mm_gy),
+                num_links=links,
+                memory_config_ag=dram,
+                topology=cfg["topology"],
+                cluster_axis=cfg["cluster_axis"],
+                bias=None,
+                config=mmcfg,
+                memory_config_mm=dram,
+                compute_kernel_config=compute,
+                num_workers_per_link=workers,
+                num_buffers_per_channel=args.ag_buffers,
+                read_local_slice_from_input=True,
+                fused_ternary_input_a=t_extras["a"] if use_addcmul else None,
+                fused_ternary_input_b=t_extras["b"] if use_addcmul else None,
+                fused_ternary_scalar=spec.addcmul_scalar if use_addcmul else None,
+                chunks=spec.chunks if fused else 1,
+                mm_signal_aggregator_mode=agg_mode,
+                fuse_swiglu=spec.fuse_swiglu and fused,
+            )
+            # [gathered K, matmul chunk 0, ...]
+            return outs[1] if len(outs) == 2 else list(outs[1:])
+
+        kind = "SAGMM"
+    elif spec.is_agmm:
         # Ping-pong exactly like CCLManager.get_ag_ping_pong_semaphore / get_ag_ping_pong_buffer: consecutive AGMM
         # calls alternate between two semaphore pairs and two gathered-in0 buffers, so call i+1 on a device that is
         # ahead cannot signal semaphores that call i on a neighbour is still consuming.
@@ -191,7 +303,6 @@ def main() -> None:
             )
             for _ in range(n_sets)
         ]
-        use_addcmul = fused and spec.addcmul_scalar is not None
 
         def run():
             i = call_idx[0] % n_sets
@@ -210,7 +321,7 @@ def main() -> None:
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=cfg["num_workers_per_link"],
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=args.agmm_buffers,
                 chunks=spec.chunks if fused else 1,
                 fuse_swiglu=spec.fuse_swiglu and fused,
                 scalar=spec.addcmul_scalar if use_addcmul else None,

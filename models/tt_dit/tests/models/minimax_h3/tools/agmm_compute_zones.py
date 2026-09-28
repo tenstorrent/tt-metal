@@ -71,11 +71,23 @@ BLOCK_EDITS = [
     ),
     (
         """            swiglu_block(
-                intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);""",
+                intermediate_cb.get_cb_id(),
+                in2_cb.get_cb_id(),
+                out_cb.get_cb_id(),
+                M_block_tiles,
+                N_block_tiles,
+                current_M_block_tiles,
+                current_N_block_tiles);""",
         """            {
                 DeviceZoneScopedN("SWIGLU");
                 swiglu_block(
-                    intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+                    intermediate_cb.get_cb_id(),
+                    in2_cb.get_cb_id(),
+                    out_cb.get_cb_id(),
+                    M_block_tiles,
+                    N_block_tiles,
+                    current_M_block_tiles,
+                    current_N_block_tiles);
             }""",
     ),
     # The other epilogues (one is compiled per op: FUSE_SWIGLU -> ff1, FUSE_TERNARY -> to_out, neither -> to_qkv,
