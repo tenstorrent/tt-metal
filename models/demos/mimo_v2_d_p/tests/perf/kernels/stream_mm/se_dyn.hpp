@@ -42,7 +42,7 @@ struct SeDyn {
     uint32_t num_v = 0;       // sub-blocks over all entries
     uint32_t off[SE_MAX_V];   // entry a's first row in the dispatch buffer (TILE_HEIGHT-aligned)
     uint32_t cnt[SE_MAX_V];   // its tokens
-    uint32_t subs[SE_MAX_V];  // its sub-blocks
+    uint16_t subs[SE_MAX_V];  // its sub-blocks (<= 65535: a count below 2M rows)
     uint8_t eid[SE_MAX_V];    // local expert index of entry a
     uint8_t ld[SE_MAX_V];     // its gate/up weight load
     uint8_t last[SE_MAX_V];   // 1: the load's last use
@@ -56,12 +56,14 @@ struct SeDyn {
 
 // Ring regions from the retirement order; false if some load would wait on a retirement that comes after its use.
 inline bool se_dyn_regions(SeDyn& d) {
-    uint32_t ret_pos[SE_MAX_E], ret_ld[SE_MAX_E], first[SE_MAX_E], n_ret = 0;
+    // (8-bit: entries < SE_MAX_V <= 128; the 8 KB RISC local memory holds the stack, SeDyn and the pin copy)
+    uint8_t ret_pos[SE_MAX_E], ret_ld[SE_MAX_E], first[SE_MAX_E];
+    uint32_t n_ret = 0;
     for (uint32_t l = 0; l < d.n_load; ++l) {
-        first[l] = 0xFFFF;
+        first[l] = 0xFF;
     }
     for (uint32_t a = 0; a < d.n_act; ++a) {
-        if (first[d.ld[a]] == 0xFFFF) {
+        if (first[d.ld[a]] == 0xFF) {
             first[d.ld[a]] = a;
         }
         if (d.last[a]) {
@@ -112,7 +114,19 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
     if (k < 2) {
         return;
     }
-    const SeDyn o = d;
+    // the original entries (at most SE_MAX_E: a full SeDyn copy overflows the RISC stack at SE_MAX_E 64)
+    struct {
+        uint32_t n_act, off[SE_MAX_E], cnt[SE_MAX_E];
+        uint16_t subs[SE_MAX_E];
+        uint8_t eid[SE_MAX_E];
+    } o;
+    o.n_act = d.n_act;
+    for (uint32_t a = 0; a < d.n_act; ++a) {
+        o.off[a] = d.off[a];
+        o.cnt[a] = d.cnt[a];
+        o.subs[a] = d.subs[a];
+        o.eid[a] = d.eid[a];
+    }
     uint32_t v = 0, s0 = 0, j = 0;
     auto put = [&](uint32_t src, uint32_t off, uint32_t cnt, uint32_t subs, uint32_t ld, bool last) {
         d.eid[v] = o.eid[src];
@@ -144,8 +158,17 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
     for (uint32_t jj = 0; jj + 1 < o.n_act; ++jj) {
         d.load_eid[1 + jj] = o.eid[other(jj)];
     }
-    if (!se_dyn_regions(d)) {
-        d = o;
+    if (!se_dyn_regions(d)) {  // back to the plain order (se_dyn_load's)
+        d.n_act = o.n_act;
+        for (uint32_t a = 0; a < o.n_act; ++a) {
+            d.off[a] = o.off[a];
+            d.cnt[a] = o.cnt[a];
+            d.subs[a] = o.subs[a];
+            d.eid[a] = o.eid[a];
+            d.ld[a] = a;
+            d.last[a] = 1;
+            d.load_eid[a] = o.eid[a];
+        }
     }
 }
 #endif
@@ -169,7 +192,8 @@ inline void se_dyn_subgrid(SeDyn& d, uint32_t sg) {
         }
         const uint32_t n0 = d.n_act, rps = d.rps;
         for (uint32_t a = 0; a < n0; ++a) {
-            if ((d.subs[a] + SE_SG_WCOST) * SE_SG <= total || d.subs[a] < SE_SG || d.n_act + SE_SG - 1 > SE_MAX_E) {
+            if ((uint32_t(d.subs[a]) + SE_SG_WCOST) * SE_SG <= total || d.subs[a] < SE_SG ||
+                d.n_act + SE_SG - 1 > SE_MAX_E) {
                 continue;
             }
             const uint32_t sb = d.subs[a], cnt = d.cnt[a], off = d.off[a];

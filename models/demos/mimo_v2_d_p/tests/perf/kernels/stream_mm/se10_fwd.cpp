@@ -113,4 +113,6 @@ void kernel_main() {
     noc_async_write_set_trid(0);
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
 }

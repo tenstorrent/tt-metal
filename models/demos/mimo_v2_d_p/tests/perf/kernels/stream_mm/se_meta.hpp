@@ -15,6 +15,7 @@
 #define SE_MAX_E 16
 #endif
 constexpr uint32_t SE_MAX_V = 2 * SE_MAX_E;  // schedule entries: a pinned expert's chunks + the others
+static_assert(SE_MAX_V < 255, "SeDyn keeps entry / load indices in 8 bits (0xFF: none)");
 constexpr uint32_t SE_META_SUBS = 2;
 constexpr uint32_t SE_META_SMALL = SE_META_SUBS + SE_MAX_V;
 constexpr uint32_t SE_META_GU = SE_META_SMALL + 1;

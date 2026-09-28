@@ -10,6 +10,8 @@ Hidden states are ``[1, 1, S_local, H]``: sequence block-cyclic over SP rows, re
   sigmoid scores renormalised (``norm_topk_prob``), x routed_scaling_factor (1.0). Same routing rule as Kimi.
 * MoE: DeepSeek EP substrate (routing_setup -> dispatch -> unified_routed_expert_ffn(Silu) -> combine ->
   reduce), experts spread over all chips (2x2: 64/chip, Galaxy 8x4: 8/chip). No shared expert.
+  ``MIMO_FLAT_EXPERT=1``: the routed experts run on the flat streamed expert op (``tt/flat_expert.py``), which reads
+  the row-major bf16 dispatch buffer and the routing's counts / regions directly (no tilize, one program per chip).
 """
 
 import math
@@ -31,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.mimo_v2_d_p.reference.config import MiMoTextConfig
+from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert
 from models.demos.mimo_v2_d_p.tt.mm_configs import best_mm_config
 from models.demos.mimo_v2_d_p.tt.weight_cache import cache_dir, cache_name
 
@@ -187,6 +190,37 @@ def routed_expert_hybrid_threshold() -> int | None:
     return int(v) if v else None
 
 
+def flat_expert_enabled() -> bool:
+    """``MIMO_FLAT_EXPERT=1``: routed experts on the flat streamed expert op instead of unified_routed_expert_moe."""
+    return os.environ.get("MIMO_FLAT_EXPERT", "0") == "1"
+
+
+def build_flat_expert(mesh_device, sd, cfg: MiMoTextConfig, experts_per_chip, dgs, ndg, max_tok, weights_dtype):
+    """One FlatExpert over the mesh: device (r, c) runs the experts the EP table puts there (the same global ids the
+    unified op reads through its global expert idx table: table[c, r], get_ep_mesh_mapper's sharding)."""
+    rows, cols = tuple(mesh_device.shape)
+    assert (rows, cols) == (dgs, ndg), (rows, cols, dgs, ndg)
+    table = ExpertMapping.create_global_expert_idx_table(
+        experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
+    )
+    gids = [[int(g) for g in table[c, r]] for r in range(rows) for c in range(cols)]
+    tw = lambda g, n: sd[f"experts.{g}.{n}.weight"].T.float().contiguous()  # nn.Linear [out, in] -> x @ W [in, out]
+    weights = [[(tw(g, "gate_proj"), tw(g, "up_proj"), tw(g, "down_proj")) for g in gl] for gl in gids]
+    wdtype = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8"}[weights_dtype]
+    return FlatExpert(
+        mesh_device,
+        weights,
+        m=max_tok,
+        H=cfg.hidden_size,
+        I=cfg.moe_intermediate_size,
+        gids=gids,
+        n_global=cfg.n_routed_experts,
+        wdtype=wdtype,
+        act="silu",
+        pin=1,
+    )
+
+
 def moe_capacity_factor(K: int, E: int, n_dev: int) -> int:
     """Dispatch-buffer capacity factor (buffer = dispatch_group * seq * factor tokens per chip).
 
@@ -217,7 +251,7 @@ class TtMoE:
     ):
         self.mesh_device = mesh_device
         weights_dtype = weights_dtype or default_expert_dtype()
-        E, K, H, I = cfg.n_routed_experts, cfg.num_experts_per_tok, cfg.hidden_size, cfg.moe_intermediate_size
+        E, K, H = cfg.n_routed_experts, cfg.num_experts_per_tok, cfg.hidden_size
         self.E, self.K, self.H = E, K, H
         self.gate = TtGate(
             mesh_device,
@@ -263,6 +297,18 @@ class TtMoE:
             topology=topology,
             init_zeros=True,
         )
+        self.flat = None
+        if flat_expert_enabled():
+            self.flat = build_flat_expert(mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype)
+            self.expert = None
+        else:
+            self._init_unified(mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix)
+        self.reduce = TtReduceModule(
+            mesh_device=mesh_device, topk_dim=3, cluster_axis=1, num_links=num_links, topology=topology
+        )
+
+    def _init_unified(self, mesh_device, sd, cfg, experts_per_chip, dgs, ndg, max_tok, weights_dtype, cache_prefix):
+        H, I = cfg.hidden_size, cfg.moe_intermediate_size
         gidx = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(
                 experts_per_chip=experts_per_chip, dispatch_group_size=dgs, num_dispatch_groups=ndg
@@ -295,9 +341,6 @@ class TtMoE:
             cache_name_prefix=ec_prefix,
             hybrid_token_threshold=routed_expert_hybrid_threshold(),
         )
-        self.reduce = TtReduceModule(
-            mesh_device=mesh_device, topk_dim=3, cluster_axis=1, num_links=num_links, topology=topology
-        )
 
     def __call__(self, x):
         """x [1,1,S,H] (post-attention-normed, replicated over TP) -> [1,1,S,H]."""
@@ -310,9 +353,13 @@ class TtMoE:
         w = ttnn.reshape(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (1, S, self.K))
         x3 = ttnn.squeeze(x, 0)
         buf, meta = self.dispatch(x3, w, idx, offsets, self.tt_table)
-        tiled = ttnn.to_layout(ttnn.squeeze(ttnn.squeeze(buf, 0), 0), ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(buf)
-        y = self.expert(tiled, counts, regions)
+        if self.flat is not None:  # reads the row-major bf16 buffer itself
+            y = self.flat(ttnn.squeeze(ttnn.squeeze(buf, 0), 0), counts, regions)
+            ttnn.deallocate(buf)
+        else:
+            tiled = ttnn.to_layout(ttnn.squeeze(ttnn.squeeze(buf, 0), 0), ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(buf)
+            y = self.expert(tiled, counts, regions)
         y = ttnn.unsqueeze(ttnn.unsqueeze(y, 0), 0)
         comb = self.combine(y, meta, counts, regions, seq_len_per_chip=S)
         w = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)

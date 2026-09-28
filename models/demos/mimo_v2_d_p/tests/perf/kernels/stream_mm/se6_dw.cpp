@@ -106,4 +106,6 @@ void kernel_main() {
 #endif
         b += n;
     }
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
 }

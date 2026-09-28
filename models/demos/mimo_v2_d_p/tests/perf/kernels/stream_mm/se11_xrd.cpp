@@ -108,4 +108,6 @@ void kernel_main() {
     if (in_batch) {
         flush();
     }
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
 }

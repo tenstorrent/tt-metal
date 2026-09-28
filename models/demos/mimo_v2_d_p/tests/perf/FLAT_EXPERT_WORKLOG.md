@@ -456,3 +456,47 @@ launch runs. Also tried: packing each kernel's cores into maximal rectangles (`_
 `MIMO_FL_CRS_SINGLE=1` for the old one-range-per-core) - no change (16.0 vs 16.1 on the flawed metric, gap
 unchanged), kept since it is fewer dispatch writes. Real remaining cost is host-side only (~30 us enqueue vs ~6),
 hidden behind >= 175 us kernels and removed entirely by trace. The earlier 77 us host-copy gap was real (op-to-op).
+
+## In the MiMo layers (2026-09-27/28)
+
+**Op builder.** The harness body moved to `tt/flat_expert.py` (`FlatExpert(device, weights, *, m, H, I, gids,
+n_global, wdtype, act, pin, dyn, e2e)`; the harness only makes data / checks). Weights per device (a mesh: one
+`MeshProgramDescriptor`, per-device global expert ids in the runtime args; lockstep allocation keeps every other
+address equal). Per call: the kernels are cached by the buffer addresses (x, y, counts, regions, arena, words); the
+CBs are rebuilt every call (they bind the launch's arena). On a `generic_op` program-cache hit the framework
+re-applies every runtime arg and CB address from the call's descriptor (`apply_descriptor_runtime_args`).
+* The arena (~1.2 MB/core on ~every core) and the relays' freed words are allocated per launch and freed after it: a
+  persistent arena would clash with every other op's static CBs. Nothing in them outlives a launch (end to end the
+  relays zero their words in-kernel) - checked with random garbage written to the arena's L1 between launches.
+* The down coordinators' done words must start at zero (the coordinator leaves them zeroed): a 2 KB persistent L1
+  tensor on the 1-3 coordinator cores.
+* Host cost per call ~0.3 ms (allocs 0.07, descriptor 0.21, enqueue) vs >= 175 us kernels; the --profile build's
+  Python path is much slower (b2b gap 811 us under Tracy), so measure host cost without it.
+
+**64 experts per chip** (2x2 QuietBox: 256 / 4). SE_MAX_E 64 (meta page 2 KB) hung: the DM kernels' schedule struct
+(SeDyn, 2 x 64-entry arrays) plus se_dyn_pin's full copy of it overflowed the 8 KB RISC local memory. Fixed: the pin
+copy keeps only the original <= SE_MAX_E entries (off / cnt / subs / eid), subs is uint16, se_dyn_regions' arrays
+uint8 (entries < SE_MAX_V <= 128, static_assert). Counts row: SE_DYN_HALF auto >= 4 x n_global (1 KB for 256).
+
+**Model wiring.** `MIMO_FLAT_EXPERT=1` (tt/ffn.py): TtMoE builds one FlatExpert over the mesh (device (r, c) gets the
+EP table's experts table[c, r], the unified op's global ids), feeds it the dispatch's row-major bf16 buffer and the
+routing's [1, 256] counts / regions rows directly (no tilize), skips the unified weights. Real routing on the
+decoder-layer test (random prompt embeddings) is very spiky: per chip one or more experts at the full capacity
+(2048 = 2 x 1024 tokens), most of the 64 empty; standalone replays of each chip's counts: 376 - 1266 us.
+
+**The hang: a nonzero write transaction ID left in the NoC command buffer.** The decoder layer passed its first MoE
+call and hung on the second, all 4 chips, the whole pipeline waiting (gate/up on GO, coordinator on done words, compute
+backpressured inside matmul / tilize LLKs). Minimal repro: flat -> one 1024x4096x4096 matmul -> flat, single chip, no
+fabric, any mode (even pre-tiled static); flat back to back (50x), an eltwise add or a 1-core matmul between: fine.
+Ruled out: routing counts, in-flight work (sync before the call), arena address moves, arena contents (zeros /
+garbage fills), done-word corruption (probed zero). The watcher named it: "BRISC detected invalid NOC command buffer
+state before starting the next kernel (write-capable NOC packet tags must be zero so implicit transaction ID users
+start with transaction ID 0). Current kernel: se6_drecv.cpp". se6_drecv / se5_recv send h / x with
+`noc_async_write_one_packet_with_trid` and exited with their last ID in the write command buffer; the next program's
+plain writes then carried it and its write barriers / flush checks hung (back to back the next program was the flat
+op itself, whose trid users set their own IDs). se10_fwd / se9_rdown already reset theirs. Fixed: both reset to ID 0
+before exit, and every flat DM kernel now ends with `noc_async_full_barrier()` (the relay multicaster also exited
+without an atomic barrier). test_flat_expert_mesh.py (2x2, spiky counts, a matmul + SDPA + all-gather and a pinned L1
+buffer between launches) guards it; the harness has `MIMO_FL_BETWEEN=matmul`.
+
+Decoder layer L1 (SWA + MoE) with the flat expert vs HF: PCC 0.99956 (unified: 0.9996).

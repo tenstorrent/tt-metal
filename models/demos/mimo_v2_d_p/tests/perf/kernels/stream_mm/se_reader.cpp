@@ -89,4 +89,6 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb, slot_tiles * batch);  // the forwarder only consumes the chunks that exist
     }
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
 }

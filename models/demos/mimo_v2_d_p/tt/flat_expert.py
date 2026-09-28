@@ -1,0 +1,1627 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Flat spatially pipelined streamed routed experts (SwiGLU) on Blackhole: the op builder.
+
+    y_e = (act(x_e @ Wg_e, x_e @ Wu_e)) @ Wd_e   for every local expert e, x_e its rows of the dispatch buffer
+
+One program per chip streams every local expert's weights once through a spatial pipeline (16 DRAM bank readers ->
+gate/up cores in reader-free rectangles, x relays that read / tilize the row-major bf16 dispatch buffer and
+multicast it, down cores that stream down weights and write bfp8 y into the same rows of a model-shaped output).
+Dynamic mode (the model's): per-expert token counts and region rows are read on device (the MoE routing's counts /
+regions rows, indexed by global expert id), so one cached program serves every routing. See
+tests/perf/FLAT_EXPERT_WORKLOG.md for the design, measurements and the MIMO_FL_* tuning knobs.
+
+    fe = FlatExpert(mesh_device, weights, m=max_tokens_per_expert, gids=per_device_global_ids, n_global=256, H=H, I=I)
+    y = fe(dispatch_buffer_rm_bf16, counts, regions)        # y: [rows, H] bfp8 TILE, expert e's rows at its region
+"""
+
+import json
+import os
+
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.mimo_v2_d_p.tests.perf.test_dram_read_fwd import noc_hops
+from models.demos.mimo_v2_d_p.tests.perf.test_stream_matmul import BF8_TILE
+from models.demos.mimo_v2_d_p.tests.perf.test_stream_matmul import _crs as _crs_single
+
+
+def _crs(cores):
+    """Cores packed into maximal rectangles (greedy: widest x run, then grow in y). One CoreRange per core
+    turns every binary / launch-message write into a per-core unicast; rectangles let dispatch multicast."""
+    if os.environ.get("MIMO_FL_CRS_SINGLE"):
+        return _crs_single(cores)
+    left = {(c.x, c.y) for c in cores}
+    rects = []
+    for x0, y0 in sorted(left, key=lambda t: (t[1], t[0])):
+        if (x0, y0) not in left:
+            continue
+        x1 = x0
+        while (x1 + 1, y0) in left:
+            x1 += 1
+        y1 = y0
+        while all((x, y1 + 1) in left for x in range(x0, x1 + 1)):
+            y1 += 1
+        for x in range(x0, x1 + 1):
+            for y in range(y0, y1 + 1):
+                left.discard((x, y))
+        rects.append(ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)))
+    return ttnn.CoreRangeSet(rects)
+
+
+def _env_list(name, default, cast=str):
+    return [cast(v) for v in os.environ.get(name, default).split(",") if v]
+
+
+KDIR = "models/demos/mimo_v2_d_p/tests/perf/kernels/stream_mm"
+X_SLOTS_ENV = os.environ.get("MIMO_FL_X_SLOTS")  # x ring slots (default: 24 end to end, else 16)
+RELAY_CB = int(os.environ.get("MIMO_FL_RELAY_CB", "16"))  # x blocks buffered on a relay
+D_CHAINS = int(os.environ.get("MIMO_FL_DOWN_CHAINS", "7"))
+H_PIECES = int(os.environ.get("MIMO_FL_H_PIECES", "32"))
+HBUF_ENV = os.environ.get("MIMO_FL_HBUF")  # h buffers on the down cores (default 3, 2 when L1 is short)
+L1_BANK = 1427 * 1024  # usable L1 per core for the arena (Blackhole, l1_small_size 0)
+PIN_ENV = os.environ.get("MIMO_FL_PIN")  # dyn: pin the biggest expert's weights, chunks of >= PIN sub-blocks
+DRING_ENV = os.environ.get("MIMO_FL_DRING")  # down ring in experts (default 2 with pinning: two whole, else 1.5)
+READ_BATCH = int(os.environ.get("MIMO_FL_READ_BATCH", "1"))
+X_BATCH = int(os.environ.get("MIMO_FL_X_BATCH", "4"))  # x blocks per relay read barrier
+KBLK, MT_MAX, ND, R = 8, 4, 28, 4  # R gate/up cores per reader; row tiles per sub-block up to MT_MAX
+W_DTYPES = {"bf8": (ttnn.bfloat8_b, BF8_TILE), "bf4": (ttnn.bfloat4_b, 576)}
+H_TILE = BF8_TILE
+DN_NOC = int(os.environ.get("MIMO_FL_DN_NOC", "1"))  # NoC of the down cores' h chain / y writes (weights: the other)
+FWD_DEPTH = int(os.environ.get("MIMO_FL_FWD_DEPTH", "0"))  # > 0: pipelined forwarder (se10_fwd.cpp), chunks in flight
+RD_SLOTS = int(os.environ.get("MIMO_FL_RD_SLOTS", "0"))  # reader CB slots (0: 2 x READ_BATCH)
+XHELP_ENV = os.environ.get(
+    "MIMO_FL_XHELP", "auto"
+)  # e2e: one multicaster per rectangle, a helper core reads / tilizes half of x
+LAND_SLOTS_ENV = os.environ.get("MIMO_FL_LAND_SLOTS")  # helper -> primary landing ring (super-blocks)
+SMALL_T = int(
+    os.environ.get("MIMO_FL_SMALL_T", "0")
+)  # dyn + reader-down: <= this many tokens per expert -> readers drop down
+RM_CHUNKS = int(os.environ.get("MIMO_FL_RM_CHUNKS", "4"))  # e2e relay: row-major chunks (32 rows x 2 KB) buffered
+XRD_BATCH = int(os.environ.get("MIMO_FL_XRD_BATCH", "2"))  # e2e relay: chunks per read barrier
+SB_SLOTS = int(os.environ.get("MIMO_FL_SB_SLOTS", "3"))  # e2e relay: tilized super-blocks buffered
+RDOWN_ENV = os.environ.get(
+    "MIMO_FL_RDOWN", "auto"
+)  # one reader per down chain also computes down columns (chain tail); auto: M >= 256
+RDOWN_PCD_ENV = os.environ.get("MIMO_FL_RDOWN_PCD")  # down columns of each such reader (default 4, 6 with 4 relays)
+X2_ENV = os.environ.get("MIMO_FL_X2", "auto")
+XCOL_ENV = os.environ.get(
+    "MIMO_FL_XCOL", "auto"
+)  # e2e: n relays in column 1, each tilizing 1/n of x for both rectangles  # two x relays per rectangle (auto: e2e with reader-down)
+FWD_DIR = int(os.environ.get("MIMO_FL_FWD_DIR", "0"))  # per-reader forwarding NoC by direction (else all NOC1)
+XNOC = int(os.environ.get("MIMO_FL_XNOC", "0"))
+
+
+# disjoint subgrids: NSG complete copies of the pipeline, each on its own cores, each serving its own experts (the
+# kernels' schedule assigns experts to subgrids, se_dyn.hpp SE_SG); gate/up rectangles MIMO_FL_SG_RECTS
+# auto: 2 for low-I shapes (I <= 1024: TP-sharded experts) with dynamic counts at helper-relay capacity (K2 TP4 us/expert
+# M 32 / 512 / 2048: 1 subgrid 24.4 / 85.5 / 309.4, 2 subgrids 22.0 / 63.5 / 224.6; TP2 34.5 / 115.5 / 438.0 ->
+# 39.0 / 112.0 / 396.9)
+def _nsg(It, m, dyn):
+    env = os.environ.get("MIMO_FL_SG", "auto")
+    return int(env) if env != "auto" else ((2 if It <= 16 else 3) if dyn and It <= 32 and m >= 256 else 1)
+
+
+def _sg_rects(nsg):
+    return [
+        tuple(int(v) for v in r.split(":"))
+        for r in os.environ.get("MIMO_FL_SG_RECTS", {3: "2:5:0:3,2:5:4:7,8:9:0:7"}.get(nsg, "2:5:0:3,8:9:0:7")).split(
+            ","
+        )
+    ]
+
+
+def _gu_acc(nsg):
+    """Gate/up accumulation: MIMO_FL_GU_ACC, default fp32 DEST, but l1acc with 3 subgrids (TP2-like: NP 2 on 16-core
+    rectangles, where fp32's 4-tile DST would force 32-row sub-blocks); MIMO_FL_GU_FP32=0: bf16."""
+    if os.environ.get("MIMO_FL_GU_ACC"):
+        return os.environ["MIMO_FL_GU_ACC"]
+    if not int(os.environ.get("MIMO_FL_GU_FP32", "1")):
+        return "bf16"
+    return "l1acc" if nsg == 3 else "fp32"
+
+
+ACTS = {"silu": 0, "swigluoai": 1, "situ": 2, "clamped_silu": 3, "gelu_tanh": 4, "gate_only": 0}
+W_STD = float(os.environ.get("MIMO_FL_WSTD", "0.02"))  # weight init std (larger: the clamping activations clamp)
+
+
+def act_ref(g, u, act="silu"):
+    """Reference gate/up activation (unified_routed_expert_ffn's fused_swiglu.cpp variants)."""
+    F = torch.nn.functional
+    if act == "silu":
+        return F.silu(g) * u
+    if act == "swigluoai":  # GPT-OSS / MiniMax-M3: alpha 1.702, limit 7
+        g = g.clamp(max=7.0)
+        return (u.clamp(-7.0, 7.0) + 1) * g * torch.sigmoid(1.702 * g)
+    if act == "situ":  # Kimi K3: beta 4 (gate), 25 (up)
+        return 4 * torch.tanh(g / 4) * torch.sigmoid(g) * 25 * torch.tanh(u / 25)
+    if act == "clamped_silu":  # DeepSeek V4: limit 10
+        return F.silu(g.clamp(max=10.0)) * u.clamp(-10.0, 10.0)
+    if act == "gate_only":  # debug: with MIMO_FL_NO_ACT the device packs the raw gate accumulator
+        return g
+    if act == "gelu_tanh":  # Gemma 4
+        return F.gelu(g, approximate="tanh") * u
+    raise ValueError(act)  # NoC of the x relays' multicasts (their DRAM reads use the other)
+
+
+GU_L1_BUDGET = int(os.environ.get("MIMO_FL_GU_L1", str(1400 * 1024)))  # gate/up core: weight ring + x ring
+
+
+def _gu_split(It, Ht=None, w_tile=576, x_slots=24, n_readers=16, max_cores=64, dyn=True, nsg=1):
+    """Gate/up work split for It intermediate tile columns: (NP pairs per core, G M-groups). The It / NP pair-sets
+    go round the 16 readers (a multiple of 16), and each is computed by G cores, one per M-group (a group owns
+    MT / G row tiles of every sub-block). Fewest M-groups first (a group re-forwards every weight block: G > 1
+    measured 14-40% slower at small M, never faster, on K2 TP2 / TP4 and K3), then most cores (<= 64), then the
+    fewest pairs per core; DST holds
+    (MT / G) x 2 NP gate/up tiles <= 8, and a core's L1 the 2-expert gate/up ring (each group holds its pairs'
+    full-K slice) + the x ring."""
+    if os.environ.get("MIMO_FL_NP"):
+        return int(os.environ["MIMO_FL_NP"]), int(os.environ.get("MIMO_FL_G", "1"))
+    best, cands = None, []
+    for np_ in (1, 2, 3, 4):
+        for g in (1, 2, 4):
+            ps = It // np_
+            dst, _ = _gu_dst(np_, Ht, x_slots, dyn, nsg)
+            if It % np_ or ps % n_readers or ps * g > max_cores or min(dst // (2 * np_), MT_MAX // g) < 1:
+                continue
+            mt_ = g * min(dst // (2 * np_), MT_MAX // g)
+            if Ht and 2 * Ht * 2 * np_ * w_tile + x_slots * mt_ * KBLK * BF8_TILE > GU_L1_BUDGET:
+                continue
+            cands.append((ps * g, np_, g))
+            cand = ((-g, ps * g, -np_), np_, g)
+            best = cand if best is None or cand > best else best
+    assert best, f"no gate/up split for {It} tile columns"
+    # fewer than 32 gate/up cores (TP4-like splits): 2 M-groups on twice the cores (K2 TP4, us/expert M 32 / 512 /
+    # 2048: G1 16 cores 20.9 / 112.5 / 435.0, G2 + 2 relay helpers 24.7 / 85.2 / 309.1)
+    if best[0][1] < 32 and max_cores == 64:
+        g2 = [c for c in cands if c[2] == 2 and c[1] == best[1] and c[0] >= 2 * best[0][1]]
+        if g2:
+            return g2[0][1], 2
+    return best[1], best[2]
+
+
+def _gu_dst(np_, Ht, x_slots, dyn=True, nsg=1):
+    """(DST tiles the gate/up sub-block may use, gate/up row passes?). fp32 DEST (half sync) holds 4 tiles; with row
+    passes (MIMO_FL_GU_RP, auto: dynamic counts, NP <= 2, the x ring holds a whole sub-block's K-blocks) the
+    sub-block keeps the 8-tile (bf16-sized) rows and gate/up runs its K loop once per 4 / (2 NP) row tiles."""
+    acc = _gu_acc(nsg)
+    if acc != "fp32" or os.environ.get("MIMO_FL_GU_DST", "half") == "full":
+        return 8, False
+    rp_env = os.environ.get("MIMO_FL_GU_RP", "auto")
+    rp = (dyn and np_ <= 2 and Ht is not None and Ht // KBLK <= x_slots) if rp_env == "auto" else bool(int(rp_env))
+    return (8, True) if rp else (4, False)
+
+
+def _chains(cores, n, phys, noc):
+    """Greedy nearest (by `noc` hops) path through `cores`, cut into n chains."""
+    left = list(cores)
+    path = [min(left, key=lambda c: (c[1].y, c[1].x) if noc == 0 else (-c[1].y, -c[1].x))]
+    left.remove(path[0])
+    while left:
+        nxt = min(left, key=lambda c: noc_hops(phys(path[-1][1]), phys(c[1]), noc))
+        path.append(nxt)
+        left.remove(nxt)
+    L = len(path) // n
+    return [path[i * L : (i + 1) * L] if i < n - 1 else path[i * L :] for i in range(n)]
+
+
+def _layout(device, x2=False, xcol=0, nh=1, nsg=1, sg_rects=None):
+    grid = device.compute_with_storage_grid_size()
+    phys = lambda c: device.worker_core_from_logical_core(c)
+    opt = list(device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0))
+    readers = opt + [ttnn.CoreCoord(c.x + 1, c.y) for c in opt]
+    rcols = sorted({c.x for c in readers})
+    assert rcols == [0, 1, 6, 7] and (grid.x, grid.y) == (11, 10), (rcols, grid)
+    # gate/up rectangles (x0, x1, y0, y1): no reader inside (subgrids: rectangle k = subgrid k's gate/up cores)
+    rects = [(2, 5, 0, 9), (8, 10, 0, 7)] if nsg == 1 else sg_rects
+    gu = [ttnn.CoreCoord(x, y) for x0, x1, y0, y1 in rects for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
+    taken = {(c.x, c.y) for c in readers + gu}
+    # relays just east / south of their rectangle (NOC1 multicasts run -x / -y)
+    if nsg > 2:  # subgrids: per rectangle, the free cells of the column just west of it nearest its middle row
+        assert XNOC == 0 and not xcol
+
+        def west(r_):
+            x0, x1, y0, y1 = r_
+            yc = (y0 + y1) / 2
+            ys = sorted(range(grid.y), key=lambda y: (abs(y - yc), y))
+            return next(ttnn.CoreCoord(x0 - 1, y) for y in ys if (x0 - 1, y) not in taken)
+
+        relays = []
+        for _ in range(1 + (nh if x2 else 0)):  # primaries, then each helper round
+            for r_ in rects:
+                relays.append(west(r_))
+                taken.add((relays[-1].x, relays[-1].y))
+        down = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
+        return grid, phys, readers, gu, rects, relays, down
+    if xcol:  # all relays west of both rectangles (NOC0 multicasts run +x): each feeds both
+        assert XNOC == 0
+        relays = [ttnn.CoreCoord(1, y) for y in (4, 5, 3, 6, 2, 7, 1, 8) if (1, y) not in taken][:xcol]
+        assert len(relays) == xcol
+    elif XNOC == 1:
+        relays = [next(ttnn.CoreCoord(6, y) for y in (5, 3, 2, 7, 0, 8) if (6, y) not in taken), ttnn.CoreCoord(9, 8)]
+    else:  # NOC0 multicasts run +x / +y: relays just west of their rectangle
+        relays = [
+            next(ttnn.CoreCoord(1, y) for y in (4, 5, 3, 6, 2, 7) if (1, y) not in taken),
+            next(ttnn.CoreCoord(7, y) for y in (3, 4, 2, 5, 1, 6) if (7, y) not in taken),
+        ]
+    taken |= {(c.x, c.y) for c in relays}
+    if x2:  # nh more relays per rectangle, next to the first (relay 2 + 2 j + k: rectangle k's j-th extra)
+        assert XNOC == 0
+        for _ in range(nh):
+            extra = [
+                next(ttnn.CoreCoord(1, y) for y in (5, 3, 6, 2, 7, 1, 8, 0, 9) if (1, y) not in taken),
+                next(ttnn.CoreCoord(7, y) for y in (4, 2, 5, 1, 6, 0, 7, 8, 9) if (7, y) not in taken),
+            ]
+            relays += extra
+            taken |= {(c.x, c.y) for c in extra}
+    down = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
+    return grid, phys, readers, gu, rects, relays, down
+
+
+def _bank_sharded(regions_per_dev, banks, dtype, device):
+    """Per-core weight regions (equal-size [tiles, 32, 32]) -> one width-sharded DRAM tensor: core i's region is
+    contiguous in bank i % banks at byte offset (i // banks) * region bytes. One region list per device (a mesh:
+    row-major device order; lockstep allocation gives every device the same address)."""
+    hosts = []
+    for regions in regions_per_dev:
+        per = -(-len(regions) // banks)
+        regions = list(regions) + [torch.zeros_like(regions[0])] * (per * banks - len(regions))
+        hosts.append(
+            torch.cat(
+                [torch.cat([regions[b + h * banks] for h in range(per)]).reshape(-1, 32) for b in range(banks)], dim=1
+            )
+        )
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, (hosts[0].shape[0], 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    if len(hosts) == 1:
+        return ttnn.from_torch(hosts[0], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    return ttnn.from_torch(
+        torch.stack(hosts),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mc,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+    )
+
+
+class FlatExpert:
+    """The flat expert op for one set of local experts per device (see the module docstring).
+
+    weights: per device (row-major mesh order), per local expert, (Wg [H, I], Wu [H, I], Wd [I, H]) torch tensors
+    (x @ W convention). gids: per device, the local experts' global ids (their index into the counts / regions rows,
+    dynamic mode). m: tokens per expert the program is built for (the dispatch capacity per expert)."""
+
+    def __init__(
+        self,
+        device,
+        weights,
+        *,
+        m,
+        H,
+        I,
+        gids=None,
+        n_global=None,
+        wdtype="bf4",
+        act="silu",
+        pin=None,
+        dyn=True,
+        e2e=True,
+        band=None,
+    ):
+        E = len(weights[0])
+        assert all(len(w_) == E for w_ in weights)
+        DYN, E2E, ACT = bool(dyn), bool(e2e) or bool(dyn), act
+        PIN = int(PIN_ENV) if PIN_ENV is not None else (1 if pin is None else int(pin))
+        DRING = float(DRING_ENV) if DRING_ENV else (2.0 if PIN else 1.5)
+        X_SLOTS_DEF = int(X_SLOTS_ENV) if X_SLOTS_ENV else (24 if E2E else 16)
+        NSG = _nsg(I // 32, m, DYN)
+        SG_RECTS = _sg_rects(NSG)
+        N_RD_SG = 1 << ((16 // max(1, NSG)).bit_length() - 1) if NSG > 1 else 16  # readers per subgrid (power of 2)
+        band = list(band) if band else [int(v) for v in os.environ.get("MIMO_FL_BAND", "1,1000000000").split(",")]
+        n_dev = len(weights)
+        gids = gids if gids is not None else [[2 * e + 1 for e in range(E)]] * n_dev
+        NG = n_global if n_global is not None else 2 * E + 2
+        self.device, self.E, self.H, self.I, self.m, self.n_dev = device, E, H, I, m, n_dev
+        self.dyn, self.e2e, self.gids, self.NG = DYN, E2E, gids, NG
+        w_dtype, w_tile = W_DTYPES[wdtype]
+        assert m % 32 == 0
+        # rows per sub-block: M < 128 -> one sub-block of M rows; else 4 row tiles (MIMO_FL_MT overrides), the last
+        # sub-block zero-padded when M is not a multiple of it (FLOPs / bytes below count the real M only)
+        # the x ring shrinks (24 -> 16 -> 12 slots) before the gate/up split gives up cores to fit L1
+        for X_SLOTS in sorted({X_SLOTS_DEF, 16, 12}, reverse=True):
+            if X_SLOTS > X_SLOTS_DEF:
+                continue
+            try:
+                NP, G = (
+                    _gu_split(I // 32, H // 32, w_tile, X_SLOTS, dyn=DYN, nsg=NSG)
+                    if NSG == 1
+                    else _gu_split(
+                        I // 32,
+                        H // 32,
+                        w_tile,
+                        X_SLOTS,
+                        N_RD_SG,
+                        min((x1 - x0 + 1) * (y1 - y0 + 1) for x0, x1, y0, y1 in SG_RECTS),
+                        dyn=DYN,
+                        nsg=NSG,
+                    )
+                )
+                break
+            except AssertionError:
+                if X_SLOTS == 12:
+                    raise
+        # fp32 DEST accumulation for gate/up (K = H is long: bf16 DEST ties-away rounding gives a norm gain ~1.085 at K
+        # 7168, test_dest_gain_probe.py) halves the DST half to 4 tiles
+        # MIMO_FL_GU_ACC: fp32 (DEST), l1acc (bf16 DEST in passes of MIMO_FL_GU_L1ACC_GRP K-blocks, summed in L1 by the
+        # packer: keeps the 8-tile DST half), bf16 (all of K in bf16 DEST: the ~1.27 norm gain). MIMO_FL_GU_FP32=0 = bf16.
+        GU_ACC = _gu_acc(NSG)
+        assert GU_ACC in ("fp32", "l1acc", "bf16"), GU_ACC
+        GU_FP32 = GU_ACC == "fp32"
+        L1ACC_GRP = int(os.environ.get("MIMO_FL_GU_L1ACC_GRP", "1"))
+        # full-sync DST (MIMO_FL_GU_DST=full): one 16-tile file, 8 fp32 tiles, but math and pack no longer overlap
+        GU_FULL = os.environ.get("MIMO_FL_GU_DST", "half") == "full"
+        DST_T, GU_RP = _gu_dst(
+            NP, H // 32, X_SLOTS, DYN, NSG
+        )  # (row passes: DST_T is the sub-block's, a pass uses 4 fp32 tiles)
+        MT_CAP = G * min(DST_T // (2 * NP), MT_MAX // G)  # a group's rows x 2 NP gate/up tiles fit DST
+        MT = int(os.environ["MIMO_FL_MT"]) if os.environ.get("MIMO_FL_MT") else min(MT_CAP, max(G, m // 32 // G * G))
+        assert MT % G == 0 and (MT // G) * 2 * NP <= DST_T, (MT, G, NP, DST_T)
+        MTG = MT // G
+        m_pad = -(-m // (MT * 32)) * MT * 32
+        # compute-bound M: readers help with down, end to end only when down would be heavy without them (> 6 output
+        # tile columns per down core over the 26 of the large layout: K2 / H 6144 yes, MiMo H 4096 no)
+        RDOWN = (m >= 256 and (not E2E or H // 32 > 6 * 26)) if RDOWN_ENV == "auto" else bool(int(RDOWN_ENV))
+        banks = device.dram_grid_size().x
+        # e2e x relays: below reader-down M one relay west of both rectangles (several collapse: overlapping multicasts),
+        # with reader-down two per rectangle (X2), taking turns by super-block
+        XCOL = (1 if E2E and m < 256 else 0) if XCOL_ENV == "auto" else int(XCOL_ENV)
+        X2 = not XCOL and (E2E and m >= 256 if X2_ENV == "auto" else bool(int(X2_ENV)))  # two x relays per rectangle
+        XHELP = (E2E and m >= 256 and not XCOL) if XHELP_ENV == "auto" else bool(int(XHELP_ENV))
+        if XHELP:  # the X2 cores, but relays 2 / 3 only read + tilize for relays 0 / 1 (one sender per rectangle)
+            assert E2E and not XCOL
+            X2 = True
+        # helpers per rectangle (default 2 with M-groups: the relays then pace the smaller gate/up work)
+        NH = int(os.environ.get("MIMO_FL_XHELP_N", "2" if G > 1 else "1")) if XHELP else 1
+        LAND_SLOTS = int(LAND_SLOTS_ENV) if LAND_SLOTS_ENV else (2 if NH > 1 else 3)  # (landing ring per helper: L1)
+        grid, phys, readers, gu, rects, relays, down = _layout(device, X2, XCOL, NH, NSG, SG_RECTS)
+        if (
+            NSG > 1
+        ):  # subgrid k: rectangle k, its nearest readers, primary relay k + its helpers, a share of the down cores
+            assert (
+                len(rects) == NSG and DYN and XHELP and not SMALL_T
+            ), "subgrids: dynamic counts, e2e with helper relays"
+            ctr = [((x0 + x1) / 2, (y0 + y1) / 2) for x0, x1, y0, y1 in rects]
+            dist = lambda c, k: abs(c.x - ctr[k][0]) + abs(c.y - ctr[k][1])
+            if NSG == 2:  # (the measured 2-subgrid layout: west / east reader columns, down split by relative distance)
+                readers = [c for c in readers if c.x in (0, 1)] + [c for c in readers if c.x in (6, 7)]
+                order_d = sorted(down, key=lambda c: (dist(c, 0) - dist(c, 1), c.y, c.x))
+                half = len(order_d) // 2
+                down = order_d[:half] + order_d[half : 2 * half]  # (odd count: the last core idles)
+            else:
+                pool, by_sg = list(readers), [[] for _ in range(NSG)]
+                for _ in range(N_RD_SG):  # round robin, each subgrid its nearest free reader
+                    for k_ in range(NSG):
+                        c_ = min(pool, key=lambda c: (dist(c, k_), c.y, c.x))
+                        by_sg[k_].append(c_)
+                        pool.remove(c_)
+                readers = [c for lst in by_sg for c in lst]
+                down = down + pool  # readers no subgrid uses do down work
+                nd_sg = len(down) // NSG
+                left_d, parts = list(down), [[] for _ in range(NSG)]
+                for _ in range(nd_sg):  # round robin, each subgrid its nearest free down core
+                    for k_ in range(NSG):
+                        c_ = min(left_d, key=lambda c: (dist(c, k_), c.y, c.x))
+                        parts[k_].append(c_)
+                        left_d.remove(c_)
+                down = [c for lst in parts for c in lst]  # (the rest idle)
+        ND = len(down)
+        ND_SG = ND // NSG  # down cores per subgrid; down core d is subgrid d // ND_SG's local core d % ND_SG
+        sg_dn = lambda d: d // ND_SG
+        dl = lambda d: d % ND_SG
+        nrl = len(relays)
+        if os.environ.get("MIMO_FL_SHOW"):
+            logger.info(f"readers logical->phys {[((c.x, c.y), (phys(c).x, phys(c).y)) for c in readers]}")
+            logger.info(
+                f"gu phys x {sorted({phys(c).x for c in gu})} relays {[(phys(c).x, phys(c).y) for c in relays]}"
+            )
+            for nm, lst in (("readers", readers), ("gu", gu), ("relays", relays), ("down", down)):
+                logger.info(f"{nm}: " + " ".join(f"{c.x},{c.y}->{phys(c).x}-{phys(c).y}" for c in lst))
+        n_rd, ngu = len(readers), len(gu)
+        n_rd_sg = n_rd // NSG  # readers per subgrid (reader r: subgrid r // n_rd_sg)
+        sg_rd = lambda r: r // n_rd_sg
+        Ht, It = H // 32, I // 32
+        S = m_pad // (MT * 32)
+        V = E * S
+        nk_gu = Ht // KBLK
+        slot = KBLK * 2 * NP  # one gate/up core's block: [KBLK x (gate, up) x NP]
+        RG = (It // NP) // n_rd_sg  # pair-sets per reader (its chunk: RG blocks), each forwarded to G cores
+        R_ = RG * G  # gate/up cores per reader
+        assert (It // NP) % n_rd_sg == 0 and R_ <= 4, (It, NP, n_rd_sg, R_)
+        logger.info(f"gate/up split: {It} columns, NP {NP} x G {G} (MT {MT}, {MTG} per group), {R_ * n_rd} cores")
+        ring_g = int(round(float(os.environ.get("MIMO_FL_GU_RING", "2")) * nk_gu))  # gate/up weight ring, in experts
+        D_CH = min(D_CHAINS, n_rd_sg) if RDOWN else D_CHAINS  # down chains per subgrid (a reader tail each)
+        n_rdn = D_CH if RDOWN else 0  # readers that also compute down columns: one per down chain, as its tail
+        # (per subgrid: each subgrid has D_CHAINS chains and computes all H columns for its own experts)
+        pcd_r = (int(RDOWN_PCD_ENV) if RDOWN_PCD_ENV else 6 if (X2 or XCOL == 4) else 4) if RDOWN else 0
+        rem_cols = Ht - n_rdn * pcd_r  # the down cores' columns; uneven when they do not divide: two widths
+        base_p, extra = divmod(rem_cols, ND_SG)
+        pcds = [base_p + (1 if dl(d) < extra else 0) for d in range(ND)]
+        col0s = [sum(pcds[sg_dn(d) * ND_SG : d]) for d in range(ND)]
+        assert max(pcds) <= 16 and min(pcds) >= 1, pcds  # (> 8: the down compute runs column passes of <= 8)
+        kd_of = lambda p_: max(k for k in (8, 4, 2, 1) if k * p_ <= 16 and It % k == 0)
+
+        def dgrp(p_):
+            k_ = kd_of(p_)
+            return dict(kd=k_, nblk=It // k_, slot=k_ * p_, ring=int(round(DRING * (It // k_))), out=MT * p_)
+
+        dgroups = {p_: [d for d in range(ND) if pcds[d] == p_] for p_ in sorted(set(pcds))}
+        pcd = max(pcds)
+        kd = kd_of(pcd)
+        if RDOWN:
+            kd_r = kd_of(pcd_r)
+            nblk_r, slot_dr = It // kd_r, kd_r * pcd_r
+            ring_dr = int(round(float(os.environ.get("MIMO_FL_DRING_R", DRING)) * nblk_r))
+            logger.info(f"ring_dr {ring_dr} nblk_r {nblk_r}")  # the reader tails' down ring
+            out_tiles_r = MT * pcd_r
+        nblk = It // kd
+        slot_d = kd * pcd
+        ring_d = int(round(DRING * nblk))
+        x_blk = MT * KBLK
+        x_bytes = x_blk * BF8_TILE
+        h_tiles = It * MT  # h of one sub-block: [KT][4 row tiles]
+        out_tiles = MT * pcd
+        pk = lambda c: (phys(c).x << 16) | phys(c).y
+
+        # M-groups by rectangle (MIMO_FL_GROUP_RECT, auto: G == 2 and each rectangle holds its group's cores): halves
+        # the x each rectangle's relay multicasts (a group only reads its rows of every x block)
+        rect_n = [(x1 - x0 + 1) * (y1 - y0 + 1) for x0, x1, y0, y1 in rects]
+        GR_ENV = os.environ.get("MIMO_FL_GROUP_RECT", "auto")
+        GROUP_RECT = (
+            (G == 2 and E2E and not XCOL and min(rect_n) >= (It // NP)) if GR_ENV == "auto" else bool(int(GR_ENV))
+        )
+        # gate/up cores per reader: 4 each, nearest by the forwarder's NoC hops, balanced
+        rect_of0 = lambda c: next(i for i, (x0, x1, y0, y1) in enumerate(rects) if x0 <= c.x <= x1 and y0 <= c.y <= y1)
+        left = list(range(ngu))
+        per_reader = {r: [] for r in range(n_rd)}
+        fwd_noc = [1] * n_rd
+        if FWD_DIR:  # forward the way the NoC runs: NOC0 (+x) to cores east of the reader, NOC1 (-x) to cores west
+            in_rect = lambda k: [ci for ci in left if rect_of0(gu[ci]) == k]
+            east = [r for r, c in enumerate(readers) if c.x in (0, 1)]  # -> rect 0 over NOC0
+            far = sorted([r for r, c in enumerate(readers) if c.x in (6, 7)], key=lambda r: -readers[r].x)
+            assert R_ == 4
+            n2 = len(in_rect(1)) // R
+            plan = [(r, 0, 0) for r in east] + [(r, 1, 0) for r in far[:n2]] + [(r, 0, 1) for r in far[n2:]]
+            for r, k, noc in plan:
+                fwd_noc[r] = noc
+            for _ in range(R):
+                for r, k, noc in plan:
+                    cand = in_rect(k)
+                    best = min(cand, key=lambda ci: noc_hops(phys(readers[r]), phys(gu[ci]), noc))
+                    per_reader[r].append(best)
+                    left.remove(best)
+            assert not left
+        else:
+            for j_ in range(R_):
+                for r, c in enumerate(readers):
+                    # GROUP_RECT: M-group g's cores all in rectangle g (its relay then multicasts only that group's rows)
+                    cand = [
+                        ci
+                        for ci in left
+                        if (not GROUP_RECT or rect_of0(gu[ci]) == j_ % G) and (NSG == 1 or rect_of0(gu[ci]) == sg_rd(r))
+                    ] or left
+                    best = min(cand, key=lambda ci: noc_hops(phys(c), phys(gu[ci]), 1))
+                    per_reader[r].append(best)
+                    left.remove(best)
+        order = [
+            ci for r in range(n_rd) for ci in per_reader[r]
+        ]  # core r * R_ + j: reader r's pair-set j / G, group j % G
+        gu_idle = [gu[ci] for ci in left]  # (in the x multicast rectangles; no gate/up work)
+        gu = [gu[ci] for ci in order]
+        ngu = len(gu)
+        rect_of = lambda c: next(i for i, (x0, x1, y0, y1) in enumerate(rects) if x0 <= c.x <= x1 and y0 <= c.y <= y1)
+
+        # ---- arena (per-role layout, 2 KB aligned) ----
+        al = lambda b: (b + 2047) // 2048 * 2048
+        X_OFF = al(ring_g * slot * w_tile)
+        P_OFF = X_OFF + al(X_SLOTS * x_bytes)  # SE_GU_L1ACC partials (in the arena: static CBs clash with it)
+        gu_bytes = P_OFF + (al(MTG * 2 * NP * 2048) if GU_ACC == "l1acc" else 0)
+        rd_slots = RD_SLOTS or 2 * READ_BATCH
+        RD_OFF = al(rd_slots * RG * slot * w_tile)  # a down-computing reader's in1 ring follows its reader CB
+        H_OFF = al(
+            max(
+                max(dgrp(p_)["ring"] * dgrp(p_)["slot"] for p_ in dgroups) * w_tile,
+                RD_OFF + (ring_dr * slot_dr * w_tile if RDOWN else 0),
+            )
+        )
+        out_bytes = al(2 * out_tiles * (BF8_TILE if E2E else 2048))
+        HBUF = (
+            int(HBUF_ENV) if HBUF_ENV else (3 if H_OFF + al(3 * h_tiles * H_TILE) + out_bytes + 2048 <= L1_BANK else 2)
+        )
+        O_OFF = H_OFF + al(HBUF * h_tiles * H_TILE)
+        D_OFF = O_OFF + out_bytes  # the output double buffer (bfp8 end to end)
+        dn_bytes = D_OFF + 2048
+        SMALL = bool(SMALL_T) and DYN and RDOWN
+        if (
+            SMALL
+        ):  # small-M role split: the reader tails' columns in extra slices of PCX columns on the first down cores
+            xcols = n_rdn * pcd_r
+            pcx = -(-xcols // ND)
+            assert xcols % pcx == 0 and pcx <= 8, (xcols, pcx)
+            n_x = xcols // pcx
+            kd_x = kd_of(pcx)
+            nblk_x, slot_x = It // kd_x, kd_x * pcx
+            ring_x = int(round(float(os.environ.get("MIMO_FL_DRING_X", "1.5")) * nblk_x))
+            XW_OFF = dn_bytes
+            XO_OFF = XW_OFF + al(ring_x * slot_x * w_tile)
+            dn_bytes = XO_OFF + al(MT * pcx * BF8_TILE)  # one output slot (L1 is tight)
+        tok_pad = -(-m // 32) * 32  # e2e: expert e's region starts at row e * tok_pad of the dispatch buffer
+        # e2e: super-blocks (SBT K tiles: the relay's row-major chunk is 32 rows x SBT * 32 bf16) per row
+        SBT = next(t for t in (32, 16, 8) if Ht % t == 0 and t % KBLK == 0)
+        SEG = SBT * 64
+        nsb = Ht // SBT
+        SB_OFF = al(RM_CHUNKS * 32 * SEG)
+        assert RM_CHUNKS % XRD_BATCH == 0, "a read batch must not straddle the row-major CB's wrap"
+        LAND_OFF = SB_OFF + al(
+            SB_SLOTS * MT * SBT * BF8_TILE
+        )  # XHELP: the primary's landing ring for the helper's super-blocks
+        relay_bytes = (
+            (LAND_OFF + (al(NH * LAND_SLOTS * MT * SBT * BF8_TILE) if XHELP else 0)) if E2E else al(RELAY_CB * x_bytes)
+        )
+        arena_tiles = max(gu_bytes, dn_bytes, relay_bytes, RD_OFF) // 2048
+        logger.info(
+            f"M {m}: {S} sub-blocks; gu ring {ring_g * slot * w_tile >> 10} KB, x ring {X_SLOTS * x_bytes >> 10} KB; "
+            f"down {ND} x {pcd} (kd {kd}); arena {arena_tiles * 2} KB; relays {[(c.x, c.y) for c in relays]}"
+        )
+
+        tiles = lambda w: w.view(w.shape[0] // 32, 32, w.shape[1] // 32, 32).permute(0, 2, 1, 3)
+        w_all, wd_all, wr_all, wx_all = [], [], [], []
+        for W_l in weights:  # per device
+            T_l = [(tiles(a), tiles(b), tiles(c)) for a, b, c in W_l]  # per expert gate / up / down tile views
+
+            # ---- gate/up weights: per reader region, per expert, per K-block, its 4 cores' [KBLK x (g, u)] blocks ----
+            regions = []
+            for r in range(n_rd):
+                blocks = []
+                for Wg_t, Wu_t, _ in T_l:
+                    for c in range(nk_gu):
+                        ks = slice(c * KBLK, (c + 1) * KBLK)
+                        for pl in range(RG):
+                            cols = [((r % n_rd_sg) * RG + pl) * NP + p_ for p_ in range(NP)]
+                            blocks.append(
+                                torch.stack([w_[ks, c_] for c_ in cols for w_ in (Wg_t, Wu_t)], dim=1).reshape(
+                                    -1, 32, 32
+                                )
+                            )
+                regions.append(torch.cat(blocks))
+            w_all.append(regions)
+            region_bytes = regions[0].shape[0] * w_tile
+
+            # ---- down weights: per down core region, per expert, per K-block, [kd x pcd] ----
+            def dreg(d):
+                p_, k_ = pcds[d], kd_of(pcds[d])
+                return torch.cat(
+                    [
+                        Wd_t[c * k_ : (c + 1) * k_, col0s[d] : col0s[d] + p_].reshape(-1, 32, 32)
+                        for _, _, Wd_t in T_l
+                        for c in range(It // k_)
+                    ]
+                )
+
+            dregs = [dreg(d) for d in range(ND)]
+            n_max = max(r_.shape[0] for r_ in dregs)
+            dregs = [torch.cat([r_, torch.zeros(n_max - r_.shape[0], 32, 32)]) for r_ in dregs]  # equal regions
+            wd_all.append(dregs)
+            wd_region = dregs[0].shape[0] * w_tile
+            if RDOWN:  # the down-computing readers' columns follow the down cores'
+                rregs = [
+                    torch.cat(
+                        [
+                            Wd_t[
+                                c * kd_r : (c + 1) * kd_r,
+                                rem_cols + (i % n_rdn) * pcd_r : rem_cols + (i % n_rdn + 1) * pcd_r,
+                            ].reshape(-1, 32, 32)
+                            for _, _, Wd_t in T_l
+                            for c in range(nblk_r)
+                        ]
+                    )
+                    for i in range(n_rdn * NSG)
+                ]
+                wr_all.append(rregs)
+                wr_region = rregs[0].shape[0] * w_tile
+            if SMALL:
+
+                def xreg(d):
+                    if d >= n_x:
+                        return torch.zeros(E * nblk_x * slot_x, 32, 32)
+                    c0 = rem_cols + d * pcx
+                    return torch.cat(
+                        [
+                            Wd_t[c * kd_x : (c + 1) * kd_x, c0 : c0 + pcx].reshape(-1, 32, 32)
+                            for _, _, Wd_t in T_l
+                            for c in range(nblk_x)
+                        ]
+                    )
+
+                wx_all.append([xreg(d) for d in range(ND)])
+                wx_region = E * nblk_x * slot_x * w_tile
+        w_dev = _bank_sharded(w_all, banks, w_dtype, device)
+        wd_dev = _bank_sharded(wd_all, banks, w_dtype, device)
+        wr_dev = _bank_sharded(wr_all, banks, w_dtype, device) if RDOWN else None
+        wx_dev = _bank_sharded(wx_all, banks, w_dtype, device) if SMALL else None
+        del w_all, wd_all, wr_all, wx_all
+        # pre-tiled x (not end to end): blocks (v, K-block) of [MT * 32 x KBLK * 32] bfp8, block k in region k % nreg
+        nreg = 2 * banks
+        if not E2E:
+            assert (V * nk_gu) % nreg == 0
+        x_region = (V * nk_gu // nreg) * x_blk * BF8_TILE
+        self.x_layout = dict(nreg=nreg, x_region=x_region, V=V, S=S, MT=MT, nk_gu=nk_gu, x_blk=x_blk, banks=banks)
+        assert not int(os.environ.get("MIMO_FL_PREPASS", "0")), "the pre-pass path is retired (see the work log)"
+
+        both = gu + down
+        arena_cores = both + relays + readers + gu_idle  # every role keeps its buffers in the one lockstep arena
+        l1_sharded = lambda cores, rows: ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_crs(cores), (rows, 32), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # the arena (every role's buffers, ~all of L1) and the relays' freed words are per-launch scratch, allocated
+        # around each launch (a persistent arena would clash with every other op's circular buffers); nothing in
+        # them outlives a launch (end to end the relays zero their words in-kernel)
+        self._arena_spec = (
+            ttnn.Shape([len(arena_cores) * arena_tiles * 32, 32]),
+            l1_sharded(arena_cores, arena_tiles * 32),
+        )
+        self._words_spec = (ttnn.Shape([len(relays) * 32, 32]), l1_sharded(relays, 32))
+        words_zero = ttnn.from_torch(torch.zeros(len(relays) * 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # the down coordinators' done words must start every launch at zero (the coordinator leaves them zeroed):
+        # a small persistent tensor on the coordinator cores (one per subgrid)
+        coords = [down[k_ * (len(down) // NSG)] for k_ in range(NSG)]
+        done = ttnn.from_torch(
+            torch.zeros(len(coords) * 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=l1_sharded(coords, 32),
+        )
+        rect_cores = [[ci for ci in range(ngu) if rect_of(gu[ci]) == k] for k in range(len(rects))]
+        word_rel = {ci: 4 * (ci if XCOL else rect_cores[rect_of(gu[ci])].index(ci)) for ci in range(ngu)}
+
+        DATA, HARR, GO, DONE, GATH, XARR, SFREE, HFREE, HSFREE, WORD, GATH1, GATH2 = (
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+        )
+        sems = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=_crs(readers + both + relays + gu_idle), initial_value=0)
+            for i in range(16)
+        ]
+        d_pred, d_succ, d_heads = {}, {}, []
+        rdn = []  # (reader index, chain tail down index)
+        for k_ in range(NSG):  # each subgrid's down cores in D_CHAINS chains, tails = its readers
+            for seg in _chains([(d, down[d]) for d in range(ND) if sg_dn(d) == k_], D_CH, phys, DN_NOC):
+                d_heads.append(seg[0][0])
+                if RDOWN:
+                    tail = seg[-1][0]
+                    used = {r for r, _ in rdn}
+                    r = min(
+                        (r for r in range(n_rd) if r not in used and sg_rd(r) == k_),
+                        key=lambda r: noc_hops(phys(down[tail]), phys(readers[r]), DN_NOC),
+                    )
+                    rdn.append((r, tail))
+                for a, b in zip(seg, seg[1:]):
+                    d_succ[a[0]], d_pred[b[0]] = b[0], a[0]
+        xy_or0 = lambda lst, i: pk(lst[i]) if i is not None else 0
+        head_xy_sg = [[pk(down[d]) for d in d_heads if sg_dn(d) == k_] for k_ in range(NSG)]
+        head_xy = head_xy_sg[0]
+        coord_sg = [pk(down[k_ * ND_SG]) for k_ in range(NSG)]  # each subgrid's coordinator (its first down core)
+        ngu_sg = ngu // NSG
+        gu_xy_sg = [[pk(c) for c in gu[k_ * ngu_sg : (k_ + 1) * ngu_sg]] for k_ in range(NSG)]
+        sgx = lambda k_: [k_] if NSG > 1 else []  # the subgrid id after the se_dyn.hpp args
+
+        def _walk(h_):
+            out_ = [h_]
+            while out_[-1] in d_succ:
+                out_.append(d_succ[out_[-1]])
+            return out_
+
+        if os.environ.get("MIMO_FL_SHOW"):
+            logger.info(
+                "ROLEMAP "
+                + json.dumps(
+                    {
+                        "readers": [(c.x, c.y) for c in readers],
+                        "gu": [(c.x, c.y) for c in gu],
+                        "relays": [(c.x, c.y) for c in relays],
+                        "down": [(c.x, c.y) for c in down],
+                        "rdown": [(readers[r].x, readers[r].y) for r, _ in rdn],
+                        "heads": [(down[d].x, down[d].y) for d in d_heads],
+                        "chains": [[(down[d].x, down[d].y) for d in _walk(h_)] for h_ in d_heads],
+                        "coord": (down[0].x, down[0].y),
+                        "xhelp": bool(XHELP),
+                        "xcol": XCOL,
+                        "pcds": pcds,
+                    }
+                )
+            )
+
+        def make(x_addr, y_addr, c_addr, r_addr, base, words_addr, gids_d):
+            """One device's kernels / semaphores for the per-call buffer addresses (x, y, counts, regions, the arena
+            and the freed words) and that device's global expert ids, plus its CBs as a function of the arena."""
+            land_addr, x_ring_addr, h_all_addr = base, base + X_OFF, base + H_OFF
+            word_of = {ci: words_addr + word_rel[ci] for ci in range(ngu)}
+            done_addr = done.buffer_address()
+            # the routing's outputs: per global expert token count and region row; static e2e: region / count tiles
+            dyn_args = [c_addr, r_addr, 4 * NG, band[0], band[1]] + list(gids_d) if DYN else []
+            e2e_rt = (
+                dyn_args
+                if DYN
+                else ([v_ for e in range(E) for v_ in (e * tok_pad // 32, tok_pad // 32)] if E2E else [])
+            )
+
+            rd_vals, fw_vals, gu_rt, gu_grp = {}, {}, ttnn.RuntimeArgs(), {}
+            for r, c in enumerate(readers):
+                rd_vals[(c.x, c.y)] = (
+                    [w_dev.buffer_address(), r % banks, (r // banks) * region_bytes, 0] + dyn_args + sgx(sg_rd(r))
+                )
+                fw_vals[(c.x, c.y)] = (
+                    [land_addr]
+                    + [pk(gu[r * R_ + j]) for j in range(R_)]
+                    + (dyn_args + sgx(sg_rd(r)) if DYN else [0] * R_)
+                )
+                for j in range(R_):
+                    ci = r * R_ + j
+                    g = gu[ci]
+                    gu_grp[(g.x, g.y)] = j % G
+                    gu_rt[g.x][g.y] = (
+                        [
+                            pk(c),
+                            j,
+                            (r % n_rd_sg) * RG + j // G,  # pair-set (its h K-tiles)
+                            len(head_xy_sg[sg_rd(r)]),
+                            0,
+                            coord_sg[sg_rd(r)],
+                            GATH,
+                            x_ring_addr,
+                            0,
+                            0,
+                            0,
+                            *(
+                                (pk(relays[0]), word_of[ci], h_all_addr, j % G)
+                                if XCOL
+                                else (pk(relays[rect_of(g)]), word_of[ci], h_all_addr, j % G)
+                            ),
+                            *(
+                                [pk(relays[k]) if k < XCOL else 0 for k in (1, 2, 3)]
+                                if XCOL
+                                else [pk(relays[rect_of(g) + 2]) if X2 and not XHELP else 0, 2, 3]
+                            ),
+                            0,
+                            SFREE,
+                            WORD,
+                        ]
+                        + head_xy_sg[sg_rd(r)]
+                        + dyn_args
+                        + sgx(sg_rd(r))
+                    )
+            gu_crt = ttnn.RuntimeArgs()
+            for g in gu:
+                gu_crt[g.x][g.y] = [gu_grp[(g.x, g.y)]]
+            dr_rts = {p_: ttnn.RuntimeArgs() for p_ in dgroups}
+            dw_rts = {p_: ttnn.RuntimeArgs() for p_ in dgroups}
+            dc_rts = {p_: ttnn.RuntimeArgs() for p_ in dgroups}
+            gu_xy = [pk(c) for c in gu]
+            for d, dc in enumerate(down):
+                tail_succ = {t: pk(readers[r]) for r, t in rdn}
+                dr_rt, dw_rt = dr_rts[pcds[d]], dw_rts[pcds[d]]
+                dr_rt[dc.x][dc.y] = (
+                    [
+                        h_all_addr,
+                        xy_or0(down, d_pred.get(d)),
+                        tail_succ.get(d, xy_or0(down, d_succ.get(d))),
+                        coord_sg[sg_dn(d)],
+                        int(dl(d) == 0),
+                        ngu_sg,
+                        y_addr,
+                        col0s[d],
+                        done_addr,
+                        dl(d),
+                    ]
+                    + gu_xy_sg[sg_dn(d)]
+                    + e2e_rt
+                    + sgx(sg_dn(d))
+                    + ([rem_cols + d * pcx, int(d < n_x), int(d in tail_succ), ND] if SMALL else [])
+                )
+                dw_rt[dc.x][dc.y] = (
+                    [wd_dev.buffer_address(), d % banks, (d // banks) * wd_region]
+                    + dyn_args
+                    + sgx(sg_dn(d))
+                    + ([wx_dev.buffer_address(), d % banks, (d // banks) * wx_region, int(d < n_x)] if SMALL else [])
+                )
+                dc_rts[pcds[d]][dc.x][dc.y] = [int(SMALL and d < n_x)]
+            xr_rt, xm_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            hl_rt = [ttnn.RuntimeArgs() for _ in range(NH)]
+            vstride = XCOL or ((1 + NH) if XHELP else 2 if X2 else 1)
+            NR = len(rects)  # rectangles: primary relay k = relays[k], rectangle k's helper j = relays[NR + NR * j + k]
+            rl_off = lambda idx: idx if XCOL else ((0 if idx < NR else (idx - NR) // NR + 1) if XHELP else idx // 2)
+            rl_sb = lambda idx: len(
+                [g for g in range(V * nsb) if g % vstride == rl_off(idx)]
+            )  # super-blocks relay idx sends
+            for idx, rl in enumerate(relays):
+                k = idx % NR  # its rectangle
+                x0, x1, y0, y1 = rects[k]
+                lo, hi = ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)
+                xr_rt[rl.x][rl.y] = (
+                    [x_addr, vstride, rl_off(idx)]
+                    + ((dyn_args + sgx(idx % NR)) if dyn_args else [v_ for e in range(E) for v_ in (e * tok_pad, m)])
+                    if E2E
+                    else [x_addr, x_region, 0]
+                )
+                a, b = (hi, lo) if XNOC == 1 else (lo, hi)
+                xm_l = [
+                    x_ring_addr,
+                    pk(a),
+                    pk(b),
+                    (x1 - x0 + 1) * (y1 - y0 + 1),
+                    words_addr,
+                    len(rect_cores[k]),
+                ] + ([rl_sb(idx), XARR if idx < NR else 3, vstride, idx // 2, 0, 0, 0, 0] if E2E else [])
+                if XCOL:  # both rectangles, every gate/up core's freed word
+                    (ax0, ax1, ay0, ay1), (bx0, bx1, by0, by1) = rects
+                    xm_l = [
+                        x_ring_addr,
+                        pk(ttnn.CoreCoord(ax0, ay0)),
+                        pk(ttnn.CoreCoord(ax1, ay1)),
+                        (ax1 - ax0 + 1) * (ay1 - ay0 + 1),
+                        words_addr,
+                        ngu,
+                        rl_sb(idx),
+                        (XARR, 3, 2, 1)[idx],
+                        vstride,
+                        idx,
+                        0,
+                        (bx1 - bx0 + 1) * (by1 - by0 + 1),
+                        pk(ttnn.CoreCoord(bx0, by0)),
+                        pk(ttnn.CoreCoord(bx1, by1)),
+                    ]
+                if (
+                    XHELP and idx < NR
+                ):  # the rectangle's one sender: all its super-blocks, the helper's via the landing ring
+                    hp = relays[idx + NR]
+                    xm_l = (
+                        xm_l[:6]
+                        # RT 10: the row tiles this rectangle's cores read (GROUP_RECT: its group's), m0 | m1 << 8 (0: all)
+                        + [V * nsb, XARR, 1, 0, (idx * MTG) | ((idx + 1) * MTG << 8) if GROUP_RECT else 0, 0, 0, 0]
+                        + [pk(hp), base + LAND_OFF, LAND_SLOTS]
+                        + [pk(relays[NR + NR * j_ + idx]) for j_ in range(1, NH)]
+                    )
+                if XHELP and idx >= NR:
+                    j_ = (idx - NR) // NR  # its ring follows the primary's rings of helpers 0..j - 1
+                    sbb = MT * SBT * BF8_TILE
+                    hl_rt[j_][rl.x][rl.y] = (
+                        [
+                            pk(relays[idx % NR]),
+                            base + LAND_OFF + j_ * LAND_SLOTS * sbb,
+                            rl_sb(idx),
+                            1 + NH,
+                            j_ + 1,
+                        ]
+                        + dyn_args
+                        + sgx(idx % NR)
+                    )
+                    continue
+                xm_rt[rl.x][rl.y] = xm_l + dyn_args + (sgx(idx % NR) if dyn_args else [])
+
+            dm = lambda proc, noc: ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc)
+            FP = ttnn.KernelDescriptor.SourceType.FILE_PATH
+            SE_MAX_E = next(
+                n for n in (16, 32, 64) if E <= n
+            )  # schedule arrays (se_meta.hpp); meta page 3 + 6 SE_MAX_E words
+            META_BYTES = {16: 512, 32: 1024, 64: 2048}[SE_MAX_E]
+            DYN_HALF = int(os.environ.get("MIMO_FL_DYN_HALF", str(max(512, 1 << (4 * NG - 1).bit_length()))))
+            assert 4 * NG <= DYN_HALF, "the counts row must fit a scratch half (bytes)"
+            # pinned down weights too when every down ring holds exactly NREG experts (MIMO_FL_DRING / _R = 2 with PIN)
+            dn_reg = (
+                DYN
+                and PIN
+                and all(dgrp(p_)["ring"] == (ring_g // nk_gu) * dgrp(p_)["nblk"] for p_ in dgroups)
+                and (not RDOWN or ring_dr == (ring_g // nk_gu) * nblk_r)
+            )
+            # every kernel builds the same schedule: sub-block rows, gate/up ring regions, pinning (se_dyn.hpp)
+            assert not DYN or ring_g % nk_gu == 0, "dynamic schedule: the gate/up ring holds whole experts"
+            dyn_def = (
+                (
+                    [("SE_DYN", "1"), ("SE_DYN_HALF", str(DYN_HALF)), ("SE_RPS", str(MT * 32))]
+                    + ([("SE_SG", str(NSG))] if NSG > 1 else [])
+                    + [("SE_MAX_E", str(SE_MAX_E)), ("SE_META_BYTES", str(META_BYTES))]
+                    + [("SE_GU_NREG", str(ring_g // nk_gu))]
+                    + (
+                        [("SE_PIN_MIN", str(PIN)), ("SE_PIN_SMALL", os.environ.get("MIMO_FL_PIN_SMALL", "2"))]
+                        if PIN
+                        else []
+                    )
+                    + ([("SE_DN_REG", "1")] if dn_reg else [])
+                )
+                if DYN
+                else []
+            ) + ([("SE_SMALL_T", str(SMALL_T))] if SMALL else [])
+            x_ct = [pcx, kd_x, slot_x, ring_x] if SMALL else []
+            # dynamic counts and M-groups (receiver j gets block j / G: only se10_fwd maps it) use the pipelined forwarder
+            FWD = max(FWD_DEPTH, 2) if (DYN or G > 1) else FWD_DEPTH
+            e2e_def = [("SE_E2E", "1")] if E2E else []
+            tz_rt = ttnn.RuntimeArgs()
+            for rl in relays:
+                tz_rt[rl.x][rl.y] = [rl_sb(relays.index(rl))]
+            zones = [("SE_ZONES", "1")] if os.environ.get("MIMO_SE_ZONES") else []
+            zones += [("SE_WAITZ", os.environ["MIMO_SE_WAITZ"])] if os.environ.get("MIMO_SE_WAITZ") else []
+            total_x = V * nk_gu
+            gu_crs, dn_crs, rd_crs, rl_crs = _crs(gu), _crs(down), _crs(readers), _crs(relays)
+            swap = bool(int(os.environ.get("MIMO_FL_RD_SWAP", "0")))  # readers read on NOC1 and forward on NOC0
+            RD_NOC, FW_NOC = (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0) if swap else (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+            kernels = []
+            for fn in (0, 1):
+                grp = [c for r, c in enumerate(readers) if fwd_noc[r] == fn]
+                if not grp:
+                    continue
+                rd_noc, fw_noc_ = (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0) if fn == 0 else (RD_NOC, FW_NOC)
+                g_rd, g_fw = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+                rdn_cores = {(readers[r].x, readers[r].y) for r, _ in rdn}
+                plain = [c for c in grp if (c.x, c.y) not in rdn_cores]
+                for c in plain:
+                    g_rd[c.x][c.y] = rd_vals[(c.x, c.y)]
+                for c in grp:
+                    g_fw[c.x][c.y] = fw_vals[(c.x, c.y)]
+                mine = [(i, r, t) for i, (r, t) in enumerate(rdn) if fwd_noc[r] == fn]
+                if mine:
+                    assert READ_BATCH == 1
+                    g_rn = ttnn.RuntimeArgs()
+                    for i, r, t in mine:
+                        c = readers[r]
+                        g_rn[c.x][c.y] = (
+                            [
+                                w_dev.buffer_address(),
+                                r % banks,
+                                (r // banks) * region_bytes,
+                                wr_dev.buffer_address(),
+                                i % banks,
+                                (i // banks) * wr_region,
+                                pk(down[t]),
+                                coord_sg[sg_rd(r)],
+                                done_addr,
+                                ND_SG + i % n_rdn,  # its done word on the subgrid's coordinator
+                                y_addr,
+                                rem_cols + (i % n_rdn) * pcd_r,
+                            ]
+                            + e2e_rt
+                            + sgx(sg_rd(r))
+                        )
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se9_rdown.cpp",
+                            source_type=FP,
+                            core_ranges=_crs([readers[r] for _, r, _ in mine]),
+                            compile_time_args=[
+                                0,
+                                w_tile,
+                                RG * slot,
+                                E * nk_gu,
+                                1,
+                                slot_dr,
+                                E * nblk_r,
+                                2,
+                                h_tiles,
+                                H_TILE,
+                                H_PIECES,
+                                16,
+                                out_tiles_r,
+                                V,
+                                HARR,
+                                HSFREE,
+                                HBUF,
+                                MT,
+                                pcd_r,
+                                Ht,
+                                S,
+                                E,
+                                rd_slots,
+                                ring_dr,
+                            ],
+                            defines=([("SE_GU_FIRST", "1")] if int(os.environ.get("MIMO_FL_GU_FIRST", "0")) else [])
+                            + ([("SE9_SKIP_DW", "1")] if os.environ.get("MIMO_FL_SKIP_RDW") else [])
+                            + ([("SE9_TRID", "1")] if int(os.environ.get("MIMO_FL_SE9_TRID", "1")) else [])
+                            + e2e_def
+                            + dyn_def,
+                            runtime_args=g_rn,
+                            config=dm(ttnn.DataMovementProcessor.RISCV_0, rd_noc),
+                        )
+                    )
+                    rd_dc_rt = ttnn.RuntimeArgs()
+                    for _, r, _ in mine:
+                        rd_dc_rt[readers[r].x][readers[r].y] = [0]
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se6_dcompute.cpp",
+                            source_type=FP,
+                            core_ranges=_crs([readers[r] for _, r, _ in mine]),
+                            compile_time_args=[MTG, G, It, kd_r, pcd_r, E, S, slot_dr, ring_dr] + x_ct,
+                            runtime_args=rd_dc_rt,
+                            defines=zones
+                            + dyn_def
+                            + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else []),
+                            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                        )
+                    )
+                if plain:
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se_reader.cpp",
+                            source_type=FP,
+                            core_ranges=_crs(plain),
+                            compile_time_args=[0, w_tile, RG * slot, READ_BATCH, nk_gu, 0, 1, E, RG * slot, 0],
+                            defines=dyn_def,
+                            runtime_args=g_rd,
+                            config=dm(ttnn.DataMovementProcessor.RISCV_0, rd_noc),
+                        )
+                    )
+                kernels += [
+                    (
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se_forward.cpp",
+                            source_type=FP,
+                            core_ranges=_crs(grp),
+                            compile_time_args=[
+                                0,
+                                R_,
+                                w_tile,
+                                RG * slot,
+                                slot,
+                                ring_g,
+                                0,
+                                DATA,
+                                KBLK,
+                                nk_gu,
+                                0,
+                                1,
+                                E,
+                                READ_BATCH,
+                                0,
+                                1,
+                                slot,
+                                0,
+                            ],
+                            runtime_args=g_fw,
+                            config=dm(ttnn.DataMovementProcessor.RISCV_1, fw_noc_),
+                        )
+                        if not FWD
+                        else ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se10_fwd.cpp",
+                            source_type=FP,
+                            core_ranges=_crs(grp),
+                            compile_time_args=[
+                                0,
+                                R_,
+                                w_tile,
+                                RG * slot,
+                                slot,
+                                ring_g,
+                                0,
+                                DATA,
+                                nk_gu if DYN else E * nk_gu,
+                                rd_slots,
+                                FWD,
+                                E,
+                                G,
+                            ],
+                            defines=dyn_def + ([("SE_DBG", "1")] if os.environ.get("MIMO_FL_DBG") else []),
+                            runtime_args=g_fw,
+                            config=dm(ttnn.DataMovementProcessor.RISCV_1, fw_noc_),
+                        )
+                    ),
+                ]
+            kernels += (
+                []
+                + (
+                    [
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se11_xrd.cpp",
+                            source_type=FP,
+                            core_ranges=rl_crs,
+                            compile_time_args=[0, H * 2, E, MT, nsb, S, XRD_BATCH],
+                            runtime_args=xr_rt,
+                            defines=[("SE_SBT", str(SBT))]
+                            + zones
+                            + dyn_def
+                            + (
+                                [("XRD_SKIP_READS", os.environ["MIMO_FL_XRD_SKIP"])]
+                                if os.environ.get("MIMO_FL_XRD_SKIP")
+                                else []
+                            )
+                            + ([("XHELP_SMALL", "1")] if XHELP else []),
+                            config=dm(
+                                ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0 if XNOC == 1 else ttnn.NOC.NOC_1
+                            ),
+                        ),
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se11_tz.cpp",
+                            source_type=FP,
+                            core_ranges=rl_crs,
+                            compile_time_args=[0, 1, MT],
+                            runtime_args=tz_rt,
+                            defines=[("SE_SBT", str(SBT))] + zones + dyn_def,
+                            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                        ),
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se11_xmc.cpp",
+                            source_type=FP,
+                            core_ranges=_crs(relays[:NR]) if XHELP else rl_crs,
+                            compile_time_args=[1, MT, BF8_TILE, X_SLOTS, XARR, WORD, KBLK, E, nsb],
+                            runtime_args=xm_rt,
+                            defines=[("SE_SBT", str(SBT))]
+                            + zones
+                            + dyn_def
+                            + (
+                                [("XMC_WHOLE_SB", "1")]
+                                if int(os.environ.get("MIMO_FL_WHOLE_SB", "1" if E2E else "0"))
+                                else []
+                            )
+                            + ([("XMC_HELPER", "1"), ("SE_XNH", str(NH))] if XHELP else [])
+                            + [("XMC_ZERO_WORDS", "1")],
+                            config=dm(
+                                ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1 if XNOC == 1 else ttnn.NOC.NOC_0
+                            ),
+                        ),
+                    ]
+                    + (
+                        [  # helper j of each rectangle bumps arrival semaphore (4, 7, 8, 10)[j] on its primary
+                            ttnn.KernelDescriptor(
+                                kernel_source=f"{KDIR}/se13_xhelp.cpp",
+                                source_type=FP,
+                                core_ranges=_crs(relays[NR + NR * j_ : NR + NR * (j_ + 1)]),
+                                compile_time_args=[1, MT, BF8_TILE, LAND_SLOTS, (4, 7, 8, 10)[j_], 5, E, nsb],
+                                runtime_args=hl_rt[j_],
+                                defines=[("SE_SBT", str(SBT))] + dyn_def,
+                                config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
+                            )
+                            for j_ in range(NH)
+                        ]
+                        if XHELP
+                        else []
+                    )
+                    if E2E
+                    else [
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/xdl_selfread.cpp",
+                            source_type=FP,
+                            core_ranges=rl_crs,
+                            compile_time_args=[0, x_bytes, total_x, nreg, banks, X_BATCH, x_blk, 1],
+                            runtime_args=xr_rt,
+                            config=dm(
+                                ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0 if XNOC == 1 else ttnn.NOC.NOC_1
+                            ),
+                        ),
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/se8_xmc.cpp",
+                            source_type=FP,
+                            core_ranges=rl_crs,
+                            compile_time_args=[0, x_blk, x_bytes, total_x, X_SLOTS, XARR, RELAY_CB, WORD],
+                            runtime_args=xm_rt,
+                            defines=zones + ([("XMC_SAFE", "1")] if os.environ.get("MIMO_FL_XMC_SAFE") else []),
+                            config=dm(
+                                ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1 if XNOC == 1 else ttnn.NOC.NOC_0
+                            ),
+                        ),
+                    ]
+                )
+                + [
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/se5_recv.cpp",
+                        source_type=FP,
+                        core_ranges=gu_crs,
+                        compile_time_args=[
+                            0,
+                            x_blk,
+                            1,
+                            slot,
+                            E * nk_gu,
+                            V,
+                            ring_g,
+                            16,
+                            1,
+                            3,
+                            2,
+                            MTG,
+                            H_TILE,
+                            ngu_sg,
+                            DATA,
+                            HARR,
+                            GO,
+                            DONE,
+                            KBLK,
+                            HARR,
+                            SFREE,
+                            HBUF,
+                            XARR,
+                            HFREE,
+                            X_SLOTS,
+                            x_bytes,
+                            S,
+                            NP,
+                            HSFREE,
+                            H_PIECES,
+                            nk_gu,
+                            GATH1,
+                            GATH2,
+                            1,
+                            G,
+                            E,
+                        ],
+                        defines=zones
+                        + dyn_def
+                        + [("SE_GU_ONLY", "1"), ("SE_X_RELAY", "1"), ("SE_NO_PARTNER", "1")]
+                        + ([("SE_DBG", "1")] if os.environ.get("MIMO_FL_DBG") else [])
+                        + (
+                            [("SE_X_RELAY2", str(SBT // KBLK)), ("SE_X_NRELAY", str(XCOL or 2))]
+                            if ((X2 and not XHELP) or XCOL)
+                            else []
+                        ),
+                        runtime_args=gu_rt,
+                        config=dm(
+                            ttnn.DataMovementProcessor.RISCV_0,
+                            (
+                                ttnn.NOC.NOC_1
+                                if int(os.environ.get("MIMO_FL_GU_NOC", "0" if E2E else "1"))
+                                else ttnn.NOC.NOC_0
+                            ),
+                        ),
+                    ),
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/se3_compute.cpp",
+                        source_type=FP,
+                        core_ranges=gu_crs,
+                        compile_time_args=[KBLK, MTG, nk_gu, 0, 1, E, S, slot, 1, 1, NP, 0, ring_g],
+                        runtime_args=gu_crt,
+                        defines=[("SE_DST_TILES", str(4 if GU_RP else DST_T))]
+                        + ([("SE_GU_RP", str(max(1, 4 // (2 * NP)))), ("SE_XSLOTS", str(X_SLOTS))] if GU_RP else [])
+                        + ([("SE_GU_L1ACC", str(L1ACC_GRP))] if GU_ACC == "l1acc" else [])
+                        + zones
+                        + dyn_def
+                        + [("SE_GU_ONLY", "1"), ("SE_ACT", str(ACTS[ACT])), ("SE_XMT", str(MT))]
+                        + ([("SE_NO_ACT", "1")] if os.environ.get("MIMO_FL_NO_ACT") else []),
+                        config=ttnn.ComputeConfigDescriptor(
+                            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=GU_FP32, dst_full_sync_en=GU_FULL
+                        ),
+                    ),
+                ]
+            )
+            for p_, ds in dgroups.items():
+                g_ = dgrp(p_)
+                g_crs = _crs([down[d] for d in ds])
+                kernels += [
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/se6_drecv.cpp",
+                        source_type=FP,
+                        core_ranges=g_crs,
+                        compile_time_args=[
+                            2,
+                            h_tiles,
+                            H_TILE,
+                            H_PIECES,
+                            16,
+                            g_["out"],
+                            V,
+                            S,
+                            ngu_sg,
+                            ND_SG + n_rdn,
+                            HARR,
+                            HSFREE,
+                            GATH,
+                            DONE,
+                            GO,
+                            HBUF,
+                            MT,
+                            p_,
+                            Ht,
+                            GATH,
+                            GATH1,
+                            GATH2,
+                            E,
+                        ]
+                        + ([pcx] if SMALL else []),
+                        defines=e2e_def + dyn_def,
+                        runtime_args=dr_rts[p_],
+                        config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1 if DN_NOC else ttnn.NOC.NOC_0),
+                    ),
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/se6_dw.cpp",
+                        source_type=FP,
+                        core_ranges=g_crs,
+                        compile_time_args=[
+                            1,
+                            g_["slot"],
+                            w_tile,
+                            E * g_["nblk"],
+                            int(os.environ.get("MIMO_FL_DW_BATCH", "2")),
+                            int(wdtype == "bf8"),
+                            E,
+                        ]
+                        + ([slot_x, nblk_x, 4] if SMALL else []),
+                        runtime_args=dw_rts[p_],
+                        defines=dyn_def
+                        + (
+                            [("SE_DW_DELAY", os.environ["MIMO_FL_DW_DELAY"])]
+                            if os.environ.get("MIMO_FL_DW_DELAY")
+                            else []
+                        ),
+                        config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0 if DN_NOC else ttnn.NOC.NOC_1),
+                    ),
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/se6_dcompute.cpp",
+                        source_type=FP,
+                        core_ranges=g_crs,
+                        compile_time_args=[MTG, G, It, g_["kd"], p_, E, S, g_["slot"], g_["ring"]] + x_ct,
+                        runtime_args=dc_rts[p_],
+                        defines=zones
+                        + dyn_def
+                        + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else []),
+                        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                    ),
+                ]
+            OUT_FMT = (ttnn.bfloat8_b, BF8_TILE) if E2E else (ttnn.bfloat16, 2048)
+            fmt = lambda i, d_, page: [ttnn.CBFormatDescriptor(buffer_index=i, data_format=d_, page_size=page)]
+
+            def cbs_for(arena):  # (per launch: the CBs bind the launch's arena tensor)
+                return _cbs(arena)
+
+            def arena_cb(idx, off, size, crs, d_, page, arena):
+                cb = ttnn.cb_descriptor_from_sharded_tensor(
+                    idx, arena, address_offset=off, total_size=size, core_ranges=crs
+                )
+                cb.format_descriptors = fmt(idx, d_, page)
+                return cb
+
+            def _cbs(arena):
+                arena_cb_ = lambda *a: arena_cb(*a, arena)
+
+                cbs = (
+                    [
+                        arena_cb_(0, 0, rd_slots * RG * slot * w_tile, rd_crs, w_dtype, w_tile),
+                    ]
+                    + (
+                        [
+                            arena_cb_(0, 0, RM_CHUNKS * 32 * SEG, rl_crs, ttnn.bfloat16, SEG),
+                            arena_cb_(1, SB_OFF, SB_SLOTS * MT * SBT * BF8_TILE, rl_crs, ttnn.bfloat8_b, BF8_TILE),
+                        ]
+                        if E2E
+                        else [arena_cb_(0, 0, RELAY_CB * x_bytes, rl_crs, ttnn.bfloat8_b, BF8_TILE)]
+                    )
+                    + [
+                        arena_cb_(1, 0, ring_g * slot * w_tile, gu_crs, w_dtype, w_tile),
+                        arena_cb_(0, X_OFF, X_SLOTS * x_bytes, gu_crs, ttnn.bfloat8_b, BF8_TILE),
+                        ttnn.CBDescriptor(
+                            total_size=HBUF * MTG * NP * H_TILE,
+                            core_ranges=gu_crs,
+                            format_descriptors=fmt(3, ttnn.bfloat8_b, H_TILE),
+                        ),
+                        ttnn.CBDescriptor(
+                            total_size=2048, core_ranges=gu_crs, format_descriptors=fmt(16, ttnn.bfloat16, 2048)
+                        ),
+                    ]
+                    + (  # SE_GU_L1ACC: the gate/up partials (bf16, one sub-block of this core's rows)
+                        [arena_cb_(5, P_OFF, MTG * 2 * NP * 2048, gu_crs, ttnn.bfloat16, 2048)]
+                        if GU_ACC == "l1acc"
+                        else []
+                    )
+                    + [
+                        arena_cb_(2, H_OFF, HBUF * h_tiles * H_TILE, dn_crs, ttnn.bfloat8_b, H_TILE),
+                    ]
+                    + [
+                        cb_
+                        for p_, ds in dgroups.items()
+                        for cb_ in (
+                            arena_cb_(
+                                1,
+                                0,
+                                dgrp(p_)["ring"] * dgrp(p_)["slot"] * w_tile,
+                                _crs([down[d] for d in ds]),
+                                w_dtype,
+                                w_tile,
+                            ),
+                            arena_cb_(
+                                16, O_OFF, 2 * dgrp(p_)["out"] * OUT_FMT[1], _crs([down[d] for d in ds]), *OUT_FMT
+                            ),
+                        )
+                    ]
+                    + []
+                    + (
+                        []
+                        if not RDOWN
+                        else [
+                            arena_cb_(
+                                1,
+                                RD_OFF,
+                                ring_dr * slot_dr * w_tile,
+                                _crs([readers[r] for r, _ in rdn]),
+                                w_dtype,
+                                w_tile,
+                            ),
+                            arena_cb_(
+                                2,
+                                H_OFF,
+                                HBUF * h_tiles * H_TILE,
+                                _crs([readers[r] for r, _ in rdn]),
+                                ttnn.bfloat8_b,
+                                H_TILE,
+                            ),
+                            arena_cb_(
+                                16, O_OFF, 2 * out_tiles_r * OUT_FMT[1], _crs([readers[r] for r, _ in rdn]), *OUT_FMT
+                            ),
+                        ]
+                    )
+                )
+                if (
+                    DYN
+                ):  # CB 6: the counts page a data-movement kernel hands its compute; CB 7: DM scratch (BRISC low / NCRISC high half)
+                    all_crs = _crs(arena_cores)
+                    cbs += [
+                        ttnn.CBDescriptor(
+                            total_size=META_BYTES,
+                            core_ranges=all_crs,
+                            format_descriptors=fmt(6, ttnn.uint32, META_BYTES),
+                        ),
+                        ttnn.CBDescriptor(
+                            total_size=4 * DYN_HALF,
+                            core_ranges=all_crs,
+                            format_descriptors=fmt(7, ttnn.uint32, 4 * DYN_HALF),
+                        ),
+                    ]
+                if SMALL:  # the extra slice's weight ring and output on the down cores
+                    cbs += [
+                        arena_cb_(4, XW_OFF, ring_x * slot_x * w_tile, dn_crs, w_dtype, w_tile),
+                        arena_cb_(17, XO_OFF, MT * pcx * BF8_TILE, dn_crs, ttnn.bfloat8_b, BF8_TILE),
+                    ]
+                return cbs
+
+            return kernels, sems, cbs_for
+
+        self._make = make
+        self.w_dev, self.wd_dev, self.wr_dev, self.wx_dev = w_dev, wd_dev, wr_dev, wx_dev
+        self.words_zero, self.done = words_zero, done
+        self._cache = {}
+        self.tag_cfg = dict(
+            NP=NP,
+            G=G,
+            MT=MT,
+            PIN=PIN,
+            NH=NH,
+            HBUF=HBUF,
+            X_SLOTS=X_SLOTS,
+            DRING=DRING,
+            act=ACT,
+            GU_ACC=GU_ACC,
+            L1ACC_GRP=L1ACC_GRP,
+            GU_FULL=GU_FULL,
+            GU_RP=GU_RP,
+            GROUP_RECT=GROUP_RECT,
+            RDOWN=RDOWN,
+            SMALL=SMALL,
+            NSG=NSG,
+            tok_pad=tok_pad,
+            S=S,
+            V=V,
+            w_tile=w_tile,
+        )
+
+    def program(self, x, y, counts=None, regions=None, arena=None, words=None):
+        """ProgramDescriptor (one device) or MeshProgramDescriptor (per-device expert ids) for these tensors. The
+        kernels are cached by the buffer addresses; the CBs are rebuilt every call (they bind the launch's arena)."""
+        own = arena is None
+        if own:  # (e.g. show_kernels: a throwaway arena)
+            arena, words = self.alloc_scratch()
+        key = (
+            x.buffer_address(),
+            y.buffer_address(),
+            counts.buffer_address() if counts is not None else 0,
+            regions.buffer_address() if regions is not None else 0,
+            arena.buffer_address(),
+            words.buffer_address(),
+        )
+        parts = self._cache.get(key)
+        if parts is None:
+            if len(self._cache) > 16:
+                self._cache.clear()
+            parts = [self._make(*key, g_) for g_ in self.gids]
+            self._cache[key] = parts
+        progs = [ttnn.ProgramDescriptor(kernels=k_, semaphores=s_, cbs=cb_(arena)) for k_, s_, cb_ in parts]
+        if own:
+            ttnn.deallocate(arena)
+            ttnn.deallocate(words)
+        if self.n_dev == 1:
+            return progs[0]
+        prog = ttnn.MeshProgramDescriptor()
+        rows, cols = tuple(self.device.shape)
+        for d_ in range(self.n_dev):
+            coord = ttnn.MeshCoordinate(d_ // cols, d_ % cols)
+            prog[ttnn.MeshCoordinateRange(coord, coord)] = progs[d_]
+        return prog
+
+    def alloc_scratch(self):
+        """The launch's arena and freed words (L1, uninitialized)."""
+        return tuple(
+            ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, mc)
+            for shape, mc in (self._arena_spec, self._words_spec)
+        )
+
+    def alloc_output(self, x):
+        """End to end: a model-shaped bfp8 output (the dispatch buffer's rows); else the pre-tiled bf16 layout."""
+        c = self.tag_cfg
+        shape = [x.shape[-2], self.H] if self.e2e else [c["V"] * c["MT"] * 32, self.H]
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape),
+            ttnn.bfloat8_b if self.e2e else ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def __call__(self, x, counts=None, regions=None, y=None):
+        """x: the row-major bf16 dispatch buffer [rows, H] (end to end; else the pre-tiled bfp8 x), counts / regions:
+        the routing's [1, n_global] uint32 rows (dynamic mode). Returns y (written only at the active experts' rows)."""
+        if self.e2e:
+            mc = x.memory_config()
+            assert x.layout == ttnn.ROW_MAJOR_LAYOUT and x.dtype == ttnn.bfloat16 and x.shape[-1] == self.H, x
+            assert mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        if self.dyn:  # one page per row: [1, n_global] uint32, row major, DRAM interleaved
+            for t in (counts, regions):
+                assert t is not None and t.layout == ttnn.ROW_MAJOR_LAYOUT and t.shape[-1] == self.NG, t
+                assert t.dtype in (ttnn.uint32, ttnn.int32) and t.memory_config().buffer_type == ttnn.BufferType.DRAM
+                assert t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                assert t.logical_volume() == self.NG, t.shape
+        y = self.alloc_output(x) if y is None else y
+        arena, words = self.alloc_scratch()
+        if not self.e2e:  # (end to end the relays zero their freed words themselves)
+            ttnn.copy_host_to_device_tensor(self.words_zero, words)
+        ttnn.generic_op(
+            [self.w_dev, self.wd_dev, x, arena, y, words, self.done]
+            + ([self.wr_dev] if self.wr_dev is not None else [])
+            + ([self.wx_dev] if self.wx_dev is not None else []),
+            self.program(x, y, counts, regions, arena, words),
+        )
+        ttnn.deallocate(arena)
+        ttnn.deallocate(words)
+        return y
+
+    @staticmethod
+    def show_kernels(program):
+        """Dispatch anatomy: per kernel its cores, rectangles, runtime-arg words."""
+        tot_rt = 0
+        for kd_ in program.kernels:
+            crs_ = kd_.core_ranges
+            ranges_ = crs_.ranges()
+            rt_words = 0
+            for rg in ranges_:
+                for x_ in range(rg.start.x, rg.end.x + 1):
+                    for y_ in range(rg.start.y, rg.end.y + 1):
+                        try:
+                            rt_words += len(kd_.runtime_args[x_][y_])
+                        except Exception:
+                            pass
+            tot_rt += rt_words
+            logger.info(
+                f"KERNEL {str(kd_.kernel_source).split('/')[-1]:16s} cores {crs_.num_cores():3d} "
+                f"rects {len(ranges_):3d} rt words {rt_words:5d}"
+            )
+        logger.info(f"KERNELS {len(program.kernels)} total rt words {tot_rt}, cbs {len(program.cbs)}")

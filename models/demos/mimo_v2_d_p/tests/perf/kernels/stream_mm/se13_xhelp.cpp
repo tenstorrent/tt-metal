@@ -58,4 +58,6 @@ void kernel_main() {
         cb_pop_front(sb_cb, sb_tiles);
     }
     noc_async_atomic_barrier();
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
 }

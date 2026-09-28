@@ -237,4 +237,10 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
+    // the write command buffer's packet tag back to transaction ID 0: the next program's plain writes (implicit ID
+    // 0) would otherwise carry this kernel's last ID and their barriers / flush checks hang (watcher: "write-capable
+    // NOC packet tags must be zero")
+    noc_async_write_set_trid(0);
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
 }

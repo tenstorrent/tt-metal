@@ -25,7 +25,14 @@ def load(path):
                 cur = None
             continue
         if cur is not None:
-            data[cur][it[cur]][int(x["DEVICE ID"])].append((x["OP CODE"], float(x["DEVICE KERNEL DURATION [ns]"] or 0) / 1e3))
+            data[cur][it[cur]][int(x["DEVICE ID"])].append(
+                (
+                    x["OP CODE"],
+                    float(x["DEVICE KERNEL DURATION [ns]"] or 0) / 1e3,
+                    float(x.get("DEVICE FW START CYCLE") or "nan"),
+                    float(x.get("DEVICE FW END CYCLE") or "nan"),
+                )
+            )
     return data
 
 
@@ -39,17 +46,27 @@ def summarize(iters):
     return sum(ops.values()), ops
 
 
+def span(iters, mhz=1350.0):
+    """Device span per iteration (first op's FW start to the last op's FW end, max over devices), mean, us: kernel time
+    plus the gaps between ops (dispatch / host)."""
+    spans = []
+    for devs in iters.values():
+        spans.append(max((max(o[3] for o in v) - min(o[2] for o in v)) / mhz for v in devs.values() if v))
+    return sum(spans) / len(spans) if spans else float("nan")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csv")
     ap.add_argument("--ops", action="store_true")
     ap.add_argument("--filter", default="")
+    ap.add_argument("--span", action="store_true", help="also the device span (kernels + gaps)")
     a = ap.parse_args()
     for tag, iters in load(a.csv).items():
         if a.filter not in tag:
             continue
         total, ops = summarize(iters)
-        print(f"{tag:<50s} {total:10.1f} us")
+        print(f"{tag:<50s} {total:10.1f} us" + (f"   span {span(iters):10.1f} us" if a.span else ""))
         if a.ops:
             for k, v in ops.items():
                 print(f"    {k:<56s} {v:9.1f}")
