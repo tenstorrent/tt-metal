@@ -497,9 +497,7 @@ class TPGatedDeltaNet:
         """Last K-1 rows of [conv_state ; src]. T < K-1 must not slice src alone (negative start)."""
         K = self.K
         if T >= K - 1:
-            # Both arches: a masked bucket's carry_len varies per request, so slicing on it keys a
-            # Slice program per length and recompiles after the prefill trace is parked (#48536).
-            if full_T is not None and full_T > T and full_T >= 2 * tpc.TILE_SIZE:
+            if full_T is not None and full_T > T and full_T >= 2 * tpc.TILE_SIZE and not tpc.is_blackhole():
                 return self._carry_tail_tile_stable(src, T, C, full_T)
             return ttnn.slice(src, (0, T - (K - 1), 0), (1, T, C))
         _dram = ttnn.DRAM_MEMORY_CONFIG
@@ -620,7 +618,7 @@ class TPGatedDeltaNet:
         _xfix = None  # splice input; stays None on Blackhole and on the from-scratch/concat paths
         if tpc.is_blackhole():
             # new_state: last K-1 real input tokens (for the next chunk's carry), TILE/DRAM.
-            new_state = self._shift_register_tail(qkv, T if carry_len is None else carry_len, conv_state, C, full_T=T)
+            new_state = self._shift_register_tail(qkv, T, conv_state, C)
             new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
             if conv_state is None:
                 pad = ttnn.zeros(
