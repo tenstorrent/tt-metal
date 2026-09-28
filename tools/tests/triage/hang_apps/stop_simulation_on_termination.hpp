@@ -28,6 +28,7 @@ inline void trace(const char* message) {
 
 inline void trace_with_number(const char* message, long number) {
     // No snprintf here: format the number by hand so this stays usable from a handler.
+    // 24 characters is enough to hold any 64-bit integer, including the sign.
     char digits[24];
     char* end = digits + sizeof(digits);
     char* cursor = end;
@@ -49,8 +50,9 @@ inline void trace_with_number(const char* message, long number) {
 }
 
 inline void print_backtrace() {
-    void* frames[64];
-    const int count = ::backtrace(frames, 64);
+    constexpr int max_frames = 100;
+    void* frames[max_frames];
+    const int count = ::backtrace(frames, max_frames);
     // backtrace_symbols_fd does not allocate, unlike backtrace_symbols.
     ::backtrace_symbols_fd(frames, count, STDERR_FILENO);
 }
