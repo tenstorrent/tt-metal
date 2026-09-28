@@ -30,13 +30,14 @@ export HF_DATASETS_CACHE="$work/datasets" HF_MODULES_CACHE="$work/hf-modules"
 export TT_METAL_CACHE="$work/tt-cache" TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
 git clone https://github.com/tenstorrent/vllm-tt-plugin.git "$work/plugin"
-plugin_ref="${VLLM_TT_PLUGIN_REF:-35090660433d5606957ded97f7130b5cc75f94f7}"
-# The shared workflow's former default predates request-lifecycle fixes needed
-# after concurrent evaluation. Keep manual overrides, but do not select it for Qwen.
+qwen_plugin_ref=b7e4292e4193cba20abe9c7c68ce489201b2e36b
+plugin_ref="${VLLM_TT_PLUGIN_REF:-$qwen_plugin_ref}"
+# The shared workflow defaults predate the Qwen device-sampling fallback. Keep
+# explicit non-default overrides while vllm-tt-plugin#140 is under review.
 legacy_plugin_ref=yieldthought/llama31-qb2-serving
-if [ "$plugin_ref" = "$legacy_plugin_ref" ]; then
-    echo "::warning::Ignoring stale VLLM_TT_PLUGIN_REF=$legacy_plugin_ref; using the pinned Qwen revision" >&2
-    plugin_ref=35090660433d5606957ded97f7130b5cc75f94f7
+if [ "$plugin_ref" = main ] || [ "$plugin_ref" = "$legacy_plugin_ref" ]; then
+    echo "::warning::Ignoring VLLM_TT_PLUGIN_REF=$plugin_ref; using the pinned Qwen revision" >&2
+    plugin_ref=$qwen_plugin_ref
 fi
 git -C "$work/plugin" checkout "$plugin_ref"
 git -C "$work/plugin" rev-parse HEAD > "$results/plugin-revision.txt"
