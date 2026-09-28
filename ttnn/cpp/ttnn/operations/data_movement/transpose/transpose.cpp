@@ -261,7 +261,7 @@ ttnn::Tensor transpose_impl(
     Tensor output;
     if (identity) {
         if (memory_config_arg.has_value() && input_unsqueezed.memory_config() != *memory_config_arg) {
-            output = ttnn::clone(input_unsqueezed, std::nullopt, *memory_config_arg, std::nullopt);
+            output = ttnn::clone(input_unsqueezed, std::nullopt, memory_config_arg, std::nullopt);
         } else {
             output = input_unsqueezed;
         }
