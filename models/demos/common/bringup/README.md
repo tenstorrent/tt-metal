@@ -2,7 +2,7 @@
 
 A framework for bringing up chunked prefill of a transformer on Tenstorrent hardware in fixed, gated steps. Agents do
 the creative work, one fresh `claude -p` per step. Tests that were written, checked against the CPU reference and frozen
-before any implementation exists decide whether a step passed. Design: `models/demos/ernie45_d_p/bringup/docs/pipeline_design.html`.
+before any implementation exists decide whether a step passed. Overview: `docs/pipeline_design.html`, published at https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC.
 The ERNIE-4.5 bring-up (`models/demos/ernie45_d_p/`) is the run the design came from.
 
 ## Start

@@ -42,7 +42,7 @@ All under `models/demos/ernie45_d_p/bringup/`, committed and pushed:
 | `components.yaml` | Component -> reference op -> TTNN op, NATIVE/COMPOSED/CPU tag, gating task, and the `findings:` list. |
 | `gate.py`, `metrics.py` | Gate runner (`<id> --commit`, `--next`, `--status`, `--sweep [prefix]`) and metric sink. |
 | `export_dashboard.py`, `dashboard/` | Dashboard generator and template. |
-| `docs/pipeline_design.html` | The framework design (draft 4). Published copy: https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC |
+| `models/demos/common/bringup/docs/pipeline_design.html` | The framework overview (moved there; replaces draft 4). Published copy: https://claude.ai/artifact/L5rXDnJoEpjsEL33s3wmSC |
 | `logs/<task>.log` | Full gate output. Gitignored, local only. |
 
 Other pointers:
