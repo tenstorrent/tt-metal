@@ -44,13 +44,27 @@ def _vllm_dense_similarity_allclose_kwargs(device) -> dict[str, float]:
 
 
 def _vllm_score_rel_tolerance(device) -> float:
-    """Sparse / ColBERT scalar scores vs fixed reference: pytest.approx(..., rel=...)."""
-    return 0.025 if ttnn_is_blackhole(device) else 0.01
+    """Sparse / ColBERT scalar scores vs fixed reference: pytest.approx(..., rel=...).
+
+    Wormhole: 0.02 covers the measured bf8 spread of up to 1.9 % (see the dense
+    kwargs above). With the accurate SDPA exponential (#57180) and the exact SDPA
+    reciprocal (#56292) the lexical score sits 1.36 % below the reference
+    (0.1928863525390625 vs 0.19554901123046875) and the second ColBERT score
+    1.31 % below (0.4559256434440613 vs 0.462), identical on three nightly runs.
+    The previous 0.01 was tuned to the legacy kernels' one-sided bias.
+    """
+    return 0.025 if ttnn_is_blackhole(device) else 0.02
 
 
 def _vllm_corner_sparse_weight_rel(device) -> float:
-    """Single-token sparse weight under BF8; noisier than batched paths."""
-    return 0.04 if ttnn_is_blackhole(device) else 0.03
+    """Single-token sparse weight under BF8; noisier than batched paths.
+
+    0.04 on both architectures. On Wormhole the one-token "Hi" weight is 3.48 %
+    below the reference with the exact SDPA reciprocal from #56292 (0.2578125 vs
+    0.26710861921310425) and was 3.8 % above it with the approximate exponential,
+    so the bf8 noise on this scalar is about +-4 %.
+    """
+    return 0.04
 
 
 def _require_single_device(device) -> None:
