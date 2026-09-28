@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Fetch issues/PRs via GraphQL search over one created: window (search caps at 1000 results per query).
-usage: fetch_search.py <repo> <pr|issue> "<qualifiers>" <YYYY-MM-DD..YYYY-MM-DD> <out.jsonl>
+"""Fetch issues/PRs via GraphQL search over one date window (search caps at 1000 results per query).
+usage: fetch_search.py <repo> <pr|issue> "<qualifiers>" <YYYY-MM-DD..YYYY-MM-DD> <out.jsonl> [--field created|closed]
+The window is on the creation date by default; `--field closed` windows on the close date, which is what an
+incremental refresh needs (a bug opened long ago and closed this week lives in an old creation window).
 Exit 3 = window holds >1000 results; split it and rerun."""
 import json
 import subprocess
@@ -8,6 +10,9 @@ import sys
 import time
 
 repo, kind, quals, win, out = sys.argv[1:6]
+field = sys.argv[sys.argv.index("--field") + 1] if "--field" in sys.argv else "created"
+if field not in ("created", "closed"):
+    sys.exit("--field must be created or closed")
 PR = """... on PullRequest{number title createdAt mergedAt closedAt state author{login} labels(first:15){nodes{name}}
   body additions deletions changedFiles mergeCommit{oid} closingIssuesReferences(first:10){nodes{number}}
   reviewThreads{totalCount} reviews{totalCount} comments{totalCount}}"""
@@ -21,7 +26,7 @@ Q = (
     "query($q:String!,$c:String){search(type:ISSUE,first:50,after:$c,query:$q)"
     "{issueCount pageInfo{hasNextPage endCursor} nodes{%s}}}"
 ) % (PR if kind == "pr" else IS)
-q = f"repo:{repo} is:{kind} {quals} created:{win}"
+q = f"repo:{repo} is:{kind} {quals} {field}:{win}"
 cur, n, total = None, 0, 0
 with open(out + ".part", "w") as f:
     while True:

@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Fetch ALL closed issues and ALL PRs of a GitHub repo as JSONL, in parallel weekly windows (resumable).
 
-  fetch_repo.py <owner/name> <out_dir> [--issues-only | --prs-only] [--jobs 6]
+  fetch_repo.py <owner/name> <out_dir> [--issues-only | --prs-only] [--jobs 6] [--since YYYY-MM-DD]
 
 Writes <out_dir>/issue/<window>.jsonl and <out_dir>/pr/<window>.jsonl. GitHub search returns at most 1000 results
 per query, so each window is one week, and a window that still overflows is split in half automatically.
 Finished windows are skipped on rerun, so a killed fetch resumes where it stopped.
+
+`--since` is the incremental refresh: it fetches only what CLOSED on or after that date (closed issues, closed and
+merged PRs), windowed on the close date, into closed_<window>.jsonl files next to the full fetch. Windowing on the
+creation date would miss every long-lived bug closed since the last mining. Take the date from the store's marker
+(mining/marker.py). A window that reaches today is always refetched, since more will close in it.
 """
 import datetime as dt
 import json
@@ -22,8 +27,12 @@ created = json.loads(
         ["gh", "api", f"repos/{repo}"], capture_output=True, text=True, check=True
     ).stdout
 )["created_at"]
-start, end = dt.date.fromisoformat(created[:10]), dt.date.today() + dt.timedelta(days=1)
-kinds = [("issue", "is:closed"), ("pr", "")]
+since = sys.argv[sys.argv.index("--since") + 1] if "--since" in sys.argv else None
+start = dt.date.fromisoformat(since or created[:10])
+end = dt.date.today() + dt.timedelta(days=1)
+field, prefix = ("closed", "closed_") if since else ("created", "")
+# a refresh wants what closed: open PRs are not fixes yet
+kinds = [("issue", "is:closed"), ("pr", "is:closed" if since else "")]
 if "--issues-only" in sys.argv:
     kinds = kinds[:1]
 if "--prs-only" in sys.argv:
@@ -31,11 +40,21 @@ if "--prs-only" in sys.argv:
 
 
 def run(kind, quals, a, b):
-    out = f"{outdir}/{kind}/{a}_{b}.jsonl"
-    if os.path.exists(out):
+    out = f"{outdir}/{kind}/{prefix}{a}_{b}.jsonl"
+    if os.path.exists(out) and b < dt.date.today():
         return
     r = subprocess.run(
-        ["python3", f"{here}/fetch_search.py", repo, kind, quals, f"{a}..{b}", out],
+        [
+            "python3",
+            f"{here}/fetch_search.py",
+            repo,
+            kind,
+            quals,
+            f"{a}..{b}",
+            out,
+            "--field",
+            field,
+        ],
         capture_output=True,
         text=True,
     )

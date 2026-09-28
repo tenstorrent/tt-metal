@@ -50,7 +50,8 @@ benchmark and a sibling sweep.
 | diff | files changed since a commit | `init_run.py --since <commit>`, the cheap way to keep an old full audit current |
 | siblings | the unfixed copies of past fixes, from mined deep reads | `engine/siblings.py from-deep`, then the recheck verification (*Sweeping siblings from history*) |
 | bench | real past bugs, at the commit before their fix | `engine/bench.py prepare/score`, which measures recall |
-| mine | build or refresh a repo pack | `mining/` pipeline (below) |
+| mine | build a repo's mined history and pack, once | `mining/` pipeline (below) |
+| refresh | only what closed since the last mining | `mining/marker.py delta`, then `fetch_repo.py --since` (*Refreshing the mined history*) |
 
 Full, area and bench runs fan out through the **Workflow** tool. That needs the user's explicit opt-in to
 multi-agent orchestration. Get it, and state the cost first. Calibration from earlier runs: about 50k tokens per
@@ -72,6 +73,10 @@ through `exec_tier.py configure`), and never assume a default for the execution 
    the repo's code with those commands, so confirm it is acceptable on this machine.
 3. **Budget:** tokens and wall-clock. State the calibration (about 50k tokens per file hunted, plus about 40% for
    verification), and whether to run the optional second pass.
+4. **New history since the last mining.** Run `mining/marker.py delta <mine>/<repo>.mined.json` first (count queries
+   only) and report what closed since the watermark. If there is any, offer the refresh (*Refreshing the mined
+   history*): it costs agents only for the new cases, and it gives the sibling sweep new leads and the recall
+   measurement a fresh holdout.
 
 tt-metal presets for the execution tier (confirm with the user; they take a clean build dir and many minutes each):
 ```
@@ -213,6 +218,31 @@ The same pipeline built the shipped packs. It is repo-agnostic.
 7. **Synthesise:** `mining/synthesize.py` computes the class weights and hot spots. Then write the pack by hand:
    a weighted class table, hot spots, seeds, incomplete fixes, and reviewer checks. The unfixed siblings from step 5
    are candidate bugs: sweep them (*Sweeping siblings from history*); never file them straight from mining.
+8. **Mark how far the mining reached:** `mining/marker.py write <mine>/<repo>.mined.json --repo owner/name --dumps
+   '<mine>/raw/issue/*.jsonl,<mine>/raw/pr/*.jsonl' --deep <deep.jsonl> --holdout <holdouts> [--tree-commit <sha>]`.
+   The watermark is the latest close time in the dumps. A published pack gets its own `packs/<repo>.mined.json`,
+   written with `--public` (dates and counts, no issue or PR ids).
+
+## Refreshing the mined history
+Mining a repo's whole history is the expensive part, and it is done once. After that, a refresh reads only what
+CLOSED since the watermark: nothing mined before is fetched, triaged or deep-read again.
+1. **What is new:** `mining/marker.py delta <mine>/<repo>.mined.json` counts the issues and PRs closed since.
+2. **Fetch the delta:** `mining/fetch_repo.py owner/name <mine>/raw --since <watermark date>`. It windows on the
+   CLOSE date, into `closed_*.jsonl` files beside the full fetch. Windowing on the creation date misses most of it:
+   of the 40 tt-metal issues closed in the two days after one watermark, 38 had been opened before it.
+3. **Build, triage and deep-read only the new cases:** mining steps 2, 3 and 5 on the `closed_*` dumps, with
+   `select.py --exclude` given the existing deep-read store and every holdout (it matches by id AND by fix commit, so
+   a case already read under another id is skipped too). Where a new fix touches the files of an old deep-read
+   case, re-read that old case too: its fix-completeness verdict may have changed (a revert, a re-fix).
+4. **Use the new cases twice.** Their `unfixed` siblings go to the sibling sweep. And bugs fixed after the watermark
+   were never seen by the mining, so they are a clean holdout: pick the next recall benchmark from them
+   (mining step 4) before they join the deep reads.
+5. **Move the watermark:** re-run `marker.py write` over all the dumps once the new cases are persisted. The mined
+   store is updated in place, with no approval needed. The committed pack and its `packs/<repo>.mined.json` change
+   only when the user agrees, since that is a commit to the repo. The pack text need not be rewritten for a refresh:
+   as reading for hunters it has not shown value.
+An audit's own findings are not history yet. They become history when they are fixed and closed, and the next
+refresh reads them then.
 
 ## Sweeping siblings from history
 A fix lands in one arch, dtype or overload, and its copies keep the bug. The deep read of each past fix (mining step
