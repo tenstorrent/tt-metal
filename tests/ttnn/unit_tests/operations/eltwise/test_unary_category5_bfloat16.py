@@ -93,7 +93,7 @@ def test_glu_reglu_ops(device, ttnn_op, ulp, dim):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp)
 
 
-@pytest.mark.parametrize("dim", [-2, 2])
+@pytest.mark.parametrize("dim", [0, 1, 2, -2])
 @pytest.mark.parametrize("ttnn_op", [ttnn.glu, ttnn.reglu, ttnn.geglu, ttnn.swiglu])
 def test_glu_family_rejects_non_last_dim(device, ttnn_op, dim, expect_error):
     # Regression: dim was checked only by a TT_ASSERT, which Release drops, so these split dim 3 silently.
