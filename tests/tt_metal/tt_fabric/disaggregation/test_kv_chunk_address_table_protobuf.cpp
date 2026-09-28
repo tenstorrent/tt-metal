@@ -524,6 +524,88 @@ TEST(KvChunkAddressTableProtobuf, BlockCyclicRunsRoundTrip) {
     expect_tables_equal(original, restored);
 }
 
+TEST(KvChunkAddressTableProtobuf, BlockCyclicMultiGroupRunsRoundTrip) {
+    // A row that cycles through several device groups with the same period as its addresses
+    // (the multi-galaxy decode layout: kPeriod chunks per cycle, kGroups groups each holding
+    // kPeriod/kGroups consecutive chunks). One run per residue carries that residue's group.
+    DualWriteEnvGuard guard("0");
+    constexpr uint32_t kPeriod = 16;
+    constexpr uint32_t kGroups = 4;
+    constexpr uint32_t kPerGroup = kPeriod / kGroups;
+    constexpr uint32_t kChunks = 96;  // 6 full periods
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 2, .max_sequence_length = kChunks * 32, .num_slots = 2, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    std::array<DeviceGroupIndex, kGroups> grps;
+    for (uint32_t g = 0; g < kGroups; g++) {
+        grps[g] = original.add_device_group({make_proto_fnid(g, 0), make_proto_fnid(g, 1)});
+    }
+    for (uint32_t slot = 0; slot < 2; slot++) {
+        for (uint32_t layer = 0; layer < 2; layer++) {
+            const uint64_t row_base = 0x1'0000'0000ULL + (slot * 2 + layer) * 0x1000'0000ULL;
+            for (uint32_t i = 0; i < kChunks; i++) {
+                const uint32_t r = i % kPeriod;
+                original.set(
+                    layer,
+                    i * 32,
+                    slot,
+                    KvCacheLocation{
+                        .noc_addr = row_base + (r / kPerGroup) * 0x2'0000'0000ULL + (r % kPerGroup) * 0x2000ULL +
+                                    (i / kPeriod) * 0x30000ULL,
+                        .size_bytes = 512,
+                        .device_group_index = grps[r / kPerGroup]});
+            }
+        }
+    }
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.configs(0).compression(), ::tt::disaggregation::proto::STRIDED_ROWS);
+    EXPECT_EQ(pb.entries_size(), 0);
+    EXPECT_EQ(pb.runs_size(), 4 * kPeriod);  // 4 rows, one run per residue
+    for (const auto& run : pb.runs()) {
+        EXPECT_EQ(run.chunk_step(), kPeriod);
+        EXPECT_EQ(run.count(), kChunks / kPeriod);
+        EXPECT_EQ(run.addr_stride(), 0x30000);
+        EXPECT_EQ(run.device_group_index(), *grps[run.start_chunk() / kPerGroup]);
+    }
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    ASSERT_EQ(restored.compression(0), ChunkCompression::kStridedRows);
+    expect_tables_equal(original, restored);
+}
+
+TEST(KvChunkAddressTableProtobuf, AperiodicGroupsStayUnrolled) {
+    // Affine addresses but one chunk on a different device group than the rest: no period covers
+    // the row, so the config exports UNROLLED (entries) and still round-trips exactly.
+    DualWriteEnvGuard guard("0");
+    KvChunkAddressTableConfig cfg{
+        .num_layers = 1, .max_sequence_length = 64 * 32, .num_slots = 1, .chunk_n_tokens = 32};
+    KvChunkAddressTable original(cfg);
+    const auto grp0 = original.add_device_group({make_proto_fnid(0, 0)});
+    const auto grp1 = original.add_device_group({make_proto_fnid(1, 0)});
+    for (uint32_t i = 0; i < 64; i++) {
+        original.set(
+            0,
+            i * 32,
+            0,
+            KvCacheLocation{
+                .noc_addr = 0x1'0000'0000ULL + i * 0x10000ULL,
+                .size_bytes = 512,
+                .device_group_index = i == 17 ? grp1 : grp0});
+    }
+
+    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+    ASSERT_TRUE(pb.ParseFromString(export_to_protobuf(original)));
+    EXPECT_EQ(pb.configs(0).compression(), ::tt::disaggregation::proto::UNROLLED);
+    EXPECT_EQ(pb.runs_size(), 0);
+    EXPECT_EQ(pb.entries_size(), 64);
+
+    auto restored = import_from_protobuf(pb.SerializeAsString());
+    EXPECT_EQ(restored.compression(0), ChunkCompression::kUnrolled);
+    expect_tables_equal(original, restored);
+}
+
 TEST(KvChunkAddressTableProtobuf, MixedCompressionPerConfigRoundTrip) {
     // Compression is per-config: the affine config exports STRIDED_ROWS, the pseudo-random
     // config stays UNROLLED. The importer must honor both tags in one table.
