@@ -457,7 +457,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
     bool zero_start_grid = false;
     CoreCoord compute_with_storage_grid;
-    // Both the shard grid and the worker grid must be one range; otherwise cores past the first range get no args.
+    // A multi-range worker grid would leave cores past its first range without args.
     if (grid.size() == 1 && all_device_cores.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
