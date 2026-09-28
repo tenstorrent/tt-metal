@@ -10,7 +10,10 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "compute_common.hpp"
+// The factory defines SDPA_JOINT_STREAMING with the streaming kernel (Blackhole); without it this is main's kernel.
+#ifdef SDPA_JOINT_STREAMING
 #include "compute_streaming.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -38,11 +41,13 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(20);
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(21);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(22);
+#ifdef SDPA_JOINT_STREAMING
     constexpr bool use_streaming_compute = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t valid_Skt = get_compile_time_arg_val(24);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(25);
     constexpr uint32_t n_partial_col = get_compile_time_arg_val(26);
     constexpr uint32_t mid_padded_tiles = get_compile_time_arg_val(27);
+#endif
 
     uint32_t argidx = 0;
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
@@ -63,7 +68,9 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
+#ifdef SDPA_JOINT_STREAMING
     constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_6;
+#endif
 
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
@@ -76,6 +83,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+#ifdef SDPA_JOINT_STREAMING
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, use_streaming_compute ? cb_out : cb_qk_im);
     if constexpr (use_streaming_compute) {
         CircularBuffer(cb_identity_scale_in).wait_front(1);
@@ -148,6 +156,9 @@ void kernel_main() {
         }
         return;
     }
+#else
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+#endif
     matmul_init(cb_q_in, cb_k_in);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {

@@ -641,6 +641,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    if (use_streaming_compute) {
+        compute_desc.defines.emplace_back("SDPA_JOINT_STREAMING", "1");
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
