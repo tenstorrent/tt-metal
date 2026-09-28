@@ -1,0 +1,25 @@
+{
+ "metrics": {
+  "pcc_attention_L00": {
+   "t": "2026-09-28T05:07:23",
+   "value": 0.9999884914913465
+  },
+  "rel_l2_attention_L00": {
+   "t": "2026-09-28T05:07:23",
+   "value": 0.008036051876842976
+  },
+  "rel_l2_head_rows_attention_L00": {
+   "t": "2026-09-28T05:07:23",
+   "value": 0.007031400687992573
+  },
+  "row_norm_ratio_max_attention_L00": {
+   "t": "2026-09-28T05:07:23",
+   "value": 1.011489987373352
+  },
+  "row_norm_ratio_min_attention_L00": {
+   "t": "2026-09-28T05:07:23",
+   "value": 1.0018301010131836
+  }
+ },
+ "task": "C.full_dense.attention"
+}
