@@ -3,7 +3,7 @@
 """Part-level tests for the phased GDN prims
 
 chunk_gdn_prep produces the seven per-(head,chunk) fp32 intermediates
-{v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}; chunk_gdn_scan consumes them plus the initial
+{v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv}; chunk_gdn_scan consumes them plus the initial
 state and carries the recurrence. Both are bound privately (ttnn._ttnn.operations.transformer, not
 registered as ttnn.transformer operations): they are test surfaces of the public op's phased path. Each prim is asserted against torch formulas
 inlined from models/experimental/gated_attention_gated_deltanet/torch_functional/
@@ -89,8 +89,8 @@ def _prep_reference(q, k, v, g, beta):
     """The seven prep outputs, fp32, from head-major per-chunk inputs.
     q,k,v: [BH,NC,C,D] fp32 (the exact bf16-rounded values fed to the device, q pre-scaled);
     g,beta: [BH,NC,C] fp32. Mirrors delta_rule_ops.py:170-205 with the phased op's
-    UN-premultiplied WY hand-off: kd/v_beta are NOT multiplied by t_inv (the scan applies t_inv
-    after the v_beta - kd@S subtraction)."""
+    UN-premultiplied WY hand-off: nkd/v_beta are NOT multiplied by t_inv (the scan applies t_inv
+    after forming v_beta + nkd@S; nkd is handed off negated so that sum is one DST accumulation)."""
     C = q.shape[-2]
     decay = g.cumsum(-1)  # [BH,NC,C]  (:189)
     decay_exp = decay.exp().unsqueeze(-1)  # [BH,NC,C,1]  (:190)
@@ -106,7 +106,7 @@ def _prep_reference(q, k, v, g, beta):
             -2
         )
     t_inv = attn + torch.eye(C, dtype=torch.float32)  # :201
-    kd = k_beta * decay_exp  # :205's operand, un-premultiplied
+    nkd = -(k_beta * decay_exp)  # :205's operand, un-premultiplied and NEGATED (the scan adds nkd@S onto v_beta)
     q_decay = q * decay_exp  # :229 (scale already folded into q)
     mask_causal = torch.triu(torch.ones(C, C, dtype=torch.bool), diagonal=1)
     intra = (q @ k.transpose(-1, -2) * l_mask).masked_fill(mask_causal, 0)  # :222
@@ -115,18 +115,18 @@ def _prep_reference(q, k, v, g, beta):
     # dl*I: exp(g_sum) on the diagonal of one 32x32 tile (the scan decays each state tile as (dl*I) @ S_tile,
     # so the tile is a single 32x32 identity block whatever C or K are)
     dl = decay[..., -1].exp()[..., None, None] * torch.eye(32, dtype=torch.float32)
-    return v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv
+    return v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv
 
 
-def _scan_reference(v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv, s0):
+def _scan_reference(v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv, s0):
     """The scan recurrence (delta_rule_ops.py:216-238 semantics in the phased prims'
-    un-premultiplied form): v_new = t_inv @ (v_beta - kd@S) — mathematically identical to
-    u - w@S with u=t_inv@v_beta, w=t_inv@kd."""
+    un-premultiplied form): v_new = t_inv @ (v_beta + nkd@S), nkd = -(k_beta*decay_exp) — mathematically
+    identical to u - w@S with u=t_inv@v_beta, w=-t_inv@nkd."""
     bh, nc = v_beta.shape[:2]
     S = s0.clone()
     o = torch.zeros(bh, nc, CHUNK, v_beta.shape[-1], dtype=torch.float32)
     for c in range(nc):
-        v_new = t_inv[:, c] @ (v_beta[:, c] - kd[:, c] @ S)
+        v_new = t_inv[:, c] @ (v_beta[:, c] + nkd[:, c] @ S)
         o[:, c] = q_decay[:, c] @ S + intra[:, c] @ v_new  # :229-232
         S = S * dl[:, c, 0, 0][:, None, None] + k_dec_t[:, c] @ v_new  # :235-238 (dl = the diagonal value)
     return o, S
@@ -164,7 +164,7 @@ def test_prep_outputs_vs_torch(device, bh, nc):
     # ki-accumulation-order rounding, reduced srcA/srcB precision on fp32 eltwise operands, and
     # fp32 pack rounding. Bounds are sized to each output's magnitude and op chain:
     #   v_beta  5e-3: one broadcast mul, |v_beta| <= |v| ~ 3 (0.5*randn tails); no exp involved
-    #   kd      2e-3: |k_beta| <= 1 (normalized k, beta < 1) times decay_exp <= 1 (g <= 0); one exp
+    #   nkd      2e-3: |k_beta| <= 1 (normalized k, beta < 1) times decay_exp <= 1 (g <= 0); one exp
     #   q_decay 1e-3: |q*scale| <= ~0.1 (normalized rows), decay_exp <= 1; exp error dominates
     #   intra   1e-3: |q@k^T| <= scale (Cauchy-Schwarz on L2-normalized rows), L_mask <= 1;
     #                 128-term fp32 accumulation + one exp in the mask
@@ -178,7 +178,7 @@ def test_prep_outputs_vs_torch(device, bh, nc):
     # k_dec_t and t_inv were calibrated on p150b hardware (fw 19.11): measured max-abs 2.2e-3 and
     # 1.1e-3 across the parametrized shapes; bounds carry ~2x headroom. PCC >= 0.999 remains the
     # primary gate for every output.
-    names = ["v_beta", "kd", "q_decay", "intra", "k_dec_t", "dl", "t_inv"]
+    names = ["v_beta", "nkd", "q_decay", "intra", "k_dec_t", "dl", "t_inv"]
     bounds = [5e-3, 2e-3, 1e-3, 1e-3, 5e-3, 1e-4, 2.5e-3]
     assert len(outs) == 7
     for name, out, ref, bound in zip(names, outs, refs, bounds):

@@ -68,7 +68,7 @@ ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output
     const uint32_t TT = tt::constants::TILE_HEIGHT;  // dl*I is one 32x32 tile whatever C and K are
     return {
         f32(ttnn::Shape({BH, NC, C, V})),    // v_beta
-        f32(ttnn::Shape({BH, NC, C, K})),    // kd
+        f32(ttnn::Shape({BH, NC, C, K})),    // nkd
         f32(ttnn::Shape({BH, NC, C, K})),    // q_decay
         f32(ttnn::Shape({BH, NC, C, C})),    // intra
         f32(ttnn::Shape({BH, NC, K, C})),    // k_dec_t
@@ -158,7 +158,7 @@ void ChunkGdnScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace tt::constants;
     check(in.v_beta, "v_beta", DataType::FLOAT32);
-    check(in.kd, "kd", DataType::FLOAT32);
+    check(in.nkd, "nkd", DataType::FLOAT32);
     check(in.q_decay, "q_decay", DataType::FLOAT32);
     check(in.intra, "intra", DataType::FLOAT32);
     check(in.k_dec_t, "k_dec_t", DataType::FLOAT32);
@@ -198,7 +198,7 @@ ChunkGdnScanOperation::tensor_return_value_t ChunkGdnScanOperation::create_outpu
 
 std::vector<Tensor> chunk_gdn_scan(
     const Tensor& v_beta,
-    const Tensor& kd,
+    const Tensor& nkd,
     const Tensor& q_decay,
     const Tensor& intra,
     const Tensor& k_dec_t,
@@ -212,12 +212,12 @@ std::vector<Tensor> chunk_gdn_scan(
     bool use_mcast,
     bool force_serial) {
     const auto& vb_shape = v_beta.logical_shape();  // [BH, NC, C, V]
-    const auto& kd_shape = kd.logical_shape();      // [BH, NC, C, K]
+    const auto& nkd_shape = nkd.logical_shape();    // [BH, NC, C, K]
     auto attrs = ChunkGdnScanOperation::operation_attributes_t{
         .BH = vb_shape[0],
         .num_chunks = vb_shape[1],
         .chunk_size = chunk_size,
-        .key_dim = kd_shape[3],
+        .key_dim = nkd_shape[3],
         .val_dim = vb_shape[3],
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
@@ -228,7 +228,7 @@ std::vector<Tensor> chunk_gdn_scan(
     };
     auto tensor_args = ChunkGdnScanOperation::tensor_args_t{
         .v_beta = v_beta,
-        .kd = kd,
+        .nkd = nkd,
         .q_decay = q_decay,
         .intra = intra,
         .k_dec_t = k_dec_t,

@@ -5,7 +5,7 @@
 // direct NoC hand-off into the NV RECEIVER cores of ONE head (per-head producer form; the pooled
 // form generalizes the item walk and the owner function, not this protocol). Per item (chunk c):
 //   1. wait for the seven compute-pushed intermediates
-//        v_beta [C,V], t_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl*I [1 tile]
+//        v_beta [C,V], t_inv [C,C], nkd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl*I [1 tile]
 //   2. wait credit[h] == NV      — every receiver of head h has reserved chunk c's slots
 //      credit[h] <- 0
 //   3. v_beta: NV V-slice writes (1x1-rectangle multicasts, unlinked), slice v -> receiver v's ring slot
@@ -40,7 +40,7 @@
 
 // CB indices (prep compute's output slots == the scan side's hand-off slots;
 // must match chunk_gdn_prep.cpp, chunk_gdn_scan.cpp and the fused program factory).
-constexpr uint32_t cb_Tinv = 13, cb_vbeta = 14, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
+constexpr uint32_t cb_Tinv = 13, cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_kdec_t = 24, cb_dl = 22;
 
 void kernel_main() {
@@ -133,7 +133,7 @@ void kernel_main() {
     // the union declaration makes each base identical on every receiver).
     const uint32_t base_vbeta = CircularBuffer(cb_vbeta).get_read_ptr();
     const uint32_t base_Tinv = CircularBuffer(cb_Tinv).get_read_ptr();
-    const uint32_t base_kd = CircularBuffer(cb_kd).get_read_ptr();
+    const uint32_t base_kd = CircularBuffer(cb_nkd).get_read_ptr();
     const uint32_t base_intra = CircularBuffer(cb_intra).get_read_ptr();
     const uint32_t base_qdecay = CircularBuffer(cb_qdecay).get_read_ptr();
     const uint32_t base_kdec_t = CircularBuffer(cb_kdec_t).get_read_ptr();
@@ -203,7 +203,7 @@ void kernel_main() {
             DeviceZoneScopedN("tx_wait_cb");
             CircularBuffer(cb_vbeta).wait_front(cv);
             CircularBuffer(cb_Tinv).wait_front(cc);
-            CircularBuffer(cb_kd).wait_front(ck);
+            CircularBuffer(cb_nkd).wait_front(ck);
             CircularBuffer(cb_intra).wait_front(cc);
             CircularBuffer(cb_qdecay).wait_front(ck);
             CircularBuffer(cb_kdec_t).wait_front(kc);
@@ -233,7 +233,7 @@ void kernel_main() {
             }
             // The six shared tensors, linked, into the rectangle.
             send_shared(cb_Tinv, cc, base_Tinv + slot * cc * tb);
-            send_shared(cb_kd, ck, base_kd + slot * ck * tb);
+            send_shared(cb_nkd, ck, base_kd + slot * ck * tb);
             send_shared(cb_intra, cc, base_intra + slot * cc * tb);
             send_shared(cb_qdecay, ck, base_qdecay + slot * ck * tb);
             send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
@@ -260,7 +260,7 @@ void kernel_main() {
         // Free the slots for compute's next chunk only now (the writes have completed).
         CircularBuffer(cb_vbeta).pop_front(cv);
         CircularBuffer(cb_Tinv).pop_front(cc);
-        CircularBuffer(cb_kd).pop_front(ck);
+        CircularBuffer(cb_nkd).pop_front(ck);
         CircularBuffer(cb_intra).pop_front(cc);
         CircularBuffer(cb_qdecay).pop_front(ck);
         CircularBuffer(cb_kdec_t).pop_front(kc);

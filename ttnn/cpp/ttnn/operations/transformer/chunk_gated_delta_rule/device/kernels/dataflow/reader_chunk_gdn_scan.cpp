@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Phase B (scan) reader: the initial state S [K,V] once, then per chunk the seven prep
-// intermediates v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv from DRAM. All fp32.
+// intermediates v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv from DRAM. All fp32.
 //
 // Four compile variants (host selects via defines; no define = the plain reader):
 //   GDN_MCAST_SENDER   — this core is its head's v-block-0. It reads the six SHARED V-independent
-//                        tensors (kd, q_decay, intra, k_dec_t, dl, t_inv) from DRAM once per chunk
+//                        tensors (nkd, q_decay, intra, k_dec_t, dl, t_inv) from DRAM once per chunk
 //                        and multicasts them into the sibling v-block cores' CBs (identical CB
 //                        base addresses on every scan core — CBs are declared on one CoreRangeSet).
 //   GDN_MCAST_RECEIVER — a sibling v-block core. Reads only its private V-sliced tensors (v_beta,
@@ -51,7 +51,8 @@
 // already aligned) so the fused program declares one hand-off CB set on the producer/receiver
 // union. Must match chunk_gdn_scan.cpp (compute) and both program factories.
 constexpr uint32_t cb_dl = 22, cb_S = 8, cb_Tinv = 13;
-constexpr uint32_t cb_vbeta = 14, cb_kd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
+constexpr uint32_t cb_eye = 5;  // one 32x32 fp32 identity tile for the compute's `I @ v_beta` accumulation
+constexpr uint32_t cb_vbeta = 14, cb_nkd = 18, cb_qdecay = 19, cb_intra = 20, cb_kdec_t = 24;
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -70,8 +71,8 @@ void kernel_main() {
     constexpr auto s0_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
 #else
     constexpr auto vb_a = TensorAccessorArgs<5>();
-    constexpr auto kd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
-    constexpr auto qd_a = TensorAccessorArgs<kd_a.next_compile_time_args_offset()>();
+    constexpr auto nkd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
+    constexpr auto qd_a = TensorAccessorArgs<nkd_a.next_compile_time_args_offset()>();
     constexpr auto it_a = TensorAccessorArgs<qd_a.next_compile_time_args_offset()>();
     constexpr auto kc_a = TensorAccessorArgs<it_a.next_compile_time_args_offset()>();
     constexpr auto dl_a = TensorAccessorArgs<kc_a.next_compile_time_args_offset()>();
@@ -121,7 +122,7 @@ void kernel_main() {
     const uint32_t sender_y = get_arg_val<uint32_t>(6);
 #else
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
-    const uint32_t kd_addr = get_arg_val<uint32_t>(4);
+    const uint32_t nkd_addr = get_arg_val<uint32_t>(4);
     const uint32_t qd_addr = get_arg_val<uint32_t>(5);
     const uint32_t it_addr = get_arg_val<uint32_t>(6);
     const uint32_t kc_addr = get_arg_val<uint32_t>(7);
@@ -144,7 +145,7 @@ void kernel_main() {
 #endif
     const auto s0_acc = TensorAccessor(s0_a, s0_addr, tb);
 #if !defined(GDN_MCAST_RECEIVER) && !defined(GDN_FUSED_RECEIVER)
-    const auto kd_acc = TensorAccessor(kd_a, kd_addr, tb);
+    const auto nkd_acc = TensorAccessor(nkd_a, nkd_addr, tb);
     const auto qd_acc = TensorAccessor(qd_a, qd_addr, tb);
     const auto it_acc = TensorAccessor(it_a, it_addr, tb);
     const auto kc_acc = TensorAccessor(kc_a, kc_addr, tb);
@@ -193,6 +194,22 @@ void kernel_main() {
     // (degenerates to the full state on fused receivers: vb = 0, Vt = Vt_full).
     read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
 
+    // One fp32 identity tile for the compute's `I @ v_beta` DST accumulation (scan_step). Written once by
+    // this RISC, never popped; the fence orders the stores before the push.
+    {
+        cb_reserve_back(cb_eye, 1);
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_eye));
+        for (uint32_t i = 0; i < 1024; i++) {
+            p[i] = 0u;
+        }
+        for (uint32_t r = 0; r < 32; r++) {
+            p[(r < 16) ? r * 17 : 768 + (r - 16) * 17] =
+                0x3F800000u;  // 1.0f at (r, r): faces 0 and 3 carry the diagonal
+        }
+        asm volatile("fence");
+        cb_push_back(cb_eye, 1);
+    }
+
 #if defined(GDN_MCAST_SENDER)
     Semaphore<> ready(SEM_READY);
     Semaphore<> valid(SEM_VALID);
@@ -221,7 +238,7 @@ void kernel_main() {
         read_vslice(vb_acc, cb_vbeta, hc * Ct * Vt_full, Ct);  // private v_beta slice (unchanged)
 
         // Stage all six shared groups, then one barrier for the lot.
-        const uint32_t p_kd = stage_group(kd_acc, cb_kd, hc * ck, ck);
+        const uint32_t p_nkd = stage_group(nkd_acc, cb_nkd, hc * ck, ck);
         const uint32_t p_qd = stage_group(qd_acc, cb_qdecay, hc * ck, ck);
         const uint32_t p_it = stage_group(it_acc, cb_intra, hc * cc, cc);
         const uint32_t p_kc = stage_group(kc_acc, cb_kdec_t, hc * kc, kc);
@@ -246,7 +263,7 @@ void kernel_main() {
                 {.noc_x_start = rcv_x0, .noc_y_start = rcv_y0, .noc_x_end = rcv_x1, .noc_y_end = rcv_y1, .addr = addr},
                 /*linked=*/true);
         };
-        mcast_group(p_kd, ck);
+        mcast_group(p_nkd, ck);
         mcast_group(p_qd, ck);
         mcast_group(p_it, cc);
         mcast_group(p_kc, kc);
@@ -261,7 +278,7 @@ void kernel_main() {
         valid.set_multicast(noc, rcv_x0, rcv_y0, rcv_x1, rcv_y1, num_dests);  // unlinked: ends chain
 
         // Advance the sender's own CBs only now (the mcasts addressed the pre-push slots).
-        CircularBuffer(cb_kd).push_back(ck);
+        CircularBuffer(cb_nkd).push_back(ck);
         CircularBuffer(cb_qdecay).push_back(ck);
         CircularBuffer(cb_intra).push_back(cc);
         CircularBuffer(cb_kdec_t).push_back(kc);
@@ -286,7 +303,7 @@ void kernel_main() {
 
         // Reserve this chunk's space in every shared CB FIRST — the ready inc is the sender's
         // proof that these slots are writable (compute has popped the previous chunk).
-        CircularBuffer(cb_kd).reserve_back(ck);
+        CircularBuffer(cb_nkd).reserve_back(ck);
         CircularBuffer(cb_qdecay).reserve_back(ck);
         CircularBuffer(cb_intra).reserve_back(cc);
         CircularBuffer(cb_kdec_t).reserve_back(kc);
@@ -300,7 +317,7 @@ void kernel_main() {
         valid.wait(VALID);
 
         // The shared bytes are in our CBs; make them visible to compute.
-        CircularBuffer(cb_kd).push_back(ck);
+        CircularBuffer(cb_nkd).push_back(ck);
         CircularBuffer(cb_qdecay).push_back(ck);
         CircularBuffer(cb_intra).push_back(cc);
         CircularBuffer(cb_kdec_t).push_back(kc);
@@ -345,7 +362,7 @@ void kernel_main() {
         {
             DeviceZoneScopedN("rx_reserve");
             CircularBuffer(cb_vbeta).reserve_back(D * cv);
-            CircularBuffer(cb_kd).reserve_back(D * ck);
+            CircularBuffer(cb_nkd).reserve_back(D * ck);
             CircularBuffer(cb_qdecay).reserve_back(D * ck);
             CircularBuffer(cb_intra).reserve_back(D * cc);
             CircularBuffer(cb_kdec_t).reserve_back(D * kc);
@@ -382,7 +399,7 @@ void kernel_main() {
 
         // The chunk's seven blocks are in our CBs; make them visible to compute.
         CircularBuffer(cb_vbeta).push_back(cv);
-        CircularBuffer(cb_kd).push_back(ck);
+        CircularBuffer(cb_nkd).push_back(ck);
         CircularBuffer(cb_qdecay).push_back(ck);
         CircularBuffer(cb_intra).push_back(cc);
         CircularBuffer(cb_kdec_t).push_back(kc);
@@ -405,7 +422,7 @@ void kernel_main() {
     for (uint32_t c = 0; c < NC; c++) {
         const uint32_t hc = h * NC + c;
         read_vslice(vb_acc, cb_vbeta, hc * Ct * Vt_full, Ct);  // v_beta [C, V] slice
-        read_into(kd_acc, cb_kd, hc * ck, ck);                 // V-independent: full read
+        read_into(nkd_acc, cb_nkd, hc * ck, ck);               // V-independent: full read
         read_into(qd_acc, cb_qdecay, hc * ck, ck);
         read_into(it_acc, cb_intra, hc * cc, cc);
         read_into(kc_acc, cb_kdec_t, hc * kc, kc);

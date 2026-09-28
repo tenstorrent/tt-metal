@@ -355,7 +355,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             flat_qk,
             H,
             phased_cfg->prep_serial);
-        // prep = {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}
+        // prep = {v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv}
         auto scan = ttnn::prim::chunk_gdn_scan(
             prep[0],
             prep[1],

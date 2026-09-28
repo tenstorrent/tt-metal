@@ -117,7 +117,7 @@ std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
 
 std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
     const ttnn::Tensor& v_beta,
-    const ttnn::Tensor& kd,
+    const ttnn::Tensor& nkd,
     const ttnn::Tensor& q_decay,
     const ttnn::Tensor& intra,
     const ttnn::Tensor& k_dec_t,
@@ -132,7 +132,7 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
     bool force_serial) {
     return ttnn::prim::chunk_gdn_scan(
         v_beta,
-        kd,
+        nkd,
         q_decay,
         intra,
         k_dec_t,
@@ -402,7 +402,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
 
         Returns:
             list[ttnn.Tensor]: the 7 fp32 per-chunk DRAM intermediates the scan consumes —
-                [v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv]; shapes/dtypes are
+                [v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv]; shapes/dtypes are
                 ChunkGdnScanInputs, device/chunk_gdn_phased.hpp:133-142 (dl is a per-chunk
                 scalar in tile position [0,0]).
         )doc";
@@ -446,7 +446,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
 
         Args:
             v_beta (ttnn.Tensor):  [BH, NC, C, V] fp32 (= v * beta)
-            kd (ttnn.Tensor):      [BH, NC, C, K] fp32 (= k_beta * decay_exp)
+            nkd (ttnn.Tensor):      [BH, NC, C, K] fp32 (= -(k_beta * decay_exp): negated, the scan accumulates v_beta + nkd@S in DST)
             q_decay (ttnn.Tensor): [BH, NC, C, K] fp32
             intra (ttnn.Tensor):   [BH, NC, C, C] fp32
             k_dec_t (ttnn.Tensor): [BH, NC, K, C] fp32
@@ -475,7 +475,7 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         "chunk_gdn_scan",
         &chunk_gdn_scan_launch,
         nb::arg("v_beta").noconvert(),
-        nb::arg("kd").noconvert(),
+        nb::arg("nkd").noconvert(),
         nb::arg("q_decay").noconvert(),
         nb::arg("intra").noconvert(),
         nb::arg("k_dec_t").noconvert(),

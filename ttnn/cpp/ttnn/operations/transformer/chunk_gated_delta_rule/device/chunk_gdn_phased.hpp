@@ -83,8 +83,8 @@ struct ChunkGdnPrepOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Returns {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv} (all fp32, per-chunk DRAM tensors).
-// (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta - kd@S subtraction,
+// Returns {v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv} (all fp32, per-chunk DRAM tensors).
+// (WY hand-off is un-premultiplied: the scan applies t_inv AFTER the v_beta + nkd@S accumulation,
 //  so the inverse's fp error is not amplified by the cancellation.)
 std::vector<Tensor> chunk_gdn_prep(
     const Tensor& q,
@@ -126,8 +126,8 @@ struct ChunkGdnScanParams {
 };
 
 struct ChunkGdnScanInputs {
-    Tensor v_beta;                        // [BH, NC, C, V] fp32  (= v * beta)
-    Tensor kd;                            // [BH, NC, C, K] fp32  (= k_beta * decay_exp)
+    Tensor v_beta;  // [BH, NC, C, V] fp32  (= v * beta)
+    Tensor nkd;  // [BH, NC, C, K] fp32  (= -(k_beta * decay_exp): negated, the scan accumulates v_beta + nkd@S in DST)
     Tensor q_decay;                       // [BH, NC, C, K] fp32
     Tensor intra;                         // [BH, NC, C, C] fp32
     Tensor k_dec_t;                       // [BH, NC, K, C] fp32
@@ -159,7 +159,7 @@ struct ChunkGdnScanOperation {
 // and was removed).
 std::vector<Tensor> chunk_gdn_scan(
     const Tensor& v_beta,
-    const Tensor& kd,
+    const Tensor& nkd,
     const Tensor& q_decay,
     const Tensor& intra,
     const Tensor& k_dec_t,

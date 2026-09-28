@@ -17,6 +17,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
@@ -173,6 +174,25 @@ inline void expc(uint32_t in, uint32_t o, uint32_t n) {
         tile_regs_acquire();
         copy_tile(in, i, 0);
         exp_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o, i);
+        tile_regs_release();
+    }
+    cb_push_back(o, n);
+}
+
+// out = -in, n tiles: exact sign flip on the SFPU (the copy into DST is exact fp32).
+inline void negc(uint32_t in, uint32_t o, uint32_t n) {
+    cb_reserve_back(o, n);
+    pack_reconfig_data_format(o);
+    reconfig_data_format_srca(in);  // unary: in->srcA
+    copy_init(in);
+    negative_tile_init();
+    for (uint32_t i = 0; i < n; i++) {
+        tile_regs_acquire();
+        copy_tile(in, i, 0);
+        negative_tile(0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, i);
@@ -493,13 +513,13 @@ struct GdnPrepCbs {
 // selected per chunk by the caller and passed as cur_S/dst).
 struct GdnScanCbs {
     uint32_t dl, Tinv, out;
-    uint32_t vbeta, kd, qdecay, intra;
+    uint32_t vbeta, nkd, qdecay, intra;
     uint32_t vnew, ointer, kdec_t;
-    uint32_t scr1;
+    uint32_t eye;  // one 32x32 identity tile (fp32), written by the reader at kernel start
 };
 
 // PHASE A (prep): one state-independent (head, chunk) work-item. No recurrent state here; the
-// sequential state scan lives in scan_step. Outputs (per chunk) v_beta, kd(->cb.w), T_inv,
+// sequential state scan lives in scan_step. Outputs (per chunk) v_beta, nkd(->cb.w), T_inv,
 // k_dec_t, q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
 // Ct/Kt/Vt/qk_norm are TEMPLATE parameters (not runtime args): the shape branches below must compile
 // out exactly as the monolithic kernel's `if constexpr` did, or the Ct==2 prep program overflows the
@@ -708,11 +728,17 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 
     {
         GDN_ZONE("pp_kd");
-        // ---- un-premultiplied WY hand-off: output v_beta (cb.vbeta), kd=k_beta*decay_exp (cb.w),
-        // T_inv (cb.Tinv). The scan computes v_new = T_inv @ (v_beta - kd@S), applying the inverse
-        // AFTER the subtraction so its fp error is not amplified by the u - w@S cancellation.
-        bcast_cols_mul(cb.kbeta, cb.decay_exp, cb.w, Ct, Kt);  // kd -> cb.w (output)
+        // ---- un-premultiplied WY hand-off: output v_beta (cb.vbeta), nkd = -(k_beta*decay_exp) (cb.w),
+        // T_inv (cb.Tinv). The scan computes v_new = T_inv @ (v_beta + nkd@S), applying the inverse
+        // AFTER the subtraction so its fp error is not amplified by the u - w@S cancellation. The
+        // operand is handed off NEGATED so the scan forms v_beta + nkd@S as one DST accumulation
+        // (nkd @ S, then I @ v_beta accumulated onto it): the negation is an exact sign flip of the
+        // decay_exp column, staged in cb.decay (popped after decayfac, free from here on).
+        negc(cb.decay_exp, cb.decay, Ct);
+        WAIT(cb.decay, Ct);
+        bcast_cols_mul(cb.kbeta, cb.decay, cb.w, Ct, Kt);  // nkd -> cb.w (output)
         WAIT(cb.w, ck);
+        POP(cb.decay, Ct);
         POP(cb.kbeta, ck);
     }
     // cb.vbeta (v_beta) and cb.Tinv (T_inv) remain pushed for the writer; NOT popped here.
@@ -792,23 +818,45 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     // GDN_HOIST_RECONFIG). Formats are identical either way => bit-exact.
     constexpr bool H = true;
 
-    // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse after the subtraction so the WY
-    // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
-    {
-        GDN_ZONE("st_kdS");
-        WAIT(cb.kd, ck);
-        WAIT(cur_S, kv);
-        mm(cb.kd, cur_S, cb.scr1, Ct, Kt, Vt, false, H);  // kdS = kd @ S -> scr1
-        WAIT(cb.scr1, cv);
-        POP(cb.kd, ck);
-    }
+    // v_new = T_inv @ (v_beta + nkd@S), nkd = -(k_beta*decay_exp) from prep -- apply the inverse
+    // after the subtraction so the WY inverse's fp error is not amplified by the cancellation (vs the
+    // u - w@S form). diff is formed in ONE DST pass of matmul accumulation: nkd @ S, then I @ v_beta
+    // onto the same DST tile (MVMUL adds into DST; only the packer zeroes it at release). This replaces
+    // the packed kd@S, its re-unpack and the eltwise block of the two-block form; the identity matmul
+    // keeps the window inside one op class (no eltwise init or reconfig between the products). One
+    // rounding moves: v_beta enters the sum through srcA like every other matmul operand instead of
+    // through the eltwise add. diff itself must be packed: it is the in1 operand of T_inv @ diff, and
+    // the WAIT on cb.ointer below is what keeps that block's unpacker behind this block's packer.
     {
         GDN_ZONE("st_diff");
+        WAIT(cb.nkd, ck);
         WAIT(cb.vbeta, cv);
-        ew(cb.vbeta, cb.scr1, cb.ointer, cv, EwOp::Sub, H);  // diff = v_beta - kdS -> ointer
-        WAIT(cb.ointer, cv);
+        WAIT(cur_S, kv);
+        cb_reserve_back(cb.ointer, cv);
+        matmul_init(cb.nkd, cur_S, 0);  // one init serves both products: matmul_tiles binds its CBs per call
+        for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
+            const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < nb; j++) {
+                const uint32_t t = t0 + j;
+                const uint32_t mi = t / Vt;
+                const uint32_t ni = t - mi * Vt;
+                for (uint32_t ki = 0; ki < Kt; ki++) {
+                    matmul_tiles(cb.nkd, cur_S, mi * Kt + ki, ki * Vt + ni, j);  // DST[j]  = nkd @ S
+                }
+                matmul_tiles(cb.eye, cb.vbeta, 0, t, j);  // DST[j] += I @ v_beta
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < nb; j++) {
+                pack_tile(j, cb.ointer, t0 + j);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb.ointer, cv);
+        POP(cb.nkd, ck);
+        WAIT(cb.ointer, cv);  // the next block's unpacker must not run ahead of this block's packer
         POP(cb.vbeta, cv);
-        POP(cb.scr1, cv);
     }
     {
         GDN_ZONE("st_vnew");

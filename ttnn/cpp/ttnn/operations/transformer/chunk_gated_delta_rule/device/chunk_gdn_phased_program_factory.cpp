@@ -67,7 +67,7 @@ constexpr uint32_t scr2 = tt::CBIndex::c_29;
 constexpr uint32_t scr3 = tt::CBIndex::c_30;
 constexpr uint32_t s3 = tt::CBIndex::c_31;
 // SCAN aliases. The scan-side indices of the seven per-chunk inputs equal PREP'S OUTPUT indices
-// (v_beta=14, kd=18=w, q_decay=19, intra=20, k_dec_t=24, dl=22=vnew — prep's compute pushes dl
+// (v_beta=14, nkd=18=w, q_decay=19, intra=20, k_dec_t=24, dl=22=vnew — prep's compute pushes dl
 // into its vnew slot — t_inv=13), so the fused program can declare one hand-off CB set on the
 // producer/receiver core union. Scan's v_new scratch took the 11 freed by dl. Pure renumber:
 // the phased path is numerically identical (CB indices never affect the math).
@@ -121,7 +121,7 @@ PrepWorkDist distribute_prep(CoreCoord grid, uint32_t total, uint32_t core_cap) 
 
 // Value-parallel work distribution for SCAN. The chunk recurrence is sequential in TIME, but it
 // factorizes EXACTLY over the value dimension: each V-block S[:, vb] evolves independently (every
-// scan op — kd@S, T_inv@diff, q_decay@S, intra@v_new, k_dec_t@v_new, S*dl — is column-wise in V,
+// scan op — nkd@S, T_inv@diff, q_decay@S, intra@v_new, k_dec_t@v_new, S*dl — is column-wise in V,
 // needing only the full-K shared per-chunk tensors + that block's own V-slice). This mirrors FLA's
 // fwd_h/fwd_o launch grid over (i_v, i_bh) with a sequential loop over time. K is NOT split (v_new
 // and o reduce over all K). We pick the finest V-blocking whose ROW-ALIGNED placement fits the
@@ -324,7 +324,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     auto* ones_buf = in.ones_c.buffer();
     auto* masks_buf = in.masks_c.buffer();
     auto* vb_buf = outputs[0].buffer();    // v_beta
-    auto* kd_buf = outputs[1].buffer();    // kd = k_beta*decay_exp
+    auto* nkd_buf = outputs[1].buffer();   // nkd = -(k_beta*decay_exp)
     auto* qd_buf = outputs[2].buffer();    // q_decay
     auto* it_buf = outputs[3].buffer();    // intra
     auto* kdec_buf = outputs[4].buffer();  // k_dec_t
@@ -357,7 +357,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
              attrs.Hk,
              1u});
         writer.emplace_runtime_args(
-            core, {wi_start, wi_count, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
+            core, {wi_start, wi_count, vb_buf, nkd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
         compute.emplace_runtime_args(core, {wi_count});
     }
 
@@ -390,10 +390,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const uint32_t Vt = sdist.Vtl;  // per-core V-block width; CBs/compute use this
     const uint32_t n_used = static_cast<uint32_t>(sdist.cores.size());
 
-    // V-independent tensors (kd, q_decay, intra, k_dec_t, T_inv, dl) are read in FULL; only the
+    // V-independent tensors (nkd, q_decay, intra, k_dec_t, T_inv, dl) are read in FULL; only the
     // V-dependent CBs (v_beta/state/out/scratch) shrink to the per-core V-block width Vt(=Vtl).
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
-    uint32_t scr = std::max({cc, ck, cv, kv, kc});
 
     ProgramDescriptor desc;
     auto add_cb = [&](uint32_t idx, uint32_t n_tiles, uint32_t nbuf = 1, tt::DataFormat fmt = tt::DataFormat::Float32) {
@@ -405,11 +404,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1: the
+    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds nkd. nbuf=1: the
     // deep-fan-out nbuf=2 prefetch of PR #53804 is deliberately NOT carried in this tree, so the
     // phased path's performance stays identical to main and is a fixed reference for the
     // fused-vs-phased A/Bs built on top of it.
-    // Per-head multicast of the shared V-independent inputs (kd, q_decay, intra, k_dec_t, dl,
+    // Per-head multicast of the shared V-independent inputs (nkd, q_decay, intra, k_dec_t, dl,
     // t_inv): the head's v-block-0 core (leftmost of its 1xNV row rectangle) reads them from DRAM
     // once and multicasts into the sibling cores' CBs — the siblings would otherwise re-read
     // identical DRAM pages (NV-fold read amplification). Needs NV >= 2 to have anyone to share
@@ -422,7 +421,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     constexpr uint32_t sem_valid_id = 1;
 
     add_cb(pcb::vbeta, cv, 1);  // v_beta (prep's vbeta slot, 14)
-    add_cb(pcb::w, ck, 1);      // kd (prep's w slot)
+    add_cb(pcb::w, ck, 1);      // nkd (prep's w slot)
     add_cb(pcb::qdecay, ck, 1);
     add_cb(pcb::intra, cc, 1);
     add_cb(pcb::kdec_t, kc, 1);
@@ -438,7 +437,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     // Scratch.
     add_cb(pcb::scan_vnew, cv);
     add_cb(pcb::ointer, cv);
-    add_cb(pcb::scr1, scr);
+    add_cb(pcb::eye, 1);  // the reader-written identity tile (scan_step's I @ v_beta)
 
     CoreRangeSet sender_set, receiver_set;
     if (do_mcast) {
@@ -471,7 +470,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_ct = ct_args;
     TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.kd.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(*in.nkd.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.q_decay.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.intra.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k_dec_t.buffer()).append_to(reader_ct);
@@ -539,7 +538,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     compute.runtime_args.reserve(n_used);
 
     auto* vb_buf = in.v_beta.buffer();
-    auto* kd_buf = in.kd.buffer();
+    auto* nkd_buf = in.nkd.buffer();
     auto* qd_buf = in.q_decay.buffer();
     auto* it_buf = in.intra.buffer();
     auto* kdec_buf = in.k_dec_t.buffer();
@@ -555,7 +554,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         const uint32_t vb = sdist.vblk[i];
         if (!do_mcast) {
             reader.emplace_runtime_args(
-                core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf});
+                core, {h, vb, NC, vb_buf, nkd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf});
         } else if (vb == 0) {
             // Sender. Its receivers are the 1x(NV-1) rectangle immediately to its right (the
             // row-aligned placement guarantees cores[i+1 .. i+NV-1] are this head's remaining
@@ -570,7 +569,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                  vb,
                  NC,
                  vb_buf,
-                 kd_buf,
+                 nkd_buf,
                  qd_buf,
                  it_buf,
                  kdec_buf,

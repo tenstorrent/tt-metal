@@ -3,7 +3,7 @@
 //
 // Fused prep→scan chunked Gated Delta Rule (ONE prim, ONE program, zero DRAM intermediates):
 // per head, NP PRODUCER cores run the unchanged prep reader+compute and a writer that NoC-writes
-// the 7 computed intermediates (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv) straight into the
+// the 7 computed intermediates (v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv) straight into the
 // CBs of the head's NV RECEIVER cores (each carrying a V-slice) through a credit/valid handshake;
 // the receivers run the unchanged scan compute+writer. NP and NV come from
 // ChunkGdnFusedProgramConfig::num_producers / num_receivers, or from the cost model when unset.

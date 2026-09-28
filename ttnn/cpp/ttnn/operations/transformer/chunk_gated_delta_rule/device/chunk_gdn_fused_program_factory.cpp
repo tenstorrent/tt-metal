@@ -38,7 +38,7 @@
 // writer computes both from the global chunk index (writer_chunk_gdn_fused.cpp). After the F1
 // scan-side CB renumber (scan v_beta 17->14, dl 11->22, v_new 22->11) the seven hand-off indices
 // coincide with prep's output indices, so the same physical CB is prep's output AND scan's input:
-//   v_beta=14  kd=18  q_decay=19  intra=20  k_dec_t=24  dl=22  t_inv=13
+//   v_beta=14  nkd=18  q_decay=19  intra=20  k_dec_t=24  dl=22  t_inv=13
 //
 // Bit-exactness: the compute kernels and the math header are byte-identical to the phased path and
 // the seven intermediates are packed at the same CB boundaries in fp32, so fused == phased bit for
@@ -69,7 +69,7 @@ namespace fcb {
 // The 7 hand-off CBs: prep OUTPUT index == scan INPUT index (that identity is the whole design).
 constexpr uint32_t Tinv = tt::CBIndex::c_13;    // t_inv
 constexpr uint32_t vbeta = tt::CBIndex::c_14;   // v_beta
-constexpr uint32_t kd = tt::CBIndex::c_18;      // kd (prep's cb_w)
+constexpr uint32_t nkd = tt::CBIndex::c_18;     // nkd (prep's cb_w)
 constexpr uint32_t qdecay = tt::CBIndex::c_19;  // q_decay
 constexpr uint32_t intra = tt::CBIndex::c_20;   // intra
 constexpr uint32_t dl = tt::CBIndex::c_22;      // dl (1 tile; prep aliases its cb_vnew slot)
@@ -127,7 +127,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const uint32_t scr = std::max({cc, ck, cv, kv, kc});
     // Receiver-side (V-sliced) tile counts — the phased scan factory's at Vt = Vtl.
     const uint32_t cvl = Ct * Vtl, kvl = Kt * Vtl;
-    const uint32_t scr_l = std::max({cc, ck, cvl, kvl, kc});
 
     const tt::DataFormat df_qkv = tt::DataFormat::Float16_b;  // bf16 q/k/v (prep inputs)
     const uint32_t tile_f32 = tt::tile_size(tt::DataFormat::Float32);
@@ -163,12 +162,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     // (1) The 7 hand-off CBs FIRST, on the UNION core set => same base address on producer and every
     // receiver (the slot-addressing precondition). fp32, PRODUCER sizes, in the receiver's reserve order
-    // (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv). Double-buffered: the producer runs one chunk
+    // (v_beta, nkd, q_decay, intra, k_dec_t, dl, t_inv). Double-buffered: the producer runs one chunk
     // ahead of the receivers' consumption. The writer's explicit destination slots (global c % nbuf, and
     // the v_beta ring) are computed against THIS depth, so kHandoffNbuf travels to the writer as a CT arg.
     const uint32_t kHandoffNbuf = attrs.nbuf;
     add_cb(union_set, fcb::vbeta, cv, kHandoffNbuf);
-    add_cb(union_set, fcb::kd, ck, kHandoffNbuf);
+    add_cb(union_set, fcb::nkd, ck, kHandoffNbuf);
     add_cb(union_set, fcb::qdecay, ck, kHandoffNbuf);
     add_cb(union_set, fcb::intra, cc, kHandoffNbuf);
     add_cb(union_set, fcb::kdec_t, kc, kHandoffNbuf);
@@ -225,7 +224,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(rcv_set, fcb::s2, kvl);
     add_cb(rcv_set, fcb::ointer, cvl);
     add_cb(rcv_set, fcb::final_s, kvl);
-    add_cb(rcv_set, fcb::scr1, scr_l);
+    add_cb(rcv_set, fcb::eye, 1);  // the reader-written identity tile (scan_step's I @ v_beta)
     add_cb(rcv_set, fcb::s3, kvl);
 
     // Handshake semaphores, declared on the UNION so each id resolves to the same L1 address on
