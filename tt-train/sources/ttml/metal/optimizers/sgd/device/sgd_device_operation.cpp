@@ -28,6 +28,16 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
+            tensor.device() == param.device(), "Tensor '{}' must be on the same mesh device as the parameter.", name);
+
+        TT_FATAL(
+            tensor.tensor_topology() == param.tensor_topology(),
+            "Tensor '{}' must have the same mesh topology as the parameter. Expected {}, got {}",
+            name,
+            param.tensor_topology(),
+            tensor.tensor_topology());
+
+        TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Tensor '{}' must be in DRAM. Got buffer type: '{}'",
             name,
@@ -52,6 +62,15 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
+
+        const auto& tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_tile_shape() == tt::tt_metal::Tile::TileShape{32U, 32U} &&
+                tile.get_face_shape() == tt::tt_metal::Tile::FaceShape{16U, 16U} && !tile.get_transpose_within_face() &&
+                !tile.get_transpose_of_faces(),
+            "Tensor '{}' must use the canonical 32x32 TILE page with 16x16 faces and no transposition; got {}",
+            name,
+            tile);
 
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
@@ -83,18 +102,33 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
 
     const auto momentum = args.momentum;
     const auto use_momentum = (momentum > 0.0F);
-    if (use_momentum) {
-        TT_FATAL(
-            momentum_buffer.has_value(),
-            "Momentum buffer must be provided when using momentum. Got momentum value: {}. Please set momentum to "
-            "zero or pass momentum buffer.",
-            momentum);
-    }
+    TT_FATAL(
+        momentum_buffer.has_value() == use_momentum,
+        "Momentum buffer presence must match positive momentum. Got momentum {} and momentum buffer present={}",
+        momentum,
+        momentum_buffer.has_value());
+    TT_FATAL(
+        args.dampening == 0.0F || use_momentum,
+        "Dampening requires positive momentum. Got dampening {} and momentum {}",
+        args.dampening,
+        momentum);
+    TT_FATAL(
+        !args.nesterov || (use_momentum && args.dampening == 0.0F),
+        "Nesterov requires positive momentum and zero dampening. Got momentum {} and dampening {}",
+        momentum,
+        args.dampening);
 }
 
 SGDDeviceOperation::spec_return_value_t SGDDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return tensor_args.param.tensor_spec();
+}
+
+SGDDeviceOperation::topology_return_value_t SGDDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // The output aliases the parameter. Preserve its topology instead of letting generic
+    // multi-input topology inference relabel the parameter before validation.
+    return {tensor_args.param.tensor_topology()};
 }
 
 SGDDeviceOperation::tensor_return_value_t SGDDeviceOperation::create_output_tensors(

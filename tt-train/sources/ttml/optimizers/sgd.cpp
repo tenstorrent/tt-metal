@@ -175,7 +175,7 @@ void SGD::validate_config() const {
                 fmt::format("Nesterov momentum requires a positive momentum! momentum={}", m_config.momentum));
         }
     }
-    if (m_config.dampening != 0.0 && m_config.momentum == 0.0) {
+    if (m_config.dampening != 0.0 && m_config.momentum <= 0.0) {
         throw std::runtime_error(fmt::format("Dampening requires a positive momentum! momentum={}", m_config.momentum));
     }
 }
