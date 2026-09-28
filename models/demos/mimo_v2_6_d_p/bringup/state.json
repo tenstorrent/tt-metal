@@ -2286,7 +2286,7 @@
   "agent": {
    "defs": {
     "models/demos/common/bringup/agents/bringup-engineer.md": {
-     "blob": "d16e869364d823125c06779d789dbc39c303fea4",
+     "blob": "874b140f37e897ed93af3c87748bed94e2c82b9c",
      "dirty": false
     },
     "models/demos/common/bringup/briefs/brief.md": {
@@ -2299,7 +2299,7 @@
     }
    },
    "model": "claude-opus-5-5[1m]",
-   "session_id": "d6ea5343-770d-4f06-97bf-e0ed4509e083"
+   "session_id": "bb3fa8ea-285d-499b-b319-cf4af676f3f8"
   },
   "agent_runs": [
    {
@@ -2355,11 +2355,40 @@
     "seconds": 358.1,
     "session_id": "d6ea5343-770d-4f06-97bf-e0ed4509e083",
     "t": "2026-09-27T23:15:13"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "874b140f37e897ed93af3c87748bed94e2c82b9c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [
+     "changed files outside the allowed paths (revert them): ['models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_02_attention.py']"
+    ],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 690.7,
+    "session_id": "bb3fa8ea-285d-499b-b319-cf4af676f3f8",
+    "t": "2026-09-28T02:56:13"
    }
   ],
   "attempt": 1,
   "attempts": 1,
-  "duration_s": 198.2,
+  "duration_s": 351.9,
   "history": [
    {
     "status": "FAIL",
@@ -2392,19 +2421,31 @@
    {
     "status": "PASS",
     "t": "2026-09-28T01:43:06"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-28T02:44:03"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-28T02:44:42"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-28T03:02:11"
    }
   ],
-  "last_run": "2026-09-28T01:43:06",
+  "last_run": "2026-09-28T03:02:11",
   "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/runs/run1/logs/O.1.log",
   "metrics": {
-   "chunk_seconds_c10": 0.693,
+   "chunk_seconds_c10": 0.519,
    "covered_layers": 6,
    "device_model_hybrid": 0,
-   "fork_calls": 6,
+   "fork_calls": 8,
    "fork_calls_uncovered": 0,
    "fork_tests_failed": 0,
-   "forks_used": 5,
-   "model_load_s": 10.5,
+   "forks_used": 6,
+   "model_load_s": 10.4,
    "pcc_layer_L00": 0.9985762910256748,
    "pcc_layer_L01": 0.9984540712492636,
    "pcc_layer_L02": 0.9984236941059318,
@@ -2424,7 +2465,7 @@
    "pcc_state_value_L03": 0.9993558488430258,
    "pcc_state_value_L04": 0.9995297168246405,
    "pcc_state_value_L05": 0.9995616187888463,
-   "prefill_seconds": 0.693,
+   "prefill_seconds": 0.519,
    "rung_chunk": 5120,
    "rung_seq": 56320,
    "rung_start": 51200,
@@ -2433,7 +2474,7 @@
   "rc": 0,
   "reason": [],
   "role": "optests",
-  "started": "2026-09-28T01:39:48",
+  "started": "2026-09-28T02:56:19",
   "status": "PASS",
   "waiting": null
  },
