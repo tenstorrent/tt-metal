@@ -326,11 +326,30 @@ void bind_sdpa(nb::module_& mod) {
         .value("LOW_PRECISION", ttnn::transformer::SDPAPrecision::LOW_PRECISION);
     mod.def(
         "_sdpa_recipe_compute_program",
-        [](ttnn::transformer::SDPAPrecision precision, DataType kv_type, const CoreRangeSet& grid, uint32_t k_chunks) {
+        [](ttnn::transformer::SDPAPrecision precision,
+           DataType kv_type,
+           const CoreRangeSet& grid,
+           uint32_t k_chunks,
+           uint32_t q_tiles,
+           uint32_t k_tiles,
+           uint32_t d_tiles) {
             namespace recipe = sdpa::detail;
             return recipe::recipe_compute_program(
-                recipe::resolve_precision_policy(recipe::select_recipe(precision, kv_type)), grid, k_chunks);
-        });
+                recipe::resolve_precision_policy(recipe::select_recipe(precision, kv_type)),
+                grid,
+                k_chunks,
+                q_tiles,
+                k_tiles,
+                d_tiles);
+        },
+        nb::arg("precision"),
+        nb::arg("kv_dtype"),
+        nb::arg("grid"),
+        nb::arg("k_chunks"),
+        nb::kw_only(),
+        nb::arg("q_tiles") = 8,
+        nb::arg("k_tiles") = 16,
+        nb::arg("d_tiles") = 4);
     bind_sdpa_recipe_blocking(mod);
     ttnn::bind_function<"prepare_sdpa_input", "ttnn.transformer.">(
         mod,
