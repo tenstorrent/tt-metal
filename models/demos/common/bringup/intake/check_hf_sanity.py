@@ -80,7 +80,6 @@ def main(argv=None):
     a = ap.parse_args(argv)
     torch.set_num_threads(cpu_threads())
     spec = load_spec(a.spec)
-    tok = tokenizer(spec)
 
     try:
         rev = local_revision(hf_path(spec))
@@ -92,6 +91,23 @@ def main(argv=None):
     metrics.record("revision_ok", rev_ok)
     metrics.record("revision_pinned", int(pinned is not None))
 
+    from models.demos.common.bringup.intake.trim_checkpoint import load_marker
+
+    try:
+        marker = load_marker(hf_path(spec))
+    except Exception:  # no local checkpoint dir (e.g. a hub-cache or fixture model)
+        marker = None
+    if marker:  # F47: the checkpoint was trimmed after this check passed; the whole model is gone
+        print(
+            f"checkpoint trimmed to layers 0-{marker['keep_layers'] - 1} at {marker['t']}; replaying the sanity metrics"
+        )
+        for name, value in marker["sanity"].items():
+            if name != "revision_ok":
+                print(f"  {name} = {value} (recorded)")
+                metrics.record(name, value, replayed=True)
+        return
+
+    tok = tokenizer(spec)
     model = load_model(spec)
     sm = spec.get("intake.smoke")
     if sm:
