@@ -231,6 +231,46 @@ def caps_stale(demo_dir):
     return False
 
 
+# RETRY A WEDGE ON THE BOARD THE WEDGE JUST RESET.
+#
+# A trace hang already triggers a reset (perf_test_gen._run_perf_node catches TracyHangError, runs
+# tt-smi -r, and returns the WEDGE). What it does NOT do on this path is try again: the retry loop
+# lives in `generate_perf_test`, which bounds itself at _TRACE_WEDGE_LIMIT, and the gate reaches the
+# capture through `validate_generated_perf_test` instead -- which has none. So the board is reset and
+# the result is then discarded.
+#
+# That costs the whole round. Reaching the capture at all means the correctness gate has just run:
+# ~3.5 h of device work on one Qwen-Image-Edit bring-up. Against that, one more ~10-minute capture on
+# a board that was JUST reset is nearly free, and it is the only way to find out whether the reset
+# actually restored anything. Six rounds over two days each paid the 3.5 h, wedged once, and stopped.
+#
+# `_is_device_disruption` states the case against retrying -- "that already got one reset and must
+# return to the caller as a WEDGE, NOT loop reset+retry (which just re-hangs)". That is why this is
+# BOUNDED AND SMALL (one extra attempt by default) rather than a loop: if it just re-hangs, the cost
+# is one capture and the report now says so with BOTH attempts' evidence; if it does not, the round
+# is saved. Every attempt's detail is kept, so the progression is visible instead of only the last.
+# HOW MANY, from what an attempt costs against what it tells you. A capture runs ~5-15 min (the
+# longest observed was 13); the round it is trying to save is ~3.5 h. The value decays fast, though:
+# attempt 1 establishes the failure, attempt 2 answers the open question (did the reset restore the
+# board?), attempt 3 separates flaky from deterministic -- and past that each 15 minutes buys
+# information already in hand. generate_perf_test's _TRACE_WEDGE_LIMIT of 10 would be up to 2.5 h,
+# as expensive as the round, so it is not reused as a count here.
+_WEDGE_RETRY_ENV = "E2E_TRACE_WEDGE_RETRIES"
+_WEDGE_RETRIES = 2
+
+
+def _wedge_retries() -> int:
+    try:
+        return max(0, int(os.environ.get(_WEDGE_RETRY_ENV, str(_WEDGE_RETRIES))))
+    except ValueError:
+        return _WEDGE_RETRIES
+
+
+def _is_wedge(status, detail) -> bool:
+    """A hang, as opposed to an ordinary invalid/skip verdict the agent should fix in code."""
+    return status == "invalid" and "WEDGE" in (detail or "")
+
+
 def run_fresh_trace_capture(demo_dir, timeout_s=900):
     demo_dir = Path(demo_dir)
     perf = _perf_test(demo_dir)
@@ -243,11 +283,29 @@ def run_fresh_trace_capture(demo_dir, timeout_s=900):
         return read_trace_caps(demo_dir), "perf_test_gen unavailable: %s" % e
     os.environ["TT_PERF_TRACE"] = "1"
     os.environ.setdefault("PERF_MCP_VALIDATE_TIMEOUT", str(timeout_s))
-    try:
-        status, detail = validate_generated_perf_test(perf, task)
-    except Exception as e:  # noqa: BLE001
-        return read_trace_caps(demo_dir), "capture raised: %s" % e
-    return read_trace_caps(demo_dir), "%s %s" % (status, detail or "")
+    attempts = []
+    for attempt in range(1 + _wedge_retries()):
+        try:
+            status, detail = validate_generated_perf_test(perf, task)
+        except Exception as e:  # noqa: BLE001
+            attempts.append("capture raised: %s" % e)
+            break
+        attempts.append("%s %s" % (status, detail or ""))
+        if not _is_wedge(status, detail):
+            break
+        if attempt < _wedge_retries():  # another attempt follows
+            print(
+                "  [trace] capture wedged and the board was reset; retrying the capture on it "
+                "(%d/%d)" % (attempt + 1, _wedge_retries()),
+                flush=True,
+            )
+    # Every attempt is reported, not just the last: "wedged in the same place twice" and "got further
+    # the second time" need opposite fixes, and only the sequence tells them apart.
+    if len(attempts) > 1:
+        joined = "\n".join("attempt %d: %s" % (i + 1, a) for i, a in enumerate(attempts))
+    else:
+        joined = attempts[0] if attempts else "no capture attempted"
+    return read_trace_caps(demo_dir), joined
 
 
 def evaluate_trace_gate(demo_dir, trace_caps=None, allow_no_trace=False, overflow_proof=None, fresh=False):
