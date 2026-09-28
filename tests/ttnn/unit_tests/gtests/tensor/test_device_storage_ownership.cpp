@@ -56,6 +56,15 @@ TensorSpec make_sharded_l1_tensor_spec(const Shape& shape, const std::array<uint
     return TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, memory_config));
 }
 
+// A view of a view: owner holds an 8 KiB shard, `outer` covers bytes [4096, 8192) of it, and `inner` covers
+// bytes [2048, 4096) of `outer`.
+constexpr uint32_t kOuterViewOffset = 4096;
+constexpr uint32_t kInnerViewOffset = 2048;
+
+TensorSpec make_nested_owner_spec() { return make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32}); }
+TensorSpec make_nested_outer_spec() { return make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32}); }
+TensorSpec make_nested_inner_spec() { return make_sharded_l1_tensor_spec(Shape{1, 1, 16, 32}, {16, 32}); }
+
 // ======================================================================================
 // DeviceStorage Ownership Tests
 //
@@ -123,6 +132,58 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRejectsReinterpretedSource) 
         ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("reinterpreted storage is not supported")));
 }
 
+TEST_F(DeviceStorageOwnershipTest, ReinterpretedShardedTensorViewTracksItsSource) {
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, 4096);
+    Tensor reinterpreted = ttnn::unchecked_reinterpret_layout(view, Layout::ROW_MAJOR);
+
+    reinterpreted.deallocate(/*force=*/true);
+    EXPECT_FALSE(reinterpreted.is_allocated());
+    EXPECT_TRUE(view.is_allocated()) << "deallocating a reinterpretation of a view must release only itself";
+    EXPECT_TRUE(owner.is_allocated()) << "deallocating a reinterpretation of a view must not free the owner";
+
+    Tensor second = ttnn::unchecked_reinterpret_layout(view, Layout::ROW_MAJOR);
+    owner.deallocate(/*force=*/true);
+    EXPECT_FALSE(second.is_allocated()) << "a reinterpretation of a view must be invalidated with its source";
+}
+
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocatesWithoutForce) {
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, 4096);
+
+    view.deallocate();
+
+    EXPECT_FALSE(view.is_allocated()) << "a view whose storage is not shared must deallocate without force";
+    EXPECT_TRUE(owner.is_allocated());
+}
+
+TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewDeallocatesWithoutForce) {
+    std::optional<Tensor> outer;
+    std::optional<Tensor> inner;
+    {
+        Tensor owner = ttnn::create_device_tensor(make_nested_owner_spec(), mesh_device_.get());
+        outer.emplace(
+            ttnn::experimental::create_sharded_tensor_view(owner, make_nested_outer_spec(), kOuterViewOffset));
+        inner.emplace(
+            ttnn::experimental::create_sharded_tensor_view(*outer, make_nested_inner_spec(), kInnerViewOffset));
+    }
+
+    // The outer view is shared with the inner view, so it cannot be released without force.
+    outer->deallocate();
+    EXPECT_TRUE(outer->is_allocated());
+
+    // Releasing the inner view leaves the outer view intact, after which the outer view is no longer shared.
+    inner->deallocate();
+    EXPECT_FALSE(inner->is_allocated());
+    EXPECT_TRUE(outer->is_allocated());
+    outer->deallocate();
+    EXPECT_FALSE(outer->is_allocated());
+}
+
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationPreservesOwner) {
     constexpr uint32_t view_offset = 4096;
     const TensorSpec owner_spec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
@@ -188,15 +249,6 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationReleasesRetained
     Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
     EXPECT_EQ(replacement.buffer()->address(), ownerAddress);
 }
-
-// A view of a view: owner holds an 8 KiB shard, `outer` covers bytes [4096, 8192) of it, and `inner` covers
-// bytes [2048, 4096) of `outer`.
-constexpr uint32_t kOuterViewOffset = 4096;
-constexpr uint32_t kInnerViewOffset = 2048;
-
-TensorSpec make_nested_owner_spec() { return make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32}); }
-TensorSpec make_nested_outer_spec() { return make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32}); }
-TensorSpec make_nested_inner_spec() { return make_sharded_l1_tensor_spec(Shape{1, 1, 16, 32}, {16, 32}); }
 
 TEST_F(DeviceStorageOwnershipTest, NestedShardedTensorViewRetainsEverySource) {
     uint32_t owner_address = 0;

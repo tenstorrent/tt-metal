@@ -158,7 +158,13 @@ DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor rei
     DeviceStorage(
         std::make_shared<MeshTensorHolder>(std::move(reinterpreted_mesh_tensor)),
         owning_storage.coords_,
-        owning_storage.get_root_mesh_tensor()) {}
+        owning_storage.mesh_tensor_holder_->is_retained_view() ? nullptr : owning_storage.get_root_mesh_tensor()) {
+    // A reinterpretation of a retained view is itself a retained view of that view: it follows the view's source
+    // chain, and deallocating it releases only the reinterpretation instead of the view's owner.
+    if (owning_storage.mesh_tensor_holder_->is_retained_view()) {
+        mesh_tensor_holder_->retained_owner_ = owning_storage.mesh_tensor_holder_;
+    }
+}
 
 DeviceStorage DeviceStorage::create_retained_view(
     const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) {
@@ -205,6 +211,12 @@ const tt::tt_metal::distributed::MeshBuffer& DeviceStorage::get_root_mesh_buffer
 bool DeviceStorage::is_sole_owner_of_device_memory() const {
     if (!is_allocated()) {
         return false;
+    }
+    // A retained view's underlying MeshTensor is its own: deallocating the view releases only the view, never its
+    // source, so the view needs only its holder to be unshared. Counting the root holder would make deallocate()
+    // without force a no-op for as long as the owner tensor exists.
+    if (mesh_tensor_holder_->is_retained_view()) {
+        return mesh_tensor_holder_.use_count() == 1;
     }
     return mesh_tensor_holder_.use_count() == 1 && get_root_mesh_tensor().use_count() == 1;
 }
