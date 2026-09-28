@@ -1,0 +1,701 @@
+<title>M3 AgentX Prefill Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f3f5f4; --surface: #fcfdfc; --surface-2: #eaeeec; --line: #d5dcd9; --line-2: #c3ccc8;
+  --ink: #111816; --ink-2: #4b5753; --ink-3: #75817d;
+  --accent: #0f6e73; --accent-ink: #ffffff; --accent-soft: #d8ecec;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #e87ba4;
+  --good: #1a7f37; --good-soft: #dcf2e2; --warn: #9a6700; --warn-soft: #fbefd0; --bad: #c2352f; --bad-soft: #f9dedc;
+  --grid: #e3e8e6;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111614; --surface: #171d1b; --surface-2: #1f2724; --line: #2c3632; --line-2: #3a4541;
+    --ink: #eef3f1; --ink-2: #aab6b2; --ink-3: #7f8c88;
+    --accent: #3fb6b8; --accent-ink: #06201f; --accent-soft: #173a3a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #d55181;
+    --good: #4cc26c; --good-soft: #173b23; --warn: #d9a43a; --warn-soft: #3a2e12; --bad: #ec6b62; --bad-soft: #43201e;
+    --grid: #252e2b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111614; --surface: #171d1b; --surface-2: #1f2724; --line: #2c3632; --line-2: #3a4541;
+  --ink: #eef3f1; --ink-2: #aab6b2; --ink-3: #7f8c88;
+  --accent: #3fb6b8; --accent-ink: #06201f; --accent-soft: #173a3a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #d55181;
+  --good: #4cc26c; --good-soft: #173b23; --warn: #d9a43a; --warn-soft: #3a2e12; --bad: #ec6b62; --bad-soft: #43201e;
+  --grid: #252e2b;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45; padding-inline: 16px; padding-block: 0 48px; }
+.wrap { max-width: 1320px; margin: 0 auto; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; letter-spacing: 0.01em; text-wrap: balance; margin: 0; }
+h1 { font-size: 30px; line-height: 1.1; }
+h2 { font-size: 21px; }
+h3 { font-size: 16px; }
+p { margin: 0; max-width: 72ch; }
+.mono, .num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-2); }
+.small { font-size: 12.5px; }
+a { color: var(--accent); }
+header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; padding-block: 22px 14px; }
+header.top .sub { color: var(--ink-2); max-width: 78ch; margin-top: 6px; }
+.eyebrow { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+nav.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 18px; overflow-x: auto; }
+nav.tabs a { padding: 9px 14px; color: var(--ink-2); text-decoration: none; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
+nav.tabs a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+nav.tabs a:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.explore { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .explore { grid-template-columns: 1fr; } }
+aside.rail { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 14px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 8px); max-height: calc(100vh - 16px); overflow-y: auto; }
+@media (max-width: 900px) { aside.rail { position: static; max-height: none; } }
+fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+legend { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding: 0; margin-bottom: 4px; }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) 130px; align-items: center; gap: 8px; }
+.row label { color: var(--ink-2); font-size: 13px; }
+.row.check { grid-template-columns: 18px minmax(0, 1fr); }
+.row.check label { color: var(--ink); }
+select, input[type="number"], input[type="text"] { width: 100%; font: inherit; font-size: 13px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 5px; padding: 5px 7px; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.hint { font-size: 12px; color: var(--ink-3); }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+button { font: inherit; font-weight: 600; border-radius: 6px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:disabled { opacity: 0.55; cursor: progress; }
+.results { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.panel > h2, .panel > h3 { margin-bottom: 8px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; background: var(--surface); }
+.tile .k { font-size: 12px; color: var(--ink-2); }
+.tile .v { font-family: var(--f-display); font-size: 28px; font-weight: 600; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile .v small { font-size: 14px; color: var(--ink-2); font-weight: 500; }
+.tile .d { font-size: 12px; color: var(--ink-3); font-family: var(--f-mono); }
+.charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1100px) { .charts { grid-template-columns: 1fr; } }
+.chart { position: relative; min-width: 0; }
+.chart h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart svg text { fill: var(--ink-3); font-family: var(--f-mono); font-size: 10px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 8px; font-size: 12px; font-family: var(--f-mono); box-shadow: 0 4px 14px rgba(0,0,0,.12); white-space: nowrap; z-index: 5; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; gap: 2px; background: var(--surface); }
+.bar > span { display: block; height: 100%; }
+.status { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
+.prog { flex: 1; height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.prog > span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tablewrap { overflow-x: auto; }
+.pill { display: inline-block; font-family: var(--f-mono); font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+.pill.p0 { background: var(--bad-soft); color: var(--bad); }
+.pill.p1 { background: var(--warn-soft); color: var(--warn); }
+.pill.p2 { background: var(--surface-2); color: var(--ink-3); }
+.pill.good { background: var(--good-soft); color: var(--good); }
+.stages { display: flex; gap: 2px; align-items: flex-end; height: 70px; margin-top: 6px; }
+.stages > div { flex: 1; min-width: 3px; border-radius: 3px 3px 0 0; background: var(--s1); position: relative; }
+.stages > div.dense { background: var(--s2); }
+.stages > div.bott { outline: 2px solid var(--ink); outline-offset: 0; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 16px; font-size: 13px; }
+.kv div span { color: var(--ink-2); }
+.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; flex-wrap: wrap; }
+.seg button { border: 0; border-radius: 0; background: var(--surface); font-weight: 500; padding: 7px 12px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.steps { display: flex; flex-direction: column; gap: 5px; }
+.step { display: grid; grid-template-columns: 210px minmax(0, 1fr) 64px 70px; gap: 10px; align-items: center; font-size: 13px; }
+@media (max-width: 700px) { .step { grid-template-columns: 1fr 58px 60px; } .step .track { grid-column: 1 / -1; order: 3; } }
+.track { position: relative; height: 14px; background: var(--surface-2); border-radius: 3px; }
+.track .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--s1); border-radius: 3px; }
+.track .inf { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--s2); }
+.cols2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 1000px) { .cols2 { grid-template-columns: 1fr; } }
+.prose { display: flex; flex-direction: column; gap: 10px; max-width: 80ch; }
+.prose ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.callout { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; }
+details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div>
+    <div class="eyebrow">MiniMax-M3 pipeline prefill · Blackhole galaxies · AgentX 1M replay</div>
+    <h1>M3 AgentX Prefill Lab</h1>
+    <p class="sub">Replays the full AgentX corpus (393 Claude Code sessions, 98,827 requests, up to 990k context) the way AIPerf's <span class="mono">inferencex-agentx-mvp</span> scenario does, against a per-op roofline of the M3 prefill pipeline calibrated to the #57827 hardware runs. Goodput is useful tok/s (tokens an infinite prefix cache would still have to prefill) at p90 TTFT under the SLO.</p>
+  </div>
+  <div class="small muted mono" id="dataStamp"></div>
+</header>
+<nav class="tabs" aria-label="Sections">
+  <a href="#explore" data-tab="explore">Explore</a>
+  <a href="#roadmap" data-tab="roadmap">Roadmap</a>
+  <a href="#model" data-tab="model">Model &amp; calibration</a>
+  <a href="#method" data-tab="method">Method</a>
+</nav>
+
+<!-- ============================== EXPLORE ============================== -->
+<section id="tab-explore">
+<div class="explore">
+<aside class="rail" aria-label="Configuration">
+  <fieldset>
+    <legend>Preset</legend>
+    <select id="preset" aria-label="Preset"></select>
+    <div class="hint" id="presetDesc"></div>
+  </fieldset>
+  <fieldset>
+    <legend>Hardware &amp; pipeline</legend>
+    <div class="row"><label for="galaxies">Galaxies</label><select id="galaxies"><option>4</option><option>8</option></select></div>
+    <div class="row"><label for="replicas">Pipeline replicas</label><select id="replicas"><option>1</option><option>2</option><option>4</option></select></div>
+    <div class="row"><label for="mesh">Stage mesh [SP,TP]</label><select id="mesh"><option value="2x4">[2,4] 8 chips</option><option value="4x4">[4,4] 16 chips</option><option value="8x4">[8,4] 32 chips</option><option value="4x2">[4,2] 8 chips (TP=2)</option></select></div>
+    <div class="row"><label for="stages">Stages per replica</label><input id="stages" type="number" min="1" max="64" step="1"></div>
+    <div class="row"><label for="split">Layer split</label><select id="split"><option value="auto">auto-balanced</option><option value="even">even</option><option value="custom">custom</option></select></div>
+    <div class="row" id="splitRow" hidden><label for="splitCustom">Layers per stage</label><input id="splitCustom" type="text" placeholder="1,1,1,5,5,..."></div>
+  </fieldset>
+  <fieldset>
+    <legend>Kernels</legend>
+    <div class="row"><label for="opEff">Op efficiency <span class="mono" id="opEffV"></span></label><input id="opEff" type="range" min="0" max="1" step="0.1"></div>
+    <div class="hint">0 = today's measured kernels, 1 = roofline targets (70% matmul, 80% DRAM/link, overlapped expert weight reads).</div>
+    <div class="row check"><input id="boundedDense" type="checkbox"><label for="boundedDense">Bounded dense gather ([0,kv_len))</label></div>
+    <div class="row check"><input id="asyncHandoff" type="checkbox"><label for="asyncHandoff">Async stage handoff</label></div>
+    <div class="row check"><input id="msaLocal" type="checkbox"><label for="msaLocal">MSA SP-local indexer</label></div>
+  </fieldset>
+  <fieldset>
+    <legend>Chunking &amp; batching</legend>
+    <div class="row"><label for="layout">KV layout</label><select id="layout"><option value="fixed">fixed chunk (block-cyclic)</option><option value="var">variable chunk (a2a KV write)</option></select></div>
+    <div class="row"><label for="chunk">Chunk size</label><select id="chunk"><option>1024</option><option>2048</option><option>4096</option><option>5120</option><option>8192</option></select></div>
+    <div class="row check"><input id="batch" type="checkbox"><label for="batch">Batch several requests per chunk</label></div>
+    <div class="row"><label for="budget">Token budget</label><select id="budget"><option>4096</option><option>8192</option><option>16384</option><option>32768</option></select></div>
+    <div class="row"><label for="attn">Attention</label><select id="attn"><option value="seq">sequential per request</option><option value="fused">fused multi-user</option></select></div>
+    <div class="row"><label for="policy">Queue order</label><select id="policy"><option value="fcfs">FCFS</option><option value="srpt">shortest first (30 s aging)</option></select></div>
+  </fieldset>
+  <fieldset>
+    <legend>KV cache</legend>
+    <div class="row"><label for="cache">Residency</label><select id="cache"><option value="slots">static 1M slots</option><option value="pool">slot lanes + paged pool</option><option value="paging">full paging (ideal)</option><option value="inf">infinite cache</option></select></div>
+    <div class="row"><label for="lanes">Lanes per stage</label><input id="lanes" type="number" min="1" max="32" step="1"></div>
+    <div class="row check"><input id="laneArena" type="checkbox"><label for="laneArena">Variable-size lanes (arena)</label></div>
+    <div class="row"><label for="arenaTokens">Arena (M tokens)</label><select id="arenaTokens"><option value="2000000">2</option><option value="4000000">4</option><option value="8000000">8</option></select></div>
+    <div class="row check"><input id="unaligned" type="checkbox"><label for="unaligned">Unaligned resume</label></div>
+    <div class="row check"><input id="hostTier" type="checkbox"><label for="hostTier">Host-DRAM KV tier</label></div>
+    <div class="row"><label for="hostGBPerGalaxy">Host GB / galaxy</label><input id="hostGBPerGalaxy" type="number" min="0" step="128"></div>
+    <div class="row"><label for="pcieGBsPerGalaxy">PCIe GB/s / galaxy</label><input id="pcieGBsPerGalaxy" type="number" min="1" step="8"></div>
+    <div class="row check"><input id="idxDerep" type="checkbox"><label for="idxDerep">index_k stored once (not ×TP)</label></div>
+    <div class="row check"><input id="idxBf16" type="checkbox"><label for="idxBf16">index_k bf16 (off = bf8)</label></div>
+    <div class="row"><label for="reserveGB">Reserve GB / chip</label><input id="reserveGB" type="number" min="0" step="0.5"></div>
+  </fieldset>
+  <fieldset>
+    <legend>Traffic &amp; SLO</legend>
+    <div class="row"><label for="decodeTps">Decode tok/s per request</label><input id="decodeTps" type="number" min="5" step="5"></div>
+    <div class="row"><label for="slo">p90 TTFT SLO (s)</label><input id="slo" type="number" min="0.5" step="0.5"></div>
+    <div class="row"><label for="duration">Profiling window (s)</label><select id="duration"><option>900</option><option>1800</option></select></div>
+    <div class="row"><label for="seed">Seed</label><input id="seed" type="number" min="1" step="1"></div>
+    <div class="row"><label for="concs">Concurrency grid</label><input id="concs" type="text"></div>
+    <div class="row check"><input id="compareInf" type="checkbox" checked><label for="compareInf">Also run with an infinite cache</label></div>
+  </fieldset>
+  <div class="btns">
+    <button class="primary" id="runBtn" type="button">Run sweep</button>
+    <button id="pinBtn" type="button" disabled>Pin as comparison</button>
+  </div>
+</aside>
+
+<div class="results">
+  <div class="panel">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;align-items:baseline">
+      <h2 id="resTitle">Results</h2>
+      <div class="status"><span id="statusTxt">Loading traffic…</span><div class="prog" style="width:120px"><span id="progBar"></span></div></div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+  <div class="panel">
+    <div class="legend" id="legend"></div>
+    <div class="charts">
+      <div class="chart" id="chU"><h4>Useful tok/s vs concurrency</h4></div>
+      <div class="chart" id="chT"><h4>p90 TTFT (s, log) vs concurrency</h4></div>
+      <div class="chart" id="chH"><h4>Prefix-cache hit rate vs concurrency</h4></div>
+    </div>
+    <p class="hint" style="margin-top:6px">Concurrency is AIPerf's lane count: live agent trees, each replaying a session with its recorded (uncapped) idle gaps, sub-agent fan-out and joins. Hover a chart for values.</p>
+  </div>
+  <div class="cols2">
+    <div class="panel">
+      <h3>Where processed tokens go <span class="muted small" id="bdAt"></span></h3>
+      <div class="bar" id="bdBar" style="margin-top:8px"></div>
+      <div class="legend" id="bdLegend" style="margin-top:8px"></div>
+      <p class="hint" id="bdNote"></p>
+    </div>
+    <div class="panel">
+      <h3>Plan <span class="muted small">(updates instantly)</span></h3>
+      <div class="kv" id="planKv" style="margin-top:6px"></div>
+      <div class="stages" id="planStages" aria-label="Per-stage modelled chunk time"></div>
+      <p class="hint" id="planNote" style="margin-top:6px"></p>
+    </div>
+  </div>
+  <details class="panel"><summary>All sweep points</summary><div class="tablewrap" id="ptsTable" style="margin-top:8px"></div></details>
+</div>
+</div>
+</section>
+
+<!-- ============================== ROADMAP ============================== -->
+<section id="tab-roadmap" hidden>
+  <div class="results">
+    <div class="panel prose" id="roadHead"></div>
+    <div class="panel">
+      <h2>Feature priorities</h2>
+      <p class="muted small" style="margin:4px 0 10px">Tier from the leave-one-out loss on the full stack and the greedy gain, across the four scenarios (P0 ≥ 1.25x in any scenario, P1 ≥ 1.07x, P2 below). Scope is a rough engineering estimate.</p>
+      <div class="tablewrap" id="prioTable"></div>
+    </div>
+    <div class="panel">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+        <h2>Greedy roadmap</h2>
+        <div class="seg" id="scSeg" role="group" aria-label="Scenario"></div>
+      </div>
+      <p class="muted small" style="margin:4px 0 10px">From the scenario's baseline (today's configuration: 16x[2,4] or 32x[2,4], chunk 2048, static 1M slots), each row adds the feature with the largest goodput gain. Blue = goodput, orange tick = same stack with an infinite cache.</p>
+      <div class="steps" id="greedy"></div>
+    </div>
+    <div class="cols2">
+      <div class="panel"><h3>Best configurations (grid on the roadmap stack)</h3><div class="tablewrap" id="gridTable" style="margin-top:8px"></div></div>
+      <div class="panel"><h3>Sensitivity of the best configuration</h3><div class="tablewrap" id="sensTable" style="margin-top:8px"></div></div>
+    </div>
+    <div class="panel">
+      <h3>Baseline vs best, this scenario</h3>
+      <div class="legend" id="cmpLegend"></div>
+      <div class="charts"><div class="chart" id="cmpU"><h4>Useful tok/s</h4></div><div class="chart" id="cmpT"><h4>p90 TTFT (s, log)</h4></div><div class="chart" id="cmpH"><h4>Hit rate</h4></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== MODEL ============================== -->
+<section id="tab-model" hidden>
+  <div class="results">
+    <div class="panel prose">
+      <h2>How the cost model is calibrated</h2>
+      <p>Every layer is split into the ops the implementation runs. Each op has a roofline time from its FLOPs, DRAM bytes and ethernet bytes on the stage mesh (Blackhole: 608 TF LoFi / 304 TF HiFi2, 512 GB/s GDDR6, 100 GB/s bidirectional CCL per axis). Its measured efficiency is <span class="mono">roofline / (profiled time − latency floor)</span> from the zone profiles (chunk 5120, 51k cached; [2,4], [8,4], [4,2]; [4,4] interpolated). A pipeline fit on 7,840 per-rank, per-chunk-position medians of the 16-stage runs A/B/C adds the 2D-fabric MoE factor, the dense ring-joint compute and capacity-scan efficiencies, embedding, and the blocking stage handoff. The op-efficiency knob moves every op geometrically from its measured efficiency to the target.</p>
+      <p id="valSummary"></p>
+    </div>
+    <div class="cols2">
+      <div class="panel"><h3>Per-op efficiency, [2,4] MoE/MSA layer</h3><div class="tablewrap" id="effTable" style="margin-top:8px"></div></div>
+      <div class="panel"><h3>Pipeline-level fit</h3><div class="tablewrap" id="pipeTable" style="margin-top:8px"></div></div>
+    </div>
+    <div class="panel"><h3>Replay of the #57827 matrix (16 x [2,4], 4 users)</h3><div class="tablewrap" id="valTable" style="margin-top:8px"></div></div>
+  </div>
+</section>
+
+<!-- ============================== METHOD ============================== -->
+<section id="tab-method" hidden>
+  <div class="panel prose">
+    <h2>Traffic replay</h2>
+    <ul>
+      <li><b>Corpus.</b> <span class="mono">semianalysisai/cc-traces-weka-062126</span>, full variant (contexts up to 990k). Each request is a chain of 64-token block hashes; hashes are prefix-chained, so a block id is a node of the session's prefix tree.</li>
+      <li><b>Lanes.</b> Concurrency N creates N lanes. A lane replays one tree (main agent chain + sub-agents). Its start t* is uniform over the session; every stream active at t* is primed with its last turn before t* (a real prefill, <span class="mono">max_tokens=1</span>), and measurement starts once all primers finish. A drained tree recycles to the next session from turn 0 with a fresh cache-bust marker.</li>
+      <li><b>Timing.</b> Next request = previous end + recorded end-to-start delay, uncapped (main-agent gaps: median 4.9 s, mean 395 s). The only cap is AIPerf's 10 s system-idle cap. Sub-agents spawn when the parent turn returns (or at issue on the overlap path) and the join turn fires when the last child ends. Request end = prefill done + <span class="mono">out / decode tok/s</span>.</li>
+      <li><b>Window.</b> 1800 s profiling; goodput counts requests whose prefill finishes inside it.</li>
+    </ul>
+    <h2>KV residency</h2>
+    <ul>
+      <li><b>Static slots</b> (today): one 1M slot per stream, LRU over idle slots, hit = shared prefix with the stream's previous request, floored to a chunk multiple unless resume is unaligned. Slots are what the memory holds: 20 at 4 galaxies with bf16 index_k replicated ×4.</li>
+      <li><b>Pool</b>: lanes (fixed 1M or arena-allocated at request size) + a content-addressed paged pool with exact LRU over prefix-tree pieces (equivalent to 64-token pages). Copy-in of the hit and copy-out of the new tokens are DRAM-bound per stage and overlapped with a 25% contention charge. Optional host-DRAM tier: device evictions demote to host, host hits are fetched over PCIe before admission, and write-backs share the link.</li>
+      <li><b>Paging</b> = pool without lanes or copies (ideal paged kernels). <b>Infinite</b> = everything stays resident.</li>
+      <li><b>Useful tokens</b> = tokens an infinite prefix cache would prefill. Re-prefill = tokens lost to eviction, alignment or unmaterialised history.</li>
+    </ul>
+    <h2>Pipeline</h2>
+    <ul>
+      <li>Stages process chunks FIFO; a chunk's time per stage is the sum of its layers plus overhead; the blocking send keeps a stage busy after compute; the hop latency delays arrival at the next stage. The in-flight chunk limit is 2S+4.</li>
+      <li>Fixed layout: one request per chunk, padded to the chunk (routed MoE ops use actual tokens). Variable layout: segments padded to 32·SP tokens plus an all-to-all KV write per layer. Batching packs several requests up to the budget; attention runs per request (sequential) or once per chunk (fused), with a core-wave quantization factor.</li>
+      <li>Memory per stage: weights (bf4 experts, bf8 attention, bf16 shared/dense MLP, embedding on stage 0, LM head on the last), a reserve per chip and activation buffers; KV capacity is the minimum over stages.</li>
+    </ul>
+    <h2>Not modelled</h2>
+    <ul>
+      <li>Decode-side capacity and KV migration to decode; decode is a fixed per-request rate.</li>
+      <li>Fragmentation in the lane arena; copy kernels are assumed to be page-list gathers at 50% DRAM efficiency.</li>
+      <li>Host PCIe bandwidth and host DRAM size are assumptions (1 TB and 64 GB/s per galaxy by default); see the sensitivity table.</li>
+    </ul>
+    <p class="muted small">Source: <span class="mono">models/demos/minimax_m3/traffic_sim/</span> (README.md, sim_core.js). Same core runs here in a Web Worker and in node for the study.</p>
+  </div>
+</section>
+</div>
+
+<script type="text/plain" id="simcore">/*__SIM_CORE__*/</script>
+<script type="text/plain" id="trafficB64">__TRAFFIC_B64__</script>
+<script>
+(function () {
+'use strict';
+const CAL = "__CAL__";
+const STUDY = "__STUDY__";
+const PRESETS = "__PRESETS__";
+const VALID = "__VALIDATION__";
+const THEAD = "__TRAFFIC_HEADER__";
+const simText = document.getElementById('simcore').textContent;
+(new Function(simText))();
+const SIM = self.M3SIM;
+const $ = (id) => document.getElementById(id);
+const fmtK = (x) => (x == null || !isFinite(x) ? '–' : x >= 1e4 ? (x / 1000).toFixed(1) + 'k' : x >= 1000 ? (x / 1000).toFixed(2) + 'k' : Math.round(x).toString());
+const fmtS = (x) => (x == null || !isFinite(x) ? '–' : x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2));
+const pct = (x, d = 0) => (x == null || !isFinite(x) ? '–' : (100 * x).toFixed(d) + '%');
+const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+$('dataStamp').textContent = `${THEAD.stats.requests.toLocaleString()} requests · ${(THEAD.stats.input_tokens / 1e9).toFixed(1)}B input tokens · ∞-cache hit ${(100 * THEAD.stats.inf_hit_rate).toFixed(1)}%`;
+
+// ---------------------------------------------------------------- tabs
+const TABS = ['explore', 'roadmap', 'model', 'method'];
+function showTab(t) {
+  if (!TABS.includes(t)) t = 'explore';
+  for (const x of TABS) { $('tab-' + x).hidden = x !== t; }
+  document.querySelectorAll('nav.tabs a').forEach((a) => a.setAttribute('aria-current', a.dataset.tab === t ? 'page' : 'false'));
+}
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+showTab(location.hash.slice(1));
+
+// ---------------------------------------------------------------- traffic + workers
+let trafficBuf = null;
+function decodeTraffic() {
+  const b64 = document.getElementById('trafficB64').textContent.trim();
+  const bin = atob(b64); const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  trafficBuf = u.buffer;
+}
+const GLUE = `
+let TR = null, CAL = null;
+function slim(r, c) {
+  if (r.error) return { conc: c, error: r.error };
+  return { conc: c, usefulTps: r.usefulTps, processedTps: r.processedTps, newTps: r.newTps, ttftP50: r.ttftP50, ttftP90: r.ttftP90, ttftP99: r.ttftP99,
+    hitRate: r.hitRate, infHitRate: r.infHitRate, reprefillFrac: r.reprefillFrac, padFrac: r.padFrac, maxUtil: r.maxUtil, avgChunkTok: r.avgChunkTok,
+    avgSegsPerChunk: r.avgSegsPerChunk, done: r.done, warmupS: r.warmupS };
+}
+onmessage = (e) => {
+  const m = e.data;
+  if (m.init) { TR = M3SIM.loadTraffic(m.buf, m.header); CAL = m.cal; postMessage({ ready: true }); return; }
+  const j = m.job; let over = 0, prevU = -1;
+  for (const c of j.concs) {
+    let r; try { r = M3SIM.simulate(TR, CAL, Object.assign({}, j.cfg, { concurrency: c })); } catch (err) { r = { error: String(err) }; }
+    const p = slim(r, c); postMessage({ id: j.id, point: p });
+    if (p.error) break;
+    if (p.ttftP90 > 4 * j.slo && p.usefulTps <= prevU * 1.02) over++; else over = 0;
+    prevU = Math.max(prevU, p.usefulTps);
+    if (over >= 2) break;
+  }
+  postMessage({ id: j.id, done: true });
+};`;
+let workerUrl = null;
+function mkWorker() {
+  if (!workerUrl) workerUrl = URL.createObjectURL(new Blob([simText, GLUE], { type: 'text/javascript' }));
+  const w = new Worker(workerUrl);
+  w.postMessage({ init: true, buf: trafficBuf.slice(0), header: THEAD, cal: CAL });
+  return w;
+}
+
+// ---------------------------------------------------------------- form <-> cfg
+const FIELDS = ['galaxies', 'replicas', 'mesh', 'stages', 'split', 'opEff', 'boundedDense', 'asyncHandoff', 'msaLocal', 'layout', 'chunk', 'batch', 'budget', 'attn', 'policy',
+  'cache', 'lanes', 'laneArena', 'arenaTokens', 'unaligned', 'hostTier', 'hostGBPerGalaxy', 'pcieGBsPerGalaxy', 'idxDerep', 'idxBf16', 'reserveGB', 'decodeTps', 'duration', 'seed'];
+const NUMS = new Set(['galaxies', 'replicas', 'stages', 'opEff', 'chunk', 'budget', 'lanes', 'arenaTokens', 'hostGBPerGalaxy', 'pcieGBsPerGalaxy', 'reserveGB', 'decodeTps', 'duration', 'seed']);
+function setForm(cfg) {
+  const c = Object.assign({}, SIM.DEFAULTS, cfg);
+  for (const f of FIELDS) {
+    const el = $(f); let v = c[f];
+    if (f === 'mesh') v = v.join('x');
+    if (f === 'split') { if (Array.isArray(v)) { $('splitCustom').value = v.join(','); v = 'custom'; } }
+    if (el.type === 'checkbox') el.checked = !!v; else el.value = String(v);
+  }
+  $('splitRow').hidden = $('split').value !== 'custom';
+  syncUi();
+}
+function getCfg() {
+  const c = {};
+  for (const f of FIELDS) {
+    const el = $(f); let v = el.type === 'checkbox' ? el.checked : el.value;
+    if (NUMS.has(f)) v = Number(v);
+    if (f === 'mesh') v = v.split('x').map(Number);
+    c[f] = v;
+  }
+  if (c.split === 'custom') c.split = $('splitCustom').value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0);
+  return c;
+}
+function syncUi() {
+  $('opEffV').textContent = Number($('opEff').value).toFixed(1);
+  $('splitRow').hidden = $('split').value !== 'custom';
+  const pool = $('cache').value === 'pool';
+  for (const id of ['lanes', 'laneArena', 'hostTier', 'hostGBPerGalaxy', 'pcieGBsPerGalaxy']) $(id).disabled = !pool;
+  $('arenaTokens').disabled = !pool || !$('laneArena').checked;
+  $('lanes').disabled = !pool || $('laneArena').checked;
+  $('budget').disabled = !$('batch').checked; $('attn').disabled = !$('batch').checked;
+  $('unaligned').disabled = $('layout').value === 'var';
+}
+function presetOptions() {
+  const sel = $('preset');
+  sel.innerHTML = PRESETS.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('') + '<option value="-1">custom</option>';
+  sel.addEventListener('change', () => { const i = Number(sel.value); if (i >= 0) { setForm(PRESETS[i].cfg); $('presetDesc').textContent = PRESETS[i].desc; updatePlan(); } });
+}
+document.querySelector('aside.rail').addEventListener('input', (e) => {
+  if (e.target.id === 'preset') return;
+  if (FIELDS.includes(e.target.id) || e.target.id === 'splitCustom') { $('preset').value = '-1'; $('presetDesc').textContent = 'Custom configuration.'; }
+  syncUi(); updatePlan();
+});
+
+// ---------------------------------------------------------------- plan preview
+function updatePlan() {
+  const cfg = getCfg();
+  let plan;
+  try { plan = SIM.makePlan(cfg, CAL); } catch (e) { $('planNote').textContent = String(e); return; }
+  const T = cfg.batch ? cfg.budget : cfg.chunk;
+  const kv = 140000;
+  const o = new Float64Array(plan.S);
+  SIM.chunkStageMs(plan, T, [{ n: T, na: T, k: kv, cap: cfg.cache === 'slots' ? cfg.slotLen || 1048576 : (cfg.cache === 'pool' && !cfg.laneArena ? 1048576 : kv + T) }], o);
+  const blk = plan.blockMs(T); const mx = Math.max(...o);
+  const ceiling = T / (mx + blk) * 1000 * cfg.replicas;
+  const kvS = [];
+  kvS.push(['Chips', `${plan.S * plan.P * cfg.replicas} (${cfg.replicas} x ${plan.S} x ${plan.P})`]);
+  kvS.push(['KV capacity / replica', `${(plan.capTok / 1e6).toFixed(1)} M tokens`]);
+  if (cfg.cache === 'slots') kvS.push(['Static 1M slots', `${plan.nSlots}`]);
+  if (cfg.cache === 'pool') { kvS.push(['Paged pool', `${(plan.poolTok / 1e6).toFixed(1)} M tokens`]); kvS.push([cfg.laneArena ? 'Lane arena' : 'Lanes', cfg.laneArena ? `${(plan.arena / 1e6).toFixed(0)} M tokens` : `${plan.lanes} x 1M`]); }
+  if (plan.hostTok > 0) kvS.push(['Host tier', `${(plan.hostTok / 1e6).toFixed(0)} M tokens`]);
+  kvS.push(['KV bytes / token', `${(plan.kvbL * 60 / 1000).toFixed(1)} KB`]);
+  kvS.push(['Ceiling @140k cached', `${fmtK(ceiling)} processed tok/s`]);
+  $('planKv').innerHTML = kvS.map(([k, v]) => `<div><span>${k}</span><br><b class="mono">${v}</b></div>`).join('');
+  const bi = o.indexOf(mx);
+  $('planStages').innerHTML = Array.from(o).map((t, s) => `<div class="${plan.stages[s].nd ? 'dense' : ''} ${s === bi ? 'bott' : ''}" style="height:${Math.max(4, 100 * t / mx)}%" title="stage ${s}: ${plan.counts[s]} layers${plan.stages[s].nd ? ' (' + plan.stages[s].nd + ' dense)' : ''}, ${t.toFixed(1)} ms"></div>`).join('');
+  const errs = plan.errors.length ? ' Warnings: ' + plan.errors.join('; ') + '.' : '';
+  $('planNote').textContent = `Split ${plan.counts.join(',')}. Bars: modelled ms per stage for one ${T}-token chunk at 140k cached (orange = holds a dense layer, outlined = bottleneck ${mx.toFixed(1)} ms + ${blk.toFixed(1)} ms blocking send).${errs}`;
+}
+
+// ---------------------------------------------------------------- charts
+function lineChart(el, series, opt) {
+  const W = 360, H = 190, m = { l: 44, r: 10, t: 8, b: 26 };
+  el.querySelectorAll('svg,.tip').forEach((n) => n.remove());
+  series = series.map((s) => Object.assign({}, s, { points: s.points.filter((p) => isFinite(p.y) && (!opt.yLog || p.y > 0)) }));
+  const pts = series.flatMap((s) => s.points);
+  if (!pts.length) { el.insertAdjacentHTML('beforeend', `<svg viewBox="0 0 ${W} ${H}"><text x="${W / 2}" y="${H / 2}" text-anchor="middle">run a sweep</text></svg>`); return; }
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = opt.yMin != null ? opt.yMin : 0, y1 = opt.yMax != null ? opt.yMax : Math.max(...ys, opt.ref || 0) * 1.08;
+  if (opt.yLog) { y0 = Math.max(0.1, Math.min(...ys.filter((y) => y > 0), opt.ref || 1) / 1.5); y1 = Math.max(...ys, opt.ref || 1) * 1.5; }
+  const lx = (x) => Math.log(x);
+  const X = (x) => m.l + (W - m.l - m.r) * (x1 === x0 ? 0.5 : (lx(x) - lx(x0)) / (lx(x1) - lx(x0)));
+  const Y = (y) => { if (opt.yLog) { const v = Math.max(y0, Math.min(y1, y)); return H - m.b - (H - m.t - m.b) * (Math.log(v) - Math.log(y0)) / (Math.log(y1) - Math.log(y0)); } return H - m.b - (H - m.t - m.b) * (Math.min(y1, y) - y0) / (y1 - y0); };
+  let g = '';
+  // y ticks
+  let yt = [];
+  if (opt.yLog) { for (let e = Math.floor(Math.log10(y0)); e <= Math.ceil(Math.log10(y1)); e++) for (const k of [1, 3]) { const v = k * 10 ** e; if (v >= y0 && v <= y1) yt.push(v); } }
+  else { const step = niceStep((y1 - y0) / 4); for (let v = Math.ceil(y0 / step) * step; v <= y1 + 1e-9; v += step) yt.push(v); }
+  for (const v of yt) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${cssv('--grid')}" stroke-width="1"/><text x="${m.l - 6}" y="${Y(v) + 3}" text-anchor="end">${opt.yFmt(v)}</text>`;
+  // x ticks at data concurrencies (thinned)
+  const ux = [...new Set(xs)].sort((a, b) => a - b); let lastX = -1e9;
+  for (const v of ux) { const px = X(v); if (px - lastX < 30) continue; lastX = px; g += `<text x="${px}" y="${H - m.b + 14}" text-anchor="middle">${v}</text>`; }
+  g += `<text x="${W - m.r}" y="${H - 2}" text-anchor="end">concurrency (lanes)</text>`;
+  if (opt.ref) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(opt.ref)}" y2="${Y(opt.ref)}" stroke="${cssv('--ink-3')}" stroke-dasharray="4 3" stroke-width="1"/><text x="${W - m.r}" y="${Y(opt.ref) - 4}" text-anchor="end">SLO ${opt.ref}s</text>`;
+  for (const s of series) {
+    if (!s.points.length) continue;
+    const d = s.points.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    for (const p of s.points) g += `<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="3.2" fill="${s.color}" stroke="${cssv('--surface')}" stroke-width="1.5"/>`;
+  }
+  g += `<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${H - m.b}" stroke="${cssv('--ink-3')}" stroke-width="1" visibility="hidden"/>`;
+  el.insertAdjacentHTML('beforeend', `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(el.querySelector('h4').textContent)}">${g}<rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/></svg><div class="tip" hidden></div>`);
+  const svg = el.querySelector('svg'), tip = el.querySelector('.tip'), xh = svg.querySelector('.xh');
+  svg.addEventListener('mousemove', (ev) => {
+    const r = svg.getBoundingClientRect(); const px = (ev.clientX - r.left) * W / r.width;
+    let best = null; for (const v of ux) if (!best || Math.abs(X(v) - px) < Math.abs(X(best) - px)) best = v;
+    xh.setAttribute('x1', X(best)); xh.setAttribute('x2', X(best)); xh.setAttribute('visibility', 'visible');
+    const rows = series.map((s) => { const p = s.points.find((q) => q.x === best); return p ? `<div><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${s.color};margin-right:5px"></i>${esc(s.name)}: <b>${opt.yFmt(p.y)}</b></div>` : ''; }).join('');
+    tip.innerHTML = `<div>C = ${best}</div>${rows}`; tip.hidden = false;
+    const tx = X(best) * r.width / W; tip.style.left = Math.min(r.width - tip.offsetWidth - 4, Math.max(0, tx + 10)) + 'px'; tip.style.top = '22px';
+  });
+  svg.addEventListener('mouseleave', () => { tip.hidden = true; xh.setAttribute('visibility', 'hidden'); });
+}
+function niceStep(x) { const e = 10 ** Math.floor(Math.log10(x)); const f = x / e; return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * e; }
+function drawTriple(ids, series, slo) {
+  lineChart($(ids[0]), series.map((s) => ({ name: s.name, color: s.color, points: s.pts.map((p) => ({ x: p.conc, y: p.usefulTps })) })), { yFmt: fmtK });
+  lineChart($(ids[1]), series.map((s) => ({ name: s.name, color: s.color, points: s.pts.map((p) => ({ x: p.conc, y: p.ttftP90 })) })), { yFmt: fmtS, yLog: true, ref: slo });
+  lineChart($(ids[2]), series.map((s) => ({ name: s.name, color: s.color, points: s.pts.map((p) => ({ x: p.conc, y: p.hitRate })) })), { yFmt: (v) => pct(v), yMin: 0, yMax: 1 });
+}
+
+// ---------------------------------------------------------------- goodput (same rule as lib/pool.js)
+function summarize(points, slo) {
+  let best = null, g = 0, peak = null;
+  const pts = points.filter((p) => !p.error).sort((a, b) => a.conc - b.conc);
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]; if (!peak || p.usefulTps > peak.usefulTps) peak = p;
+    if (p.ttftP90 <= slo) {
+      if (!best || p.usefulTps > best.usefulTps) best = p; g = Math.max(g, p.usefulTps);
+      const q = pts[i + 1];
+      if (q && q.ttftP90 > slo && q.usefulTps > p.usefulTps) { const w = (Math.log(slo) - Math.log(Math.max(1e-3, p.ttftP90))) / (Math.log(q.ttftP90) - Math.log(Math.max(1e-3, p.ttftP90))); g = Math.max(g, p.usefulTps + Math.min(1, Math.max(0, w)) * (q.usefulTps - p.usefulTps)); }
+    }
+  }
+  return { goodput: g, at: best, peak };
+}
+
+// ---------------------------------------------------------------- run
+let run = null, pinned = null, workers = [];
+function colors() { return { cfg: cssv('--s1'), inf: cssv('--s2'), pin: cssv('--s3') }; }
+function render() {
+  const slo = Number($('slo').value);
+  const C = colors();
+  const series = [];
+  if (run) { series.push({ name: 'this config', color: C.cfg, pts: run.real }); if (run.inf.length) series.push({ name: 'same, infinite cache', color: C.inf, pts: run.inf }); }
+  if (pinned) series.push({ name: 'pinned: ' + pinned.name, color: C.pin, pts: pinned.real });
+  $('legend').innerHTML = series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('');
+  drawTriple(['chU', 'chT', 'chH'], series, slo);
+  const R = run ? summarize(run.real, slo) : null, I = run && run.inf.length ? summarize(run.inf, slo) : null, P = pinned ? summarize(pinned.real, slo) : null;
+  const a = R && R.at;
+  const tiles = [
+    ['Goodput', R ? fmtK(R.goodput) : '–', 'useful tok/s @ p90 ≤ ' + slo + ' s', P ? `pinned ${fmtK(P.goodput)} (${R && P.goodput ? (R.goodput / P.goodput).toFixed(2) + 'x' : '–'})` : ''],
+    ['With infinite cache', I ? fmtK(I.goodput) : '–', 'same config, nothing evicted', R && I && I.goodput ? `real = ${pct(R.goodput / I.goodput)} of ∞` : ''],
+    ['TTFT at goodput point', a ? `${fmtS(a.ttftP50)}<small> / ${fmtS(a.ttftP90)} s</small>` : '–', 'p50 / p90', a ? `C = ${a.conc} lanes` : ''],
+    ['Hit rate there', a ? pct(a.hitRate, 1) : '–', 'prefix-cache hit, token-weighted', a ? `∞-cache ${pct(a.infHitRate, 1)}` : ''],
+    ['Peak useful', R && R.peak ? fmtK(R.peak.usefulTps) : '–', 'any TTFT', R && R.peak ? `C = ${R.peak.conc}, p90 ${fmtS(R.peak.ttftP90)} s` : ''],
+  ];
+  $('tiles').innerHTML = tiles.map(([k, v, s, d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="k">${s}</div><div class="d">${d}</div></div>`).join('');
+  // breakdown
+  const bp = a || (R && R.peak);
+  if (bp) {
+    const proc = bp.processedTps, pad = bp.padFrac * proc, nw = proc - pad, rep = bp.reprefillFrac * nw, use = nw - rep;
+    const parts = [['useful', use, cssv('--s1')], ['re-prefill (evicted / misaligned)', rep, cssv('--s2')], ['padding', pad, cssv('--ink-3')]];
+    $('bdBar').innerHTML = parts.map(([n, v, c]) => `<span style="width:${100 * v / proc}%;background:${c}" title="${n}: ${fmtK(v)} tok/s"></span>`).join('');
+    $('bdLegend').innerHTML = parts.map(([n, v, c]) => `<span><i style="background:${c};height:8px;width:8px"></i>${n} <b class="mono">${fmtK(v)}</b> (${pct(v / proc)})</span>`).join('');
+    $('bdAt').textContent = `at C = ${bp.conc}`;
+    $('bdNote').textContent = `Processed ${fmtK(proc)} tok/s, bottleneck-stage busy ${pct(bp.maxUtil)}, average chunk ${Math.round(bp.avgChunkTok)} tokens with ${bp.avgSegsPerChunk.toFixed(1)} requests.`;
+  } else { $('bdBar').innerHTML = ''; $('bdLegend').innerHTML = ''; $('bdNote').textContent = ''; }
+  // points table
+  const rows = [];
+  for (const [nm, arr] of [['config', run ? run.real : []], ['∞ cache', run ? run.inf : []]]) for (const p of arr) rows.push(`<tr><td>${nm}</td><td class="n">${p.conc}</td><td class="n">${fmtK(p.usefulTps)}</td><td class="n">${fmtK(p.processedTps)}</td><td class="n">${fmtS(p.ttftP50)}</td><td class="n">${fmtS(p.ttftP90)}</td><td class="n">${pct(p.hitRate, 1)}</td><td class="n">${pct(p.reprefillFrac)}</td><td class="n">${pct(p.padFrac)}</td><td class="n">${pct(p.maxUtil)}</td><td class="n">${Math.round(p.avgChunkTok)}</td></tr>`);
+  $('ptsTable').innerHTML = rows.length ? `<table><thead><tr><th>run</th><th class="n">C</th><th class="n">useful</th><th class="n">processed</th><th class="n">TTFT p50</th><th class="n">p90</th><th class="n">hit</th><th class="n">re-prefill</th><th class="n">pad</th><th class="n">util</th><th class="n">chunk</th></tr></thead><tbody>${rows.join('')}</tbody></table>` : '<p class="hint">No run yet.</p>';
+}
+function startRun() {
+  if (!trafficBuf) decodeTraffic();
+  const cfg = getCfg();
+  const plan = SIM.makePlan(cfg, CAL);
+  const fatal = plan.errors.filter((e) => !e.startsWith('no profile'));
+  if (fatal.length) { $('statusTxt').textContent = 'Fix the configuration: ' + fatal.join('; '); return; }
+  const concs = $('concs').value.split(',').map((x) => Number(x.trim())).filter((x) => x > 0).sort((a, b) => a - b);
+  const slo = Number($('slo').value);
+  const name = $('preset').value >= 0 ? PRESETS[Number($('preset').value)].name : 'custom';
+  run = { name, cfg, real: [], inf: [] };
+  const jobs = [{ id: 'real', cfg }];
+  if ($('compareInf').checked && cfg.cache !== 'inf') jobs.push({ id: 'inf', cfg: Object.assign({}, cfg, { cache: 'inf', hostTier: false }) });
+  $('runBtn').disabled = true; $('pinBtn').disabled = true;
+  let pending = jobs.length; const total = concs.length * jobs.length; let got = 0; const t0 = performance.now();
+  $('statusTxt').textContent = 'Simulating…'; $('progBar').style.width = '0%';
+  $('resTitle').textContent = 'Results: ' + name;
+  jobs.forEach((j, i) => {
+    const w = workers[i] || (workers[i] = mkWorker());
+    w.onmessage = (e) => {
+      const m = e.data; if (m.ready) return;
+      if (m.point) { run[m.id].push(m.point); got++; $('progBar').style.width = (100 * got / total) + '%'; render(); }
+      if (m.done) { if (--pending === 0) { $('runBtn').disabled = false; $('pinBtn').disabled = false; $('progBar').style.width = '100%'; $('statusTxt').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(1)} s`; render(); } }
+    };
+    w.postMessage({ job: { id: j.id, cfg: j.cfg, concs, slo } });
+  });
+}
+$('runBtn').addEventListener('click', startRun);
+$('pinBtn').addEventListener('click', () => { if (run) { pinned = { name: run.name, real: run.real.slice() }; render(); } });
+$('slo').addEventListener('change', render);
+
+// ---------------------------------------------------------------- roadmap
+const FEAT = Object.fromEntries(STUDY.features.map((f) => [f.key, f]));
+const SCS = Object.keys(STUDY.scenarios);
+let curSc = SCS[0];
+function tierOf(key) {
+  let best = 1;
+  for (const sk of SCS) {
+    const S = STUDY.scenarios[sk];
+    const l = S.loo.find((x) => x.remove === key); if (l && S.full && l.goodput > 0) best = Math.max(best, S.full.goodput / l.goodput);
+    const gi = S.greedy.findIndex((g) => g.add === key); if (gi > 0 && S.greedy[gi - 1].goodput > 0) best = Math.max(best, S.greedy[gi].goodput / S.greedy[gi - 1].goodput);
+  }
+  return { tier: best >= 1.25 ? 'P0' : best >= 1.07 ? 'P1' : 'P2', score: best };
+}
+function renderRoadmap() {
+  const rows = STUDY.features.map((f) => {
+    const t = tierOf(f.key);
+    const cells = SCS.map((sk) => {
+      const S = STUDY.scenarios[sk];
+      const gi = S.greedy.findIndex((g) => g.add === f.key);
+      const gain = gi > 0 && S.greedy[gi - 1].goodput > 0 ? S.greedy[gi].goodput / S.greedy[gi - 1].goodput : null;
+      const l = S.loo.find((x) => x.remove === f.key);
+      const loss = l && l.goodput > 0 && S.full ? S.full.goodput / l.goodput : null;
+      return `<td class="n">${gain ? '×' + gain.toFixed(2) + ` <span class="muted">#${gi}</span>` : '–'}</td><td class="n">${loss ? '×' + loss.toFixed(2) : '–'}</td>`;
+    }).join('');
+    return { t, html: `<tr><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td>${esc(f.name)}${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span> <span class="small muted">${f.scope ? esc(f.scope[1]) : ''}</span></td><td class="small muted">${f.scope ? esc(f.scope[2]) : ''}</td></tr>` };
+  }).sort((a, b) => b.t.score - a.t.score);
+  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2">${esc(STUDY.scenarios[sk].label)}<br><span class="muted">greedy · LOO</span></th>`).join('')}<th>scope</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
+  $('scSeg').innerHTML = SCS.map((sk) => `<button type="button" data-sc="${sk}" aria-pressed="${sk === curSc}">${esc(STUDY.scenarios[sk].label)}</button>`).join('');
+  $('scSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { curSc = b.dataset.sc; renderRoadmap(); }));
+  const S = STUDY.scenarios[curSc];
+  const mx = Math.max(...S.greedy.map((g) => Math.max(g.goodput, g.inf || 0)), 1);
+  $('greedy').innerHTML = S.greedy.map((g, i) => {
+    const gain = i ? g.goodput / Math.max(1, S.greedy[i - 1].goodput) : null;
+    const nm = g.add ? FEAT[g.add].name : 'Baseline (today)';
+    return `<div class="step"><div>${esc(nm)}</div><div class="track"><div class="fill" style="width:${100 * g.goodput / mx}%"></div>${g.inf ? `<div class="inf" style="left:${100 * g.inf / mx}%" title="infinite cache ${fmtK(g.inf)}"></div>` : ''}</div><div class="mono n" style="text-align:right">${fmtK(g.goodput)}</div><div class="mono small ${gain && gain >= 1.07 ? '' : 'muted'}" style="text-align:right">${gain ? '×' + gain.toFixed(2) : ''}</div></div>`;
+  }).join('');
+  const topo = (e) => `${e.stages}x[${e.mesh}]${e.replicas > 1 ? ' ×' + e.replicas : ''}`;
+  $('gridTable').innerHTML = `<table><thead><tr><th>topology</th><th class="n">budget / chunk</th><th class="n">lanes</th><th class="n">goodput</th><th class="n">p90</th><th class="n">hit</th><th></th></tr></thead><tbody>${S.grid.slice(0, 8).map((g, i) => `<tr><td class="mono">${topo(g.extra)}</td><td class="n">${g.extra.budget || g.extra.chunk}</td><td class="n">${g.extra.arenaTokens ? (g.extra.arenaTokens / 1e6) + 'M arena' : g.extra.lanes || '–'}</td><td class="n">${fmtK(g.goodput)}</td><td class="n">${g.at ? fmtS(g.at.ttftP90) : '–'}</td><td class="n">${g.at ? pct(g.at.hitRate) : '–'}</td><td>${i === 0 ? '<button type="button" id="loadBest">Load</button>' : ''}</td></tr>`).join('')}</tbody></table><p class="hint" style="margin-top:6px">[4,2] = TP=2 stage; today's KV allocation assumes one KV head per chip (TP=4), so it needs a KV-head sharding change.</p>`;
+  const lb = $('loadBest'); if (lb) lb.addEventListener('click', () => { const i = PRESETS.findIndex((p) => p.name === 'best-' + curSc); if (i >= 0) { $('preset').value = String(i); $('preset').dispatchEvent(new Event('change')); location.hash = 'explore'; } });
+  $('sensTable').innerHTML = `<table><thead><tr><th>variant</th><th class="n">goodput</th><th class="n">vs best</th></tr></thead><tbody>${S.sens.map((s) => `<tr><td>${esc(s.name === 'SLO-free peak' ? 'peak useful (no SLO)' : s.name)}</td><td class="n">${fmtK(s.name === 'SLO-free peak' ? s.peak : s.goodput)}</td><td class="n">${s.name === 'SLO-free peak' ? '' : '×' + (s.goodput / Math.max(1, S.grid[0].goodput)).toFixed(2)}</td></tr>`).join('')}</tbody></table>`;
+  const C = colors();
+  const ser = [{ name: 'baseline (today)', color: C.pin, pts: S.curves.base }, { name: 'best configuration', color: C.cfg, pts: S.curves.best }];
+  $('cmpLegend').innerHTML = ser.map((s) => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join('');
+  drawTriple(['cmpU', 'cmpT', 'cmpH'], ser, STUDY.slo);
+  // headline
+  const g0 = STUDY.scenarios.g4_k0, g1 = STUDY.scenarios.g4_k1, h0 = STUDY.scenarios.g8_k0, h1 = STUDY.scenarios.g8_k1;
+  const top = STUDY.features.map((f) => [f, tierOf(f.key)]).filter(([, t]) => t.tier === 'P0').map(([f]) => f.key);
+  $('roadHead').innerHTML = `<h2>What moves goodput on AgentX</h2>
+  <p>Goodput = useful tok/s with p90 TTFT ≤ ${STUDY.slo} s. Baseline → best configuration found: <b>4 galaxies</b> ${fmtK(g0.greedy[0].goodput)} → <b>${fmtK(g0.grid[0].goodput)}</b> with today's kernels, ${fmtK(g1.grid[0].goodput)} with roofline kernels; <b>8 galaxies</b> ${fmtK(h0.greedy[0].goodput)} → <b>${fmtK(h0.grid[0].goodput)}</b> today, ${fmtK(h1.grid[0].goodput)} with roofline kernels.</p>
+  <p>P0 features: ${top.map((k) => `<span class="pill p0">${esc(k)}</span>`).join(' ')}. The ordering, gains and scope are below; hover the orange ticks for the infinite-cache ceiling of each step.</p>`;
+}
+
+// ---------------------------------------------------------------- model tab
+function renderModel() {
+  const errs = []; const rows = [];
+  for (const v of VALID) {
+    const [run, c, n, mT, xT, mI, xI] = v;
+    const e1 = xT ? mT / xT - 1 : null, e2 = xI ? mI / xI - 1 : null;
+    if (e1 != null) errs.push(Math.abs(e1)); if (e2 != null) errs.push(Math.abs(e2));
+    const cls = (e) => (e == null ? '' : Math.abs(e) > 0.1 ? 'style="color:var(--bad)"' : '');
+    rows.push(`<tr><td>${run}</td><td class="n">${c.toLocaleString()}</td><td class="n">${n.toLocaleString()}</td><td class="n">${fmtK(mT)}</td><td class="n">${fmtK(xT)}</td><td class="n" ${cls(e1)}>${e1 == null ? '–' : (100 * e1).toFixed(0) + '%'}</td><td class="n">${mI}</td><td class="n">${xI == null ? '–' : Math.round(xI)}</td><td class="n" ${cls(e2)}>${e2 == null ? '–' : (100 * e2).toFixed(0) + '%'}</td></tr>`);
+  }
+  errs.sort((a, b) => a - b);
+  $('valSummary').innerHTML = `Replaying the ${VALID.length} matrix cells of runs A (chunk 5120, even split), B (5120, split 1,1,1,5x5,4x8) and C (2048, same split): |error| median <b>${(100 * errs[Math.floor(errs.length / 2)]).toFixed(1)}%</b>, p90 <b>${(100 * errs[Math.floor(0.9 * errs.length)]).toFixed(1)}%</b>, max ${(100 * errs[errs.length - 1]).toFixed(1)}% over loaded new tok/s and idle TTFT.`;
+  $('valTable').innerHTML = `<table><thead><tr><th>run</th><th class="n">cached</th><th class="n">new</th><th class="n">loaded tok/s model</th><th class="n">measured</th><th class="n">err</th><th class="n">idle TTFT ms model</th><th class="n">measured</th><th class="n">err</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  const eff = CAL.effs['2x4'];
+  const tgt = { matmul: 0.7, dram: 0.8, link: 0.8 };
+  const cls = { norm_ag: 'link', qkv: 'matmul', idx_branch: 'matmul', misc: 'dram', o_proj: 'matmul', attn_rs: 'link', shared: 'matmul', router: 'matmul', dispatch: 'link', experts: 'matmul', combine: 'link', moe_reduce: 'dram', ag_kv: 'link', ag_idx: 'link', indexer: 'matmul', sparse: 'matmul' };
+  $('effTable').innerHTML = `<table><thead><tr><th>op</th><th class="n">measured eff</th><th class="n">target</th><th class="n">headroom</th></tr></thead><tbody>${Object.keys(cls).map((op) => `<tr><td class="mono">${op}</td><td class="n">${pct(eff.moe[op], 1)}</td><td class="n">${pct(tgt[cls[op]])}</td><td class="n">×${(tgt[cls[op]] / Math.min(eff.moe[op], tgt[cls[op]])).toFixed(1)}</td></tr>`).join('')}</tbody></table><p class="hint" style="margin-top:6px">experts: today's kernel is fitted as weight read + compute (not max); ag_idx pins at 100% because the profile's index gather is below its bf16 link roofline.</p>`;
+  const P = CAL.pipe;
+  const pr = [
+    ['MoE layer multiplier (2D fabric)', `${P.moeMult[0].toFixed(3)} + ${P.moeMult[1].toFixed(3)}·5120/T`],
+    ['Stage overhead per chunk', `${P.stageOv[0].toFixed(2)} ms`],
+    ['Dense ring-joint compute eff', pct(P.ringC, 1)],
+    ['Dense capacity-scan eff', pct(P.ringScan, 2) + ` (≈${(0.5 * 1e6 * 272 / 1e11 / P.ringScan * 1000 / 1000).toFixed(0)} ms per 1M-token lane per chunk)`],
+    ['Embedding', `${P.embed.toFixed(2)} ms`],
+    ['Blocking send', `${Math.max(0, P.block[0] + P.block[1] * 5.12).toFixed(1)} ms @5120, ${Math.max(0, P.block[0] + P.block[1] * 2.048).toFixed(1)} ms @2048`],
+    ['Hop latency', `${Math.max(0.5, P.hop[0] + P.hop[1] * 5.12).toFixed(1)} ms @5120, ${Math.max(0.5, P.hop[0] + P.hop[1] * 2.048).toFixed(1)} ms @2048`],
+    ['Fit residual, MoE stages', `${CAL.fit.moe_rmse.toFixed(1)} ms rms`],
+    ['Fit residual, dense stages', `${(100 * CAL.fit.dense_rmse_log).toFixed(0)}% rms (log)`],
+  ];
+  $('pipeTable').innerHTML = `<table><tbody>${pr.map(([k, v]) => `<tr><td>${k}</td><td class="n">${v}</td></tr>`).join('')}</tbody></table>`;
+}
+
+// ---------------------------------------------------------------- boot
+presetOptions();
+const startIdx = Math.max(0, PRESETS.findIndex((p) => p.name === 'today-C'));
+$('preset').value = String(startIdx); setForm(PRESETS[startIdx].cfg); $('presetDesc').textContent = PRESETS[startIdx].desc;
+$('slo').value = STUDY.slo; $('concs').value = '16,32,64,96,128,192,256,384,512,640,768,1024,1536,2048';
+updatePlan(); renderRoadmap(); renderModel();
+// show the study curves for the starting preset until the viewer runs one
+(function seed() {
+  const S = STUDY.scenarios.g4_k0;
+  run = { name: 'today-C (from the study)', real: S.curves.base, inf: [] };
+  $('resTitle').textContent = 'Results: today-C (precomputed; press Run for a live sweep)';
+  render();
+})();
+setTimeout(() => { decodeTraffic(); $('statusTxt').textContent = 'Ready. Press Run sweep.'; }, 30);
+})();
+</script>
