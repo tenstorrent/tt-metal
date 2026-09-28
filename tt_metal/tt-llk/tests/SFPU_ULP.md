@@ -24,9 +24,10 @@ git diff helpers/sfpu_accuracy_budget.yaml
 CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -k MyOp --compile-consumer
 ```
 
-`--ulp-emit` **writes the checked-in table**. It refuses to do so unless you are on
-Wormhole, you are the xdist controller, and no test in the session failed — but it is
-still a deliberate act, so read the diff before committing it.
+`--ulp-emit` **writes the checked-in table**, once, at the end of the session; under
+`-n` the controller merges every worker's measurements first. It refuses to write unless
+you are on Wormhole and no test in the session failed — but it is still a deliberate
+act, so read the diff before committing it.
 
 ## Why a step budget rather than a tolerance
 

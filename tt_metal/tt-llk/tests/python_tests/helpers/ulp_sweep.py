@@ -276,6 +276,52 @@ def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
     cells[key] = max(cells.get(key, 0), max_ulp)
 
 
+def export_measured() -> List[list]:
+    """``MEASURED`` as plain lists, for an xdist worker to hand to the controller."""
+    return [
+        [op, list(key), max_ulp]
+        for op, cells in MEASURED.items()
+        for key, max_ulp in cells.items()
+    ]
+
+
+def merge_measured(rows) -> None:
+    """Fold a worker's :func:`export_measured` into this process, worst lane winning."""
+    for op, key, max_ulp in rows:
+        record(op, tuple(key), max_ulp)
+
+
+def finish_emit(arch, testsfailed: int, path=None) -> str:
+    """Write this session's measurements into the table, and say what was written.
+
+    Raises ``RuntimeError`` rather than write when the session cannot vouch for them:
+    off ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
+    Wormhole's name, or after a failure, when only a subset was measured.
+    """
+    from datetime import date
+
+    from helpers.sfpu_accuracy_budget import _TABLE_PATH, MEASURED_ARCH
+
+    if arch != MEASURED_ARCH:
+        raise RuntimeError(
+            f"ran on {arch.value}, but the table's unkeyed rows are read as "
+            f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
+            "Nothing written."
+        )
+    if testsfailed:
+        raise RuntimeError(
+            f"saw {testsfailed} failure(s), so the session measured a subset. Nothing "
+            "written -- emit from a clean run."
+        )
+    path = path or _TABLE_PATH
+    suffix = (
+        f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
+        f"{arch.value}, {date.today().isoformat()}"
+    )
+    n = write_table(path, suffix)
+    return f"--ulp-emit: rewrote {n} op block(s) in {path.name}"
+
+
 def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     """What the table should say for a measured worst lane on *out_fmt*.
 

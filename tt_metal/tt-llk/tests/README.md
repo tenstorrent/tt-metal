@@ -79,9 +79,10 @@ full guide including log levels, output destinations, and pytest-xdist behaviour
 ## SFPU accuracy
 
 Each SFPU op declares how closely its output must match its golden, in
-`python_tests/helpers/sfpu_accuracy_budget.yaml`. The ops enrolled on the ULP metric
-are gated against every value their input format can take, by
-`python_tests/test_unary_sfpu_ulp.py`.
+`python_tests/helpers/sfpu_accuracy_budget.yaml`. For the enrolled unary ops,
+`python_tests/test_unary_sfpu_ulp.py` feeds every finite bfloat16 and float16 value
+(Bfp8_b is swept as bfloat16) and gates on the declared step budget. Rows for other
+formats, such as Float32, come from sampled measurements, not the exhaustive sweep.
 
 See [SFPU_ULP.md](SFPU_ULP.md) for how to enrol an op, what the sweep feeds and
 masks, and the rules the table enforces.

@@ -19,7 +19,6 @@ or re-measure and fold the results back into helpers/sfpu_accuracy_budget.yaml::
 """
 
 import sys
-from datetime import date
 
 import pytest
 import torch
@@ -42,8 +41,6 @@ from helpers.llk_params import (
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
-    _TABLE_PATH,
-    MEASURED_ARCH,
     Metric,
     accuracy_contract,
 )
@@ -241,37 +238,3 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         f"{cell}: {stats['max']} ULP over {lanes} swept lanes, budget "
         f"{contract.max_ulp}. Worst lane at flat index {stats['worst_index']}."
     )
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _emit_measured_table(request):
-    """Under ``--ulp-emit``, fold the session's measurements into the table at the end,
-    once every cell of an op has been seen. It rewrites a checked-in file, so only:
-
-    * on ``MEASURED_ARCH`` -- unkeyed rows are read as that arch's measurements;
-    * on the xdist controller -- each worker would write its own shard;
-    * after a clean session -- a partial run would widen rows over cells it never saw.
-    """
-    yield
-    if not ulp_sweep.EMIT or not ulp_sweep.MEASURED:
-        return
-    arch = get_chip_architecture()
-    if arch != MEASURED_ARCH:
-        pytest.fail(
-            f"--ulp-emit ran on {arch.value}, but the table's unkeyed rows are read as "
-            f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
-            "Nothing written."
-        )
-    if hasattr(request.config, "workerinput"):
-        return
-    if request.session.testsfailed:
-        pytest.fail(
-            f"--ulp-emit saw {request.session.testsfailed} failure(s), so the session "
-            "measured a subset. Nothing written -- emit from a clean run."
-        )
-    suffix = (
-        f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
-        f"{arch.value}, {date.today().isoformat()}"
-    )
-    n = ulp_sweep.write_table(_TABLE_PATH, suffix)
-    print(f"\n--ulp-emit: rewrote {n} op block(s) in {_TABLE_PATH.name}")

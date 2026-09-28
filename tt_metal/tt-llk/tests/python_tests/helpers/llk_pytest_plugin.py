@@ -1002,9 +1002,44 @@ def perf_report(request, worker_id):
     temp_report.dump_csv(post_path)
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Merge an xdist worker's ``--ulp-emit`` measurements into the controller's."""
+    from . import ulp_sweep
+
+    ulp_sweep.merge_measured(getattr(node, "workeroutput", {}).get("ulp_measured", ()))
+
+
+def _finish_ulp_emit(session):
+    """Under ``--ulp-emit``, write the whole session's measurements into the table once,
+    after every cell of an op has been seen. A refusal fails the session."""
+    from . import ulp_sweep
+
+    if not ulp_sweep.EMIT or not ulp_sweep.MEASURED:
+        return
+    try:
+        message = ulp_sweep.finish_emit(get_chip_architecture(), session.testsfailed)
+    except (RuntimeError, ValueError) as exc:
+        message = f"--ulp-emit: {exc}"
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(message)
+    else:
+        print(message)
+
+
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
+        # Each worker measured its own share; the controller merges them in
+        # pytest_testnodedown and writes the table once.
+        from . import ulp_sweep
+
+        if ulp_sweep.EMIT:
+            session.config.workeroutput["ulp_measured"] = ulp_sweep.export_measured()
         return
+
+    _finish_ulp_emit(session)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()

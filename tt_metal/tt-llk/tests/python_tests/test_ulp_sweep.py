@@ -12,12 +12,16 @@ import math
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathOperation
 from helpers.ulp_sweep import (
     EMIT_HEADROOM,
     MEASURED,
+    export_measured,
+    finish_emit,
     measurable_mask,
+    merge_measured,
     nonfinite_failures,
     record,
     write_table,
@@ -241,3 +245,48 @@ def test_an_input_outside_the_ops_domain_is_not_a_nonfinite_failure():
         fmt,
         fmt,
     ).any()
+
+
+def test_xdist_workers_measurements_merge_worst_lane_first(table):
+    """Under ``-n`` each worker fills its own ``MEASURED``; the controller merges the
+    exports. A cell two workers both measured keeps the worse reading, as ``record``
+    does within one process, and the merged table is what one process would write."""
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    worker_a = export_measured()
+    MEASURED.clear()
+    record("Gelu", ("Float16", "Float16", "No", "No"), 9)
+    record("Gelu", ("Float16", "Float16", "Yes", "No"), 2)
+    worker_b = export_measured()
+    MEASURED.clear()
+
+    merge_measured(worker_a)
+    merge_measured(worker_b)
+    assert MEASURED == {
+        "Gelu": {
+            ("Float16", "Float16", "No", "No"): 9,
+            ("Float16", "Float16", "Yes", "No"): 2,
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "arch, failed, refusal",
+    [
+        (ChipArchitecture.BLACKHOLE, 0, "unkeyed rows are read as wormhole"),
+        (ChipArchitecture.WORMHOLE, 3, "3 failure"),
+    ],
+    ids=["other-arch", "failed-session"],
+)
+def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, failed, refusal):
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    before = table.read_text()
+    with pytest.raises(RuntimeError, match=refusal):  # allow-pytest.raises: host-only
+        finish_emit(arch, failed, table)
+    assert table.read_text() == before
+
+
+def test_emit_writes_on_a_clean_wormhole_session(table):
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    message = finish_emit(ChipArchitecture.WORMHOLE, 0, table)
+    assert message == "--ulp-emit: rewrote 1 op block(s) in budget.yaml"
+    assert "{in: Float16, out: Float16, max_ulp: 6}" in _rows(table)[0]
