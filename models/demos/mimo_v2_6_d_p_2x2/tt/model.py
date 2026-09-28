@@ -65,3 +65,19 @@ def build_mlp(mesh, loader, layer: int):
     p = f"model.layers.{layer}.mlp."
     wg, wu, wd = (fp8_weight(loader, p + f"{n}.weight", torch.float32) for n in ("gate_proj", "up_proj", "down_proj"))
     return TtDenseMLP(mesh, wg, wu, wd)
+
+
+def build_router(mesh, loader, cfg, layer: int, max_chunk: int):
+    """TtRouter (replicated on the 2x2 mesh, fp32 logits HiFi4 + fp32 acc, fp32 sigmoid + bias choice, ttnn.topk, no
+    CCL). MIMO_ROUTER_MODE=fused selects moe_grouped_topk (TF32 keys) for comparison."""
+    import os
+
+    from models.demos.mimo_v2_6_d_p_2x2.tt.router import TtRouter
+
+    assert cfg.n_group == 1 and cfg.scoring_func == "sigmoid" and cfg.norm_topk_prob
+    p = f"model.layers.{layer}.mlp.gate."
+    w = loader.get(p + "weight").float()
+    b = loader.get(p + "e_score_correction_bias").float()
+    rs = cfg.routed_scaling_factor if cfg.routed_scaling_factor is not None else 1.0
+    mode = os.environ.get("MIMO_ROUTER_MODE", "fp32")
+    return TtRouter(mesh, w, b, max_chunk, top_k=cfg.num_experts_per_tok, route_scale=rs, mode=mode)
