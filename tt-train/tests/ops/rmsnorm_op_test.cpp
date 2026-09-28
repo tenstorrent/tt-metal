@@ -6,15 +6,140 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <umd/device/cluster.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
+#include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
+
+namespace {
+
+constexpr uint32_t kValidationTestBatches = 2U;
+constexpr uint32_t kValidationTestRows = 32U;
+constexpr uint32_t kValidationTestWidth = 64U;
+constexpr float kValidationTestEpsilon = 1.0e-3F;
+
+ttnn::Tensor make_validation_test_tensor(
+    const std::vector<float>& data,
+    const ttnn::Shape& shape,
+    ttnn::distributed::MeshDevice* device,
+    const tt::tt_metal::Alignment& alignment = {},
+    const tt::tt_metal::Tile& tile = {}) {
+    const auto layout = tt::tt_metal::TensorLayout(
+        ttnn::DataType::BFLOAT16, ttnn::PageConfig(ttnn::Layout::TILE, tile), ttnn::DRAM_MEMORY_CONFIG, alignment);
+    return ttnn::Tensor::from_vector(data, tt::tt_metal::TensorSpec(shape, layout), device);
+}
+
+std::vector<float> make_validation_test_input(float offset) {
+    constexpr uint32_t logical_rows = kValidationTestBatches * kValidationTestRows;
+    std::vector<float> data(logical_rows * kValidationTestWidth);
+    for (uint32_t row = 0; row < logical_rows; ++row) {
+        for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+            data[row * kValidationTestWidth + col] =
+                offset + 0.015625F * static_cast<float>((row * 7U + col * 3U) % 41U) - 0.25F;
+        }
+    }
+    return data;
+}
+
+std::vector<float> make_validation_test_gamma(float offset) {
+    std::vector<float> data(kValidationTestWidth);
+    for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+        data[col] = offset + 0.0078125F * static_cast<float>(col % 17U);
+    }
+    return data;
+}
+
+std::vector<float> make_validation_test_upstream_grad(float offset) {
+    constexpr uint32_t logical_rows = kValidationTestBatches * kValidationTestRows;
+    std::vector<float> data(logical_rows * kValidationTestWidth);
+    for (uint32_t row = 0; row < logical_rows; ++row) {
+        for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+            data[row * kValidationTestWidth + col] =
+                offset + 0.00390625F * static_cast<float>((row * 5U + col * 11U) % 29U);
+        }
+    }
+    return data;
+}
+
+std::vector<float> validation_test_rms_reference(const std::vector<float>& input) {
+    constexpr uint32_t logical_rows = kValidationTestBatches * kValidationTestRows;
+    std::vector<float> rms(logical_rows);
+    for (uint32_t row = 0; row < logical_rows; ++row) {
+        float square_sum = 0.0F;
+        for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+            const float value = input[row * kValidationTestWidth + col];
+            square_sum += value * value;
+        }
+        rms[row] = std::sqrt(square_sum / static_cast<float>(kValidationTestWidth) + kValidationTestEpsilon);
+    }
+    return rms;
+}
+
+void expect_validation_test_forward_matches(
+    const ttnn::Tensor& output,
+    const ttnn::Tensor& rms,
+    const std::vector<float>& input,
+    const std::vector<float>& gamma) {
+    const auto actual_output = ttml::core::to_vector<float>(output);
+    const auto actual_rms = ttml::core::to_vector<float>(rms);
+    const auto expected_rms = validation_test_rms_reference(input);
+
+    ASSERT_EQ(actual_output.size(), input.size());
+    ASSERT_EQ(actual_rms.size(), expected_rms.size());
+    for (uint32_t row = 0; row < expected_rms.size(); ++row) {
+        EXPECT_NEAR(actual_rms[row], expected_rms[row], 3.0e-2F) << "row=" << row;
+        for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+            const size_t index = row * kValidationTestWidth + col;
+            const float expected = input[index] * gamma[col] / expected_rms[row];
+            EXPECT_NEAR(actual_output[index], expected, 4.0e-2F) << "row=" << row << ", col=" << col;
+        }
+    }
+}
+
+void expect_validation_test_backward_matches(
+    const ttnn::Tensor& da,
+    const ttnn::Tensor& dgamma_components,
+    const std::vector<float>& input,
+    const std::vector<float>& gamma,
+    const std::vector<float>& rms,
+    const std::vector<float>& upstream_grad) {
+    const auto actual_da = ttml::core::to_vector<float>(da);
+    const auto actual_dgamma = ttml::core::to_vector<float>(dgamma_components);
+
+    ASSERT_EQ(actual_da.size(), input.size());
+    ASSERT_EQ(actual_dgamma.size(), input.size());
+    for (uint32_t row = 0; row < rms.size(); ++row) {
+        float dot = 0.0F;
+        for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+            const size_t index = row * kValidationTestWidth + col;
+            dot += upstream_grad[index] * gamma[col] * input[index];
+        }
+        dot /= static_cast<float>(kValidationTestWidth);
+
+        for (uint32_t col = 0; col < kValidationTestWidth; ++col) {
+            const size_t index = row * kValidationTestWidth + col;
+            const float expected_da =
+                upstream_grad[index] * gamma[col] / rms[row] - input[index] * dot / (rms[row] * rms[row] * rms[row]);
+            const float expected_dgamma = upstream_grad[index] * input[index] / rms[row];
+            EXPECT_NEAR(actual_da[index], expected_da, 5.0e-2F) << "row=" << row << ", col=" << col;
+            EXPECT_NEAR(actual_dgamma[index], expected_dgamma, 5.0e-2F) << "row=" << row << ", col=" << col;
+        }
+    }
+}
+
+}  // namespace
 
 class RMSNormOpTest : public ::testing::Test {
 protected:
@@ -27,6 +152,158 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
+
+TEST_F(RMSNormOpTest, RawPrimitivesPreserveOverpaddedHeightWithAutomaticOutputs) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const ttnn::Shape input_shape({kValidationTestBatches, 1U, kValidationTestRows, kValidationTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kValidationTestWidth});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+
+    const auto input_data = make_validation_test_input(0.25F);
+    const auto gamma_data = make_validation_test_gamma(0.75F);
+    const auto upstream_grad_data = make_validation_test_upstream_grad(0.125F);
+    auto input = make_validation_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto gamma = make_validation_test_tensor(gamma_data, gamma_shape, device);
+    auto upstream_grad = make_validation_test_tensor(upstream_grad_data, input_shape, device, overpadded_alignment);
+
+    const auto forward =
+        ttnn::prim::ttml_rmsnorm_fw(input, gamma, /*return_intermediates=*/true, kValidationTestEpsilon);
+    ASSERT_EQ(forward.size(), 2U);
+    EXPECT_EQ(forward[0].tensor_spec(), input.tensor_spec());
+    auto rms_shape = input_shape;
+    rms_shape[-1] = 1U;
+    const auto expected_rms_spec = tt::tt_metal::TensorSpec(rms_shape, input.tensor_spec().tensor_layout());
+    EXPECT_EQ(forward[1].tensor_spec(), expected_rms_spec);
+    expect_validation_test_forward_matches(forward[0], forward[1], input_data, gamma_data);
+
+    const auto rms_data = validation_test_rms_reference(input_data);
+    const auto backward = ttnn::prim::ttml_rmsnorm_bw(input, gamma, forward[1], upstream_grad, kValidationTestEpsilon);
+    ASSERT_EQ(backward.size(), 2U);
+    EXPECT_EQ(backward[0].tensor_spec(), input.tensor_spec());
+    EXPECT_EQ(backward[1].tensor_spec(), input.tensor_spec());
+    expect_validation_test_backward_matches(
+        backward[0], backward[1], input_data, gamma_data, rms_data, upstream_grad_data);
+}
+
+TEST_F(RMSNormOpTest, ForwardRejectsMalformedContractsWithColdAndWarmCache) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    const ttnn::Shape input_shape({kValidationTestBatches, 1U, kValidationTestRows, kValidationTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kValidationTestWidth});
+    const ttnn::Shape rms_shape({kValidationTestBatches, 1U, kValidationTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const auto input_data = make_validation_test_input(0.25F);
+    const auto gamma_data = make_validation_test_gamma(0.75F);
+
+    auto input = make_validation_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto gamma = make_validation_test_tensor(gamma_data, gamma_shape, device);
+    auto rank3_gamma = make_validation_test_tensor(gamma_data, ttnn::Shape({1U, 1U, kValidationTestWidth}), device);
+    auto undersized_output = make_validation_test_tensor(
+        std::vector<float>(kValidationTestBatches * kValidationTestRows * 32U, -7.0F),
+        ttnn::Shape({kValidationTestBatches, 1U, kValidationTestRows, 32U}),
+        device,
+        overpadded_alignment);
+    auto wrong_stride_rms =
+        make_validation_test_tensor(std::vector<float>(rms_shape.volume(), -7.0F), rms_shape, device);
+    auto overwide_input =
+        make_validation_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 96U}));
+    auto wide_aligned_input =
+        make_validation_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 64U}));
+    auto narrow_tile_input = make_validation_test_tensor(
+        input_data, input_shape, device, overpadded_alignment, tt::tt_metal::Tile({16U, 16U}));
+
+    const auto expect_malformed_contracts_rejected = [&] {
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            input, rank3_gamma, /*return_intermediates=*/true, kValidationTestEpsilon));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            input,
+            gamma,
+            /*return_intermediates=*/true,
+            kValidationTestEpsilon,
+            std::nullopt,
+            undersized_output));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            input,
+            gamma,
+            /*return_intermediates=*/true,
+            kValidationTestEpsilon,
+            wrong_stride_rms));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            input,
+            gamma,
+            /*return_intermediates=*/false,
+            kValidationTestEpsilon,
+            wrong_stride_rms));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            overwide_input, gamma, /*return_intermediates=*/true, kValidationTestEpsilon));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            wide_aligned_input, gamma, /*return_intermediates=*/true, kValidationTestEpsilon));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_fw(
+            narrow_tile_input, gamma, /*return_intermediates=*/true, kValidationTestEpsilon));
+    };
+
+    expect_malformed_contracts_rejected();
+    const auto valid = ttnn::prim::ttml_rmsnorm_fw(input, gamma, /*return_intermediates=*/true, kValidationTestEpsilon);
+    ASSERT_EQ(valid.size(), 2U);
+    expect_malformed_contracts_rejected();
+}
+
+TEST_F(RMSNormOpTest, BackwardRejectsMalformedContractsWithColdAndWarmCache) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+    device->clear_program_cache();
+
+    const ttnn::Shape input_shape({kValidationTestBatches, 1U, kValidationTestRows, kValidationTestWidth});
+    const ttnn::Shape gamma_shape({1U, 1U, 1U, kValidationTestWidth});
+    const ttnn::Shape rms_shape({kValidationTestBatches, 1U, kValidationTestRows, 1U});
+    const tt::tt_metal::Alignment overpadded_alignment({1U, 1U, 64U, 32U});
+    const auto input_data = make_validation_test_input(0.25F);
+    const auto gamma_data = make_validation_test_gamma(0.75F);
+    const auto rms_data = validation_test_rms_reference(input_data);
+    const auto upstream_grad_data = make_validation_test_upstream_grad(0.125F);
+
+    auto input = make_validation_test_tensor(input_data, input_shape, device, overpadded_alignment);
+    auto gamma = make_validation_test_tensor(gamma_data, gamma_shape, device);
+    auto rms = make_validation_test_tensor(rms_data, rms_shape, device, overpadded_alignment);
+    auto upstream_grad = make_validation_test_tensor(upstream_grad_data, input_shape, device, overpadded_alignment);
+    auto rank3_gamma = make_validation_test_tensor(gamma_data, ttnn::Shape({1U, 1U, kValidationTestWidth}), device);
+    auto wrong_stride_rms = make_validation_test_tensor(rms_data, rms_shape, device);
+    auto undersized_grad = make_validation_test_tensor(
+        std::vector<float>(kValidationTestBatches * kValidationTestRows * 32U, 0.0F),
+        ttnn::Shape({kValidationTestBatches, 1U, kValidationTestRows, 32U}),
+        device,
+        overpadded_alignment);
+    auto undersized_da = make_validation_test_tensor(
+        std::vector<float>(kValidationTestBatches * kValidationTestRows * 32U, -7.0F),
+        ttnn::Shape({kValidationTestBatches, 1U, kValidationTestRows, 32U}),
+        device,
+        overpadded_alignment);
+    auto overwide_input =
+        make_validation_test_tensor(input_data, input_shape, device, tt::tt_metal::Alignment({1U, 1U, 64U, 96U}));
+    auto narrow_tile_input = make_validation_test_tensor(
+        input_data, input_shape, device, overpadded_alignment, tt::tt_metal::Tile({16U, 16U}));
+
+    const auto expect_malformed_contracts_rejected = [&] {
+        EXPECT_ANY_THROW(
+            (void)ttnn::prim::ttml_rmsnorm_bw(input, rank3_gamma, rms, upstream_grad, kValidationTestEpsilon));
+        EXPECT_ANY_THROW(
+            (void)ttnn::prim::ttml_rmsnorm_bw(input, gamma, wrong_stride_rms, upstream_grad, kValidationTestEpsilon));
+        EXPECT_ANY_THROW((void)ttnn::prim::ttml_rmsnorm_bw(input, gamma, rms, undersized_grad, kValidationTestEpsilon));
+        EXPECT_ANY_THROW(
+            (void)ttnn::prim::ttml_rmsnorm_bw(input, gamma, rms, upstream_grad, kValidationTestEpsilon, undersized_da));
+        EXPECT_ANY_THROW(
+            (void)ttnn::prim::ttml_rmsnorm_bw(overwide_input, gamma, rms, upstream_grad, kValidationTestEpsilon));
+        EXPECT_ANY_THROW(
+            (void)ttnn::prim::ttml_rmsnorm_bw(narrow_tile_input, gamma, rms, upstream_grad, kValidationTestEpsilon));
+    };
+
+    expect_malformed_contracts_rejected();
+    const auto valid = ttnn::prim::ttml_rmsnorm_bw(input, gamma, rms, upstream_grad, kValidationTestEpsilon);
+    ASSERT_EQ(valid.size(), 2U);
+    expect_malformed_contracts_rejected();
+}
 
 // ============================================================================
 // Section 1: RMSNorm Kernel vs PyTorch Reference Implementation
