@@ -1013,9 +1013,44 @@ execute_step_advance_writer() {
         --prev-result "success" --prev-message "Analysis/research complete" --agent "${prev:-analyzer}"
 }
 
+# Run tt-metal's own pre-commit hooks over the given worktree-relative files and
+# return the exit status of the settled pass (a fixing hook exits 1 after it
+# rewrites, so the second pass is the verdict).
+#
+# Packaging refuses any commit whose hooks change the candidate and sends the
+# run back through the whole verification route. Hooks used to run only there,
+# after silicon verification: in run 56945 fix-cstdint rewrote two new metal
+# tests at commit and cost a full second attempt after every leaf had passed.
+# The root config is deliberate. The base clone's hook was installed with the
+# nested tt_metal/tt-llk config, whose fix-cstdint matches every *.cpp/*.h in
+# the repo and rewrites metal files; the root config scopes it to tt_metal/tt-llk.
+_normalize_candidate() {
+    local wt="$1"; shift
+    local cfg="$wt/.pre-commit-config.yaml" f
+    local -a files=()
+    for f in "$@"; do [ -f "$wt/$f" ] && files+=("$f"); done
+    { [ ${#files[@]} -gt 0 ] && [ -f "$cfg" ] && command -v pre-commit >/dev/null 2>&1; } || return 0
+    local run_log log=/dev/null
+    run_log="$(_LOG 2>/dev/null)" || run_log=""
+    [ -n "$run_log" ] && [ -d "$run_log" ] && log="$run_log/pre-commit.log"
+    # git-clang-format only formats staged content and refuses a file with
+    # unstaged changes, so stage the candidate exactly as the commit would, run
+    # the hooks, then restore the index: nothing else in the pipeline expects
+    # a staged candidate before packaging.
+    _hook_pass() {
+        local rc=0
+        git -C "$wt" add -A -- "${files[@]}" >/dev/null 2>&1
+        (cd "$wt" && pre-commit run --config "$cfg" --files "${files[@]}" >>"$log" 2>&1) || rc=$?
+        git -C "$wt" reset -q -- "${files[@]}" >/dev/null 2>&1
+        return $rc
+    }
+    _hook_pass || _hook_pass
+}
+
 # ===========================================================================
 # Step 3 — record the worker's tracked and untracked changed files into state
-# (for tester/reviewer).
+# (for tester/reviewer). The candidate is normalized first, so the bytes that
+# are verified are the bytes that get committed.
 # ===========================================================================
 execute_step_record_changed_files() {
     local _L; _L="$(_LOG)"
@@ -1023,6 +1058,11 @@ execute_step_record_changed_files() {
     tracked="$(git -C "$wt" diff HEAD --name-only 2>/dev/null || true)"
     untracked="$(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null || true)"
     cf="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
+    # A failing non-fixing hook (pylint, codespell) is left for packaging,
+    # which still refuses to commit it.
+    local -a cf_files=()
+    [ -z "$cf" ] || mapfile -t cf_files <<< "$cf"
+    [ ${#cf_files[@]} -eq 0 ] || _normalize_candidate "$wt" "${cf_files[@]}" || true
     ss CHANGED_FILES "$cf"
     test_changes="$(printf '%s\n' "$cf" | grep -E '(^|/)tests?/|(^|/)test_[^/]+$' || true)"
     [ -z "$test_changes" ] || rj metric --patch-json '{"tests_generated":true}'
@@ -1723,6 +1763,37 @@ execute_step_write_generated_patch() {
     fi
     ss BASE_COMMIT "$base"
 
+    # The hooks already ran before verification (record_changed_files). Run
+    # them once more with the same config: a change now means these bytes were
+    # never verified, so go back to verification rather than commit them, and a
+    # failing hook still blocks the commit as the commit-time hook used to. The
+    # commit itself then skips the installed hook, which uses the mis-scoped
+    # nested config (see _normalize_candidate).
+    local -a candidate_files=()
+    local before_digest after_digest hooks_rc=0 no_verify=()
+    if command -v pre-commit >/dev/null 2>&1 && [ -f "$wt/.pre-commit-config.yaml" ]; then
+        mapfile -t candidate_files < <(
+            { git -C "$wt" diff --name-only "$base"; git -C "$wt" ls-files --others --exclude-standard; } |
+                sed '/^$/d' | sort -u
+        )
+        before_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base" 2>/dev/null)" || before_digest=""
+        _normalize_candidate "$wt" "${candidate_files[@]}" || hooks_rc=$?
+        after_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base" 2>/dev/null)" || after_digest=""
+        if [ "$before_digest" != "$after_digest" ]; then
+            ss PACKAGING_ERROR "packaging failed: pre-commit hooks changed the candidate; verification must be renewed"
+            echo "PACKAGING_FAILED: candidate changed by pre-commit hooks; return to verification" >&2
+            return 1
+        fi
+        if [ "$hooks_rc" -ne 0 ]; then
+            ss PACKAGING_ERROR "packaging failed: pre-commit hooks failed (LOG_DIR/pre-commit.log)"
+            echo "PACKAGING_FAILED: pre-commit hooks failed; see $(_LOG)/pre-commit.log" >&2
+            return 1
+        fi
+        no_verify=(--no-verify)
+    fi
+
     if ! git -C "$wt" -c advice.addIgnoredFile=false add -A -- "${pathspec[@]}"; then
         ss PACKAGING_ERROR "packaging failed: could not stage the complete fix"
         echo "PACKAGING_FAILED: git add failed" >&2
@@ -1749,7 +1820,7 @@ execute_step_write_generated_patch() {
         local cm="AI issue-solver: fix #${num} ${title}"
         [ "$mode" = multi ] && cm="AI issue-solver: multi-arch fix #${num} ${title}"
         if ! git -C "$wt" -c user.name="ai-code-gen" -c user.email="ai-code-gen@tenstorrent.com" \
-            commit -q -m "$cm"; then
+            commit -q "${no_verify[@]}" -m "$cm"; then
             ss PACKAGING_ERROR "packaging failed: could not commit the complete fix"
             echo "PACKAGING_FAILED: git commit failed; fix remains staged" >&2
             return 1

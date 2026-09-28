@@ -1377,3 +1377,160 @@ def test_prod_still_short_circuits(tmp_path, worktree):
         pool="prod",
     )
     assert result.returncode == 21, result.stderr
+
+
+def _packaging_with_precommit(tmp_path, worktree, fake_body, installed_hook=None):
+    """Clean reviewed candidate, a root .pre-commit-config.yaml, and a fake
+    `pre-commit` on PATH whose behaviour the caller chooses."""
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "combine-log"
+    _prepare_review(worktree, log_dir, None)
+    (worktree / "fix.cpp").write_text("reviewed candidate\n")
+    (worktree / ".pre-commit-config.yaml").write_text("repos: []\n")
+    subprocess.check_call(
+        ["git", "-C", str(worktree), "add", ".pre-commit-config.yaml"]
+    )
+    subprocess.check_call(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "config",
+            "--no-verify",
+        ]
+    )
+    state_path = log_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state["GIT_COMMIT"] = subprocess.check_output(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"], text=True
+    ).strip()
+    state_path.write_text(json.dumps(state))
+    _prepare_review(
+        worktree,
+        log_dir,
+        {"verdict": "clean", "blocking_total": 0, "requirements_complete": True},
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "pre-commit"
+    fake.write_text("#!/bin/sh\n" + fake_body)
+    fake.chmod(0o755)
+    if installed_hook is not None:
+        hook = worktree / ".git/hooks/pre-commit"
+        hook.write_text(installed_hook)
+        hook.chmod(0o755)
+    env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+    packaged = _bash(
+        "execute_step_mark_status success; execute_step_write_generated_patch",
+        llk,
+        env=env,
+    )
+    return packaged, json.loads(state_path.read_text()), log_dir
+
+
+def test_packaging_rejects_a_candidate_the_hooks_still_change(tmp_path, worktree):
+    """Hooks run before verification; if they still change the candidate at
+    packaging, those bytes were never verified, so nothing is committed."""
+    packaged, state, log_dir = _packaging_with_precommit(
+        tmp_path, worktree, "printf 'unverified hook bytes\\n' > fix.cpp\n"
+    )
+    assert packaged.returncode != 0
+    assert "pre-commit hooks changed the candidate" in state["PACKAGING_ERROR"]
+    assert not (log_dir / "generated.patch").exists()
+
+
+def test_packaging_still_refuses_a_failing_hook(tmp_path, worktree):
+    """A non-fixing hook failure (pylint, codespell) blocks the commit, as the
+    commit-time hook used to."""
+    packaged, state, _ = _packaging_with_precommit(tmp_path, worktree, "exit 1\n")
+    assert packaged.returncode != 0
+    assert "pre-commit hooks failed" in state["PACKAGING_ERROR"]
+
+
+def test_packaging_commits_with_the_root_config_not_the_installed_hook(
+    tmp_path, worktree
+):
+    """The base clone's hook uses the nested tt-llk config, whose fix-cstdint
+    rewrites metal files. With a root config present packaging runs that config
+    itself and does not run the installed hook, so a clean candidate commits."""
+    packaged, state, log_dir = _packaging_with_precommit(
+        tmp_path,
+        worktree,
+        "exit 0\n",
+        installed_hook="#!/bin/sh\nprintf 'nested-config rewrite\\n' > fix.cpp\n",
+    )
+    assert packaged.returncode == 0, packaged.stderr
+    committed = subprocess.check_output(
+        ["git", "-C", str(worktree), "show", "HEAD:fix.cpp"]
+    )
+    assert committed == b"reviewed candidate\n"
+    assert (log_dir / "generated.patch").exists()
+
+
+def test_record_changed_files_normalizes_and_restores_the_index(tmp_path, worktree):
+    """The worker's files go through the hooks before verification, staged the
+    way a commit stages them, and the index is left as it was."""
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "norm-log"
+    log_dir.mkdir()
+    (log_dir / "state.json").write_text(json.dumps({"LOG_DIR": str(log_dir)}))
+    (llk / ".codegen_run_state.json").write_text(json.dumps({"LOG_DIR": str(log_dir)}))
+    if not (worktree / ".git").exists():
+        subprocess.check_call(["git", "-C", str(worktree), "init", "-q"])
+        subprocess.check_call(["git", "-C", str(worktree), "add", "-A"])
+        subprocess.check_call(
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "base",
+                "--no-verify",
+            ]
+        )
+    (worktree / ".pre-commit-config.yaml").write_text("repos: []\n")
+    (worktree / "new_test.cpp").write_text("int   x ;\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "pre-commit"
+    # Mimic git-clang-format: only touch the file once it is staged.
+    fake.write_text(
+        "#!/bin/sh\ngit diff --cached --quiet -- new_test.cpp || printf 'int x;\\n' > new_test.cpp\n"
+    )
+    fake.chmod(0o755)
+    result = _bash(
+        "execute_step_record_changed_files",
+        llk,
+        env={"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert (worktree / "new_test.cpp").read_text() == "int x;\n"
+    status = subprocess.check_output(
+        ["git", "-C", str(worktree), "status", "--porcelain", "--", "new_test.cpp"],
+        text=True,
+    )
+    assert status.startswith("??"), status  # back to untracked, not left staged
