@@ -168,6 +168,38 @@ def test_joint_sdpa_recipe(device, variant):
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 10, 4096, 4096, 128, 0), (1, 8, 4864, 256, 128, 0), (1, 8, 1024, 1024, 256, 0), (1, 4, 1000, 1000, 128, 77)],
+    ids=["self_attention", "short_k_cross", "d256", "joint"],
+)
+@pytest.mark.parametrize("variant", ["fast", "compensated", "balanced", "accurate", "low_precision_bfp8"])
+def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
+    """Chunk sizes left to the op (no program_config, or zero chunk sizes)."""
+    b, nh, sq, sk, d, joint = shape
+    q, k, v = randn(b, nh, sq, d, seed=27), randn(b, nh, sk, d, seed=28), randn(b, nh, sk, d, seed=29)
+    precision = VARIANTS[variant][0]
+    if not joint:
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *inputs_for(device, variant, q, k, v), is_causal=False, precision=precision
+        )
+        actual, expected = ttnn.to_torch(out), reference(q, k, v)
+    else:
+        jq, jk, jv = randn(b, nh, joint, d, seed=30), randn(b, nh, joint, d, seed=31), randn(b, nh, joint, d, seed=32)
+        out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+            *inputs_for(device, variant, q, k, v),
+            *inputs_for(device, variant, jq, jk, jv),
+            joint_strategy="rear",
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size()
+            ),
+            precision=precision,
+        )
+        actual = torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2)
+        expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+    assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
+
+
 @pytest.mark.parametrize("k_length", [512, 1536, 32768])
 def test_sdpa_fast_matches_legacy(device, k_length):
     """FAST is the legacy streaming kernel: bit-identical to precision=None at the same chunks."""

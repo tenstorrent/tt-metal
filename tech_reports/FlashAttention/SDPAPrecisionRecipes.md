@@ -79,6 +79,15 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 - A recipe cannot be combined with `compute_kernel_config` or `exp_approx_mode=False`, and `scale` must be the
   default 1/√D. Unsupported arguments raise before dispatch; there is no fallback.
 
+## Blocking
+
+With a recipe, the op chooses Q and K chunk sizes when the caller leaves them unset: no `program_config`,
+or a chunk size of 0 in `SDPAProgramConfig`. For exp ring it also chooses the SDPA grid width. The chooser
+(`sdpa_recipe_blocking.cpp`) scores every supported chunk pair that fits L1, counting the attn_mask buffer.
+It uses a roofline cost model fitted to Blackhole timings, plus pipeline fill/drain terms that dominate
+short-K cross attention. Explicit chunk sizes are always honored. Blocking never changes a recipe's
+arithmetic, only its rounding order. Without a recipe, chunk sizes must be explicit.
+
 ## Ring and exp ring attention
 
 `ring_joint_scaled_dot_product_attention` and `exp_ring_joint_scaled_dot_product_attention` take the same
