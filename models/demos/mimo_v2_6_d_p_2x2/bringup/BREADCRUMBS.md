@@ -363,3 +363,9 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: PASS. BRINGUP_IMPL=stub: FAIL (pcc 0).
 - Default gate already passes (device attn_norm registered from the other block types): pcc 0.999996, rel 0.0029, ratio [0.9962, 1.0023]. 1 passed. (First `FAIL pcc=0` line is the precompile collect pass.)
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_norm.py`
+
+## S.full_moe.01.test.1 (test review, swap 01 attn_norm, layer 5), 2026-09-28
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_01_attn_norm.py` (same golden); only the docstring differs (adoption note). Gate pcc_swap_out >= 0.98; asserted extras: attn_norm vs golden PCC >= 0.99, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03]; block out finite, rel L2 <= 0.01. Everything runs on the gathered [2048, 4096] output, so none of it depends on the mesh shape.
+- BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; step rel 0.0024, ratio [0.9972, 1.0018]). BRINGUP_IMPL=stub: FAIL on every check (block out rel 0.345, step rel 1.0).
+- Default gate already passes (device attn_norm already registered): pcc_swap_out 0.999997, out rel 0.0025, step pcc 0.999996 / rel 0.0029 / ratio [0.9962, 1.0023]. 1 passed. (The first `FAIL pcc=0` line is the precompile collect pass.)
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_01_attn_norm.py`
