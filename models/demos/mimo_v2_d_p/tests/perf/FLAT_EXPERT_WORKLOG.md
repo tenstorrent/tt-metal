@@ -638,3 +638,20 @@ With fp32 full-sync down (+1.7% time) flat is the most accurate of the three on 
 | K2 TP4 7168 x 512 (2 subgrids) | 208.8 -> 208.6 | 509.6 -> 507.2 | 1799.9 -> 1796.3 |
 At most +1.6% (MiMo compute-bound, 5 down columns per core), within noise elsewhere; every run passes the harness's
 norm / PCC checks. Cheap enough to be the default.
+
+**Math utilization at large M** (8 experts balanced, fp32 full-sync down; FLOPs = 6 M H I E; peak = 110 cores x 4096
+FLOP/cycle x 1.35 GHz = 608 TFLOP/s):
+| shape | M 2048 | M 4096 |
+|---|---|---|
+| MiMo 4096 x 2048 | 2333.6 us, 359 TF/s (59%) | 4469.3 us, 369 TF/s (62%) (bf16 down 4382.8) |
+| K2 7168 x 2048 | 3634.9 us, 397 TF/s (65%) | 7090.7 us, 407 TF/s (67%) |
+| K2 TP2 7168 x 1024 | 2969.8 us, 243 TF/s (40%) | 5790.4 us, 249 TF/s (41%) |
+| K2 TP4 7168 x 512 | 1796.3 us, 201 TF/s (33%) | 3515.1 us, 205 TF/s (34%) |
+Doubling M adds only 1-3 points: the op is already in its steady state at 2K. Zone profile at 4K
+(`analyze_role_busy.py`, E=2; the profiler buffer overflows, so lower bounds): MiMo gate/up MM busy 91%, down 86%, the
+gate/up matmul itself ~73% of LoFi peak inside its zone (both roles near-saturated, so the rest is matmul efficiency).
+TP4: the 32 gate/up cores 94.5% busy, the 72 down cores wait for h 80% of the time (gate/up-bound: I/4 gives down 4x
+less work, but the split still reserves down cores for H = 7168 output columns).
+Tried at M 4096 (all worse than the defaults): TP4 1 subgrid G4 (64 gate/up cores) 5201.7 us, 1 subgrid G2 4875.1,
+3 subgrids (48 gate/up cores) 4258.9 (vs 3515.1); MiMo l1acc gate/up 4975.3 (vs 4469.3); MiMo reader-tail down
+(`MIMO_FL_RDOWN=1`) fails the reader-down tensor bounds check at MiMo's shape (not pursued).
