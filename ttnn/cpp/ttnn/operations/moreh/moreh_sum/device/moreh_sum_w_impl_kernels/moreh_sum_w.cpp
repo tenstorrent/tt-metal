@@ -103,7 +103,7 @@ void kernel_main() {
                 reconfig_data_format_srca(dfb::accum_dst);
 #endif
                 dfb_accum_dst_obj.wait_front(onetile);
-                copy_tile_to_dst_init_short(dfb::accum_dst);
+                copy_init(dfb::accum_dst);
                 copy_tile(dfb::accum_dst, 0, reduce_dst_idx);
             }
 
