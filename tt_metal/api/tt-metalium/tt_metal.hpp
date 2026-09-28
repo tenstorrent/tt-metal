@@ -115,10 +115,14 @@ template <typename DType>
     "Use distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. This API will be removed after "
     "2026-10-30.")]]
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
+// Compatibility shim: calling the deprecated overload is intentional (GCC warns even without instantiation).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     WriteToBuffer(
         buffer,
         ttsl::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
+#pragma GCC diagnostic pop
 }
 template <typename DType>
 [[deprecated(
@@ -150,7 +154,11 @@ void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     auto buffer_size = buffer.size();
     TT_FATAL(buffer_size % sizeof(DType) == 0, "Buffer size is not divisible by dtype size");
     host_buffer.resize(buffer.size() / sizeof(DType));
+// Compatibility shim: calling the deprecated overload is intentional (GCC warns even without instantiation).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
+#pragma GCC diagnostic pop
 }
 template <typename DType>
 [[deprecated(
@@ -282,9 +290,7 @@ uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, 
  * | host_buffer  | Buffer on host to copy data from                       | std::span<const uint8_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
 // clang-format on
-[[deprecated(
-    "Use a MeshBuffer with distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. "
-    "WriteToDeviceDRAMChannel will be removed after 2026-10-30.")]]
+[[deprecated("WriteToDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer);
 /**
@@ -301,9 +307,7 @@ bool WriteToDeviceDRAMChannel(
  * | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      | | host_buffer  | Buffer on host to copy data from |
  * std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
  */
-[[deprecated(
-    "Use a MeshBuffer with distributed::WriteShard or distributed::EnqueueWriteMeshBuffer instead. "
-    "WriteToDeviceDRAMChannel will be removed after 2026-10-30.")]]
+[[deprecated("WriteToDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer);
 
 // clang-format off
@@ -320,9 +324,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
  * | host_buffer  | Buffer on host to copy data into                             | std::span<uint8_t>    |                                | Yes      |
  */
 // clang-format on
-[[deprecated(
-    "Use a MeshBuffer with distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. "
-    "ReadFromDeviceDRAMChannel will be removed after 2026-10-30.")]]
+[[deprecated("ReadFromDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer);
 
 /**
@@ -340,9 +342,7 @@ bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addre
  * device in bytes                  | uint32_t              |                                | Yes      | | host_buffer
  * | Buffer on host to copy data into                             | std::vector<uint32_t> | | Yes      |
  */
-[[deprecated(
-    "Use a MeshBuffer with distributed::ReadShard or distributed::EnqueueReadMeshBuffer instead. "
-    "ReadFromDeviceDRAMChannel will be removed after 2026-10-30.")]]
+[[deprecated("ReadFromDeviceDRAMChannel is an internal-only API; it will be removed after 2026-10-30.")]]
 bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 
