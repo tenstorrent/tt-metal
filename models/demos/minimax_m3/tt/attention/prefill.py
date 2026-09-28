@@ -177,13 +177,17 @@ def attention_forward(
         with zone("o_proj_fused_rs"):
             rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
         tt_sdpa_out.deallocate(True)
+        # The fused op emits bf8_b; hand back activation_dtype like the unfused path. The residual add
+        # writes into this tensor, so a bf8 output would turn the residual (and the router input) bf8.
         if sharded_residual:
             # The fused op already reduce-scattered: that IS the sharded-residual output. Only the
             # padding trim would remain, and a sharded residual admits no padding, so nothing is left.
             assert_sharded_residual_unpadded(mesh_config, hidden_size)
-            return rs_out
+            return _as_dtype(rs_out, activation_dtype)
         with zone("ccl_out_allgather"):
             tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
+        # Cast after the gather so the gather still moves bf8.
+        tt_out_result = _as_dtype(tt_out_result, activation_dtype)
     else:
         with zone("o_proj"):
             tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
@@ -194,6 +198,14 @@ def attention_forward(
         with zone("ccl_out_allreduce"):
             tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
     return tt_out_result
+
+
+def _as_dtype(tensor, dtype):
+    if tensor.dtype == dtype:
+        return tensor
+    out = ttnn.typecast(tensor, dtype)
+    tensor.deallocate(True)
+    return out
 
 
 def _attention_core(

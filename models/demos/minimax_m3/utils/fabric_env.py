@@ -7,8 +7,8 @@ Shared by ``tests/galaxy_prefill_kv_pcc.py`` and ``tests/perf/profile_prefill.py
 the same way as the production runner (``PREFILL_FABRIC_MODE`` in
 ``models/demos/common/prefill/runners/runner_utils.py``) and reject a typo with a readable message.
 
-The ``M3_MOE_*`` knobs select the routed-expert MoE's EP transport (tt/mlp.py -> TtMiniMaxMoE); both
-default to today's path.
+The ``M3_MOE_*`` knobs select the routed-expert MoE's EP transport (tt/mlp.py -> TtMiniMaxMoE); all
+default to today's path. ``M3_MOE_LOAD_STATS`` turns on a per-layer expert-load readback (host sync).
 """
 
 import os
@@ -28,9 +28,10 @@ CCL_TOPOLOGIES = {
 }
 
 MOE_COMBINE_VERSIONS = {"v1": "v1", "v2": "v2"}
+MOE_DISPATCH_VERSIONS = {"v1": "v1", "v2": "v2"}
 
-# combine_fabric2d walks the ring on cluster_axis=0 over real wrap links, so it needs a 2D fabric that
-# wraps the SP (row) axis.
+# combine_fabric2d / dispatch_fabric2d walk the ring on cluster_axis=0 over real wrap links, so they need a
+# 2D fabric that wraps the SP (row) axis.
 MOE_COMBINE_V2_FABRICS = (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
 # Fabrics that wrap axis 0, so a Ring on cluster_axis=0 has its wrap link.
 AXIS0_RING_FABRICS = (ttnn.FabricConfig.FABRIC_1D_RING,) + MOE_COMBINE_V2_FABRICS
@@ -74,14 +75,42 @@ def moe_combine_from_env(var="M3_MOE_COMBINE", default="v1"):
     return _lookup(MOE_COMBINE_VERSIONS, var, default)
 
 
+def moe_dispatch_from_env(var="M3_MOE_DISPATCH", default="v1"):
+    """``M3_MOE_DISPATCH=v1|v2`` -> ``"v1"`` (deepseek_prefill.dispatch) or ``"v2"`` (dispatch_fabric2d).
+
+    v2 needs ``M3_FABRIC=2d_torus_xy`` and a raised fabric max payload; use set_fabric_config_from_env().
+    """
+    return _lookup(MOE_DISPATCH_VERSIONS, var, default)
+
+
+def moe_fabric2d_knobs_from_env():
+    """The ``M3_MOE_*=v2`` knobs that are on, e.g. ``["M3_MOE_DISPATCH", "M3_MOE_COMBINE"]``."""
+    knobs = []
+    if moe_dispatch_from_env() == "v2":
+        knobs.append("M3_MOE_DISPATCH")
+    if moe_combine_from_env() == "v2":
+        knobs.append("M3_MOE_COMBINE")
+    return knobs
+
+
+def moe_load_stats_from_env(var="M3_MOE_LOAD_STATS"):
+    """``M3_MOE_LOAD_STATS=1`` -> True: log per-expert token counts every MoE forward (host sync)."""
+    return os.getenv(var, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def moe_load_stats_file_from_env(var="M3_MOE_LOAD_STATS_FILE"):
+    """``M3_MOE_LOAD_STATS_FILE=<path>`` -> JSON-lines file for the raw per-expert counts, or None."""
+    return os.getenv(var, "").strip() or None
+
+
 def fabric_router_config_from_env():
     """Router config the fabric must open with, or None to keep the fabric default.
 
-    Only ``M3_MOE_COMBINE=v2`` needs one: combine_fabric2d sends a whole bf16 token plus a 64 B routing
-    tail in one packet (6144 * 2 + 64 = 12352 B for M3), above the 4352 B default. It takes DeepSeek's
-    payload size (the value combine_fabric2d is tested with).
+    Only the fabric2d MoE ops (``M3_MOE_COMBINE=v2`` / ``M3_MOE_DISPATCH=v2``) need one: each sends a
+    whole bf16 token plus a 64 B routing tail in one packet (6144 * 2 + 64 = 12352 B for M3), above the
+    4352 B default. It takes DeepSeek's payload size (the value both ops are tested with).
     """
-    if moe_combine_from_env() != "v2":
+    if not moe_fabric2d_knobs_from_env():
         return None
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 
@@ -91,7 +120,7 @@ def fabric_router_config_from_env():
 def set_fabric_config_from_env(fabric_config=None):
     """``ttnn.set_fabric_config`` for ``M3_FABRIC`` (or ``fabric_config``), plus the router config v2 needs.
 
-    Without ``M3_MOE_COMBINE=v2`` this is exactly ``ttnn.set_fabric_config(fabric_config)``. Rejects a
+    Without an ``M3_MOE_*=v2`` knob this is exactly ``ttnn.set_fabric_config(fabric_config)``. Rejects a
     fabric the MoE knobs cannot run on before the device opens, rather than hanging or failing mid-load.
     """
     if fabric_config is None:
@@ -106,8 +135,9 @@ def set_fabric_config_from_env(fabric_config=None):
         ttnn.set_fabric_config(fabric_config)
         return
     if fabric_config not in MOE_COMBINE_V2_FABRICS:
+        knobs = " and ".join(f"{k}=v2" for k in moe_fabric2d_knobs_from_env())
         raise ValueError(
-            f"M3_MOE_COMBINE=v2 needs a fabric that wraps the SP axis ({[str(f) for f in MOE_COMBINE_V2_FABRICS]}), "
+            f"{knobs} needs a fabric that wraps the SP axis ({[str(f) for f in MOE_COMBINE_V2_FABRICS]}), "
             f"got {fabric_config}; set M3_FABRIC=2d_torus_xy"
         )
     ttnn.set_fabric_config(fabric_config, router_config=router_config)

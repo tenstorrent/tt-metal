@@ -57,6 +57,9 @@ Env:
   M3_CCL_TOPOLOGY     legacy-CCL topology: linear | ring (ring needs a ring/torus fabric)   [default linear]
   M3_MOE_TOPOLOGY     MoE axis-0 dispatch / v1 combine topology: linear | ring             [default linear]
   M3_MOE_COMBINE      MoE combine: v1 | v2 (combine_fabric2d; needs M3_FABRIC=2d_torus_xy) [default v1]
+  M3_MOE_DISPATCH     MoE dispatch: v1 | v2 (dispatch_fabric2d; needs M3_FABRIC=2d_torus_xy) [default v1]
+  M3_MOE_LOAD_STATS   1 = log an M3_MOE_LOAD per-expert load line per MoE layer (host sync)  [default off]
+  M3_MOE_LOAD_STATS_FILE  also append the raw per-expert counts there as JSON lines           [default unset]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                  [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
   M3_PROFILE_ZONES    set to 1 by this script before the model is imported

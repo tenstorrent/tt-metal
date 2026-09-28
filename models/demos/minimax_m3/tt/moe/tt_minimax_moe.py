@@ -19,6 +19,11 @@ swigluoai activation; only the shared-expert step of DeepSeek's TtMoe.forward is
 Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward).
 """
 
+import json
+
+import torch
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
@@ -59,19 +64,36 @@ class TtMiniMaxMoE(LightweightModule):
         route_scale: float = 1.0,
         reduce_scatter_fn=None,
         combine_version: str = "v1",
+        dispatch_version: str = "v1",
+        load_stats: bool = False,
+        load_stats_file=None,
+        global_layer_idx=None,
     ):
-        """topology: dispatch and v1 combine on cluster_axis=0 (the TP collectives on axis 1 stay Linear).
+        """topology: v1 dispatch and v1 combine on cluster_axis=0 (the TP collectives on axis 1 stay Linear).
         combine_version: "v1" = deepseek_prefill.combine, "v2" = combine_fabric2d (Ring on a torus fabric).
+        dispatch_version: "v1" = deepseek_prefill.dispatch, "v2" = dispatch_fabric2d (Ring on a torus fabric).
+        load_stats: read the per-expert token counts back every forward and log one M3_MOE_LOAD line (host
+           sync; measurement runs only). load_stats_file: also append the raw counts there as JSON lines.
+        global_layer_idx: model layer index for the load-stats line only (layer_idx names the weight cache).
         """
         super().__init__()
         assert combine_version in ("v1", "v2"), f"combine_version must be 'v1' or 'v2', got {combine_version!r}"
+        assert dispatch_version in ("v1", "v2"), f"dispatch_version must be 'v1' or 'v2', got {dispatch_version!r}"
         self.combine_version = combine_version
+        self.dispatch_version = dispatch_version
+        # Checked before any weight of this block loads.
+        fabric2d_ops = [n for n, v in (("dispatch", dispatch_version), ("combine", combine_version)) if v == "v2"]
+        if fabric2d_ops:
+            self._check_fabric2d_v2(mesh_device, emb_dim, fabric2d_ops)
         self.mesh_device = mesh_device
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
+        self.metadata_len = metadata_len
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
+        self.num_links = num_links
 
         # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1. route_scale must
         # match the model's routed_scaling_factor (2.0 for M3): the internal gate applies it to the
@@ -128,7 +150,6 @@ class TtMiniMaxMoE(LightweightModule):
             max_dispatch_buffer_token_size >= worst_case_tokens
         ), f"init_zeros=False needs a drop-free dispatch buffer: {max_dispatch_buffer_token_size} < {worst_case_tokens}"
         if combine_version == "v2":
-            self._check_combine_v2_fabric(emb_dim)
             # No init_zeros knob: the output is never zeroed, the same contract as v1 with init_zeros=False
             # (post_combine_reduce skips or zero-weights every slot combine does not write).
             self.combine_module = TtCombine2dModule(
@@ -163,12 +184,17 @@ class TtMiniMaxMoE(LightweightModule):
                 # must_zero_init branch instead of reading the slot.
                 init_zeros=False,
             )
+        global_expert_idx_table = ExpertMapping.create_global_expert_idx_table(
+            experts_per_chip=experts_per_chip,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+        )
+        self.load_stats = load_stats
+        if load_stats:
+            self._init_load_stats(expert_dispatch_table, global_expert_idx_table, load_stats_file)
+            self.load_stats_layer_idx = layer_idx if global_layer_idx is None else global_layer_idx
         global_expert_idx_tt = ttnn.from_torch(
-            ExpertMapping.create_global_expert_idx_table(
-                experts_per_chip=experts_per_chip,
-                dispatch_group_size=dispatch_group_size,
-                num_dispatch_groups=num_dispatch_groups,
-            ),
+            global_expert_idx_table,
             mesh_mapper=get_ep_mesh_mapper(mesh_device),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
@@ -207,19 +233,78 @@ class TtMiniMaxMoE(LightweightModule):
         )
 
     @staticmethod
-    def _check_combine_v2_fabric(emb_dim):
+    def _check_fabric2d_v2(mesh_device, emb_dim, ops):
+        """combine_fabric2d / dispatch_fabric2d: a torus wrapping axis 0 and a payload that fits a token."""
+        what = " + ".join(f"{op} v2" for op in ops)
         fabric = ttnn.get_fabric_config()
-        assert fabric in MOE_COMBINE_V2_FABRICS, (
-            f"combine v2 needs a fabric that wraps axis 0 {[str(f) for f in MOE_COMBINE_V2_FABRICS]}, got {fabric}; "
-            "open it with M3_FABRIC=2d_torus_xy via utils/fabric_env.set_fabric_config_from_env"
-        )
-        # One packet carries a bf16 token plus combine_fabric2d's 64 B routing tail.
+        if fabric not in MOE_COMBINE_V2_FABRICS:
+            raise RuntimeError(
+                f"{what} needs a fabric that wraps axis 0 {[str(f) for f in MOE_COMBINE_V2_FABRICS]}, got {fabric}; "
+                "open it with M3_FABRIC=2d_torus_xy via utils/fabric_env.set_fabric_config_from_env"
+            )
+        # One packet carries a bf16 token plus the op's 64 B routing / forwarding tail.
         needed = emb_dim * 2 + 64
         payload = ttnn.get_tt_fabric_max_payload_size_bytes()
-        assert payload >= needed, (
-            f"combine v2 needs fabric max payload >= {needed} B, fabric has {payload} B; open the fabric with "
-            "utils/fabric_env.set_fabric_config_from_env (passes the router config under M3_MOE_COMBINE=v2)"
+        if payload < needed:
+            raise RuntimeError(
+                f"{what} needs fabric max payload >= {needed} B, fabric has {payload} B; open the fabric with "
+                "utils/fabric_env.set_fabric_config_from_env (passes the router config under M3_MOE_*=v2)"
+            )
+        if "dispatch" in ops:
+            # dispatch_fabric2d splits the diametrically opposite chip across both ring directions.
+            extent = mesh_device.shape[0]
+            if extent < 4 or extent % 2:
+                raise RuntimeError(f"dispatch v2 needs an even axis-0 extent >= 4, mesh is {tuple(mesh_device.shape)}")
+
+    def _init_load_stats(self, expert_dispatch_table, global_expert_idx_table, load_stats_file):
+        E = self.num_routed_experts
+        # Dispatch group (mesh column) that owns each expert: the one whose table row maps it to a chip.
+        owned = expert_dispatch_table[:, :E] >= 0
+        assert bool((owned.sum(dim=0) == 1).all()), "every expert must belong to exactly one dispatch group"
+        self._load_expert_group = owned.to(torch.int64).argmax(dim=0)
+        # (num_dispatch_groups, dispatch_group_size, experts_per_chip): experts on chip (row, col).
+        self._load_chip_experts = global_expert_idx_table.to(torch.int64)
+        self._load_stats_file = load_stats_file
+        self._load_stats_calls = 0
+
+    def _log_expert_load(self, total_counts_per_expert):
+        """One M3_MOE_LOAD line from routing_setup's total_counts_per_expert (host sync).
+
+        Per device the counts are (1, E), summed over the dispatch group (mesh column) and masked to that
+        group's experts, so expert e is read from any row of the column that owns it.
+        """
+        counts_4d = ttnn.unsqueeze_to_4D(total_counts_per_expert)
+        composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+        # (num_cols, num_rows, E)
+        host = ttnn.to_torch(counts_4d, mesh_composer=composer).squeeze(2).to(torch.int64)
+        E = self.num_routed_experts
+        counts = host[self._load_expert_group, 0, torch.arange(E)]
+        per_chip = counts[self._load_chip_experts].sum(dim=-1)  # (cols, rows)
+        per_col = per_chip.sum(dim=-1)
+        tile_padded = ((counts + 31) // 32 * 32)[self._load_chip_experts].sum(dim=-1)
+        hot = int(counts.argmax())
+        layer = self.load_stats_layer_idx
+        logger.info(
+            f"M3_MOE_LOAD layer={layer} tokens={int(counts.sum())} per_chip_max={int(per_chip.max())} "
+            f"per_chip_mean={per_chip.double().mean().item():.1f} per_chip_min={int(per_chip.min())} "
+            f"per_col_max={int(per_col.max())} per_col_mean={per_col.double().mean().item():.1f} "
+            f"hottest_expert={hot}:{int(counts[hot])} tile_padded_max={int(tile_padded.max())}"
         )
+        if self._load_stats_file:
+            with open(self._load_stats_file, "a") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "layer": layer,
+                            "call": self._load_stats_calls,
+                            "mesh": list(self.mesh_device.shape),
+                            "experts_per_chip": self.experts_per_chip,
+                            "counts": counts.tolist(),
+                        }
+                    )
+                    + "\n"
+                )
+        self._load_stats_calls += 1
 
     def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
         """Routed (expert-parallel) MoE output.
@@ -253,9 +338,9 @@ class TtMiniMaxMoE(LightweightModule):
             tt_expert_token_counts = routing.total_counts_per_expert
             tt_expert_region_offsets = routing.expert_region_offsets
             # (dispatch_group_size, E), row k = device k's global_dispatch_offsets, replicated along
-            # axis 0: the table combine_fabric2d takes as expert_offsets. Only v2 reads it.
+            # axis 0: the expert_offsets table of combine_fabric2d and dispatch_fabric2d. Only v2 reads it.
             all_expert_offsets = routing.all_global_dispatch_offsets
-            if self.combine_version != "v2":
+            if self.combine_version != "v2" and self.dispatch_version != "v2":
                 ttnn.deallocate(all_expert_offsets)
             del routing
             indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
@@ -263,6 +348,9 @@ class TtMiniMaxMoE(LightweightModule):
             b, s = x.shape[0], x.shape[1]
             scores = ttnn.reshape(scores, (b, s, scores.shape[-1]))
             indices = ttnn.reshape(indices, (b, s, indices.shape[-1]))
+        if self.load_stats:
+            with zone("moe_load_stats", FINE):
+                self._log_expert_load(tt_expert_token_counts)
 
         # Dispatch needs full emb per chip. All-gather across TP only if emb is sharded;
         # if the input is already full emb (replicated, e.g. from the decoder layer), skip.
@@ -274,14 +362,48 @@ class TtMiniMaxMoE(LightweightModule):
 
         # Dispatch -> per-expert buffers (NO shared expert)
         with zone("dispatch"):
-            dispatched_buffer, metadata = self.dispatch_module(
-                x,
-                scores,
-                indices,
-                tt_expert_offsets,
-                self.tt_expert_dispatch_table,
-                padding_config=padding_config,
-            )
+            if self.dispatch_version == "v2":
+                # dispatch_fabric2d takes bf16 x and uint16 ROW_MAJOR indices, every input interleaved in
+                # DRAM. The router weights stay out of it, as with v1: moe_reduce applies them.
+                with zone("dispatch_v2_prep", FINE):
+                    x_in = x
+                    if x.dtype != ttnn.bfloat16:
+                        x = ttnn.typecast(x, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    else:
+                        x = _to_dram_interleaved(x)
+                    indices = _to_dram_interleaved(indices)
+                dispatched_buffer, metadata = ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
+                    x,
+                    indices,
+                    all_expert_offsets,
+                    self.tt_expert_dispatch_table,
+                    tt_expert_token_counts,
+                    tt_expert_region_offsets,
+                    padding_config=padding_config,
+                    experts_per_chip=self.experts_per_chip,
+                    num_routed_experts=self.num_routed_experts,
+                    num_experts_per_tok=self.num_experts_per_tok,
+                    metadata_len=self.metadata_len,
+                    max_dispatch_buffer_token_size=self.max_dispatch_buffer_token_size,
+                    seq_len_per_chip=self.seq_len_per_chip,
+                    cluster_axis=0,
+                    num_links=self.num_links,
+                    topology=ttnn.Topology.Ring,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if x is not x_in:
+                    ttnn.deallocate(x_in)
+                if self.combine_version != "v2":
+                    ttnn.deallocate(all_expert_offsets)
+            else:
+                dispatched_buffer, metadata = self.dispatch_module(
+                    x,
+                    scores,
+                    indices,
+                    tt_expert_offsets,
+                    self.tt_expert_dispatch_table,
+                    padding_config=padding_config,
+                )
             ttnn.deallocate(x)
             scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
             indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
@@ -322,3 +444,10 @@ class TtMiniMaxMoE(LightweightModule):
             )
             routed_output = ttnn.squeeze(routed_output, dim=0)
         return routed_output
+
+
+def _to_dram_interleaved(t):
+    mc = t.memory_config()
+    if mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return t
+    return ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)

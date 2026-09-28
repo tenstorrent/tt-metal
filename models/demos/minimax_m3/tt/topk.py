@@ -215,10 +215,13 @@ class TopKRouter:
         # L1 for decode (small), DRAM for prefill (large sequences).
         is_decode = actual_tokens <= 128
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
+        # dtype pinned: moe_grouped_topk takes only bf16 / fp32 scores, and an unpinned linear inherits a
+        # bf8 input's dtype. A bf16 input (the normal path) already gives bf16, so this changes nothing there.
         router_logits = ttnn.linear(
             hidden_states,
             self.weight,  # no bias (MiniMax-M3)
             memory_config=mem_config,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_config,
         )
 
