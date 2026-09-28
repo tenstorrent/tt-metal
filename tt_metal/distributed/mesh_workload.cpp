@@ -526,6 +526,7 @@ uint32_t MeshWorkload::get_cb_size(
 namespace tt::tt_metal::experimental::program_preparation {
 
 ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device) {
+    TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
     workload.pimpl_->compile(mesh_device);
     ProgramCapacity result;
     const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
