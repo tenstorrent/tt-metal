@@ -265,13 +265,11 @@ def served_reference_canvases() -> tuple[tuple[int, int], ...]:
     return tuple(by_area[area] for area in sorted(by_area))
 
 
-def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
-    """One `(n_keyframes, canvas)` per vision-tower program set an fl2va request can reach.
+def decodable_canvases() -> tuple[tuple[int, int], ...]:
+    """Every `(height, width)` canvas `resolve_canvas_size` produces over the 1:4 to 4:1 range, sorted.
 
     A keyframe's canvas depends only on its aspect ratio, so holding the long side at the maximum and
-    sweeping the short side covers every canvas. The tower pads the patch count to `patch_alignment`.
-    It runs ring attention only for one keyframe that needs no pad; everything else is windowed, and
-    windowed programs depend only on the padded size (the window count is kept out of the key).
+    sweeping the short side covers every canvas, including those of the published ratios.
     """
     long_side = MINIMAX_H3_KEYFRAME_MAX_SIDE
     short_min = max(MINIMAX_H3_KEYFRAME_MIN_SIDE, -(-long_side // 4))
@@ -279,6 +277,17 @@ def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int,
     for short in range(short_min, long_side + 1):
         canvases.add(resolve_canvas_size(long_side, short))
         canvases.add(resolve_canvas_size(short, long_side))
+    return tuple(sorted(canvases))
+
+
+def served_keyframe_layouts(patch_alignment: int) -> tuple[tuple[int, tuple[int, int]], ...]:
+    """One `(n_keyframes, canvas)` per vision-tower program set an fl2va request can reach.
+
+    The tower pads the patch count to `patch_alignment`. It runs ring attention only for one keyframe
+    that needs no pad; everything else is windowed, and windowed programs depend only on the padded
+    size (the window count is kept out of the key).
+    """
+    canvases = decodable_canvases()
     multiple = MINIMAX_H3_CANVAS_MULTIPLE
 
     def patches(canvas: tuple[int, int]) -> int:
