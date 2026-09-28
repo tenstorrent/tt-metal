@@ -86,7 +86,10 @@ constexpr bool COMPACT_FIRST = false;
 constexpr int64_t DM_TXN_ROWS_MAX = 1;
 constexpr uint32_t PASS_A_SQ_BLOCK = 1;
 constexpr uint32_t RES_FUSE = 0;
-constexpr bool CB_SQ_EXACT = false;
+// CHANGELOG 4: charge cb_x_squared its real width (x_squared_wt tiles per tile-row, at its own format) at
+// fp32_dest_acc_en, where its format depends on the chunk.  16-bit DEST keeps the conservative full-width price
+// (that program is unchanged; the exact price measured 0.987x on the 64-core BLOCK shard there).
+constexpr bool CB_SQ_EXACT = true;
 // CB_DEPTH_CANDIDATES = (2,) on the TILE path, (1,) on ROW_MAJOR.
 constexpr int64_t CB_DEPTH_TILE = 2;
 constexpr int64_t GRID_W = 0;
@@ -350,8 +353,8 @@ int64_t norm_cb_depth(bool has_gamma, bool has_bias, int64_t block_rows) {
     return block_rows == 1 ? 1 : 2;
 }
 
-// `qt` is the tile size of the two STATISTICS intermediates, cb_x_squared and cb_normalized (fp32 at
-// fp32_dest_acc_en, see stat_dtype); `it` is cb_x_sum's (the residual sum t).
+// `qt` is cb_x_squared's tile size (fp32 when it holds a DEST-folded partial sum, see sq_dtype_of); `it` is the
+// intermediate tile size (cb_normalized, cb_x_sum).
 int64_t cb_block_bytes(
     int64_t bt,
     int64_t it,
@@ -363,7 +366,7 @@ int64_t cb_block_bytes(
     bool has_residual,
     int64_t depth_r,
     int64_t block_rows) {
-    int64_t total = depth_x * bt + qt + norm_cb_depth(has_gamma, has_bias, block_rows) * qt + depth_out * bt;
+    int64_t total = depth_x * bt + qt + norm_cb_depth(has_gamma, has_bias, block_rows) * it + depth_out * bt;
     if (has_residual) {
         total += depth_r * bt + it;
     }
@@ -381,13 +384,16 @@ bool is_bfp_dtype(DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataT
 
 DataType intermediate_dtype(DataType dt) { return is_bfp_dtype(dt) ? DataType::BFLOAT16 : dt; }
 
-// CHANGELOG 3: x^2 (cb_x_squared) and x * (1/rms) (cb_normalized) are held in fp32 when DEST is fp32,
-// as native ttnn.rms_norm holds its intermediates (`fp32_dest_acc_en ? Float32 : Float16_b`). In the
-// input's format they were rounded once on the pack and again on the output: the sum of squares
-// picked up a round-to-nearest-away bias (+2.4e-4 in the mean square at MiMo's shape), and y was
-// rounded twice. cb_x_sum stays intermediate_dtype: it IS the returned residual sum t.
-DataType stat_dtype(DataType dt, bool fp32_dest_acc_en) {
-    return fp32_dest_acc_en ? DataType::FLOAT32 : intermediate_dtype(dt);
+// CHANGELOG 4 (refines 3): cb_x_squared's format.  fp32_dest_acc_en keeps DEST 32-bit while it accumulates; a
+// value packed to L1 stays in the intermediate format unless that L1 value is itself an accumulator.
+// cb_x_squared is one exactly when the DEST fold is on (x_squared_wt < wt_chunk): each of its tiles is a sum of
+// several squares, packed once, and it is then fp32.  Without the fold (a partial last tile, or a chunk with no
+// divisor 2..SQ_FOLD_GROUP) it holds single x^2 tiles, read once by the reduce, in intermediate_dtype.
+// cb_normalized (x * 1/rms, read once by the weight multiply) and cb_x_sum (the residual sum t) are
+// intermediate_dtype at any DEST width.
+DataType sq_dtype_of(DataType dt, bool fp32_dest_acc_en, int64_t wt_chunk, int64_t partial_w) {
+    return (fp32_dest_acc_en && x_squared_wt_of(wt_chunk, partial_w) < wt_chunk) ? DataType::FLOAT32
+                                                                                 : intermediate_dtype(dt);
 }
 
 uint32_t tile_bytes(DataType dt) { return tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(dt)); }
@@ -1228,8 +1234,6 @@ ProgramDescriptor create_program_descriptor(
     const int64_t bt = tile_bytes(input.dtype());
     const DataType interm_dtype = intermediate_dtype(input.dtype());
     const int64_t it = tile_bytes(interm_dtype);
-    const DataType sq_dtype = stat_dtype(input.dtype(), compute_config.fp32_dest_acc_en);
-    const int64_t qt = tile_bytes(sq_dtype);
     const int64_t gt = has_gamma ? tile_bytes(weight->dtype()) : 0;
     const int64_t bit = has_bias ? tile_bytes(bias->dtype()) : 0;
     const int64_t st = tile_bytes(DataType::BFLOAT16);
@@ -1287,9 +1291,19 @@ ProgramDescriptor create_program_descriptor(
 
     const int64_t kernel_partial_w = plan.band ? 0 : partial_w;
     const int64_t scaler_pages = kernel_partial_w ? 2 : 1;
+    // cb_x_squared's format and its bytes per tile-row, for a candidate chunk `wtc` (CHANGELOG 4): the L1 solve
+    // prices every candidate at the format that chunk would get.  At 16-bit DEST the format is always
+    // intermediate_dtype and the price the conservative full width, i.e. the solve is the one it was.
+    const bool fp32_dest = compute_config.fp32_dest_acc_en;
+    const bool sq_exact = CB_SQ_EXACT && fp32_dest;
+    auto sq_dtype_for = [&](int64_t wtc) { return sq_dtype_of(input.dtype(), fp32_dest, wtc, kernel_partial_w); };
+    auto sq_row_bytes = [&](int64_t wtc) -> int64_t {
+        return (sq_exact ? x_squared_wt_of(wtc, kernel_partial_w) : wtc) * tile_bytes(sq_dtype_for(wtc));
+    };
     // The partial-W 0/1 mask is unpacked in cb_x_squared's format (the reduce input's), so it is written
-    // in that format: sq_dtype, which is fp32 at fp32_dest_acc_en (CHANGELOG 3).
-    const DataType scaler_dtype = kernel_partial_w ? sq_dtype : DataType::BFLOAT16;
+    // in that format.  A partial width never folds (x_squared_wt_of), so that format is intermediate_dtype
+    // (checked against the final chunk below).
+    const DataType scaler_dtype = kernel_partial_w ? interm_dtype : DataType::BFLOAT16;
     const int64_t scaler_tile_bytes = tile_bytes(scaler_dtype);
     const int64_t scaler_bytes = scaler_tile_bytes * scaler_pages;
     // `return_residual_sum`: cb_residual_sum is T_SUM_RING_BLOCKS of compute's pass-B DEST blocks -- at most
@@ -1360,6 +1374,7 @@ ProgramDescriptor create_program_descriptor(
                                 int64_t rm_depth = CB_RM_STAGE_DEPTH,
                                 int64_t block_rows = 0,
                                 bool narrow_pc = false) -> int64_t {
+            const int64_t qt = tile_bytes(sq_dtype_for(wt_core));
             const int64_t mult = cb_block_bytes(
                 bt,
                 it,
@@ -1375,8 +1390,8 @@ ProgramDescriptor create_program_descriptor(
             const int64_t fixed = per_channel_bytes(wt_core, wt_core, narrow_pc) +
                                   (!is_tile ? rm_stage_rings * rm_depth * wt_core * bt : 0) + scaler_bytes +
                                   combine_fixed;
-            const int64_t sq_wt = CB_SQ_EXACT ? x_squared_wt_of(wt_core, kernel_partial_w) : wt_core;
-            const int64_t per_tilerow = wt_core * mult - (wt_core - sq_wt) * qt + per_row_bytes;
+            // `mult` prices cb_x_squared at one tile per width tile; swap that for its real bytes.
+            const int64_t per_tilerow = wt_core * mult - wt_core * qt + sq_row_bytes(wt_core) + per_row_bytes;
             return std::max<int64_t>(0, floordiv(budget - fixed, std::max<int64_t>(1, per_tilerow)));
         };
 
@@ -1443,12 +1458,27 @@ ProgramDescriptor create_program_descriptor(
                 const auto [per_row_bytes, combine_fixed] = f32_terms(false);
                 return held + scaler_bytes + per_row_bytes + combine_fixed;
             };
+            // cb_x_squared is priced per candidate chunk (sq_row_bytes), not per tile.
             const int64_t per_chunk_tile =
-                qt * (1 + norm_cb_depth(has_gamma, has_bias, 1)) + bt * depth_out +
+                it * norm_cb_depth(has_gamma, has_bias, 1) + bt * depth_out +
                 (has_residual ? bt * (depth_x + residual_depth(depth_x)) : 0) + per_channel_bytes(0, 1, false) +
                 (!is_tile ? rm_stage_rings * CB_RM_STAGE_DEPTH * bt : 0) +
                 (compact ? PC_RING_CHUNKS * ((has_gamma ? gt : 0) + (has_bias ? bit : 0)) : 0);
-            const int64_t room = floordiv(budget - fixed_of(wt_core), per_chunk_tile);
+            auto fits = [&](int64_t hold_wt, int64_t w) {
+                return fixed_of(hold_wt) + w * per_chunk_tile + sq_row_bytes(w) <= budget;
+            };
+            // The widest chunk that fits (0: none).  With a per-tile price this is the old
+            // floordiv(budget - fixed, per-tile bytes); cb_x_squared's price is not linear in the chunk
+            // at fp32 DEST, so it is searched.
+            auto max_fit = [&](int64_t hold_wt) -> int64_t {
+                for (int64_t w = wt_core; w >= 1; --w) {
+                    if (fits(hold_wt, w)) {
+                        return w;
+                    }
+                }
+                return 0;
+            };
+            const int64_t room = max_fit(wt_core);
             if (room < 1) {
                 return std::nullopt;
             }
@@ -1463,14 +1493,10 @@ ProgramDescriptor create_program_descriptor(
                     return std::nullopt;
                 }
                 const int64_t pad = n * wtc - wt_core;
-                if (pad == 0) {
+                if (fits(wt_core + pad, wtc)) {
                     break;
                 }
-                const int64_t room_pad = floordiv(budget - fixed_of(wt_core + pad), per_chunk_tile);
-                if (wtc <= room_pad) {
-                    break;
-                }
-                cap = std::min(cap - 1, room_pad);
+                cap = std::min(cap - 1, max_fit(wt_core + pad));
                 if (cap < 1) {
                     return std::nullopt;
                 }
@@ -1522,14 +1548,27 @@ ProgramDescriptor create_program_descriptor(
 
         // STREAM.
         const int64_t depth = depth_candidates[0];
+        // qt = 0: cb_x_squared is priced per candidate chunk (sq_row_bytes).
         const int64_t mult =
-            cb_block_bytes(bt, it, qt, depth, depth, has_gamma, has_bias, has_residual, residual_depth(depth), 1);
+            cb_block_bytes(bt, it, 0, depth, depth, has_gamma, has_bias, has_residual, residual_depth(depth), 1);
         const int64_t per_chunk_tile_bytes =
             mult + per_channel_bytes(1, 1, false) + (!is_tile ? rm_stage_rings * CB_RM_STAGE_DEPTH * bt : 0);
         const auto [stream_per_row, stream_combine_fixed] = f32_terms(false);
         const int64_t fixed_stream = scaler_bytes + stream_per_row + stream_combine_fixed;
-        const int64_t wt_chunk_l1_max = std::max<int64_t>(1, floordiv(budget - fixed_stream, per_chunk_tile_bytes));
-        const auto [wtc, n] = width_chunk(wt_core, wt_chunk_l1_max, ragged_ok);
+        auto stream_fits = [&](int64_t w) {
+            return fixed_stream + w * per_chunk_tile_bytes + sq_row_bytes(w) <= budget;
+        };
+        int64_t wt_chunk_l1_max = 1;
+        for (int64_t w = wt_core; w >= 1; --w) {
+            if (stream_fits(w)) {
+                wt_chunk_l1_max = w;
+                break;
+            }
+        }
+        auto [wtc, n] = width_chunk(wt_core, wt_chunk_l1_max, ragged_ok);
+        while (!stream_fits(wtc) && wt_chunk_l1_max > 1) {
+            std::tie(wtc, n) = width_chunk(wt_core, --wt_chunk_l1_max, ragged_ok);
+        }
         return Solved{1, wtc, n, depth, depth, false, CB_RM_STAGE_DEPTH, false, false};
     };
 
@@ -1610,6 +1649,10 @@ ProgramDescriptor create_program_descriptor(
     }
 
     const int64_t x_squared_wt = x_squared_wt_of(wt_chunk, kernel_partial_w);
+    const DataType sq_dtype = sq_dtype_for(wt_chunk);
+    TT_FATAL(
+        !kernel_partial_w || sq_dtype == scaler_dtype,
+        "rms_norm_ttnn: the partial-width mask must be in cb_x_squared's format");
 
     const bool reduce_acc_via_add = REDUCE_BULK == 1 && wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT &&
                                     wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT &&
@@ -1664,7 +1707,7 @@ ProgramDescriptor create_program_descriptor(
         }
         cbs.push_back(make_cb(CB_X_SUM, it, block_rows * x_hold_wt, interm_dtype, all_cores));
     }
-    cbs.push_back(make_cb(CB_X_SQUARED, qt, block_rows * x_squared_wt, sq_dtype, all_cores));
+    cbs.push_back(make_cb(CB_X_SQUARED, tile_bytes(sq_dtype), block_rows * x_squared_wt, sq_dtype, all_cores));
     cbs.push_back(make_cb(CB_SCALER, scaler_tile_bytes, scaler_pages, scaler_dtype, all_cores));
     if (!combine) {
         cbs.push_back(make_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, DataType::FLOAT32, all_cores));
@@ -1694,7 +1737,7 @@ ProgramDescriptor create_program_descriptor(
     }
     const int64_t norm_depth = norm_cb_depth(has_gamma, has_bias, block_rows);
     if (norm_depth) {
-        cbs.push_back(make_cb(CB_NORMALIZED, qt, norm_depth * block_rows * wt_chunk, sq_dtype, all_cores));
+        cbs.push_back(make_cb(CB_NORMALIZED, it, norm_depth * block_rows * wt_chunk, interm_dtype, all_cores));
     }
     if (plan.native_out) {
         const auto [osh_t, osw_t] = shard_tile_extent(output);
