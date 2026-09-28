@@ -54,28 +54,45 @@ def padded_in_features(in_features: int) -> int:
 
 def pad_input_features(x: torch.Tensor, in_features: int) -> torch.Tensor:
     """Zero-pad the last dim of a host input to ``padded_in_features(in_features)``."""
-    pad = padded_in_features(in_features) - x.shape[-1]
+    return pad_to_width(x, padded_in_features(in_features))
+
+
+def pad_to_width(x: torch.Tensor, width: int) -> torch.Tensor:
+    pad = width - x.shape[-1]
     return torch.nn.functional.pad(x, (0, pad)) if pad > 0 else x
 
 
 class TtResidualBlock:
     """TTNN residual block. Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: TtResidualBlockWeights):
+    def __init__(self, device, weights: TtResidualBlockWeights, *, indicator_output: torch.Tensor | None = None):
+        """``indicator_output`` adds input feature ``in_features`` (in the tile padding): a row that is
+        zero except for a 1 there maps to exactly this vector, so a learned token (Chronos-2's REG)
+        goes through the same embedding call as the patches. Inputs are ``in_width`` wide."""
         self.device = device
         self.weights = weights
         self.in_features = weights.hidden_weight.shape[1]
-        self._tt = self._move_weights_to_device(device, weights)
+        self.in_width = padded_in_features(self.in_features + (indicator_output is not None))
+        self._tt = self._move_weights_to_device(device, weights, self.in_width, indicator_output)
 
     @staticmethod
-    def _move_weights_to_device(device, weights: TtResidualBlockWeights):
+    def _move_weights_to_device(device, weights: TtResidualBlockWeights, in_width: int, indicator_output):
         import ttnn
 
         in_features = weights.hidden_weight.shape[1]
+        hidden_weight = pad_to_width(weights.hidden_weight.detach().to(torch.float32), in_width)
+        residual_weight = pad_to_width(weights.residual_weight.detach().to(torch.float32), in_width)
+        if indicator_output is not None:
+            # Pre-activation <= -1 on the indicator row, so relu zeroes the hidden path and only the
+            # biases and the skip column remain.
+            hidden_weight[:, in_features] = -(weights.hidden_bias.detach().to(torch.float32).abs() + 1)
+            residual_weight[:, in_features] = (
+                indicator_output.detach().to(torch.float32)
+                - weights.output_bias.detach().to(torch.float32)
+                - weights.residual_bias.detach().to(torch.float32)
+            )
 
-        def _weight(out_in: torch.Tensor, *, pad_in: bool = False):
-            if pad_in:
-                out_in = pad_input_features(out_in, in_features)
+        def _weight(out_in: torch.Tensor):
             # ttnn.linear expects (in, out); torch nn.Linear stores (out, in).
             t = out_in.detach().to(torch.float32).t().contiguous()
             return ttnn.from_torch(
@@ -97,11 +114,11 @@ class TtResidualBlock:
             )
 
         return (
-            _weight(weights.hidden_weight, pad_in=True),
+            _weight(hidden_weight),
             _bias(weights.hidden_bias),
             _weight(weights.output_weight),
             _bias(weights.output_bias),
-            _weight(weights.residual_weight, pad_in=True),
+            _weight(residual_weight),
             _bias(weights.residual_bias),
         )
 
@@ -110,7 +127,7 @@ class TtResidualBlock:
         import ttnn
 
         x = ttnn.from_torch(
-            pad_input_features(x_host.detach(), self.in_features).to(torch.bfloat16),
+            pad_to_width(x_host.detach(), self.in_width).to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
@@ -124,31 +141,32 @@ class TtResidualBlock:
         ttnn.deallocate(out)
         return host
 
-    def forward_device(self, x, *, deallocate_input: bool = False):
+    def forward_device(self, x, *, deallocate_input: bool = False, memory_config=None, output_memory_config=None):
         """Run the residual MLP entirely on device.
 
         ``x`` is borrowed by default so address-stable trace inputs can be
         refreshed and replayed. Set ``deallocate_input`` for owned temporaries.
-        Inputs should already be zero-padded with ``pad_input_features``.
+        Inputs should already be zero-padded to ``in_width``. Intermediates use
+        ``memory_config`` and the output ``output_memory_config`` (both default DRAM).
         """
         import ttnn
 
+        from models.experimental.chronos_forecast import ops
+
+        mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
+        out_mem = ttnn.DRAM_MEMORY_CONFIG if output_memory_config is None else output_memory_config
         hidden_w, hidden_b, output_w, output_b, residual_w, residual_b = self._tt
-        if x.shape[-1] != padded_in_features(self.in_features):
-            raise ValueError(
-                f"expected input width {padded_in_features(self.in_features)} (pad_input_features), got {x.shape[-1]}"
-            )
+        if x.shape[-1] != self.in_width:
+            raise ValueError(f"expected input width {self.in_width} (pad_to_width), got {x.shape[-1]}")
         # Main path: 48 -> h (fused relu) -> out.
-        hidden_act = program_configs.linear(x, hidden_w, bias=hidden_b, activation="relu")
-        main = program_configs.linear(hidden_act, output_w, bias=output_b)
+        hidden_act = program_configs.linear(x, hidden_w, bias=hidden_b, activation="relu", memory_config=mem)
+        main = program_configs.linear(hidden_act, output_w, bias=output_b, memory_config=mem)
         ttnn.deallocate(hidden_act)
         # Skip projection path: 48 -> out.
-        skip = program_configs.linear(x, residual_w, bias=residual_b)
+        skip = program_configs.linear(x, residual_w, bias=residual_b, memory_config=mem)
         if deallocate_input:
             ttnn.deallocate(x)
-        if skip.memory_config() != main.memory_config():
-            skip = ttnn.to_memory_config(skip, main.memory_config())
-        out = ttnn.add(main, skip, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ops.add(main, skip, memory_config=out_mem)
         ttnn.deallocate(main)
         ttnn.deallocate(skip)
         return out

@@ -76,15 +76,13 @@ class TtChronosTraceRunner:
     def update_inputs(self, prepared: TtChronosPreparedInputs, *, cq_id: int | None = None) -> None:
         import ttnn
 
-        if prepared.patched_context.shape != self._prepared.patched_context.shape:
+        if prepared.patched_tokens.shape != self._prepared.patched_tokens.shape or (
+            prepared.num_context_patches != self._prepared.num_context_patches
+        ):
             raise ValueError(
-                f"trace context shape changed: {tuple(prepared.patched_context.shape)} "
-                f"!= {tuple(self._prepared.patched_context.shape)}"
-            )
-        if prepared.patched_future.shape != self._prepared.patched_future.shape:
-            raise ValueError(
-                f"trace future shape changed: {tuple(prepared.patched_future.shape)} "
-                f"!= {tuple(self._prepared.patched_future.shape)}"
+                f"trace token shape changed: {tuple(prepared.patched_tokens.shape)} "
+                f"({prepared.num_context_patches} context) != {tuple(self._prepared.patched_tokens.shape)} "
+                f"({self._prepared.num_context_patches} context)"
             )
         same_groups = prepared.unique_groups == self._prepared.unique_groups and (
             prepared.unique_groups
@@ -97,13 +95,8 @@ class TtChronosTraceRunner:
             raise ValueError("trace group layout changed (unique groups, block size or mask shape)")
         target_cq = self.cq_id if cq_id is None else cq_id
         ttnn.copy_host_to_device_tensor(
-            self._host_tensor(prepared.patched_context),
-            self.inputs.patched_context,
-            cq_id=target_cq,
-        )
-        ttnn.copy_host_to_device_tensor(
-            self._host_tensor(prepared.patched_future),
-            self.inputs.patched_future,
+            self.model.host_tokens(prepared.patched_tokens),
+            self.inputs.patched_tokens,
             cq_id=target_cq,
         )
         if not prepared.unique_groups:

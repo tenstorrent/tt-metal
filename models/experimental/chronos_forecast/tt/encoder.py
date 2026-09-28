@@ -70,12 +70,21 @@ class TtEncoder:
         diagonal_group_attention: bool = False,
         group_block: int | None = None,
         l1_series_chunk: int | None = None,
+        embed=None,
+        tail_start: int | None = None,
+        head=None,
     ):
         """Device (B,T,d) + cos/sin (1 or B,1,T,Dh) + masks -> device (B,T,d); caller owns it.
 
         With ``l1_series_chunk`` the encoder runs on chunks of that many series
         with every intermediate in L1. Chunks must not split an attention group:
         use diagonal group attention, or a multiple of ``group_block``.
+
+        Optional stages run on each chunk in the same memory: ``embed(x, memory_config)``
+        maps the (borrowed) input to the encoder input, ``tail_start`` keeps rows
+        [tail_start, T) after the last block (the final norm is per token), and
+        ``head(normed, memory_config)`` consumes the normed rows and returns the output
+        in DRAM. Only the input and output are then in DRAM.
         """
         import ttnn
 
@@ -83,8 +92,21 @@ class TtEncoder:
             if not diagonal_group_attention and (group_block is None or l1_series_chunk % group_block):
                 raise ValueError("L1 series chunks must hold whole attention groups")
             return self._forward_l1_chunked(
-                x, cos, sin, time_mask, group_mask, l1_series_chunk, diagonal_group_attention, group_block
+                x,
+                cos,
+                sin,
+                time_mask,
+                group_mask,
+                l1_series_chunk,
+                diagonal_group_attention,
+                group_block,
+                embed=embed,
+                tail_start=tail_start,
+                head=head,
             )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        if embed is not None:
+            x = embed(x, dram)
         for block in self.blocks:
             x = block.forward_device(
                 x,
@@ -95,8 +117,26 @@ class TtEncoder:
                 diagonal_group_attention=diagonal_group_attention,
                 group_block=group_block,
             )
-        x = ttnn.rms_norm(x, epsilon=self.weights.final_eps, weight=self._final_norm)
-        return x
+        return self._final(x, dram, tail_start, head)
+
+    def _final(self, h, mem, tail_start: int | None, head):
+        """Tail slice, final norm and head of one (chunk) stream; consumes ``h``."""
+        import ttnn
+
+        if tail_start is not None:
+            begin, end = [0] * len(h.shape), list(h.shape)
+            begin[-2] = tail_start
+            tail = ttnn.slice(h, begin, end, memory_config=mem)
+            ttnn.deallocate(h)
+            h = tail
+        out = ttnn.rms_norm(
+            h,
+            epsilon=self.weights.final_eps,
+            weight=self._final_norm,
+            memory_config=mem if head is not None else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(h)
+        return out if head is None else head(out, mem)
 
     @staticmethod
     def _chunk_group_mask(group_mask, seq_len: int, first_block: int, num_blocks: int):
@@ -120,7 +160,19 @@ class TtEncoder:
         return ttnn.reshape(part, (seq_len * num_blocks, 1, s, s))
 
     def _forward_l1_chunked(
-        self, x, cos, sin, time_mask, group_mask, series_chunk: int, diagonal: bool, group_block: int | None
+        self,
+        x,
+        cos,
+        sin,
+        time_mask,
+        group_mask,
+        series_chunk: int,
+        diagonal: bool,
+        group_block: int | None,
+        *,
+        embed=None,
+        tail_start: int | None = None,
+        head=None,
     ):
         """Chunks never split a group, so each runs all blocks without leaving L1."""
         import ttnn
@@ -142,6 +194,10 @@ class TtEncoder:
                     group_mask, seq_len, start // group_block, (end[batch_dim] - start) // group_block
                 )
             h = ttnn.slice(x, begin, end, memory_config=l1)
+            if embed is not None:
+                embedded = embed(h, l1)
+                ttnn.deallocate(h)
+                h = embedded
             for block in self.blocks:
                 h = block.forward_device(
                     h,
@@ -153,10 +209,7 @@ class TtEncoder:
                     group_block=group_block,
                     memory_config=l1,
                 )
-            out = ttnn.rms_norm(
-                h, epsilon=self.weights.final_eps, weight=self._final_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            ttnn.deallocate(h)
+            out = self._final(h, l1, tail_start, head)
             if chunk_mask is not None and chunk_mask is not group_mask:
                 ttnn.deallocate(chunk_mask)
             chunks.append(out)
@@ -164,7 +217,7 @@ class TtEncoder:
         ttnn.deallocate(sin_l1)
         if len(chunks) == 1:
             return chunks[0]
-        out = ttnn.concat(chunks, dim=batch_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.concat(chunks, dim=len(chunks[0].shape) - 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for chunk in chunks:
             ttnn.deallocate(chunk)
         return out

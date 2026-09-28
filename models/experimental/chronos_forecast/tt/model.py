@@ -9,6 +9,10 @@ reference : models/experimental/chronos_forecast/reference/chronos2/model.py
     quantiles = output_embed(hidden[:, -O:])             # host rearrange + unscale
 
 v1: all-valid masks only (variable masks raise); embeddings/encoder on device, rest on host.
+
+The device-resident path orders tokens [context, future, REG] (RoPE positions follow each
+token, and unmasked attention is order-free), so the forecast rows start on a tile when the
+context patch count is a multiple of 32, and embeds all of them in one call.
 """
 
 from __future__ import annotations
@@ -28,11 +32,7 @@ from models.experimental.chronos_forecast.tt.model_preprocessing import (
     prepare_patched_future,
 )
 from models.experimental.chronos_forecast.tt.program_configs import L1_CHUNK_GRID, TtChronosPrecision
-from models.experimental.chronos_forecast.tt.residual_block import (
-    TtResidualBlock,
-    TtResidualBlockWeights,
-    pad_input_features,
-)
+from models.experimental.chronos_forecast.tt.residual_block import TtResidualBlock, TtResidualBlockWeights
 from models.experimental.chronos_forecast.tt.time_attention import build_rope_cache
 
 
@@ -55,13 +55,13 @@ class TtChronosConfig:
 class TtChronosPreparedInputs:
     """Host tensors prepared once for the device-resident forward."""
 
-    patched_context: torch.Tensor
-    patched_future: torch.Tensor
+    # (B, context + future + REG patches, input embed width): context, future, then the REG
+    # indicator row (see TtResidualBlock's ``indicator_output``).
+    patched_tokens: torch.Tensor
     cos: torch.Tensor
     sin: torch.Tensor
     time_mask: torch.Tensor
     group_mask: torch.Tensor | None
-    reg_token: torch.Tensor | None
     loc_scale: tuple[torch.Tensor, torch.Tensor]
     num_context_patches: int
     num_output_patches: int
@@ -77,13 +77,11 @@ class TtChronosPreparedInputs:
 class TtChronosDeviceInputs:
     """Address-stable device inputs used by eager-device and trace execution."""
 
-    patched_context: object
-    patched_future: object
+    patched_tokens: object
     cos: object
     sin: object
     time_mask: object | None
     group_mask: object | None
-    reg_token: object | None
     batch_size: int  # series per chip; the batch is split along dim 0 across a mesh
     num_context_patches: int
     num_output_patches: int
@@ -161,7 +159,8 @@ class TtChronos:
                     f"L1 chunk budgets were measured on a {L1_CHUNK_GRID[0]}x{L1_CHUNK_GRID[1]} worker grid, "
                     f"this device has {grid.x}x{grid.y}; re-measure with sweeps/sweep_l1_chunk.py"
                 )
-        self._input_embed = TtResidualBlock(device, weights.input_embed)
+        reg_token = weights.shared_weight[weights.reg_token_id] if config.use_reg_token else None
+        self._input_embed = TtResidualBlock(device, weights.input_embed, indicator_output=reg_token)
         self._encoder = TtEncoder(device, weights.encoder, self.precision)
         self._output_embed = TtResidualBlock(device, weights.output_embed)
 
@@ -190,8 +189,8 @@ class TtChronos:
             return ttnn.shard_tensor_to_mesh_mapper(self.device, 0)
         return ttnn.replicate_tensor_to_mesh_mapper(self.device)
 
-    def host_input(self, tensor: torch.Tensor, *, split_batch: bool, device=None):
-        """bf16 tiled input, split over the mesh batch or copied to every chip.
+    def host_input(self, tensor: torch.Tensor, *, split_batch: bool, device=None, tile: bool = True):
+        """bf16 input (tiled unless ``tile=False``), split over the mesh batch or copied to every chip.
 
         ``device=None`` keeps it on host, for ``copy_host_to_device_tensor`` trace refreshes.
         """
@@ -199,14 +198,21 @@ class TtChronos:
 
         tensor = tensor.detach().to(torch.bfloat16)
         mapper = self._mesh_mapper(split_batch=split_batch)
-        if mapper is None:
+        if mapper is None and tile:
             host = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         else:
             # Tilizing inside from_torch with a mesh mapper is ~15x slower than splitting row-major first.
-            host = ttnn.to_layout(ttnn.from_torch(tensor, dtype=ttnn.bfloat16, mesh_mapper=mapper), ttnn.TILE_LAYOUT)
+            host = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, mesh_mapper=mapper)
+            if tile:
+                host = ttnn.to_layout(host, ttnn.TILE_LAYOUT)
         if device is None:
             return host
         return ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def host_tokens(self, tokens: torch.Tensor, *, device=None):
+        """Row-major patched tokens: host tilizing pads T to a tile (1024 x 133 x 64: 35.5 vs 5.3 ms),
+        and ``forward_device`` tilizes on device instead (0.3 ms)."""
+        return self.host_input(tokens, split_batch=True, device=device, tile=False)
 
     @staticmethod
     def group_mask_is_split(prepared: TtChronosPreparedInputs) -> bool:
@@ -298,27 +304,29 @@ class TtChronos:
             patched_future = patched_future[rows]
             output_rows = torch.arange(batch_size)
             batch_size += pad
-        reg_token = None
-        if cfg.use_reg_token:
-            reg_token = (
-                self.weights.shared_weight[self.weights.reg_token_id]
-                .reshape(1, 1, -1)
-                .expand(batch_size, -1, -1)
-                .contiguous()
-            )
-        # Every series uses positions 0..T-1, so one (1,T,Dh) cache broadcasts over the batch.
-        position_ids = torch.arange(seq_len).unsqueeze(0)
+        num_reg = 1 if cfg.use_reg_token else 0
+        tokens = torch.zeros(batch_size, seq_len, self._input_embed.in_width, dtype=torch.bfloat16)
+        tokens[:, :num_context_patches, : patched_context.shape[-1]] = patched_context
+        tokens[:, num_context_patches : seq_len - num_reg, : patched_future.shape[-1]] = patched_future
+        if num_reg:
+            tokens[:, -1, self._input_embed.in_features] = 1.0
+        # Reference positions of the [context, future, REG] token order; every series uses the
+        # same ones, so one (1,T,Dh) cache broadcasts over the batch.
+        position_ids = torch.cat(
+            [
+                torch.arange(num_context_patches),
+                torch.arange(num_context_patches + num_reg, seq_len),
+                torch.arange(num_context_patches, num_context_patches + num_reg),
+            ]
+        ).unsqueeze(0)
         inv_freq = self.weights.encoder.blocks[0].time.inv_freq
         cos, sin = build_rope_cache(position_ids, inv_freq)
-        in_features = self._input_embed.in_features
         return TtChronosPreparedInputs(
-            patched_context=pad_input_features(patched_context, in_features),
-            patched_future=pad_input_features(patched_future, in_features),
+            patched_tokens=tokens,
             cos=cos,
             sin=sin,
             time_mask=time_mask,
             group_mask=group_mask,
-            reg_token=reg_token,
             loc_scale=loc_scale,
             num_context_patches=num_context_patches,
             num_output_patches=num_output_patches,
@@ -338,18 +346,14 @@ class TtChronos:
         def upload(tensor: torch.Tensor, *, split_batch: bool):
             return self.host_input(tensor, split_batch=split_batch, device=self.device)
 
-        rows = prepared.patched_context.shape[0]
+        rows, seq_len = prepared.patched_tokens.shape[:2]
         if rows % self.num_devices:
             raise ValueError(
                 f"{rows} prepared series do not split over {self.num_devices} chips; "
                 "use prepare_inputs from a model on the same mesh"
             )
-        seq_len = (
-            prepared.num_context_patches + (1 if prepared.reg_token is not None else 0) + prepared.num_output_patches
-        )
         return TtChronosDeviceInputs(
-            patched_context=upload(prepared.patched_context, split_batch=True),
-            patched_future=upload(prepared.patched_future, split_batch=True),
+            patched_tokens=self.host_tokens(prepared.patched_tokens, device=self.device),
             cos=ttnn.unsqueeze(upload(prepared.cos, split_batch=False), 1),
             sin=ttnn.unsqueeze(upload(prepared.sin, split_batch=False), 1),
             time_mask=(
@@ -372,7 +376,6 @@ class TtChronos:
                     mesh_mapper=self._mesh_mapper(split_batch=self.group_mask_is_split(prepared)),
                 )
             ),
-            reg_token=upload(prepared.reg_token, split_batch=True) if prepared.reg_token is not None else None,
             batch_size=rows // self.num_devices,
             num_context_patches=prepared.num_context_patches,
             num_output_patches=prepared.num_output_patches,
@@ -381,33 +384,31 @@ class TtChronos:
         )
 
     def forward_device(self, inputs: TtChronosDeviceInputs):
-        """Execute embeddings, encoder, and output head without a host round-trip."""
+        """Execute embeddings, encoder, and output head without a host round-trip.
+
+        Returns (B, future + REG patches, Q * P) in DRAM; ``postprocess_output`` keeps the future rows.
+        With L1 chunks the embedding and head run inside each chunk.
+        """
         import ttnn
 
-        context_embeds = self._input_embed.forward_device(inputs.patched_context)
-        future_embeds = self._input_embed.forward_device(inputs.patched_future)
-        context_embeds = ttnn.reshape(
-            context_embeds,
-            (inputs.batch_size, inputs.num_context_patches, self.config.d_model),
-        )
-        future_embeds = ttnn.reshape(
-            future_embeds,
-            (inputs.batch_size, inputs.num_output_patches, self.config.d_model),
-        )
-        pieces = [context_embeds]
-        if inputs.reg_token is not None:
-            pieces.append(inputs.reg_token)
-        pieces.append(future_embeds)
-        x = ttnn.concat(pieces, dim=-2)
-        ttnn.deallocate(context_embeds)
-        ttnn.deallocate(future_embeds)
-
-        l1_series_chunk = self._l1_series_chunk(x.padded_shape[-2])
+        tokens = ttnn.to_layout(inputs.patched_tokens, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        l1_series_chunk = self._l1_series_chunk(tokens.padded_shape[-2])
         if l1_series_chunk is not None and inputs.group_block is not None:
             # Chunks hold whole group blocks; a block larger than one chunk runs from DRAM.
             l1_series_chunk = l1_series_chunk // inputs.group_block * inputs.group_block or None
-        hidden = self._encoder.forward_device(
-            x,
+
+        def embed(x, mem):
+            out = self._input_embed.forward_device(x, memory_config=mem, output_memory_config=mem)
+            # ttnn.linear can return 4D for a 3D input; the reshape is a view of ``out``.
+            return ttnn.reshape(out, (*tuple(x.shape)[:-1], out.shape[-1]))
+
+        def head(x, mem):
+            return self._output_embed.forward_device(
+                x, deallocate_input=True, memory_config=mem, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        out = self._encoder.forward_device(
+            tokens,
             inputs.cos,
             inputs.sin,
             inputs.time_mask,
@@ -415,15 +416,12 @@ class TtChronos:
             diagonal_group_attention=inputs.unique_groups,
             group_block=inputs.group_block,
             l1_series_chunk=l1_series_chunk,
+            embed=embed,
+            tail_start=inputs.num_context_patches,
+            head=head,
         )
-        seq_len = hidden.shape[-2]
-        forecast_embeds = ttnn.slice(
-            hidden,
-            (0, seq_len - inputs.num_output_patches, 0),
-            (inputs.batch_size, seq_len, self.config.d_model),
-        )
-        ttnn.deallocate(hidden)
-        return self._output_embed.forward_device(forecast_embeds, deallocate_input=True)
+        ttnn.deallocate(tokens)
+        return out
 
     def postprocess_output(
         self,
@@ -474,13 +472,11 @@ class TtChronos:
         import ttnn
 
         for tensor in (
-            inputs.patched_context,
-            inputs.patched_future,
+            inputs.patched_tokens,
             inputs.cos,
             inputs.sin,
             inputs.time_mask,
             inputs.group_mask,
-            inputs.reg_token,
         ):
             if tensor is not None:
                 ttnn.deallocate(tensor)
