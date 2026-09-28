@@ -92,3 +92,23 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   ratio [1.0018, 1.0112], PASS. Attention headroom is ~1.9x (the 1x4 prior had ~3x at rel 0.0052); if a perf change pushes attention rel toward 0.015,
   look at the SDPA preset first. The first `FAIL pcc=0` block comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_02_attention.py`
+
+## C.full_dense.attn_residual.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_residual.py`
+  (same golden, [2048, 4096]). Gate: pcc_attn_residual_L00 >= 0.99. Asserted extras: output size, finite, rel L2 <= 0.01, per-token norm
+  ratio in [0.99, 1.01]. Added the prior sliding_moe test's addend check on delta = out - in: coef in [0.95, 1.05], attn rel L2 <= 0.3.
+  Why: PCC passes 2x, zeroed rows or columns, and dropped tail rows (measurements are in the docstring).
+- BRINGUP_IMPL=reference: PCC ~1.0, rel 0.00207, ratio [0.9991, 1.0007], coef 1.0000, attn rel 0.0000, PASS. BRINGUP_IMPL=stub: PCC 0, FAIL.
+- Default gate (2x2): NotImplementedError from hooks.device_component, which is expected until the implement step. The add must stay bf16 or better
+  (the bf16 add measured rel 0.0023 on 1x4). `ttnn.bringup.rms_norm(return_residual_sum=...)` can fuse this add into ffn_norm later.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_residual.py`
+
+## C.full_dense.attn_residual.implement.1 (implement role), 2026-09-28
+- `tt/residual.py`: `TtResidualAdd`, copied from the 1x4 prior unchanged: replicated bf16 `ttnn.add` into DRAM, with no collective, because
+  attention's all_reduce over both axes leaves attn_out replicated on every chip. It is not yet fused into ffn_norm; `ttnn.bringup.rms_norm(return_residual_sum=...)`
+  is still available for the assemble/perf step.
+- `hooks.py`: added `_RESIDUAL_STEPS` (attn/mlp/ffn residual) and `_residual_host_fn`. `device_component` serves every residual step. The hybrid
+  model adds residual overrides for the steps listed in DEVICE_STEPS. `DEVICE_STEPS.full_dense` now contains `attn_residual`.
+- Gate: pcc_attn_residual_L00 0.999997, rel_l2 0.002393, row_norm_ratio [0.9996, 1.0012], coef 1.0005, attn rel 0.0024, PASS.
+  The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_residual.py`
