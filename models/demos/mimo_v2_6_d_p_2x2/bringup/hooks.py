@@ -21,7 +21,7 @@ for _name in ("tokenizer", "hf_model", "hf_layers"):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": set(),
+    "sliding_moe": {"attention"},
     "full_moe": set(),
 }
 
@@ -107,8 +107,9 @@ def _cfg(loader):
 
 
 def _attention_module(mesh, spec, layer, loader=None, cfg=None):
-    """TtFullAttention (TP=4 over the 2x2 mesh, all_reduce axis 1 then axis 0) for one full layer; loads only its
-    attention weights (fused qkv dequantized per TP rank, bf16 o_proj)."""
+    """TtFullAttention (full layers) or TtSlidingAttention (sliding layers: window, per-head sink), TP=4 over the 2x2
+    mesh, all_reduce axis 1 then axis 0; loads only its attention weights (fused qkv dequantized per TP rank, bf16
+    o_proj, bf16 sink bias)."""
     from models.demos.mimo_v2_6_d_p_2x2.tt.model import build_attention
 
     loader = loader or _loader(spec)
