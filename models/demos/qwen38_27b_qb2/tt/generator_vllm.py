@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import resolve_mesh_tp
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator
 from models.demos.qwen38_27b_qb2.tt.model import ModelCache
 
@@ -34,8 +35,11 @@ class Qwen38ForCausalLM:
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None, **kwargs
     ):
-        if tuple(mesh_device.shape) != (1, 4) or tt_data_parallel != 1:
-            raise ValueError("Qwen3.8 requires a TP4 MeshShape(1,4)")
+        # resolve_mesh_tp is the single authority on qualified hardware; it raises with the
+        # arch/cluster detail. Data parallelism is orthogonal and unsupported either way.
+        resolve_mesh_tp(mesh_device)
+        if tt_data_parallel != 1:
+            raise ValueError("Qwen3.8 does not support tt_data_parallel > 1")
         if not 1 <= max_batch_size <= 32 or not 1 <= max_seq_len <= cls._MAX_CONTEXT:
             raise ValueError("Serving dimensions exceed the validated model contract")
         if os.getenv("QWEN_DECODE_BUCKETS", "0") == "1" and max_batch_size not in (1, 8, 16):
