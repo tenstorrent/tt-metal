@@ -57,6 +57,8 @@ temporary detached baseline worktree.
   WORKTREE_DIR={WORKTREE_DIR}
   ```
 
+- Spawn the reviewer as subagent type `issue-solver-reviewer`, which runs
+  review at `xhigh` effort; spawn every other role as a general subagent.
 - The child reads its playbook, state (including verbatim issue text), and
   artifacts. Do not pre-read its playbook or copy these inputs into the prompt.
 - Append only needed perf `TARGET_ARCH`, retry `FAILURE_CLASS`, evidence paths,
@@ -339,7 +341,8 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_review
 ```
 
-Spawn `reviewer.md`, then call `execute_step_record_review`. Read
+Spawn `reviewer.md` as subagent type `issue-solver-reviewer`, then call
+`execute_step_record_review`. Read
 `blocking_total` from `review_result.json` only after recording succeeds.
 If validation fails, have the reviewer correct its output; never forward a
 malformed result to the worker. A changed candidate requires

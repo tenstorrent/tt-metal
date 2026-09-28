@@ -187,7 +187,8 @@ Do not retry the worker for `ENV_ERROR` or `SIM_ISA_GAP`. Other architectures
 may finish, but any in-scope terminal failure makes the final combined status
 `partial` or `failed`.
 
-Review the shared diff once. One review retry worker handles all blocking
+Review the shared diff once, spawning the reviewer as subagent type
+`issue-solver-reviewer`. One review retry worker handles all blocking
 findings. After it edits the fix, rerun functional verification for all
 in-scope architectures and review the new shared diff before performance.
 The review must check all original requirements across the requested scope,
