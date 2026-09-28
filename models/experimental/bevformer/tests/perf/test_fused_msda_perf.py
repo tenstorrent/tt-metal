@@ -27,6 +27,12 @@ time is in:
     * ``canonical_multi`` -- the rank-4 / rank-6 / rank-5 operand forms the op
       also accepts. The delta against ``packed_multi`` is what byte-offset
       addressing (#55232-#55236) buys, measured rather than assumed.
+    * ``head_major_multi`` -- value as (B, H, S*D), built on the host, so the
+      reader fetches each horizontal corner pair in one read. Same arithmetic
+      as ``packed_multi``, so the gate is bit-exact. One page holds a whole
+      head, so a head lives in a single DRAM bank.
+    * ``head_major_k<k>_multi`` -- the same, as (B, H, ceil(S/k), k*D): k
+      sticks per page, which spreads each head over the DRAM banks.
     * ``packed_per_level`` -- L single-level calls accumulated on device, which
       is the contract #55201 replaced. Operands are pre-sliced on the host
       outside the measured region, so this is a *lower bound* on the per-level
@@ -67,7 +73,25 @@ WORKLOADS = [
     ("nuscenes_base", 1, 2500),
 ]
 
-KERNEL_VARIANTS = ["packed_multi", "canonical_multi", "packed_per_level"]
+KERNEL_VARIANTS = [
+    "packed_multi",
+    "canonical_multi",
+    "packed_per_level",
+    "head_major_multi",
+    "head_major_k8_multi",
+    "head_major_k32_multi",
+    "head_major_k128_multi",
+]
+
+# Spatial shapes for the working-set sweep, keyed by the resulting `value`
+# size at base dims (8 heads x 32 ch, bf16). None keeps the preset's base
+# pyramid. Q, H, L and P are unchanged, so every entry issues about the same
+# number of value reads over a smaller footprint.
+WORKING_SET_SHAPES = {
+    "ws15mb": None,
+    "ws3mb": [(50, 29)] * 4,
+    "ws0p8mb": [(25, 15)] * 4,
+}
 
 
 def _head_sha():
@@ -77,7 +101,7 @@ def _head_sha():
         return "unknown"
 
 
-def _build(device, config_name, batch_size, num_queries):
+def _build(device, config_name, batch_size, num_queries, spatial_shapes_override=None):
     """Reference module, preprocessed TT params and the torch inputs.
 
     Deliberately the same construction as the PCC file: a perf number measured
@@ -88,7 +112,8 @@ def _build(device, config_name, batch_size, num_queries):
 
     model_config = preset_config.model_config
     num_levels = model_config.num_levels
-    spatial_shapes = torch.tensor(preset_config.dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
+    shapes = spatial_shapes_override or preset_config.dataset_config.spatial_shapes[:num_levels]
+    spatial_shapes = torch.tensor(shapes, dtype=torch.long)
     num_keys = int(spatial_shapes.prod(dim=1).sum().item())
 
     config = DeformableAttentionConfig(
@@ -182,6 +207,28 @@ def _canonical_operands(value, offsets, attn, model):
         ttnn.reshape(value, (bs, num_keys, model.num_heads, model.head_dim)),
         ttnn.reshape(offsets, (bs, num_queries, model.num_heads, model.num_levels, model.num_points, 2)),
         ttnn.reshape(attn, (bs, num_queries, model.num_heads, model.num_levels, model.num_points)),
+    )
+
+
+def _head_major_value(device, value, model, sticks_per_page=None):
+    """(B, S, H*D) -> (B, H, S*D), or (B, H, ceil(S/k), k*D) with a zero tail.
+
+    Through the host, so no device op is timed.
+    """
+    value_t = ttnn.to_torch(value)
+    bs, num_keys, _ = value_t.shape
+    value_t = value_t.reshape(bs, num_keys, model.num_heads, model.head_dim).permute(0, 2, 1, 3)
+    if sticks_per_page is None:
+        value_t = value_t.reshape(bs, model.num_heads, num_keys * model.head_dim)
+    else:
+        pages = -(-num_keys // sticks_per_page)
+        value_t = torch.nn.functional.pad(value_t, (0, 0, 0, pages * sticks_per_page - num_keys))
+        value_t = value_t.reshape(bs, model.num_heads, pages, sticks_per_page * model.head_dim)
+    return ttnn.from_torch(
+        value_t.contiguous(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
 
@@ -347,6 +394,13 @@ def test_fused_msda_kernel_perf(
     elif variant == "canonical_multi":
         value_c, offsets_c, attn_c = _canonical_operands(value_p, offsets_p, attn_p, model)
         op_fn = partial(_call_one, value_c, refs, offsets_c, attn_c, spatial_shapes)
+    elif variant == "head_major_multi":
+        value_h = _head_major_value(device, value_p, model)
+        op_fn = partial(_call_one, value_h, refs, offsets_p, attn_p, spatial_shapes)
+    elif variant.startswith("head_major_k"):
+        sticks_per_page = int(variant[len("head_major_k") : -len("_multi")])
+        value_h = _head_major_value(device, value_p, model, sticks_per_page)
+        op_fn = partial(_call_one, value_h, refs, offsets_p, attn_p, spatial_shapes)
     elif variant == "packed_per_level":
         per_level = _per_level_operands(device, value_p, offsets_p, attn_p, model, spatial_shapes)
         op_fn = partial(_call_per_level, refs, per_level)
@@ -370,7 +424,74 @@ def test_fused_msda_kernel_perf(
     )
     assert passed, f"variant {variant} diverged from packed_multi: {message}"
     logger.info(f"variant gate vs packed_multi: {message}")
+    if variant.startswith("head_major"):
+        torch.testing.assert_close(ttnn.to_torch(warmup), ttnn.to_torch(golden), rtol=0, atol=0)
     ttnn.deallocate(golden)
     ttnn.deallocate(warmup)
 
     _signposted(device, op_fn)
+
+
+def _count_value_reads(refs, offsets, spatial_shapes, num_levels, num_points):
+    """Value reads the reader issues: in-bounds bilinear corners only.
+
+    Mirrors the V2 pillar geometry, ``px = ref * W + offset - 0.5`` with
+    ``r = p % R``, on the same bf16 operands the device sees. The reader skips
+    out-of-bounds corners, so shrinking the pyramid also drops reads; timing
+    per issued read rather than per call keeps that out of the comparison.
+    """
+    refs_t = ttnn.to_torch(refs, dtype=torch.float32)
+    bs, num_queries, num_refs, _ = refs_t.shape
+    off = ttnn.to_torch(offsets, dtype=torch.float32)
+    off = off.reshape(bs, num_queries, off.shape[2], num_levels, num_points, 2)
+    ref_idx = torch.arange(num_points) % num_refs
+    total = 0
+    for level, (height, width) in enumerate(_spatial_shapes_list(spatial_shapes)):
+        ref = refs_t[:, :, None, ref_idx, :]
+        px = ref[..., 0] * width + off[:, :, :, level, :, 0] - 0.5
+        py = ref[..., 1] * height + off[:, :, :, level, :, 1] - 0.5
+        x0 = torch.floor(px)
+        y0 = torch.floor(py)
+        for dy in (0, 1):
+            for dx in (0, 1):
+                cx = x0 + dx
+                cy = y0 + dy
+                total += int(((cx >= 0) & (cx < width) & (cy >= 0) & (cy < height)).sum().item())
+    return total
+
+
+@torch.no_grad()
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("value_memory", ["dram", "l1"])
+@pytest.mark.parametrize("working_set", list(WORKING_SET_SHAPES))
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
+def test_fused_msda_working_set_perf(device, working_set, value_memory, reset_seeds, ensure_gc):
+    """Production kernel at base dims, pyramid footprint swept, `value` in DRAM or L1."""
+    config_name, batch_size, num_queries = "nuscenes_base", 1, 2500
+    logger.info(f"device-perf run of commit {_head_sha()} -- working set {working_set} value in {value_memory}")
+
+    config, _, tt_parameters, torch_inputs = _build(
+        device, config_name, batch_size, num_queries, WORKING_SET_SHAPES[working_set]
+    )
+    spatial_shapes = torch_inputs[3]
+    tt_query, tt_value, tt_refs = _to_device(device, torch_inputs)
+    model = _tt_model(device, config, tt_parameters, spatial_shapes)
+    value_p, refs, offsets_p, attn_p = _packed_operands(model, tt_query, tt_value, tt_refs)
+
+    reads = _count_value_reads(refs, offsets_p, spatial_shapes, config.num_levels, config.num_points)
+    value_bytes = value_p.shape[1] * value_p.shape[2] * 2
+    logger.info(f"working set {working_set}: value={value_bytes / 1e6:.2f} MB issued_value_reads={reads}")
+
+    golden = _call_one(value_p, refs, offsets_p, attn_p, spatial_shapes)
+    if value_memory == "l1":
+        value_p = ttnn.to_memory_config(value_p, ttnn.L1_MEMORY_CONFIG)
+
+    op_fn = partial(_call_one, value_p, refs, offsets_p, attn_p, spatial_shapes)
+    warmup = op_fn()
+    passed, message = check_with_pcc(
+        ttnn.to_torch(golden, dtype=torch.float32), ttnn.to_torch(warmup, dtype=torch.float32), pcc=0.9999
+    )
+    assert passed, f"value in {value_memory} diverged from value in DRAM: {message}"
+    ttnn.deallocate(golden)
+    ttnn.deallocate(warmup)
+    _signposted(device, op_fn, iters=3)

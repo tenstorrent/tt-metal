@@ -231,6 +231,26 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         }
     }
 
+    // Head-major reads a corner pair as one 2*D-wide read at a stick offset
+    // inside a page, so each stick offset must itself be a legal NoC source
+    // address.
+    if (s.value_head_major) {
+        const uint32_t value_alignment = value.buffer()->buffer_type() == BufferType::DRAM
+                                             ? tt::tt_metal::hal::get_dram_alignment()
+                                             : tt::tt_metal::hal::get_l1_alignment();
+        TT_FATAL(
+            value_stick_raw % value_alignment == 0,
+            "fused_msda: head-major value needs head_dim * element_size ({} B) to be a multiple of the value "
+            "buffer's alignment ({} B)",
+            value_stick_raw,
+            value_alignment);
+        TT_FATAL(
+            value.buffer()->page_size() % value_stick_raw == 0,
+            "fused_msda: head-major value page ({} B) must hold a whole number of {} B sticks",
+            value.buffer()->page_size(),
+            value_stick_raw);
+    }
+
     uint32_t ref_stick_aligned = 0;
     if (attrs.from_offsets) {
         const auto& ref = *tensor_args.reference_points;
@@ -282,7 +302,8 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     const auto output_fmt = datatype_to_dataformat_converter(output.dtype());
 
     // Reader-only staging arenas: reserved once and treated as flat L1 space.
-    push_cb(value_scratch_cb, TILE_MAX_ROWS, value_stick_aligned, value_fmt);
+    // Head-major stages a horizontal corner pair per row: two sticks.
+    push_cb(value_scratch_cb, (s.value_head_major ? 2u : 1u) * TILE_MAX_ROWS, value_stick_aligned, value_fmt);
     push_cb(attn_scratch_cb, TILE_MAX_ROWS * attn_sticks_per_row, attn_stick_aligned, attn_fmt);
     push_cb(loc_scratch_cb, TILE_MAX_ROWS * loc_sticks_per_row, loc_stick_aligned, loc_fmt);
     if (attrs.from_offsets) {
@@ -334,9 +355,11 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         static_cast<uint32_t>(s.locations_packed),
         static_cast<uint32_t>(s.weights_packed),
         static_cast<uint32_t>(attrs.reference_mode == MSDAReferenceMode::Level ? 0 : 1),
-        static_cast<uint32_t>(s.value_packed),
+        // 0 = canonical, 1 = packed, 2 = head-major; see fused_msda_reader_common.hpp.
+        static_cast<uint32_t>(s.value_head_major ? 2 : (s.value_packed ? 1 : 0)),
         // Must match the tensor's DRAM page size, not the D-wide scratch stick.
-        // Packed value is one (B, S) stick of H*D; canonical is one (B, S, H) stick of D.
+        // Packed value is one (B, S) stick of H*D; canonical is one (B, S, H) stick of D;
+        // head-major is k sticks of D, k = S for one page per head.
         static_cast<uint32_t>(value.buffer()->page_size()),
         static_cast<uint32_t>(attrs.from_offsets),
         geom_x_cb,

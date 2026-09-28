@@ -85,27 +85,74 @@ MSDAShapes derive_shapes(
         total_keys += h * w;
     }
 
-    // ---- value: (B, S, H, D) or packed (B, S, H*D) ----
+    // ---- value: (B, S, H, D), packed (B, S, H*D) or head-major ----
     // Packed is the layout a Linear over embed_dims emits; D is recovered from
-    // attention_weights' head dim after that tensor is parsed below.
+    // attention_weights' head dim after that tensor is parsed below. Head-major
+    // puts x and x+1 of one head next to each other, so the reader can fetch a
+    // horizontal corner pair in one read. It comes as (B, H, S*D), one page per
+    // head, or as (B, H, ceil(S/k), k*D), k sticks per page with the tail
+    // zero-padded, which spreads a head over the DRAM banks. Head-major is told
+    // apart from the other forms by dim 1 being attention_weights' head count
+    // rather than S.
     const auto& vs = value.logical_shape();
     TT_FATAL(
         vs.rank() == 4 || vs.rank() == 3,
-        "fused_msda: value rank must be 4 (B, S, H, D) or 3 (B, S, H*D), got shape {}",
+        "fused_msda: value rank must be 4 (B, S, H, D) / (B, H, ceil(S/k), k*D) or 3 (B, S, H*D) / (B, H, S*D), got "
+        "shape {}",
         vs);
     s.batch = vs[0];
-    s.num_keys = vs[1];
-    s.value_packed = vs.rank() == 3;
     TT_FATAL(s.batch > 0, "fused_msda: batch must be > 0");
-    TT_FATAL(
-        s.num_keys == total_keys,
-        "fused_msda: value's S dim ({}) must equal sum of H_l * W_l over spatial_shapes ({})",
-        s.num_keys,
-        total_keys);
-    if (!s.value_packed) {
-        s.num_heads = vs[2];
-        s.head_dim = vs[3];
-        TT_FATAL(s.num_heads > 0, "fused_msda: num_heads must be > 0");
+    const auto& attn_shape = attn.logical_shape();
+    s.value_head_major = attn_shape.rank() >= 3 && static_cast<uint32_t>(vs[1]) != total_keys && vs[1] == attn_shape[2];
+    s.value_packed = vs.rank() == 3 && !s.value_head_major;
+    if (s.value_head_major) {
+        s.num_keys = total_keys;
+        s.num_heads = vs[1];
+        if (vs.rank() == 3) {
+            TT_FATAL(
+                vs[2] % total_keys == 0,
+                "fused_msda: head-major value (B, H, S*D) last dim ({}) must be a multiple of S = sum of H_l * W_l "
+                "({})",
+                vs[2],
+                total_keys);
+            s.head_dim = vs[2] / total_keys;
+        } else {
+            // D is not a dim of its own here: it is the unique multiple of 16
+            // for which k = width / D sticks per page give ceil(S / k) pages.
+            const uint32_t pages = vs[2];
+            const uint32_t width = vs[3];
+            for (uint32_t d = 16; d <= width; d += 16) {
+                if (width % d != 0) {
+                    continue;
+                }
+                const uint32_t k = width / d;
+                if ((total_keys + k - 1) / k == pages) {
+                    TT_FATAL(
+                        s.head_dim == 0,
+                        "fused_msda: head-major value shape {} is ambiguous in head_dim ({} or {})",
+                        vs,
+                        s.head_dim,
+                        d);
+                    s.head_dim = d;
+                }
+            }
+            TT_FATAL(
+                s.head_dim != 0,
+                "fused_msda: head-major value shape {} is not (B, H, ceil(S/k), k*D) for S = {}",
+                vs,
+                total_keys);
+        }
+    } else {
+        s.num_keys = vs[1];
+        TT_FATAL(
+            s.num_keys == total_keys,
+            "fused_msda: value's S dim ({}) must equal sum of H_l * W_l over spatial_shapes ({})",
+            s.num_keys,
+            total_keys);
+        if (vs.rank() == 4) {
+            s.num_heads = vs[2];
+            s.head_dim = vs[3];
+        }
     }
 
     // ---- attention_weights: (B, Q, H, L, P) or (B, Q, H, L*P) ----
@@ -129,6 +176,7 @@ MSDAShapes derive_shapes(
             s.num_heads);
         s.head_dim = vs[2] / s.num_heads;
     } else {
+        TT_FATAL(s.num_heads > 0, "fused_msda: num_heads must be > 0");
         TT_FATAL(
             static_cast<uint32_t>(as[2]) == s.num_heads,
             "fused_msda: attention_weights heads ({}) != value heads ({})",

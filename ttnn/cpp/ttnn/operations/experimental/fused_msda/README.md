@@ -54,6 +54,7 @@ can be compared in one build.
 out = ttnn.experimental.fused_msda(
     value,                      # (B, S, H, D)          ROW_MAJOR bf16   [canonical]
                                 #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
+                                #   or (B, H, S*D) / (B, H, ceil(S/k), k*D)  [head-major]
     sampling_locations,         # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
     attention_weights,          # (B, Q, H, L, P)       ROW_MAJOR bf16   [canonical]
@@ -73,6 +74,14 @@ Q = queries        L = levels               P = points per (head, level)
 D = head_dim
 ```
 
+`value` forms. Canonical and packed store the heads of one pixel together;
+head-major stores the pixels of one head together, so `x` and `x+1` are
+adjacent and the reader fetches a horizontal corner pair in one read (§8).
+Head-major is recognised by dim 1 being `attention_weights`' head count rather
+than `S`. The rank-4 head-major form puts `k` sticks in each page and
+zero-pads the tail of each head; `D` is inferred as the unique multiple of 16
+consistent with `ceil(S/k)` pages.
+
 `spatial_shapes` is a **host-side static attribute**, not a device tensor. It is
 fixed by the feature-pyramid config, it is needed for address arithmetic in the
 reader, and reading it from device would force a host sync. `level_start_index`
@@ -85,6 +94,7 @@ runtime args — callers never pass it.
 out = ttnn.experimental.fused_msda_from_offsets(
     value,                      # (B, S, H, D)          ROW_MAJOR bf16   [canonical]
                                 #   or (B, S, H*D)      ROW_MAJOR bf16   [packed]
+                                #   or (B, H, S*D) / (B, H, ceil(S/k), k*D)  [head-major]
     reference_points,           # (B, Q, R, 2)          ROW_MAJOR bf16
     sampling_offsets,           # (B, Q, H, L, P, 2)    ROW_MAJOR bf16   [canonical]
                                 #   or (B, Q, H, L*P*2) ROW_MAJOR bf16   [packed]
@@ -225,7 +235,7 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 
 | CB | Role | Pages | Page size |
 | --- | --- | --- | --- |
-| `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row | 32 | `align(D*2)` |
+| `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row (a corner pair for head-major) | 32 (64 head-major) | `align(D*2)` |
 | `c_1` `attn_scratch` | reader-only arena for attention weights | 32 (packed) or 32*L | `align(attn_stick)` |
 | `c_2` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
 | `c_3` `input_tile` | reader → compute, the `V_corner` values | `8 * n_d_tiles` | 2048 |
@@ -357,6 +367,12 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
 4. for each of the four corners: issue `v_rows` NoC reads of the `D`-wide value
    stick at page `(b*S + level_start[l] + cy*W_l + cx) * H + h`, scatter them
    into `n_d_tiles` tile rows, zero the rows it skipped, and push.
+   Head-major instead reads NW+NE and SW+SE as one `2*D`-wide read per row,
+   from stick `s = level_start[l] + cy*W_l + cx` at page
+   `(b*H + h) * ceil(S/k) + s / k`, offset `(s % k) * D*2`. It falls back to
+   single-stick reads when one corner of the pair is out of bounds in x or the
+   pair straddles a page, and pushes both corners of a pair together, in the
+   same NW, NE, SW, SE order.
 
 Only the readers differ between V1 and V2, and only in which staged bf16 pair
 step 2 calls the primary and which the secondary.
@@ -392,6 +408,7 @@ row's `D` values across them into a stick, and writes it at
 | `H_l`, `W_l` | `<= 256` | the SFPU floors the bilinear corner and hands it to the reader as bf16, which carries 8 significant bits. Past 256 an in-bounds corner index would round to a *different, still in-bounds* pixel — a silently wrong sample. Rejected in `derive_shapes`, pinned by `test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers` |
 | `Q`, `P`, `H`, `B` | any positive value | `Q % 32 != 0` handled by `v_rows` |
 | `S` | must equal `sum_l H_l * W_l` | validated |
+| head-major `D*2` | a multiple of the value buffer's alignment | a pair read starts at a stick offset inside a page, so that offset must be a legal NoC source address |
 | padding | zeros | |
 
 Known limitations, to revisit after profiling:
@@ -401,6 +418,10 @@ Known limitations, to revisit after profiling:
   (`(B, Q, H, L*P*2)`) is one read per `(b, q, h)` and no padding — prefer it.
   This is the "flatten the semantics into one channel dimension" idea from the
   design brief; both forms are accepted and tested for equality.
+* Head-major with one page per head, `(B, H, S*D)`, puts a whole head in one
+  DRAM bank (page `i` lives in bank `i % num_banks`). With `H` smaller than, or
+  not a multiple of, the bank count some banks idle or carry two heads. Prefer
+  the paged form; `k = 32` (2 KB pages) was the fastest measured.
 * Sharded inputs unsupported.
 * `fp32` accumulate not exposed; the L1 accumulator runs at the pack format.
   `fp32_dest_acc_en` is on unconditionally, but that is about the geometry's

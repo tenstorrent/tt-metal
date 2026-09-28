@@ -66,6 +66,15 @@
 //   [4]                 num_output_tiles
 //   [5 .. 5+3L)         per level l: H_l, W_l, level_start_index_l
 //   [5+3L ...]          per output tile: b, head, q_start, v_rows
+//
+// Value layouts (VALUE_LAYOUT):
+//   0 canonical  (B, S, H, D)   one page per (b, s, h)
+//   1 packed     (B, S, H*D)    one page per (b, s), head at byte offset h*D*2
+//   2 head-major                k sticks of D per page, ceil(S/k) pages per
+//                               (b, h); k = S is (B, H, S*D). x and x+1 are
+//                               adjacent, so the reader fetches NW+NE and SW+SE
+//                               as one 2*D-wide read each, or two reads when
+//                               the pair straddles a page.
 
 // NOTE: kernels are JIT-compiled as C++17. No abbreviated function templates
 // (`const auto&` parameters), no concepts — spell template parameters out.
@@ -109,8 +118,12 @@ constexpr uint32_t loc_stick_nbytes = get_compile_time_arg_val(14);
 constexpr bool LOC_PACKED = get_compile_time_arg_val(16) != 0;
 constexpr bool ATTN_PACKED = get_compile_time_arg_val(17) != 0;
 [[maybe_unused]] constexpr uint32_t REF_MODE = get_compile_time_arg_val(18);  // 0 = level, 1 = pillar
-constexpr bool VALUE_PACKED = get_compile_time_arg_val(19) != 0;
+constexpr uint32_t VALUE_LAYOUT = get_compile_time_arg_val(19);
+constexpr bool VALUE_PACKED = VALUE_LAYOUT == 1;
+constexpr bool VALUE_HEAD_MAJOR = VALUE_LAYOUT == 2;
 constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(20);
+constexpr uint32_t HM_STICKS_PER_PAGE = VALUE_HEAD_MAJOR ? value_page_nbytes / value_stick_nbytes : 1u;
+constexpr uint32_t HM_PAGES_PER_HEAD = (NUM_KEYS + HM_STICKS_PER_PAGE - 1) / HM_STICKS_PER_PAGE;
 constexpr bool FROM_OFFSETS = get_compile_time_arg_val(21) != 0;
 
 // Reader <-> compute tile pipes.
@@ -302,6 +315,27 @@ inline void zero_input_row(uint32_t tile_l1, uint32_t r) {
     }
 }
 
+// Copies one staged D-wide stick into row r of an input tile group.
+inline void scatter_stick(uint32_t tile_l1, uint32_t r, uint32_t src_l1) {
+    const auto off = fused_msda_tile_layout::tile_row_offsets(r);
+    CoreLocalMem<volatile uint32_t> src(src_l1);
+    for (uint32_t k = 0; k < N_D_TILES; ++k) {
+        const uint32_t base = k * WORDS_PER_TILE_ROW;
+        const uint32_t words_k = (STICK_WORDS - base < WORDS_PER_TILE_ROW) ? (STICK_WORDS - base) : WORDS_PER_TILE_ROW;
+        const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
+        const uint32_t hi_words = words_k - lo_words;
+        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
+        CoreLocalMem<volatile uint32_t> dl(ktile_l1 + off.lo);
+        CoreLocalMem<volatile uint32_t> dh(ktile_l1 + off.hi);
+        for (uint32_t i = 0; i < lo_words; ++i) {
+            dl[i] = src[base + i];
+        }
+        for (uint32_t i = 0; i < hi_words; ++i) {
+            dh[i] = src[base + HALF_WORDS + i];
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The shared reader body.
 //
@@ -340,7 +374,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 
     // Scratch CBs are reserved once and used as fixed linear L1 arenas; they
     // are never pushed, so nothing downstream waits on them.
-    value_scratch_cb.reserve_back(TILE_MAX_ROWS);
+    value_scratch_cb.reserve_back((VALUE_HEAD_MAJOR ? 2u : 1u) * TILE_MAX_ROWS);
     const uint32_t value_arena_l1 = value_scratch_cb.get_write_ptr();
     attn_scratch_cb.reserve_back(TILE_MAX_ROWS * ATTN_STICKS_PER_ROW);
     const uint32_t attn_arena_l1 = attn_scratch_cb.get_write_ptr();
@@ -462,84 +496,146 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             x0_cb.pop_front(1);
             y0_cb.pop_front(1);
 
-            for (uint32_t c = 0; c < 4; ++c) {
-                // Hoist every c-invariant selector: c picks the (dy, dx) step to
-                // the corner and which validity arrays gate it.
-                //
-                // c = 0, 1, 2, 3 is NW, NE, SW, SE, and must stay in lockstep
-                // with the four corner_weight calls in msda_geometry.hpp::point
-                // that build the matching scalar tiles.
-                const int32_t dy_off = (c < 2) ? 0 : 1;
-                const int32_t dx_off = (c & 1) ? 1 : 0;
-                const bool* yv = (c < 2) ? geom.y0_valid : geom.y1_valid;
-                const bool* xv = (c & 1) ? geom.x1_valid : geom.x0_valid;
+            if constexpr (VALUE_HEAD_MAJOR) {
+                // Two groups per pair, pushed together: NW then NE, SW then SE.
+                // That is the corner order msda_geometry.hpp::point builds the
+                // scalar tiles in, so compute consumes them unchanged.
+                const uint32_t head_base_page = (b * NUM_HEADS + head) * HM_PAGES_PER_HEAD;
+                for (uint32_t dy_off = 0; dy_off < 2; ++dy_off) {
+                    const bool* yv = dy_off ? geom.y1_valid : geom.y0_valid;
 
-                input_tile_cb.reserve_back(N_D_TILES);
-                const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
+                    input_tile_cb.reserve_back(2 * N_D_TILES);
+                    const uint32_t west_l1 = input_tile_cb.get_write_ptr();
+                    const uint32_t east_l1 = west_l1 + N_D_TILES * TILE_NBYTES;
 
-                for (uint32_t r = 0; r < v_rows; ++r) {
-                    if (!(yv[r] && xv[r])) {
-                        continue;
-                    }
-                    const uint32_t cy = static_cast<uint32_t>(geom.y0[r] + dy_off);
-                    const uint32_t cx = static_cast<uint32_t>(geom.x0[r] + dx_off);
-                    // Canonical (B, S, H, D): one page per (b, s, h).
-                    // Packed (B, S, H*D): one page per (b, s), head at byte offset h*D*2.
-                    const uint32_t s = g.start_index + cy * g.width + cx;
-                    uint32_t page;
-                    uint32_t offset_bytes;
-                    if constexpr (VALUE_PACKED) {
-                        page = value_batch_base + s;
-                        offset_bytes = head * (D * 2u);
-                    } else {
-                        page = (value_batch_base + s) * NUM_HEADS + head;
-                        offset_bytes = 0;
-                    }
-                    CoreLocalMem<uint32_t> dst(value_arena_l1 + r * value_stick_nbytes);
-                    // Both page_id and offset_bytes belong to the *source* pack: async_read is
-                    // (src, dst, size, src_args, dst_args), so an offset in the 5th argument
-                    // would shift the L1 destination instead of the DRAM source page.
-                    noc.async_read(
-                        value_acc,
-                        dst,
-                        value_stick_nbytes,
-                        {.page_id = page, .offset_bytes = offset_bytes},
-                        {.offset_bytes = 0});
-                }
-                noc.async_read_barrier();
-
-                // Scatter each staged stick across the N_D_TILES face rows, and
-                // zero the rows that had no corner to gather.
-                //
-                // The zeroing is load-bearing: the scalar comes from a compute
-                // kernel that cannot know which corners fell outside the feature
-                // map, so a stale row would be multiplied by a live weight — a
-                // high-error-ratio bug that a PCC gate passes.
-                for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                    if (r >= v_rows || !(yv[r] && xv[r])) {
-                        zero_input_row(tile_l1, r);
-                        continue;
-                    }
-                    const auto off = fused_msda_tile_layout::tile_row_offsets(r);
-                    CoreLocalMem<volatile uint32_t> src(value_arena_l1 + r * value_stick_nbytes);
-                    for (uint32_t k = 0; k < N_D_TILES; ++k) {
-                        const uint32_t base = k * WORDS_PER_TILE_ROW;
-                        const uint32_t words_k =
-                            (STICK_WORDS - base < WORDS_PER_TILE_ROW) ? (STICK_WORDS - base) : WORDS_PER_TILE_ROW;
-                        const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
-                        const uint32_t hi_words = words_k - lo_words;
-                        const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-                        CoreLocalMem<volatile uint32_t> dl(ktile_l1 + off.lo);
-                        CoreLocalMem<volatile uint32_t> dh(ktile_l1 + off.hi);
-                        for (uint32_t i = 0; i < lo_words; ++i) {
-                            dl[i] = src[base + i];
+                    for (uint32_t r = 0; r < v_rows; ++r) {
+                        const bool w = geom.x0_valid[r];
+                        const bool e = geom.x1_valid[r];
+                        if (!yv[r] || !(w || e)) {
+                            continue;
                         }
-                        for (uint32_t i = 0; i < hi_words; ++i) {
-                            dh[i] = src[base + HALF_WORDS + i];
+                        // x0 is -1 when only the east corner is in bounds, so
+                        // index from the east stick, which is always >= 0 here.
+                        const uint32_t cy = static_cast<uint32_t>(geom.y0[r]) + dy_off;
+                        const uint32_t s_east = g.start_index + cy * g.width + static_cast<uint32_t>(geom.x0[r] + 1);
+                        const uint32_t pair_l1 = value_arena_l1 + r * 2u * value_stick_nbytes;
+                        const uint32_t east_page = head_base_page + s_east / HM_STICKS_PER_PAGE;
+                        const uint32_t east_slot = s_east % HM_STICKS_PER_PAGE;
+                        const uint32_t east_off = east_slot * value_stick_nbytes;
+                        if (w && e && east_slot != 0) {
+                            CoreLocalMem<uint32_t> dst(pair_l1);
+                            noc.async_read(
+                                value_acc,
+                                dst,
+                                2u * value_stick_nbytes,
+                                {.page_id = east_page, .offset_bytes = east_off - value_stick_nbytes},
+                                {.offset_bytes = 0});
+                            continue;
+                        }
+                        if (w) {
+                            // s_east >= 1 whenever the west corner is in bounds.
+                            const uint32_t s_west = s_east - 1;
+                            CoreLocalMem<uint32_t> dst(pair_l1);
+                            noc.async_read(
+                                value_acc,
+                                dst,
+                                value_stick_nbytes,
+                                {.page_id = head_base_page + s_west / HM_STICKS_PER_PAGE,
+                                 .offset_bytes = (s_west % HM_STICKS_PER_PAGE) * value_stick_nbytes},
+                                {.offset_bytes = 0});
+                        }
+                        if (e) {
+                            CoreLocalMem<uint32_t> dst(pair_l1 + value_stick_nbytes);
+                            noc.async_read(
+                                value_acc,
+                                dst,
+                                value_stick_nbytes,
+                                {.page_id = east_page, .offset_bytes = east_off},
+                                {.offset_bytes = 0});
                         }
                     }
+                    noc.async_read_barrier();
+
+                    // Same zero-row contract as the single-corner path below.
+                    for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+                        const bool row = r < v_rows && yv[r];
+                        const uint32_t pair_l1 = value_arena_l1 + r * 2u * value_stick_nbytes;
+                        if (row && geom.x0_valid[r]) {
+                            scatter_stick(west_l1, r, pair_l1);
+                        } else {
+                            zero_input_row(west_l1, r);
+                        }
+                        if (row && geom.x1_valid[r]) {
+                            scatter_stick(east_l1, r, pair_l1 + value_stick_nbytes);
+                        } else {
+                            zero_input_row(east_l1, r);
+                        }
+                    }
+                    input_tile_cb.push_back(2 * N_D_TILES);
                 }
-                input_tile_cb.push_back(N_D_TILES);
+            } else {
+                for (uint32_t c = 0; c < 4; ++c) {
+                    // Hoist every c-invariant selector: c picks the (dy, dx) step to
+                    // the corner and which validity arrays gate it.
+                    //
+                    // c = 0, 1, 2, 3 is NW, NE, SW, SE, and must stay in lockstep
+                    // with the four corner_weight calls in msda_geometry.hpp::point
+                    // that build the matching scalar tiles.
+                    const int32_t dy_off = (c < 2) ? 0 : 1;
+                    const int32_t dx_off = (c & 1) ? 1 : 0;
+                    const bool* yv = (c < 2) ? geom.y0_valid : geom.y1_valid;
+                    const bool* xv = (c & 1) ? geom.x1_valid : geom.x0_valid;
+
+                    input_tile_cb.reserve_back(N_D_TILES);
+                    const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
+
+                    for (uint32_t r = 0; r < v_rows; ++r) {
+                        if (!(yv[r] && xv[r])) {
+                            continue;
+                        }
+                        const uint32_t cy = static_cast<uint32_t>(geom.y0[r] + dy_off);
+                        const uint32_t cx = static_cast<uint32_t>(geom.x0[r] + dx_off);
+                        // Canonical (B, S, H, D): one page per (b, s, h).
+                        // Packed (B, S, H*D): one page per (b, s), head at byte offset h*D*2.
+                        const uint32_t s = g.start_index + cy * g.width + cx;
+                        uint32_t page;
+                        uint32_t offset_bytes;
+                        if constexpr (VALUE_PACKED) {
+                            page = value_batch_base + s;
+                            offset_bytes = head * (D * 2u);
+                        } else {
+                            page = (value_batch_base + s) * NUM_HEADS + head;
+                            offset_bytes = 0;
+                        }
+                        CoreLocalMem<uint32_t> dst(value_arena_l1 + r * value_stick_nbytes);
+                        // Both page_id and offset_bytes belong to the *source* pack: async_read is
+                        // (src, dst, size, src_args, dst_args), so an offset in the 5th argument
+                        // would shift the L1 destination instead of the DRAM source page.
+                        noc.async_read(
+                            value_acc,
+                            dst,
+                            value_stick_nbytes,
+                            {.page_id = page, .offset_bytes = offset_bytes},
+                            {.offset_bytes = 0});
+                    }
+                    noc.async_read_barrier();
+
+                    // Scatter each staged stick across the N_D_TILES face rows, and
+                    // zero the rows that had no corner to gather.
+                    //
+                    // The zeroing is load-bearing: the scalar comes from a compute
+                    // kernel that cannot know which corners fell outside the feature
+                    // map, so a stale row would be multiplied by a live weight — a
+                    // high-error-ratio bug that a PCC gate passes.
+                    for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+                        if (r >= v_rows || !(yv[r] && xv[r])) {
+                            zero_input_row(tile_l1, r);
+                            continue;
+                        }
+                        scatter_stick(tile_l1, r, value_arena_l1 + r * value_stick_nbytes);
+                    }
+                    input_tile_cb.push_back(N_D_TILES);
+                }
             }
         }
     }

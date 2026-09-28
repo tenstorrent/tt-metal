@@ -35,6 +35,7 @@ struct MSDAShapes {
     bool locations_packed = false;  // sampling_locations/offsets given as (B, Q, H, L*P*2)
     bool weights_packed = false;    // attention_weights given as (B, Q, H, L*P)
     bool value_packed = false;      // value given as (B, S, H*D); heads recovered from attention_weights
+    bool value_head_major = false;  // value given as (B, H, S*D); one page per (b, h)
 };
 
 struct FusedMSDAOperation {
