@@ -133,3 +133,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Default gate (2x2): the device module already serves ffn_norm (the norm path attn_norm registered). PCC 0.999996, rel 0.00290,
   ratio [0.9933, 1.0054], PASS. The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_ffn_norm.py`
+
+## S.full_dense.04.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with this run's reviewed swap 03 (the prior's swap 04 body plus the attn_residual addend check) and added
+  ffn_norm: rel L2 <= 0.03, per-token norm ratio [0.97, 1.03] (the ffn_norm component test's limits). The other limits are unchanged:
+  block out rel <= 0.01; per step PCC >= 0.99; attention 0.015, attn_residual 0.01 / [0.99, 1.01]; addend coef [0.95, 1.05], rel <= 0.3.
+- BRINGUP_IMPL=reference: out 0.999999 / rel 0.0017, PASS. BRINGUP_IMPL=stub: every check fails.
+- Device gate (2x2): pcc_swap_out 0.999994, out rel 0.0039, h_mid rel 0.0064 ratio [1.0014, 1.0084], ffn_norm rel 0.0051 ratio
+  [0.9942, 1.0106], coef 1.0005, PASS. The first `FAIL pcc=0` block comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_04_ffn_norm.py`
