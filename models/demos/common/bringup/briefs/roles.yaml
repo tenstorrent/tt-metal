@@ -9,7 +9,8 @@ reference: |
   the reference over the longest ladder rung on CPU, so make it fast (group tokens per expert for MoE, attend each chunk
   against the state instead of recomputing the prefix). Split the block into steps at the boundaries a device
   implementation would swap one at a time (norms, attention, residual adds, MLP / router / experts), and keep
-  `state_tensors` / `load_state` exact inverses. If the stock HF loader cannot run this checkpoint on this host (custom
+  `state_tensors` / `load_state` exact inverses (names per layer from `spec.state_names(layer)`; a fixed-size tensor in
+  `state.fixed`, e.g. a recurrent state, is the current one and `load_state` sets it as of `length`). If the stock HF loader cannot run this checkpoint on this host (custom
   quantized storage, or too big for host RAM in bf16), write `hf_model(spec, num_layers)` in hooks.py: the HF modeling
   code with the checkpoint's weights dequantized exactly as the checkpoint defines them; `num_layers=None` means the
   full model (the HF sanity gate: smoke and next-token accuracy), so keep what does not fit packed and dequantize it

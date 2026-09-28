@@ -8,8 +8,10 @@ A model's ``hooks.reference(spec, layers=None, dtype=torch.float32)`` returns an
     layer_ids: list[int]
     new_state(max_seq) -> state                      per-layer chunked-prefill state (KV cache, recurrent state, ...)
     forward_chunk(tokens, start, state, rec, logits_last_n=0) -> (final_hidden [S, H], logits [n, V] or None)
-    state_tensors(state, layer, length) -> {name: tensor}     names = spec.state.tensors, positions [0, length)
-    load_state(state, layer, tensors, length) -> None         inverse of state_tensors (golden prefix -> state)
+    state_tensors(state, layer, length) -> {name: tensor}     names = spec.state_names(layer), positions [0, length);
+                                                              a fixed-size tensor (spec state.fixed) is the current one
+    load_state(state, layer, tensors, length) -> None         inverse of state_tensors (golden prefix -> state; a
+                                                              fixed-size tensor is the state as of position length)
     block_graph(layer) -> list[Step]                          the block's components in execution order
     component(layer, step_name) -> fn(ctx, *inputs) -> tensor the CPU implementation of one step
     chunk_context(layer, start, length, state) -> Ctx        what stateful / positional steps need (rope tables, ...)

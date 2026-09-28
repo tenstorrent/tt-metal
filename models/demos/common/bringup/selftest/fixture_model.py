@@ -6,6 +6,10 @@
 Not a model bring-up. It implements the reference interface (reference/interface.py) in as few lines as possible,
 plus an "HF" twin that computes the same thing through a different code path, so check_hf, check_reference and
 generate_golden can be exercised without a checkpoint. Used as the ``hooks`` module of the selftest spec.
+
+Spec ``fixture.recurrent_layers: [i, ...]`` turns those layers' attention into a linear recurrence with a fixed-size
+state (``recurrent`` [H, H], decayed and updated per token), for mixed per-layer state (spec state.by_block_type,
+state.fixed).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import torch.nn.functional as F
 from models.demos.common.bringup.reference.interface import Ctx, Step, noop, run_block
 
 H, V, LAYERS, SEED = 64, 97, 3, 0
+DECAY = 0.9
 
 
 def weights():
@@ -34,10 +39,26 @@ def norm(x):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6)
 
 
+def recurrent_layers(spec) -> set[int]:
+    return set(spec.get("fixture.recurrent_layers") or []) if spec is not None else set()
+
+
+def recurrence(x, w, s):
+    """Linear attention with decay: per token, s = DECAY * s + k^T v, out = q s. Updates s in place."""
+    q, k, v = x @ w["wq"].T, x @ w["wk"].T, x @ w["wv"].T
+    out = torch.empty_like(q)
+    for t in range(x.shape[0]):
+        s.mul_(DECAY).add_(k[t, :, None] * v[t, None, :])
+        out[t] = q[t] @ s / H
+    return out
+
+
 class State:
-    def __init__(self, layers, max_seq):
-        self.k = {i: torch.zeros(max_seq, H) for i in layers}
-        self.v = {i: torch.zeros(max_seq, H) for i in layers}
+    def __init__(self, layers, max_seq, recurrent=()):
+        kv = [i for i in layers if i not in recurrent]
+        self.k = {i: torch.zeros(max_seq, H) for i in kv}
+        self.v = {i: torch.zeros(max_seq, H) for i in kv}
+        self.r = {i: torch.zeros(H, H) for i in layers if i in recurrent}
 
 
 class Reference:
@@ -45,14 +66,20 @@ class Reference:
         self.w = weights()
         self.layer_ids = list(range(LAYERS)) if layers is None else list(layers)
         self.broken_graph = broken_graph
+        self.recurrent = recurrent_layers(spec)
 
     def new_state(self, max_seq):
-        return State(self.layer_ids, max_seq)
+        return State(self.layer_ids, max_seq, self.recurrent)
 
     def state_tensors(self, state, layer, length):
+        if layer in self.recurrent:
+            return {"recurrent": state.r[layer].clone()}
         return {"key": state.k[layer][:length].clone(), "value": state.v[layer][:length].clone()}
 
     def load_state(self, state, layer, tensors, length):
+        if layer in self.recurrent:
+            state.r[layer].copy_(tensors["recurrent"])
+            return
         state.k[layer][:length] = tensors["key"][:length]
         state.v[layer][:length] = tensors["value"][:length]
 
@@ -73,6 +100,10 @@ class Reference:
         w = self.w["layers"][layer]
 
         def attention(ctx, x):
+            if layer in self.recurrent:
+                if ctx.start == 0:
+                    ctx.state.r[layer].zero_()
+                return recurrence(x, w, ctx.state.r[layer])
             end = ctx.start + x.shape[0]
             ctx.state.k[layer][ctx.start : end] = x @ w["wk"].T
             ctx.state.v[layer][ctx.start : end] = x @ w["wv"].T
@@ -129,13 +160,17 @@ class Reference:
 class _HFLayer(torch.nn.Module):
     """Independent one-shot implementation (causal attention over the whole sequence, no state)."""
 
-    def __init__(self, w):
+    def __init__(self, w, recurrent=False):
         super().__init__()
         self.w = w
+        self.recurrent = recurrent
 
     def forward(self, h):
         w = self.w
         x = norm(h)
+        if self.recurrent:
+            h = h + recurrence(x, w, torch.zeros(H, H))
+            return (h + F.silu(norm(h) @ w["w1"].T) @ w["w2"].T,)
         s = (x @ w["wq"].T) @ (x @ w["wk"].T).T / H**0.5
         s = s.masked_fill(torch.triu(torch.ones(s.shape, dtype=torch.bool), 1), float("-inf"))
         h = h + torch.softmax(s, -1) @ (x @ w["wv"].T)
@@ -148,12 +183,12 @@ class _HFOut:
 
 
 class HFTwin(torch.nn.Module):
-    def __init__(self, num_layers=None):
+    def __init__(self, num_layers=None, recurrent=()):
         super().__init__()
         self.w = weights()
         n = num_layers or LAYERS
         self.model = torch.nn.Module()
-        self.model.layers = torch.nn.ModuleList(_HFLayer(self.w["layers"][i]) for i in range(n))
+        self.model.layers = torch.nn.ModuleList(_HFLayer(self.w["layers"][i], i in recurrent) for i in range(n))
 
     def forward(self, tokens, use_cache=False):
         h = self.w["embed"][tokens[0]]
@@ -177,7 +212,7 @@ def reference(spec, layers=None, dtype=torch.float32):
 
 
 def hf_model(spec, num_layers):
-    return HFTwin(num_layers)
+    return HFTwin(num_layers, recurrent_layers(spec))
 
 
 def tokenizer(spec):

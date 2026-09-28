@@ -599,3 +599,28 @@ limits, finiteness, "not a CPU bridge", and downstream / block-out rel limits.
   `[S.x] swap test frozen without review (F49)`, unless `agents.swap_review: all | [block types]` names it; a failed
   unreviewed freeze starts the test role with the failure. Component tasks keep their test agent.
 - `dev/f49_mutation_proof.py` / `.md`: the proof (below). Selftests: test_swap_checks.py.
+## F48 (2026-09-28): mixed per-layer state (GLM-5.3 intake)
+GLM-5.3-Flash has sparse-MLA layers (latent cache + pooled indexer keys, growing along the sequence) and KDA layers
+(recurrent state [heads, 128, 128] + conv tail, fixed size). The framework assumed one list of state names for every
+layer and stored only the final state, which every "prefix at chunk start" consumer sliced to `start`: exact for a
+KV cache, wrong for a recurrence (the final state already includes the chunk under test).
+- Spec: `state.by_block_type: {bt: [names]}` (names per layer type; default `state.tensors` for all) and
+  `state.fixed: [names]`; `Spec.state_names(layer)`, `Spec.state_fixed`; validation (known block types, all covered,
+  names in `state.tensors`).
+- Golden: per-layer names; fixed tensors also stored before every dumped chunk as `kv_cache/layer_{i}_at_{p}`, and on
+  the serving-contract rung after `seq - contract_tail_pad` tokens (the last chunk rerun, cut short, from a copy of
+  the state before it). `metadata.json` adds `state_by_layer`, `state_fixed`, `state_snapshots`.
+  `Golden.state(i, at=p)`: growing tensors are the final ones (consumer slices), fixed ones the snapshot at p (error
+  if there is none).
+- Consumers pass `at=start`: component and swap contexts (harness), the ladder's golden prefix, the profile. The
+  profile reloads the prefix before every run when the spec has fixed state (a recurrence advances on each rerun).
+  check_reference takes the replay prefix from the state before the last chunk, not from the final state.
+- Contract: acks expected per slab layer when the adapter has `kv_slot_layer_ids` (hybrids; the engine already acks
+  that way); fixed state needs `hooks.contract_state_pcc(...)` against the tail snapshot, else the contract fails.
+  Engine-side migration of fixed state (a table kind without a position axis) is not done: K.1 of such a model.
+- Memory: state entries take `per_token: false` (fixed size, no seq factor), `seq_stride` (pooled rows),
+  `seq_divisor` (sequence split over chips); fixed entries are checked only against their own `kv_heads`.
+- Dashboard: any `pcc_state_<name>_L<i>` is per-layer.
+- Device-model contract (harness docstring): `layer(i, h, 0, state)` starts a new sequence, so a fixed state resets.
+- Selftests: 197 -> 212 (test_mixed_state.py adds 15; the fixture gains `fixture.recurrent_layers`, a linear
+  recurrence with an HF twin). 14 of the 15 fail on the pre-F48 code.

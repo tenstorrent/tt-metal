@@ -24,10 +24,12 @@ from models.demos.common.bringup.reference.golden import load_spec, text_tokens
 from models.demos.common.bringup.reference.interface import boundary_names, run_block, validate_graph
 
 
-def prefill(ref, tokens, chunk, rec_for_chunk=None):
+def prefill(ref, tokens, chunk, rec_for_chunk=None, before_chunk=None):
     state = ref.new_state(tokens.shape[0])
     outs = []
     for c, s in enumerate(range(0, tokens.shape[0], chunk)):
+        if before_chunk:
+            before_chunk(c, s, state)
         rec = rec_for_chunk(c) if rec_for_chunk else (lambda n, t: None)
         h, _ = ref.forward_chunk(tokens[s : s + chunk], s, state, rec, logits_last_n=0)
         outs.append(h)
@@ -75,8 +77,17 @@ def main(argv=None):
 
         return rec
 
+    prefixes = {}
+
+    def before_chunk(c, s, state):
+        # The replay's prefix is the state before the last chunk, taken then: a fixed-size (recurrent) state cannot be
+        # recovered from the final one.
+        if c == last:
+            for li in rep_layers:
+                prefixes[li] = {n: t.clone() for n, t in ref.state_tensors(state, li, s).items()}
+
     full_h, full_state = prefill(ref, tokens, a.seq)
-    ch_h, ch_state = prefill(ref, tokens, a.chunk, rec_for_chunk)
+    ch_h, ch_state = prefill(ref, tokens, a.chunk, rec_for_chunk, before_chunk)
     p_h = metrics.pcc(full_h, ch_h)
     p_state = min(
         metrics.pcc(x, ch_t[n])
@@ -107,8 +118,7 @@ def main(argv=None):
             continue
         # Fresh state holding only the prefix [0, start) of this layer, then replay the last chunk's block.
         state = ref.new_state(a.seq)
-        prefix = {n: t for n, t in ref.state_tensors(ch_state, li, start).items()}
-        ref.load_state(state, li, prefix, start)
+        ref.load_state(state, li, prefixes[li], start)
         ctx = ref.chunk_context(li, start, a.chunk, state)
         replayed = {}
         run_block(
