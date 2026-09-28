@@ -132,13 +132,23 @@ class Qwen38Model:
         if head_strategy not in ("interleaved", "dram"):
             raise ValueError("Unknown LM-head program family")
         self.head_decode_weights = []
+        self.head_decode_tail = None
         if head_strategy == "dram":
             banks = mesh_device.dram_grid_size().x
             bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
             shard_vocab = self.config.vocab_size // self.TP
-            for start in range(0, shard_vocab, 16384):
-                weight = self.head_weight[:, start : min(start + 16384, shard_vocab)]
-                width = ((weight.shape[-1] + banks * 64 - 1) // (banks * 64)) * 64
+            # A DRAM-sharded matmul returns wrong values, without failing, when the weight does
+            # not fill its bank shards exactly, so every chunk is cut on a banks*64 boundary.
+            # Whatever vocabulary is left over goes through the interleaved head, which has no
+            # bank geometry to satisfy.
+            align = banks * 64
+            stride = (16384 // align) * align
+            aligned = (shard_vocab // align) * align
+            if aligned < shard_vocab:
+                self.head_decode_tail = self.head_weight[:, aligned:shard_vocab]
+            for start in range(0, aligned, stride):
+                weight = self.head_weight[:, start : min(start + stride, aligned)]
+                width = weight.shape[-1] // banks
                 memory = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                     ttnn.BufferType.DRAM,
@@ -286,6 +296,16 @@ class Qwen38Model:
                 program_config=config,
             )
             parts.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+        if self.head_decode_tail is not None:
+            parts.append(
+                ttnn.linear(
+                    ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG),
+                    self.head_decode_tail,
+                    dtype=getattr(ttnn, self.precision["logits_dtype"]),
+                    compute_kernel_config=self.head_compute,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
         return ttnn.concat(parts, dim=-1)
 
     def prefill(self, tokens, *, cache, page_table, length, start_pos=0, slot=0, all_logits=False, positions=None):
