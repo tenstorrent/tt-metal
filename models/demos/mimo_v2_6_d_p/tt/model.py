@@ -124,7 +124,7 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int):
 
 
 def new_kv_cache(mesh, cfg, layer: int, max_seq: int):
-    """Empty device KV cache for one layer, V padded to 192: full layers 4 KV heads (head r on chip r, paged-shaped,
+    """Empty device KV cache for one layer (K 192 wide, V 128; V 192 zero-padded under MIMO_V_PAD=1): full layers 4 KV heads (head r on chip r, paged-shaped,
     page-table slices cut on the device), sliding layers 8 KV heads (heads 2r, 2r+1 on chip r, contiguous)."""
     from models.demos.mimo_v2_6_d_p.tt.attention import TtKVCacheFull, TtKVCacheSliding
 
