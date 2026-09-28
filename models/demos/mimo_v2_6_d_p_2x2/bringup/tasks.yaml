@@ -929,6 +929,13 @@ tasks:
     swapped:
     - attn_norm
     layer: 5
+  frozen:
+    at: '2026-09-28T06:48:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_01_attn_norm.py: b1147c8b5abc9e9faaf81ed0479f4dbfac042b60860c3c612ca2bd3007e85014
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.full_moe.attention
   title: full_moe attention (attention) on device, layer 5
   step: implement
