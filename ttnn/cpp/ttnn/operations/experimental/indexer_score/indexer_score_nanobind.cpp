@@ -179,8 +179,9 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk_start_idx (same meaning: rank 0's global start, tile-aligned). The reader NoC-reads it
                 every dispatch and derives each device's start (+ the block-cyclic rotation) and kv_len on
                 device: kv_len = chunk_start + chunk extent (sp*block_cyclic_chunk_local for a block-cyclic
-                cache, sp_ring*Sq for a contiguous one), i.e. exactly the history + chunk prefix a scalar caller
-                passes. Mutually exclusive with chunk_start_idx AND kv_len. The trace-safe form: a host int is
+                cache, sp_ring*Sq for a contiguous one, where sp_ring is the seq_shard_axes extent -- or every
+                device when seq_shard_axes is unset, matching the host chunk_start deduction), i.e. exactly the
+                history + chunk prefix a scalar caller passes. Mutually exclusive with chunk_start_idx AND kv_len. The trace-safe form: a host int is
                 patched into the launch per dispatch, and a trace replay never re-runs that patch.
             valid_end_tensor: optional 1-element UINT32 tensor (same container rules), requires
                 chunk_start_idx_tensor. The request's REAL token end; caps the derived kv_len at

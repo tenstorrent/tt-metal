@@ -873,10 +873,14 @@ def _system_mesh_is_2d():
 @run_for_blackhole()
 @pytest.mark.skipif(not _system_mesh_is_2d(), reason="a (2,2) submesh requires a 2D system mesh")
 @pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["sp2xtp2"], indirect=True)
-def test_msa_block_cyclic_tp_subshard_reject(mesh_device, expect_error):
+@pytest.mark.parametrize("warm", [False, True], ids=["miss", "hit"])
+def test_msa_block_cyclic_tp_subshard_reject(mesh_device, warm, expect_error):
     """A TP sub-shard of the query chunk (block_cyclic_chunk_local == tp*Sq) needs a per-device row offset
     WITHIN the slab that this op does not take, so causal block-cyclic with cluster_axis rejects it -- the same
-    combination indexer_score_msa rejects. Needs a 2D mesh: on a 1xN mesh tp is 1 and the two are equal."""
+    combination indexer_score_msa rejects. Needs a 2D mesh: on a 1xN mesh tp is 1 and the two are equal.
+
+    `hit`: a legal cluster_axis=None call builds the program first. cluster_axis is not hashed on the host-int
+    path, so the rejected call reuses that program -- the check must run on the hit too, not only on a miss."""
     rows, cols = tuple(mesh_device.shape)
     sp_axis, sp = 0, rows
     tp = (rows * cols) // sp
@@ -900,16 +904,23 @@ def test_msa_block_cyclic_tp_subshard_reject(mesh_device, expect_error):
     idx = _causal_indices_at(list(range(chunk_local, chunk_local + META_S)), META_TOPK, gen)
     idx_dev = _mesh_tensor(mesh_device, idx, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, repl)
 
-    with expect_error(RuntimeError, "needs block_cyclic_chunk_local"):
-        ttnn.transformer.sparse_sdpa_msa(
+    def call(cluster_axis):
+        return ttnn.transformer.sparse_sdpa_msa(
             q_dev,
             k_dev,
             v_dev,
             idx_dev,
             scale=META_SCALE,
             block_size=BLK_KV,
-            cluster_axis=sp_axis,
+            cluster_axis=cluster_axis,
             block_cyclic_sp_axis=sp_axis,
             block_cyclic_chunk_local=chunk_local,
             chunk_start_idx=sp * chunk_local,
         )
+
+    if warm:
+        entries = mesh_device.num_program_cache_entries()
+        ttnn.deallocate(call(None))  # the flat linearization accepts the sub-shard
+        assert mesh_device.num_program_cache_entries() == entries + 1
+    with expect_error(RuntimeError, "needs block_cyclic_chunk_local"):
+        call(sp_axis)

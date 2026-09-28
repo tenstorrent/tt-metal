@@ -58,10 +58,6 @@ struct SparseSDPAMsaInputs {
 inline bool causal_enabled(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     return attrs.chunk_start_idx.has_value() || t.has_chunk_start_metadata();
 }
-// A cache slot is selected by EITHER the host scalar or the trace-safe tensor.
-inline bool selects_cache_slot(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
-    return attrs.cache_batch_idx.has_value() || t.has_cache_slot_metadata();
-}
 // Rotation-exact block-cyclic geometry: the SP axis is named (the indexer's seq_shard_axes=[sp] predicate).
 inline bool rotation_exact_geometry(const SparseSDPAMsaParams& attrs) { return attrs.cluster_axis.has_value(); }
 

@@ -167,6 +167,32 @@ void validate_non_hashed(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaIn
             bc.sp,
             bc.chunk_local);
     }
+    // Rotation-exact causal geometry (cluster_axis named): cluster_axis's rank IS the slab the device
+    // owns, and each device owns a whole chunk_local slab. A TP sub-shard (chunk_local == tp*S) would need
+    // a per-device row offset within the slab that this op does not take -- the same combination
+    // indexer_score_msa rejects (seq_shard_axes takes at most [SP]). Checked on hits too: on the host-int path
+    // cluster_axis is not hashed (the geometry is a runtime arg), so a call that only adds cluster_axis reuses
+    // a program a cluster_axis=None call built -- and would skip a miss-only check.
+    if (attrs.has_block_cyclic() && causal_enabled(attrs, t) && rotation_exact_geometry(attrs)) {
+        const uint32_t sp = attrs.block_cyclic->sp;
+        const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
+        const auto mesh_shape = q.device()->get_view().shape();
+        const uint32_t axis = *attrs.cluster_axis;
+        TT_FATAL(
+            axis < mesh_shape.dims() && mesh_shape[axis] == sp,
+            "sparse_sdpa_msa: causal block-cyclic cluster_axis ({}) must be the SP axis the cache was striped "
+            "over (extent {} == sp {})",
+            axis,
+            axis < mesh_shape.dims() ? mesh_shape[axis] : 0u,
+            sp);
+        TT_FATAL(
+            chunk_local == q.logical_shape()[2],
+            "sparse_sdpa_msa: causal block-cyclic with cluster_axis needs block_cyclic_chunk_local ({}) == q "
+            "seq-len ({}); a TP sub-shard of the query chunk is not supported (pass cluster_axis=None for the "
+            "flat linearization instead)",
+            chunk_local,
+            q.logical_shape()[2]);
+    }
 }
 }  // namespace
 
@@ -259,28 +285,6 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
             "block_cyclic: block_size ({}) must divide shard_len T/sp ({})",
             attrs.block_size,
             shard_len);
-        // Rotation-exact causal geometry (cluster_axis named): cluster_axis's rank IS the slab the device
-        // owns, and each device owns a whole chunk_local slab. A TP sub-shard (chunk_local == tp*S) would need
-        // a per-device row offset within the slab that this op does not take -- the same combination
-        // indexer_score_msa rejects (seq_shard_axes takes at most [SP]).
-        if (causal_enabled(attrs, t) && rotation_exact_geometry(attrs)) {
-            const auto mesh_shape = q.device()->get_view().shape();
-            const uint32_t axis = *attrs.cluster_axis;
-            TT_FATAL(
-                axis < mesh_shape.dims() && mesh_shape[axis] == sp,
-                "sparse_sdpa_msa: causal block-cyclic cluster_axis ({}) must be the SP axis the cache was striped "
-                "over (extent {} == sp {})",
-                axis,
-                axis < mesh_shape.dims() ? mesh_shape[axis] : 0u,
-                sp);
-            TT_FATAL(
-                chunk_local == q.logical_shape()[2],
-                "sparse_sdpa_msa: causal block-cyclic with cluster_axis needs block_cyclic_chunk_local ({}) == q "
-                "seq-len ({}); a TP sub-shard of the query chunk is not supported (pass cluster_axis=None for the "
-                "flat linearization instead)",
-                chunk_local,
-                q.logical_shape()[2]);
-        }
     }
 }
 
