@@ -352,7 +352,7 @@ public:
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
-    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
+    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
     // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.
