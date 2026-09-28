@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "adamw_device_operation_types.hpp"
 #include "adamw_program_factory.hpp"
@@ -26,7 +27,8 @@ struct AdamWDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::optimizers::adamw::device
