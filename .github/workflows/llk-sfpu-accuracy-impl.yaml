@@ -1,0 +1,191 @@
+name: "[internal] LLK SFPU accuracy impl"
+# Entry points: workflow_call only. Schedule / dispatch / PR live in
+# llk-sfpu-accuracy.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      report-to-pr:
+        description: "Post the headroom report as a pull request comment"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+  pull-requests: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+  # One JSONL row per comparison the sweep makes, folded into a headroom report
+  # below. Relative to LLK_PATH/tests/python_tests, where the sweep runs.
+  MEASURE_FILE: ulp_measurements.jsonl
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    needs: [build-images]
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml
+
+  llk-sfpu-accuracy-exec:
+    needs: [load-test-matrix, build-images]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Set CHIP_ARCH for logs and artifacts
+        shell: bash
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+          else
+            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+          fi
+
+      # The gate itself. A gated cell whose measurement no longer fits its declared
+      # budget fails here. Tolerance cells are measured too but have no budget to
+      # fail, so the step below judges them against the measurement their row records.
+      - name: Run the exhaustive ULP sweep
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          ULP_MEASURE_PATH: ${{ env.MEASURE_FILE }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Compare the measurements against the declared budgets and recorded measurements
+        if: always()
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          set -uo pipefail
+          if [[ ! -s "${{ env.MEASURE_FILE }}" ]]; then
+            echo "No measurements were recorded — the sweep did not get that far." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # By path, not `-m`: the package __init__ imports ttexalens, and the tool
+          # is deliberately standalone. Its exit status is the regression signal for
+          # the tolerance cells, which the sweep itself cannot fail: a worst lane past
+          # the measurement the row records. The report is published either way.
+          status=0
+          python3 helpers/ulp_budget_diff.py headroom \
+            --table helpers/sfpu_accuracy_budget.yaml \
+            --measured "${{ env.MEASURE_FILE }}" \
+            --out ulp_headroom_report.md || status=$?
+          {
+            echo "## ${{ env.CHIP_ARCH }}"
+            cat ulp_headroom_report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Comment the report on the pull request
+        if: ${{ always() && inputs.report-to-pr && github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          REPORT: ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync(process.env.REPORT)) return;
+            const marker = `<!-- llk-sfpu-accuracy-${process.env.CHIP_ARCH} -->`;
+            const body = marker + '\n' + fs.readFileSync(process.env.REPORT, 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            // Edited in place, so a series of pushes leaves one report per arch
+            // rather than one per run.
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = existing.find((c) => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload the measurements and the report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: ulp-measurements-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/${{ env.MEASURE_FILE }}
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+          if-no-files-found: warn
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: sfpu-accuracy-junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+
+      - name: Publish Test Results
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        if: always()
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-*-${{ matrix.test-group.split_group }}.xml
+          include_passed: true
+          annotate_only: true

@@ -71,6 +71,9 @@ env:
   #                                  tt_metal/tt-llk in the LLK CI image after
   #                                  setup_testing_env.sh. From /work the cd fails
   #                                  before pytest starts.
+  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-accuracy-impl.yaml, which
+  #                                  supplies the LLK CI image, SFPI, the tt-llk working
+  #                                  directory and ULP_MEASURE_PATH.
   #
   # This is not an exemption: the legs still block the PR until an owner approves.
   UNSUPPORTED_YAMLS: >-
@@ -84,6 +87,7 @@ env:
     llk_e2e_tests.yaml
     llk_bit_exact_tests.yaml
     llk_perf_tests.yaml
+    llk_sfpu_accuracy_tests.yaml
 
   # Yamls under tests/pipeline_reorg/ that legitimately hold no test matrix, so the
   # gate has nothing to prove for them. ttsim-skip-list.yaml is a per-arch mapping of
