@@ -133,8 +133,7 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     uint32_t halo_tile_rows,
     uint32_t source_device,
     uint32_t cache_local_tile_rows,
-    uint32_t halo_slot_count,
-    uint32_t hop = 1) {
+    uint32_t halo_slot_count) {
     namespace sliding = ttnn::operations::transformer::sdpa::ring_joint;
     const uint32_t group_rows = q_local_tile_rows * ring_size;
     kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
@@ -142,8 +141,8 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     const uint32_t end = trace_metadata::logical_tile_rows_clamped_to_cache(
         kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
     const auto mapping = sliding::build_chunked_q_mapping(
-        kv_actual_isl / 32, end, q_local_tile_rows, ring_size, (source_device + hop) % ring_size);
-    return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows, 0, hop);
+        kv_actual_isl / 32, end, q_local_tile_rows, ring_size, (source_device + 1) % ring_size);
+    return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows);
 }
 
 // Clamp each input to the valid slab prefix, then repartition that prefix across links. Reader and
