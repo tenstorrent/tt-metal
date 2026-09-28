@@ -112,3 +112,15 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: pcc_attn_residual_L00 0.999997, rel_l2 0.002393, row_norm_ratio [0.9996, 1.0012], coef 1.0005, attn rel 0.0024, PASS.
   The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_residual.py`
+
+## S.full_dense.03.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_03_attn_residual.py`
+  (same golden, s4096 chunk 1). Added one check, taken from this run's component test: the addend on delta = h_mid - golden in against
+  the attn_out the residual received, coef in [0.95, 1.05] and rel <= 0.3 (metrics attn_coef_swap_h_mid, attn_rel_l2_swap_h_mid).
+  The other limits are unchanged from the prior: block out rel <= 0.01; per step PCC >= 0.99; rel 0.03 / 0.015 / 0.01; ratio [0.97, 1.03] for
+  attn_norm and attention, [0.99, 1.01] for attn_residual.
+- BRINGUP_IMPL=reference: out 0.999999 / rel 0.0017, coef 1.0000, PASS. BRINGUP_IMPL=stub: every check fails.
+- Device gate (2x2): pcc_swap_out 0.999994, out rel 0.0039, attention rel 0.0079 ratio [1.0018, 1.0112], h_mid rel 0.0064 ratio
+  [1.0014, 1.0084], coef 1.0005, PASS. h_mid headroom is small (ratio max 1.0084 vs 1.01) because the SDPA preset biases attention norms
+  upward. A perf change to SDPA must re-run this test.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_03_attn_residual.py`
