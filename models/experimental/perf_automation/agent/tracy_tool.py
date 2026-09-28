@@ -87,6 +87,14 @@ def per_token_ms(profiles_dir: str | Path, runs: int) -> float | None:
     return _scan_log_sentinel(_PER_TOKEN_RE, profiles_dir, runs)
 
 
+def per_token_readings(text: str) -> list[float]:
+    """Every TRACE_PER_TOKEN_MS value in `text`, in print order -- the same sentinel per_token_ms
+    reads from a log, for a caller that already holds the run's output. The harness prints the
+    sentinel even when every stage failed (as 0.0000), so its presence says the harness finished,
+    not that anything was measured; callers that need the latter check for a positive value."""
+    return [float(v) for v in _PER_TOKEN_RE.findall(text or "")]
+
+
 def decode_trace_status(profiles_dir: str | Path, runs: int) -> str:
     """Generic detector: read the perf run log and classify the pipeline's decode path.
 

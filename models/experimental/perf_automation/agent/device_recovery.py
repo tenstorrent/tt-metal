@@ -71,6 +71,13 @@ DEAD_BOARD_SIGS = (
     # matched, the temperature veto cancelled every reset (the ARC was still publishing), and each
     # emit-e2e round failed on the same chip until it was stopped by hand.
     "is hung on pcie device",
+    # A fabric the PREVIOUS run left running, seen at the next device-open (tt_metal/llrt/llrt.cpp):
+    # "Read unexpected run_mailbox value: 0x40 (expected 0x80 or 0x0)" then TT_FATAL "Read unexpected
+    # run_mailbox value from core X-Y", beside "active ethernet dispatch core ... detected as still
+    # running". Seen 2026-09-27 on a WH Galaxy after optimize killed a 32-chip tracy run: every later
+    # profile opened with it (40 per run), the device profiler then hung or returned no device data,
+    # and the temperature veto cancelled each reset because every ARC was still publishing.
+    "unexpected run_mailbox value",
 )
 
 # THE KERNEL'S VERDICT that a reset cannot help. `tt-smi -r` talks to the card OVER PCIe and asks its
@@ -579,6 +586,62 @@ def reap_device_holders() -> list:
         except Exception:  # noqa: BLE001
             pass
     return killed
+
+
+# The device spec the orchestrator runs with (--devices), exported for every layer below it.
+DEVICES_ENV = "PERF_MCP_DEVICES"
+
+
+def requested_chip_count(devices: str):
+    """How many chips --devices asks for, or None when it does not narrow the host.
+
+    "all" (and anything unparseable) means the whole host and must NOT pin visibility. "single" is
+    one chip. An explicit list is its own length, so "0,1" is two. Pure string work: nothing here
+    opens a device, so it is safe to ask at the moment a device just died.
+    """
+    text = str(devices or "").strip().lower()
+    if not text or text == "all":
+        return None
+    if text == "single":
+        return 1
+    ids = [part for part in re.split(r"[,\s]+", text) if part]
+    if ids and all(part.isdigit() for part in ids):
+        return len(ids)
+    return None
+
+
+def reset_is_mandatory_after_kill(devices=None, env=None, chip_count=None) -> bool:
+    """After a device process was SIGKILLed, is a reset required whatever the telemetry says?
+
+    The kill itself is the evidence when the run held MORE THAN ONE CHIP: a multi-chip ETH fabric
+    killed mid-run stays wedged while every ARC keeps answering, so the temperature veto in
+    recover() cancels the reset the next run needs (reproduced on a T3K 2026-09-25; the full
+    account is at cc_optimize/run.py:_reset_is_mandatory_after_kill). A single-chip run has no
+    fabric to wedge, so it keeps the veto -- that is the 2026-08-17 single-chip injury the veto
+    exists for.
+
+    The chip count comes from the child's environment first, then the device spec (DEVICES_ENV when
+    none is given). A count that cannot be taken is UNKNOWN, not one: "all" or an unparseable spec
+    means every chip on the box, so it is treated as a fabric. ``chip_count`` counts an explicit
+    spec; the default is requested_chip_count, which never opens a device.
+
+    No spec at all (devices=None and DEVICES_ENV unset -- a layer run outside the orchestrator)
+    answers False: nothing says the run held a fabric, so the veto keeps the last word, exactly as
+    it did before this rule reached that layer.
+    """
+    try:
+        chips = int((env or {}).get("device_count") or (env or {}).get("mesh_chips") or 0)
+    except (TypeError, ValueError, AttributeError):
+        chips = 0
+    if chips:
+        return chips > 1
+    spec = os.environ.get(DEVICES_ENV) if devices is None else devices
+    if spec is None:
+        return False
+    if (spec or "").strip().lower() in ("", "all"):
+        return True
+    n = (chip_count or requested_chip_count)(spec)
+    return n is None or n > 1
 
 
 def recover(

@@ -2616,18 +2616,33 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
 
     A run that produced a trace number, or that declared the pipeline genuinely un-traceable
     (TRACE_NOT_TRACE_CAPABLE), is left alone. Returns the last (output, result).
+
+    A TRACE NUMBER MEANS A POSITIVE ONE. The harness prints TRACE_PER_TOKEN_MS even when every stage
+    raised, as 0.0000, and this loop used to stop on the bare sentinel -- so a region too small for
+    every stage read as "a real trace ran" and was never grown. Measured on Qwen-Image-Edit (WH
+    Galaxy, 2026-09-27): the full-model run started at the DRAM-derived 192 MB against a pipeline
+    needing ~896 MB, all five stages failed, the headline was 0, and the gate reported a crash with
+    no retry; the same run at 896 MB times vision_encode normally. A zero headline is grown only on
+    the same overflow evidence the build phase grows on (the device's byte count, or the bare mesh
+    assertion), so a run that measured nothing for another reason (an L1 overflow, a bad shard) is
+    still reported as it was, not re-run into the ceiling.
     """
     try:
-        from agent.perf_test_gen import _needed_trace_region, _TRACE_REGION_GROW_ROUNDS
+        from agent.perf_test_gen import _MESH_TRACE_OVERFLOW_RE, _needed_trace_region, _TRACE_REGION_GROW_ROUNDS
+        from agent.tracy_tool import per_token_readings
     except Exception:  # noqa: BLE001
         return out, r
     for _ in range(int(_TRACE_REGION_GROW_ROUNDS or 0)):
         text = out or ""
-        if "TRACE_PER_TOKEN_MS=" in text or "TRACE_NOT_TRACE_CAPABLE" in text:
+        readings = per_token_readings(text)
+        if any(v > 0 for v in readings) or "TRACE_NOT_TRACE_CAPABLE" in text:
             break  # a real trace ran, or the pipeline genuinely cannot trace -- nothing to grow
         cur = int(env.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or _TRACE_REGION_DEFAULT)
         need = _needed_trace_region(text)
-        silent = need is None
+        if readings and need is None and not _MESH_TRACE_OVERFLOW_RE.search(text):
+            break  # it finished and measured nothing, but not for want of trace space
+        # silent = the run printed no headline at all: a hung overflow, the only case that wedges the mesh
+        silent = need is None and not readings
         target = min(max(int(need), cur * 2) if need is not None else cur * 2, _TRACE_REGION_MAX)
         if target <= cur:
             break  # already at the DRAM ceiling -> the trace genuinely does not fit
@@ -2635,7 +2650,11 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
         sys.stderr.write(
             "[perf-mcp] trace region too small (%s); growing to %d B%s and re-running\n"
             % (
-                "silent overflow / mesh hang -- no size reported" if silent else "device reports %d B" % need,
+                (
+                    "silent overflow / mesh hang -- no size reported"
+                    if silent
+                    else ("device reports %d B" % need if need is not None else "mesh overflow -- no size reported")
+                ),
                 target,
                 " + resetting the wedged device" if silent else "",
             )

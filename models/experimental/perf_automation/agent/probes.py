@@ -599,12 +599,26 @@ def _pgroup_io_counters(pgid) -> tuple:
     ttnn.from_torch call, with syscr and syscw unchanged across a twenty-second window and
     read_bytes/write_bytes flat. Its stall clock never fired because CPU movement reset it on every
     poll.
+
+    THE RUN IS THE GROUP AND EVERYTHING ITS LEADER STARTED. Every caller starts its run with
+    start_new_session=True and passes that group, so pgid is also the leader's pid -- and a
+    descendant that moved itself into a session of its own is still the run's work. tracy does
+    exactly that (tools/tracy/__main__.py: the workload is Popen'd with preexec_fn=os.setsid), so a
+    group-only sum saw the launcher and the capture tool, both idle during a device-profiler
+    read-back, and never the test doing the reading. Measured 2026-09-27 on a WH Galaxy: over 30 s
+    of a read-back the watched group moved 0 syscalls while the profiled test moved 13,240 and read
+    90 MB; the stall check then killed it as "no forward progress" three times running. The kill
+    (_kill_tree) already walks this same tree; the progress count now sees what the kill reaches.
+    A leader that has exited has no descendants left to find, so that case counts the group alone.
     """
     calls = 0
     total = 0
-    for pid, fields in _proc_stat_fields():
-        if len(fields) <= 2 or fields[2] != str(pgid):
-            continue
+    members = {pid for pid, fields in _proc_stat_fields() if len(fields) > 2 and fields[2] == str(pgid)}
+    try:
+        members.update(_descendant_pids(int(pgid)))
+    except (TypeError, ValueError):
+        pass
+    for pid in members:
         try:
             with open("/proc/%d/io" % pid) as fh:
                 for line in fh:
@@ -1684,7 +1698,7 @@ def make_run_profiled(
     extra_env: dict[str, str] | None = None,  # e.g. TT_METAL_VISIBLE_DEVICES
     collect_runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     retries: int = 2,
-    device_reset: Callable[[], bool] = _device_reset,
+    device_reset: Callable[..., bool] = _device_reset,  # called as device_reset(error_text=[, fault_is_certain=True])
 ) -> Callable[..., tuple[Path, float]]:
     """Factory for tracy_tool's stage-1 `run_profiled` (real hardware).
 
@@ -1771,7 +1785,21 @@ def make_run_profiled(
                 except TracyHangError:
                     if _attempt >= retries:
                         raise
-                    device_reset()
+                    # The hung run's process group was just SIGKILLed. Keep its log -- the retry
+                    # reopens log_path for writing, which is how the first failure of a night went
+                    # unrecorded -- as <name>.attemptN (no *_tracy.log reader matches it), and hand
+                    # both it and the kill to the reset: with neither, the temperature veto cancels
+                    # the reset on a multi-chip fabric and the retry opens the mesh still wedged.
+                    hung = log_path.read_text(errors="ignore") if log_path.is_file() else ""
+                    try:
+                        log_path.replace(log_path.with_name("%s.attempt%d" % (log_path.name, _attempt + 1)))
+                    except OSError:
+                        pass
+                    from . import device_recovery as _dr
+
+                    # fault_is_certain passed only when set, so a single-chip run resets as before
+                    _kill = {"fault_is_certain": True} if _dr.reset_is_mandatory_after_kill(env=env) else {}
+                    device_reset(error_text=hung, **_kill)
             if code != 0:
                 tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
                 raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")

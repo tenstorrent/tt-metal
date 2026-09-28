@@ -3803,16 +3803,12 @@ def _reset_is_mandatory_after_kill(devices, env=None) -> bool:
     for an unverifiable target applies ("must widen, never narrow"): "all" means every chip on the
     box, so it is treated as a fabric. Only a spec that NAMES a single chip keeps the gate, and that
     parse is pure string work with no device in it.
+
+    The decision itself lives in agent.device_recovery.reset_is_mandatory_after_kill, so the
+    profiler and perf-test layers (which cannot import this module) apply the same rule. This file
+    counts an explicit spec with its own _chip_count, exactly as before.
     """
-    try:
-        chips = int((env or {}).get("device_count") or (env or {}).get("mesh_chips") or 0)
-    except (TypeError, ValueError, AttributeError):
-        chips = 0
-    if chips:
-        return chips > 1
-    if (devices or "").strip().lower() in ("", "all"):
-        return True
-    return _chip_count(devices) > 1
+    return _dr().reset_is_mandatory_after_kill(devices or "", env, chip_count=lambda d: _chip_count(d))
 
 
 def _run_device_proc(
@@ -4873,7 +4869,12 @@ def _run_round_with_watchdog(
         proc.wait(timeout=30)
     except Exception:  # noqa: BLE001
         pass
-    rst = _reclaim_device(devices, error_text=_tail_lines(agent_log, 40))
+    # The round was SIGKILLed with its MCP server and whatever device run it had in flight, so the
+    # kill is the evidence (the same rule the timeout path applies): without it the temperature veto
+    # cancels the reset on a multi-chip fabric and the next round opens the mesh still wedged.
+    rst = _reclaim_device(
+        devices, error_text=_tail_lines(agent_log, 40), after_kill=_reset_is_mandatory_after_kill(devices)
+    )
     print(
         "  [optimize/cc] WATCHDOG: round %s — killed the round + %s; next round starts a FRESH mcp "
         "server on the reset mesh." % (wedge_reason, rst)
@@ -5822,7 +5823,11 @@ def optimize_pipeline(
                 )
                 print(
                     "  [optimize/cc] "
-                    + _reclaim_device(devices, error_text=_tail_lines(str(kernel_log) + ".agent.log", 40)),
+                    + _reclaim_device(
+                        devices,
+                        error_text=_tail_lines(str(kernel_log) + ".agent.log", 40),
+                        after_kill=_reset_is_mandatory_after_kill(devices),  # every one of those rounds was killed
+                    ),
                     flush=True,
                 )
                 wedge_strikes = 0
