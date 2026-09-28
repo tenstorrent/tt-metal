@@ -653,8 +653,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"B_borrowed", plan.borrow_B ? 1u : 0u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer ----
@@ -678,8 +677,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"C_borrowed", plan.borrow_C ? 1u : 0u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice", "num_C_slices"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute ----
@@ -693,7 +691,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
     ComputeHardwareConfig compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
+        ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
     if (plan.fp32_dest_acc_en) {
         // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode. The partials are
         // reloaded with a data copy into DST, so unpack them straight to DST and keep fp32 precision;
@@ -702,7 +700,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
                    format == tt::DataFormat::UInt32;
         };
-        ComputeUnpackModes& modes = unpack_modes(compute_hw_config);
+        ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
         if (is_32bit(plan.C_partials_format)) {
             modes.emplace(C_PARTIALS_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
         }
