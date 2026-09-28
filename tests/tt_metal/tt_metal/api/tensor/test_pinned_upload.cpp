@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -21,7 +22,6 @@
 #include <filesystem>
 #include <memory>
 #include <numeric>
-#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,6 +33,7 @@
 #include <tt-metalium/experimental/memory_pin_access.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
@@ -45,7 +46,6 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "common/memory_pin_impl.hpp"
-#include "impl/context/metal_context.hpp"
 #include "impl/tensor/pinned_upload.hpp"
 #include "pinned_upload_test_utils.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
@@ -53,10 +53,11 @@
 namespace tt::tt_metal {
 namespace {
 
-// A row of 1024 uint32 is one 4 KiB page, so chunks are exactly 8 MiB (2048 rows) and every row offset is aligned.
+// A row of 1024 uint32 is one 4 KiB page, so chunks are exactly k_max_chunk_bytes and every row offset is aligned.
 constexpr uint32_t k_row_words = 1024;
 constexpr size_t k_row_bytes = k_row_words * sizeof(uint32_t);
-constexpr size_t k_rows_per_chunk = (8 * 1024 * 1024) / k_row_bytes;
+constexpr size_t k_rows_per_chunk = pinned_upload::k_max_chunk_bytes / k_row_bytes;
+constexpr size_t k_rows_per_mib = (1024 * 1024) / k_row_bytes;
 constexpr size_t k_host_alignment = 4096;
 
 using AlignedWords = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, k_host_alignment>>;
@@ -77,50 +78,37 @@ HostTensor host_tensor_over(
         std::move(dhb), spec, TensorTopology::create_fully_replicated_tensor_topology(mesh_shape));
 }
 
-std::vector<uint32_t> read_back(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor) {
-    HostTensor result = cq.enqueue_read_tensor(device_tensor);
-    auto shard = result.buffer().get_shard(*distributed::MeshCoordinateRange(device_tensor.device().shape()).begin());
-    // Compare as words whatever the dtype: block-float host buffers hold packed uint32 words.
-    auto bytes = shard->view_bytes();
+// The words of `result`'s shard at `coord`, whatever the dtype: block-float host buffers hold packed uint32 words.
+std::vector<uint32_t> shard_words(const HostTensor& result, const distributed::MeshCoordinate& coord) {
+    auto bytes = result.buffer().get_shard(coord)->view_bytes();
     std::vector<uint32_t> words(bytes.size() / sizeof(uint32_t));
     std::memcpy(words.data(), bytes.data(), words.size() * sizeof(uint32_t));
     return words;
 }
 
-// First mismatching word index, or -1.
-int64_t first_mismatch(ttsl::Span<const uint32_t> expected, const std::vector<uint32_t>& actual) {
-    if (expected.size() != actual.size()) {
-        return 0;
-    }
-    for (size_t i = 0; i < expected.size(); i++) {
-        if (expected[i] != actual[i]) {
-            return static_cast<int64_t>(i);
-        }
-    }
-    return -1;
+std::vector<uint32_t> read_back(distributed::MeshCommandQueue& cq, const MeshTensor& device_tensor) {
+    return shard_words(
+        cq.enqueue_read_tensor(device_tensor),
+        *distributed::MeshCoordinateRange(device_tensor.device().shape()).begin());
 }
 
-size_t num_chunks_for(size_t shard_bytes, size_t chunk_bytes) { return (shard_bytes + chunk_bytes - 1) / chunk_bytes; }
+// First word index at which `actual` differs from `expected`, including where one of them ends first; -1 if none.
+int64_t first_mismatch(ttsl::Span<const uint32_t> expected, ttsl::Span<const uint32_t> actual) {
+    const auto [expected_it, actual_it] = std::mismatch(expected.begin(), expected.end(), actual.begin(), actual.end());
+    if (expected_it == expected.end() && actual_it == actual.end()) {
+        return -1;
+    }
+    return expected_it - expected.begin();
+}
 
 // Chunks a chunked upload splits one shard of `shard_bytes` into.
 size_t chunks_in_shard(size_t shard_bytes, size_t page_bytes) {
-    return num_chunks_for(shard_bytes, pinned_upload::chunk_bytes_for(shard_bytes, page_bytes));
+    return tt::div_up(shard_bytes, pinned_upload::chunk_bytes_for(shard_bytes, page_bytes));
 }
 
-// Why the chunked upload path cannot run on `mesh_device`, or nullopt when it can.
-std::optional<std::string> chunked_uploads_unavailable(distributed::MeshDevice& mesh_device) {
-    const auto params = experimental::GetMemoryPinningParameters(mesh_device);
-    const auto& rtoptions = MetalContext::instance().rtoptions();
-    if (!MetalContext::instance().hal().get_supports_64_bit_pcie_addressing() || params.max_pins == 0 ||
-        !params.can_map_to_noc || !params.supports_read_only) {
-        return "Chunked pinned uploads need Blackhole with IOMMU and read-only page pinning";
-    }
-    if (rtoptions.get_pinned_upload_threads() == 0 || rtoptions.get_pinned_memory_cache_limit_bytes() == 0) {
-        return "Chunked pinned uploads are disabled by TT_METAL_PINNED_UPLOAD_THREADS or "
-               "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES";
-    }
-    return std::nullopt;
-}
+constexpr const char* k_chunked_uploads_unsupported =
+    "Chunked pinned uploads need Blackhole with IOMMU, read-only page pinning and fast dispatch, and nonzero "
+    "TT_METAL_PINNED_UPLOAD_THREADS and TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES";
 
 class TensixPinnedUploadFixture : public MeshDevice1x1Fixture {
 protected:
@@ -129,8 +117,8 @@ protected:
         if (IsSkipped()) {
             return;
         }
-        if (const auto reason = chunked_uploads_unavailable(*mesh_device_)) {
-            GTEST_SKIP() << *reason;
+        if (!pinned_upload::chunked_uploads_supported(*mesh_device_)) {
+            GTEST_SKIP() << k_chunked_uploads_unsupported;
         }
     }
 
@@ -139,14 +127,10 @@ protected:
         size_t chunk_pins = 0;  // Chunk pins the upload created.
     };
 
-    // Uploads `rows` rows of distinct words from a fresh mutable buffer and checks the device copy.
-    UploadResult upload_and_verify(size_t rows) {
-        auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-        std::iota(words->begin(), words->end(), static_cast<uint32_t>(rows));
-        HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
-        auto spec = row_major_spec(rows, k_row_words);
+    // Uploads `buffer` as a tensor of `spec` and checks that the device copy holds `expected`.
+    UploadResult upload_and_verify(
+        const HostBuffer& buffer, const TensorSpec& spec, ttsl::Span<const uint32_t> expected) {
         auto host_tensor = host_tensor_over(buffer, spec, mesh_device_->shape());
-
         auto& cache = experimental::PinnedMemoryCache::instance();
         const size_t entries_before = cache.num_entries();
         const size_t chunk_pins_before = pinned_upload::num_chunk_pins_created();
@@ -156,11 +140,37 @@ protected:
             .cached = cache.num_entries() != entries_before,
             .chunk_pins = pinned_upload::num_chunk_pins_created() - chunk_pins_before,
         };
-
-        const auto actual = read_back(cq, device_tensor);
-        EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1)
-            << "rows=" << rows;
+        EXPECT_EQ(first_mismatch(expected, read_back(cq, device_tensor)), -1);
         return result;
+    }
+
+    // Uploads `rows` rows of distinct words from a fresh mutable buffer and checks the device copy.
+    UploadResult upload_and_verify(size_t rows) {
+        SCOPED_TRACE(testing::Message() << "rows=" << rows);
+        auto words = std::make_shared<AlignedWords>(rows * k_row_words);
+        std::iota(words->begin(), words->end(), static_cast<uint32_t>(rows));
+        HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+        return upload_and_verify(buffer, row_major_spec(rows, k_row_words), *words);
+    }
+
+    // Block-float tiles have page sizes that are not powers of two (bfloat4_b: 576 B, bfloat8_b: 1088 B), so chunks
+    // are multiples of lcm(page, 4 KiB) and the region offsets of every chunk must still land on page boundaries.
+    void upload_block_float_and_verify(DataType dtype, uint32_t rows, uint32_t cols) {
+        const TensorSpec spec(Shape{rows, cols}, TensorLayout(dtype, PageConfig(Layout::TILE), MemoryConfig{}));
+        const size_t size_bytes = spec.compute_packed_buffer_size_bytes();
+        ASSERT_GT(size_bytes, pinned_upload::k_pin_write_threshold_bytes);
+        ASSERT_NE(size_bytes % pinned_upload::k_max_chunk_bytes, 0u);
+
+        auto words = std::make_shared<AlignedWords>(size_bytes / sizeof(uint32_t));
+        uint32_t state = 0x12345678u ^ rows ^ (cols << 8);
+        for (auto& word : *words) {
+            state = state * 1664525u + 1013904223u;
+            word = state;
+        }
+        HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+        const auto result = upload_and_verify(buffer, spec, *words);
+        EXPECT_FALSE(result.cached) << "Expected the chunked path, not a whole-shard cached pin";
+        EXPECT_EQ(result.chunk_pins, chunks_in_shard(size_bytes, spec.compute_page_size_bytes()));
     }
 
     // Uploads `rows` rows through the chunked path and checks that every chunk was pinned.
@@ -173,7 +183,7 @@ protected:
 
 TEST_F(TensixPinnedUploadFixture, UploadWithPartialLastChunk) {
     // 33 MiB plus 37 rows: above the 32 MiB pinned-write threshold, with a short final chunk.
-    upload_chunked_and_verify(33 * 256 + 37);
+    upload_chunked_and_verify(33 * k_rows_per_mib + 37);
 }
 
 TEST_F(TensixPinnedUploadFixture, UploadOfWholeChunks) { upload_chunked_and_verify(5 * k_rows_per_chunk); }
@@ -213,7 +223,7 @@ TEST_F(TensixPinnedUploadFixture, ChunkWhosePinFailsIsCopied) {
     blocking_pin.reset();
 
     const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1);
+    EXPECT_EQ(first_mismatch(*words, actual), -1);
 }
 
 // Memory that is not device-immutable may be reused as soon as the upload returns.
@@ -231,7 +241,7 @@ TEST_F(TensixPinnedUploadFixture, MutableHostMemoryIsReadBeforeReturn) {
     EXPECT_EQ(pinned_upload::num_pending(*mesh_device_), 0u);
 
     const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(expected.data(), expected.size()), actual), -1);
+    EXPECT_EQ(first_mismatch(expected, actual), -1);
 }
 
 // Device-immutable memory (a read-only file mapping) may still be read after the upload returns. Closing the device
@@ -275,7 +285,7 @@ TEST_F(TensixPinnedUploadFixture, ImmutableUploadsCompleteAtDeviceClose) {
         auto host_tensor = host_tensor_over(map_file(), spec, mesh_device_->shape());
         MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
         const auto actual = read_back(cq, device_tensor);
-        EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(expected.data(), expected.size()), actual), -1);
+        EXPECT_EQ(first_mismatch(expected, actual), -1);
     }
     {
         std::vector<MeshTensor> device_tensors;
@@ -306,26 +316,21 @@ TEST_F(TensixPinnedUploadFixture, FinishReleasesImmutableUploads) {
     cq.finish();
     EXPECT_EQ(pinned_upload::num_pending(*mesh_device_), 0u);
     const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1);
+    EXPECT_EQ(first_mismatch(*words, actual), -1);
 }
 
 // Sharded device buffers are not eligible for chunking; they take the whole-shard path and still arrive intact.
 TEST_F(TensixPinnedUploadFixture, ShardedBufferFallsBack) {
     auto dram_grid = mesh_device_->dram_grid_size();
     CoreRangeSet dram_cores(CoreRange(CoreCoord{0, 0}, CoreCoord{dram_grid.x - 1, 0}));
-    const size_t rows = 40 * 256;
+    const size_t rows = 40 * k_rows_per_mib;
     MemoryConfig sharded(
         BufferType::DRAM, NdShardSpec{Shape{1, 1, 32, k_row_words}, dram_cores, ShardOrientation::ROW_MAJOR});
 
     auto words = std::make_shared<AlignedWords>(rows * k_row_words);
     std::iota(words->begin(), words->end(), 5u);
     HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
-    auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, k_row_words, sharded), mesh_device_->shape());
-
-    auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
-    const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1);
+    upload_and_verify(buffer, row_major_spec(rows, k_row_words, sharded), *words);
 }
 
 // Rows of 1000 words (4000 B) are padded to the DRAM alignment on device, so the pinned path does not apply.
@@ -338,35 +343,24 @@ TEST_F(TensixPinnedUploadFixture, PaddedPagesFallBack) {
     auto words = std::make_shared<AlignedWords>(rows * row_words);
     std::iota(words->begin(), words->end(), 9u);
     HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
-    auto host_tensor = host_tensor_over(buffer, spec, mesh_device_->shape());
-
-    auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
-    const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1);
+    upload_and_verify(buffer, spec, *words);
 }
 
 // A host base off the L1 read alignment cannot be read directly by the device; the upload copies instead.
 TEST_F(TensixPinnedUploadFixture, UnalignedHostBaseFallsBack) {
-    const size_t rows = 36 * 256;
+    const size_t rows = 36 * k_rows_per_mib;
     auto words = std::make_shared<AlignedWords>(rows * k_row_words + 1);
     std::iota(words->begin(), words->end(), 13u);
     // One word past an aligned address.
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data() + 1, rows * k_row_words), MemoryPin(words));
-    auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, k_row_words), mesh_device_->shape());
-
-    auto& cache = experimental::PinnedMemoryCache::instance();
-    const size_t entries_before = cache.num_entries();
-    auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
-    EXPECT_NE(cache.num_entries(), entries_before) << "An unaligned base must take the whole-shard path";
-    const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data() + 1, rows * k_row_words), actual), -1);
+    const ttsl::Span<uint32_t> unaligned(words->data() + 1, rows * k_row_words);
+    HostBuffer buffer(unaligned, MemoryPin(words));
+    const auto result = upload_and_verify(buffer, row_major_spec(rows, k_row_words), unaligned);
+    EXPECT_TRUE(result.cached) << "An unaligned base must take the whole-shard path";
 }
 
 TEST_F(TensixPinnedUploadFixture, ZeroThreadsUsesWholeShardPin) {
     ScopedPinnedUploadThreads threads(0);
-    const auto result = upload_and_verify(35 * 256 + 5);
+    const auto result = upload_and_verify(35 * k_rows_per_mib + 5);
     EXPECT_TRUE(result.cached);
     EXPECT_EQ(result.chunk_pins, 0u);
 }
@@ -382,7 +376,7 @@ TEST_F(TensixPinnedUploadFixture, ChangedThreadCountStillUploads) {
 }
 
 TEST_F(TensixPinnedUploadFixture, SecondUploadOfSameBufferUsesPinCache) {
-    const size_t rows = 34 * 256 + 9;
+    const size_t rows = 34 * k_rows_per_mib + 9;
     auto words = std::make_shared<AlignedWords>(rows * k_row_words);
     std::iota(words->begin(), words->end(), 17u);
     HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
@@ -396,57 +390,27 @@ TEST_F(TensixPinnedUploadFixture, SecondUploadOfSameBufferUsesPinCache) {
     MeshTensor second = cq.enqueue_write_tensor(host_tensor);
     EXPECT_EQ(cache.num_entries(), entries_before + 1);
     const auto actual = read_back(cq, second);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1);
-}
-
-// Block-float tiles have page sizes that are not powers of two (bfloat4_b: 576 B, bfloat8_b: 1088 B), so chunks are
-// multiples of lcm(page, 4 KiB) and the region offsets of every chunk must still land on page boundaries.
-void upload_block_float_and_verify(distributed::MeshDevice& mesh_device, DataType dtype, uint32_t rows, uint32_t cols) {
-    const TensorSpec spec(Shape{rows, cols}, TensorLayout(dtype, PageConfig(Layout::TILE), MemoryConfig{}));
-    const size_t size_bytes = spec.compute_packed_buffer_size_bytes();
-    ASSERT_GT(size_bytes, pinned_upload::k_pin_write_threshold_bytes);
-    ASSERT_NE(size_bytes % pinned_upload::k_max_chunk_bytes, 0u);
-
-    auto words = std::make_shared<AlignedWords>(size_bytes / sizeof(uint32_t));
-    uint32_t state = 0x12345678u ^ rows ^ (cols << 8);
-    for (auto& word : *words) {
-        state = state * 1664525u + 1013904223u;
-        word = state;
-    }
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
-    auto host_tensor = host_tensor_over(buffer, spec, mesh_device.shape());
-
-    auto& cache = experimental::PinnedMemoryCache::instance();
-    const size_t entries_before = cache.num_entries();
-    const size_t chunk_pins_before = pinned_upload::num_chunk_pins_created();
-    auto& cq = mesh_device.mesh_command_queue();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
-    EXPECT_EQ(cache.num_entries(), entries_before) << "Expected the chunked path, not a whole-shard cached pin";
-    EXPECT_EQ(
-        pinned_upload::num_chunk_pins_created() - chunk_pins_before,
-        chunks_in_shard(size_bytes, spec.compute_page_size_bytes()));
-    const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1);
+    EXPECT_EQ(first_mismatch(*words, actual), -1);
 }
 
 // 7168 x 10240 bfloat4_b: five 8.26 MB expert-weight-sized chunks (576 B pages).
 TEST_F(TensixPinnedUploadFixture, UploadBfloat4bShard) {
-    upload_block_float_and_verify(*mesh_device_, DataType::BFLOAT4_B, 7168, 10240);
+    upload_block_float_and_verify(DataType::BFLOAT4_B, 7168, 10240);
 }
 
 // A bfloat4_b shard whose chunks round up to the 36 KiB granule, leaving a shorter last chunk.
 TEST_F(TensixPinnedUploadFixture, UploadBfloat4bShardWithShortLastChunk) {
-    upload_block_float_and_verify(*mesh_device_, DataType::BFLOAT4_B, 7168, 9728);
+    upload_block_float_and_verify(DataType::BFLOAT4_B, 7168, 9728);
 }
 
 // 7168 x 5120 bfloat8_b (1088 B pages).
 TEST_F(TensixPinnedUploadFixture, UploadBfloat8bShard) {
-    upload_block_float_and_verify(*mesh_device_, DataType::BFLOAT8_B, 7168, 5120);
+    upload_block_float_and_verify(DataType::BFLOAT8_B, 7168, 5120);
 }
 
 // A bfloat8_b shard whose chunks round up to the 68 KiB granule, leaving a shorter last chunk.
 TEST_F(TensixPinnedUploadFixture, UploadBfloat8bShardWithShortLastChunk) {
-    upload_block_float_and_verify(*mesh_device_, DataType::BFLOAT8_B, 3232, 11264);
+    upload_block_float_and_verify(DataType::BFLOAT8_B, 3232, 11264);
 }
 
 // A host base that meets the L1 read alignment but not the PCIe alignment makes every chunk start with an unaligned
@@ -458,20 +422,12 @@ TEST_F(TensixPinnedUploadFixture, HostBaseOffPcieAlignment) {
     constexpr size_t offset_words = 4;  // 16 B
     auto words = std::make_shared<AlignedWords>(rows * row_words + offset_words);
     std::iota(words->begin(), words->end(), 0u);
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data() + offset_words, rows * row_words), MemoryPin(words));
-    auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, row_words), mesh_device_->shape());
-
-    auto& cache = experimental::PinnedMemoryCache::instance();
-    const size_t entries_before = cache.num_entries();
-    const size_t chunk_pins_before = pinned_upload::num_chunk_pins_created();
-    auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
-    EXPECT_EQ(cache.num_entries(), entries_before) << "Expected the chunked path, not a whole-shard cached pin";
+    const ttsl::Span<uint32_t> offset(words->data() + offset_words, rows * row_words);
+    HostBuffer buffer(offset, MemoryPin(words));
+    const auto result = upload_and_verify(buffer, row_major_spec(rows, row_words), offset);
+    EXPECT_FALSE(result.cached) << "Expected the chunked path, not a whole-shard cached pin";
     const size_t row_bytes = row_words * sizeof(uint32_t);
-    EXPECT_EQ(
-        pinned_upload::num_chunk_pins_created() - chunk_pins_before, chunks_in_shard(rows * row_bytes, row_bytes));
-    const auto actual = read_back(cq, device_tensor);
-    EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data() + offset_words, rows * row_words), actual), -1);
+    EXPECT_EQ(result.chunk_pins, chunks_in_shard(rows * row_bytes, row_bytes));
 }
 
 // Uploads to a mesh of more than one device: shards in separate host buffers pin as separate sources, and a 1x1 host
@@ -486,8 +442,8 @@ protected:
         if (mesh_device_->num_devices() < 2) {
             GTEST_SKIP() << "Needs a mesh of at least two devices";
         }
-        if (const auto reason = chunked_uploads_unavailable(*mesh_device_)) {
-            GTEST_SKIP() << *reason;
+        if (!pinned_upload::chunked_uploads_supported(*mesh_device_)) {
+            GTEST_SKIP() << k_chunked_uploads_unsupported;
         }
     }
 };
@@ -521,11 +477,7 @@ TEST_F(PinnedUploadMultiDeviceFixture, ShardsInSeparateBuffers) {
 
     HostTensor result = cq.enqueue_read_tensor(device_tensor);
     for (size_t i = 0; i < coords.size(); i++) {
-        auto bytes = result.buffer().get_shard(coords[i])->view_bytes();
-        std::vector<uint32_t> actual(bytes.size() / sizeof(uint32_t));
-        std::memcpy(actual.data(), bytes.data(), actual.size() * sizeof(uint32_t));
-        EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(shards[i]->data(), shards[i]->size()), actual), -1)
-            << "coord " << coords[i];
+        EXPECT_EQ(first_mismatch(*shards[i], shard_words(result, coords[i])), -1) << "coord " << coords[i];
     }
 }
 
@@ -545,11 +497,7 @@ TEST_F(PinnedUploadMultiDeviceFixture, OneHostShardReplicatedToEveryDevice) {
 
     HostTensor result = cq.enqueue_read_tensor(device_tensor);
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device_->shape())) {
-        auto bytes = result.buffer().get_shard(coord)->view_bytes();
-        std::vector<uint32_t> actual(bytes.size() / sizeof(uint32_t));
-        std::memcpy(actual.data(), bytes.data(), actual.size() * sizeof(uint32_t));
-        EXPECT_EQ(first_mismatch(ttsl::Span<const uint32_t>(words->data(), words->size()), actual), -1)
-            << "coord " << coord;
+        EXPECT_EQ(first_mismatch(*words, shard_words(result, coord)), -1) << "coord " << coord;
     }
 }
 
@@ -569,8 +517,8 @@ TEST(PinnedUploadChunking, ChunksAreBalancedGranuleMultiples) {
             ASSERT_NE(chunk_bytes, 0u);
             EXPECT_LE(chunk_bytes, pinned_upload::k_max_chunk_bytes);
             EXPECT_EQ(chunk_bytes % granule, 0u) << "page " << page_bytes;
-            const size_t fewest_chunks = num_chunks_for(shard_bytes, pinned_upload::k_max_chunk_bytes);
-            const size_t num_chunks = num_chunks_for(shard_bytes, chunk_bytes);
+            const size_t fewest_chunks = tt::div_up(shard_bytes, pinned_upload::k_max_chunk_bytes);
+            const size_t num_chunks = tt::div_up(shard_bytes, chunk_bytes);
             // Rounding every chunk up to the granule can cost at most one extra chunk.
             EXPECT_LE(num_chunks, fewest_chunks + 1) << "page " << page_bytes << " pages " << num_pages;
             // Balanced: the last chunk is short by less than one granule per chunk.

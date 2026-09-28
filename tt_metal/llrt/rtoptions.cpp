@@ -329,6 +329,25 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
+// `value`, ignoring surrounding whitespace, as an unsigned integer from 0 to `max`; nullopt when it is anything else
+// (empty, negative, partly numeric or out of range). `base` is as for std::stoull.
+std::optional<unsigned long long> parse_bounded_unsigned(const std::string& value, unsigned long long max, int base) {
+    const std::string trimmed = trim_copy(value);
+    if (trimmed.empty() || trimmed.front() == '-') {
+        return std::nullopt;
+    }
+    try {
+        size_t parse_pos = 0;
+        const unsigned long long parsed = std::stoull(trimmed, &parse_pos, base);
+        if (parse_pos != trimmed.size() || parsed > max) {
+            return std::nullopt;
+        }
+        return parsed;
+    } catch (const std::logic_error&) {  // std::invalid_argument or std::out_of_range
+        return std::nullopt;
+    }
+}
+
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
@@ -636,26 +655,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 4GB
         // Usage: export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=4294967296
         case EnvVarID::TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {
-            std::string limit_value = trim_copy(value);
-            if (limit_value.empty() || limit_value.front() == '-') {
+            const auto limit_bytes = parse_bounded_unsigned(value, std::numeric_limits<size_t>::max(), 0);
+            if (!limit_bytes.has_value()) {
                 TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES must be a non-negative byte count: {}", value);
             }
-
-            try {
-                size_t parse_pos = 0;
-                unsigned long long parsed_limit = std::stoull(limit_value, &parse_pos, 0);
-                if (parse_pos != limit_value.size()) {
-                    TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES must be a byte count: {}", value);
-                }
-                if (parsed_limit > std::numeric_limits<size_t>::max()) {
-                    TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
-                }
-                this->pinned_memory_cache_limit_bytes = static_cast<size_t>(parsed_limit);
-            } catch (const std::invalid_argument&) {
-                TT_THROW("Invalid TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: {}", value);
-            } catch (const std::out_of_range&) {
-                TT_THROW("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES value out of range: {}", value);
-            }
+            this->pinned_memory_cache_limit_bytes = static_cast<size_t>(*limit_bytes);
             break;
         }
 
@@ -669,21 +673,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PINNED_UPLOAD_THREADS: {
             // Each thread pins through its own extra device file handle; keep the handle count modest.
             constexpr unsigned long long max_threads = 64;
-            try {
-                std::string threads_value = trim_copy(value);
-                size_t parse_pos = 0;
-                unsigned long long parsed_threads = std::stoull(threads_value, &parse_pos, 10);
-                if (threads_value.empty() || threads_value.front() == '-' || parse_pos != threads_value.size() ||
-                    parsed_threads > max_threads) {
-                    TT_THROW(
-                        "TT_METAL_PINNED_UPLOAD_THREADS must be a thread count from 0 to {}: {}", max_threads, value);
-                }
-                this->pinned_upload_threads = static_cast<uint32_t>(parsed_threads);
-            } catch (const std::invalid_argument&) {
-                TT_THROW("TT_METAL_PINNED_UPLOAD_THREADS must be a thread count from 0 to {}: {}", max_threads, value);
-            } catch (const std::out_of_range&) {
+            const auto num_threads = parse_bounded_unsigned(value, max_threads, 10);
+            if (!num_threads.has_value()) {
                 TT_THROW("TT_METAL_PINNED_UPLOAD_THREADS must be a thread count from 0 to {}: {}", max_threads, value);
             }
+            this->pinned_upload_threads = static_cast<uint32_t>(*num_threads);
             break;
         }
 
@@ -971,23 +965,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: unset (whatever limit is already in effect stays)
         // Usage: export TT_METAL_TDP_LIMIT_WATTS=300
         case EnvVarID::TT_METAL_TDP_LIMIT_WATTS: {
-            std::string limit_value = trim_copy(value);
-            if (limit_value.empty()) {
+            if (trim_copy(value).empty()) {
                 this->tdp_limit_watts = std::nullopt;
                 break;
             }
-            try {
-                size_t parse_pos = 0;
-                unsigned long long parsed_limit = std::stoull(limit_value, &parse_pos, 0);
-                if (parse_pos != limit_value.size() || parsed_limit > std::numeric_limits<uint32_t>::max()) {
-                    TT_THROW("TT_METAL_TDP_LIMIT_WATTS must be a watt count: {}", value);
-                }
-                this->tdp_limit_watts = static_cast<uint32_t>(parsed_limit);
-            } catch (const std::invalid_argument&) {
+            const auto limit_watts = parse_bounded_unsigned(value, std::numeric_limits<uint32_t>::max(), 0);
+            if (!limit_watts.has_value()) {
                 TT_THROW("TT_METAL_TDP_LIMIT_WATTS must be a watt count: {}", value);
-            } catch (const std::out_of_range&) {
-                TT_THROW("TT_METAL_TDP_LIMIT_WATTS value out of range: {}", value);
             }
+            this->tdp_limit_watts = static_cast<uint32_t>(*limit_watts);
             break;
         }
 

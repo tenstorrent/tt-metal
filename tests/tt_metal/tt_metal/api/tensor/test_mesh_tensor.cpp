@@ -1009,10 +1009,8 @@ void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_de
     auto& cq = mesh_device.mesh_command_queue();
     const size_t entries_before = cache.num_entries();
     // This covers the cached whole-shard pin; the chunked upload's pins are not cached (see test_pinned_upload.cpp).
-    MeshTensor device_tensor = [&] {
-        ScopedPinnedUploadThreads whole_shard_pins(0);
-        return cq.enqueue_write_tensor(host_tensor);
-    }();
+    ScopedPinnedUploadThreads whole_shard_pins(0);
+    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
     cq.finish();
 
     // The write itself must have created the pin. Asserting only on a try_pin issued after the fact would pass

@@ -20,21 +20,32 @@ namespace tt::tt_metal {
 MemoryPinImpl::MemoryPinImpl(std::function<void()> increment_ref_count, std::function<void()> decrement_ref_count) :
     inc_(std::move(increment_ref_count)),
     dec_(std::move(decrement_ref_count)),
-    final_release_state_(std::make_shared<FinalReleaseState>()) {
+    shared_state_(std::make_shared<SharedState>()) {
     maybe_increment();
 }
 
 MemoryPinImpl::MemoryPinImpl(std::shared_ptr<void> resource) :
     inc_([]() {}),
     dec_([ref = std::move(resource)]() mutable { ref.reset(); }),
-    final_release_state_(std::make_shared<FinalReleaseState>()) {}
+    shared_state_(std::make_shared<SharedState>()) {}
+
+MemoryPinImpl::SharedState::~SharedState() {
+    for (const auto& callback : callbacks) {
+        callback();
+    }
+}
+
+MemoryPinImpl::SharedState& MemoryPinImpl::shared_state() {
+    if (!shared_state_) {
+        shared_state_ = std::make_shared<SharedState>();
+    }
+    return *shared_state_;
+}
 
 void MemoryPinImpl::add_final_release_callback(std::function<void()> callback) {
-    if (!final_release_state_) {
-        final_release_state_ = std::make_shared<FinalReleaseState>();
-    }
-    std::lock_guard lock(final_release_state_->callbacks_mutex);
-    final_release_state_->callbacks.push_back(std::move(callback));
+    auto& state = shared_state();
+    std::lock_guard lock(state.callbacks_mutex);
+    state.callbacks.push_back(std::move(callback));
 }
 
 void MemoryPinImpl::maybe_increment() {
@@ -44,70 +55,17 @@ void MemoryPinImpl::maybe_increment() {
 }
 
 void MemoryPinImpl::maybe_decrement() {
-    release_final_release_state();
+    // Dropped before dec_ so that, when this is the last copy, the final-release callbacks run first.
+    shared_state_.reset();
     if (dec_) {
         dec_();
     }
 }
 
-MemoryPinImpl::MemoryPinImpl(const MemoryPinImpl& other) :
-    inc_(other.inc_), dec_(other.dec_), final_release_state_(other.final_release_state_) {
-    acquire_final_release_state();
-}
-
-MemoryPinImpl& MemoryPinImpl::operator=(const MemoryPinImpl& other) {
-    if (this != &other) {
-        *this = MemoryPinImpl(other);
-    }
-    return *this;
-}
-
-MemoryPinImpl& MemoryPinImpl::operator=(MemoryPinImpl&& other) noexcept {
-    if (this != &other) {
-        release_final_release_state();
-        inc_ = std::move(other.inc_);
-        dec_ = std::move(other.dec_);
-        final_release_state_ = std::move(other.final_release_state_);
-    }
-    return *this;
-}
-
-MemoryPinImpl::~MemoryPinImpl() { release_final_release_state(); }
-
-void MemoryPinImpl::acquire_final_release_state() {
-    if (final_release_state_) {
-        final_release_state_->holders.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void MemoryPinImpl::release_final_release_state() {
-    if (!final_release_state_) {
-        return;
-    }
-    // acq_rel: callbacks added through any copy happen-before the release that runs them.
-    if (final_release_state_->holders.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        std::vector<std::function<void()>> callbacks;
-        {
-            std::lock_guard lock(final_release_state_->callbacks_mutex);
-            callbacks.swap(final_release_state_->callbacks);
-        }
-        for (const auto& callback : callbacks) {
-            callback();
-        }
-    }
-    final_release_state_.reset();
-}
-
-void MemoryPinImpl::mark_device_immutable() {
-    TT_FATAL(!is_empty(), "Cannot mark an empty MemoryPin device-immutable: it keeps no memory alive.");
-    if (!final_release_state_) {
-        final_release_state_ = std::make_shared<FinalReleaseState>();
-    }
-    final_release_state_->device_immutable.store(true, std::memory_order_release);
-}
+void MemoryPinImpl::mark_device_immutable() { shared_state().device_immutable.store(true, std::memory_order_release); }
 
 bool MemoryPinImpl::is_device_immutable() const noexcept {
-    return final_release_state_ != nullptr && final_release_state_->device_immutable.load(std::memory_order_acquire);
+    return shared_state_ != nullptr && shared_state_->device_immutable.load(std::memory_order_acquire);
 }
 
 bool MemoryPinImpl::is_empty() const noexcept { return !inc_ && !dec_; }

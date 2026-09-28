@@ -36,8 +36,10 @@ inline constexpr size_t k_max_chunk_bytes = 8 * 1024 * 1024;
 // k_max_chunk_bytes.
 size_t chunk_bytes_for(size_t shard_bytes, size_t page_bytes);
 
-// True when an upload of `size_bytes` to `mesh_device` should try to have the device read pinned host memory.
-bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes);
+// True when large uploads to `mesh_device` may pin in chunks: Blackhole with IOMMU and read-only page pinning, under
+// fast dispatch, with neither TT_METAL_PINNED_UPLOAD_THREADS nor TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES set to 0.
+// Whether a given upload does also depends on its buffer layout and host memory.
+bool chunked_uploads_supported(distributed::MeshDevice& mesh_device);
 
 // Writes this host's shards of `host_buffer` into `mesh_buffer` with the device reading pinned host memory.
 //

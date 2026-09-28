@@ -4,6 +4,8 @@
 
 #pragma once
 
+// This API is experimental and may change or be removed without notice.
+
 namespace tt::tt_metal {
 
 class MemoryPin;

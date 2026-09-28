@@ -12,6 +12,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_event_impl.hpp"
 #include <tt_stl/small_vector.hpp>
+#include <tt_stl/tt_pause.hpp>
 #include <sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include <system_mesh.hpp>
@@ -27,7 +28,6 @@
 #include <memory>
 #include <optional>
 #include <source_location>
-#include <thread>
 #include <utility>
 
 #include "impl/allocator/allocator.hpp"
@@ -901,13 +901,15 @@ bool MeshDeviceImpl::wait_for_event_unless_queue_failed(const MeshEvent& event) 
         return true;
     }
     const MeshCommandQueueBase& command_queue = *mesh_command_queues_[cq_id];
-    while (!EventQuery(event)) {
-        if (command_queue.completion_reader_failed()) {
-            return false;
+    bool queue_failed = false;
+    ttsl::nice_spin_until([&] {
+        if (EventQuery(event)) {
+            return true;
         }
-        std::this_thread::yield();
-    }
-    return true;
+        queue_failed = command_queue.completion_reader_failed();
+        return queue_failed;
+    });
+    return !queue_failed;
 }
 
 DeviceIds MeshDeviceImpl::get_device_ids() const {

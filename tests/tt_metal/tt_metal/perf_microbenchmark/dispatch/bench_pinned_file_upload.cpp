@@ -27,6 +27,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/base.h>
@@ -120,7 +121,8 @@ int main(int argc, char** argv) {
     const std::string cache = argv[2];
     TT_FATAL(cache == "cold" || cache == "warm", "cache must be cold or warm, got {}", cache);
     const std::vector<std::string> files(argv + 3, argv + argc);
-    const bool check = std::getenv("VERIFY") != nullptr && std::string(std::getenv("VERIFY")) != "0";
+    const char* verify_env = std::getenv("VERIFY");
+    const bool check = verify_env != nullptr && std::string_view(verify_env) != "0";
 
     size_t max_size = 0;
     for (const auto& f : files) {
