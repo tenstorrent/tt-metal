@@ -155,7 +155,10 @@ class TtMhaCore:
         # 1. RMSNorm (T5-style: no mean subtraction, no bias); gamma is folded into wqkv.
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, memory_config=mem)
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
-        xqkv = program_configs.linear(x_norm, wqkv, dtype=self.precision.attention_dtype(), memory_config=mem)
+        fidelity = self.precision.attention_math_fidelity()
+        xqkv = program_configs.linear(
+            x_norm, wqkv, dtype=self.precision.attention_dtype(), memory_config=mem, math_fidelity=fidelity
+        )
         ttnn.deallocate(x_norm)
         if head_dim % 32 == 0:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -232,7 +235,9 @@ class TtMhaCore:
             merged = ttnn.reshape(ctx_t, (batch, seq, num_heads * head_dim))
             ttnn.deallocate(ctx_t)
         ttnn.deallocate(ctx)
-        out = program_configs.linear(merged, wo, dtype=self.precision.sublayer_out_dtype(), memory_config=mem)
+        out = program_configs.linear(
+            merged, wo, dtype=self.precision.sublayer_out_dtype(), memory_config=mem, math_fidelity=fidelity
+        )
         ttnn.deallocate(merged)
         return out
 
@@ -251,7 +256,11 @@ class TtMhaCore:
         mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
         x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, memory_config=mem)
         out = program_configs.linear(
-            x_norm, self._diagonal_vo_weight, dtype=self.precision.sublayer_out_dtype(), memory_config=mem
+            x_norm,
+            self._diagonal_vo_weight,
+            dtype=self.precision.sublayer_out_dtype(),
+            memory_config=mem,
+            math_fidelity=self.precision.attention_math_fidelity(),
         )
         ttnn.deallocate(x_norm)
         return out

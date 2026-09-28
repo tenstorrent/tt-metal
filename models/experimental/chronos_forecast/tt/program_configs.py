@@ -36,10 +36,18 @@ class TtChronosPrecision:
     bf8_ff_hidden: bool = False  # relu(x @ Wi) stored as bfloat8_b
     bf8_sublayer_out: bool = False  # attention / FF outputs added to the (bf16) residual stream
     lofi_ff: bool = False  # FF-up/down matmuls at LoFi
+    lofi_attention: bool = False  # QKV, output and group V*O matmuls at LoFi
 
     @classmethod
     def performance(cls) -> "TtChronosPrecision":
-        return cls(bf8_weights=True, bf8_attention=True, bf8_ff_hidden=True, bf8_sublayer_out=True, lofi_ff=True)
+        return cls(
+            bf8_weights=True,
+            bf8_attention=True,
+            bf8_ff_hidden=True,
+            bf8_sublayer_out=True,
+            lofi_ff=True,
+            lofi_attention=True,
+        )
 
     def weight_dtype(self):
         import ttnn
@@ -65,6 +73,11 @@ class TtChronosPrecision:
         import ttnn
 
         return ttnn.MathFidelity.LoFi if self.lofi_ff else None
+
+    def attention_math_fidelity(self):
+        import ttnn
+
+        return ttnn.MathFidelity.LoFi if self.lofi_attention else None
 
     def l1_chunk_tokens(self) -> int:
         """Largest L1-resident encoder chunk (series x tile-padded tokens) measured to fit a P150."""

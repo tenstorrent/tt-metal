@@ -152,6 +152,7 @@ _MAX_REL_WQL_INCREASE = 0.01
         pytest.param("bf8_ff_hidden", 1, False, id="bf8_ff_hidden"),
         pytest.param("bf8_sublayer_out", 1, False, id="bf8_sublayer_out"),
         pytest.param("lofi_ff", 1, False, id="lofi_ff"),
+        pytest.param("lofi_attention", 1, False, id="lofi_attention"),
         pytest.param("performance", 1, False, id="performance"),
         pytest.param("performance", 4, False, id="performance_groups_of_4"),
         pytest.param("default", 1, True, id="default_l1"),
