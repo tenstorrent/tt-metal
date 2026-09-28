@@ -30,10 +30,13 @@ namespace ckernel::sfpu {
 //       negative tail stays relatively accurate down to the bf16 normal floor
 //       instead of being clamped to 0. No tail branch, so no predicated exp
 //       cost on every lane.
-//       u = 2^(y-127), y = 127 - a/ln2, is assembled from k = trunc(y) (one
-//       saturating float->uint16 conversion, so y < 0 lands on k = 0 and the
-//       result flushes to zero) and a degree-3 polynomial for 2^(y-k) whose
-//       value is placed under exponent k with a single SFPSETEXP.
+//       u = 2^(y-127), y = max(127 - a/ln2, 0). Wormhole has no truncating
+//       fp32->uint16 conversion, so the caller passes yh = max(y - 1/2, 0) and
+//       k = round-to-nearest(yh), which equals floor(y) for y >= 1/2. A
+//       degree-3 polynomial for 2^(y-k) is placed under exponent k with one
+//       SFPSETEXP. The max() is what sends y < 0 to k = 0: the conversion takes
+//       the magnitude, so an unclamped negative y comes back as a positive k.
+//       a > 88 clamps to yh = 0 and flushes to zero, the right bf16 answer.
 //       Coefficients not held in the programmable constant registers are
 //       fp16-representable so each costs one SFPLOADI, not two.
 //       The main loop evaluates two dest rows per iteration with the two
@@ -61,7 +64,8 @@ constexpr float SOFTPLUS_BF16_NEG_ONE_LN2 = -1.4426950216293334961f;
 // BF16: p(f) ~ 2^f on [0, 1), p(f) = 1 + f*(P1 + f*(P2 + f*P3)), 1.05e-4 relative.
 // p(0) = 1 exactly and p(1) = 2 - 2^-16 by construction (P1 = 1 - 2^-16 - P2 - P3), so
 // p(f) stays inside [1, 2) and SFPSETEXP can place it under exponent k unchanged.
-// P1 is fp32 (vConstFloatPrgm1); P2, P3 are exactly representable in fp16.
+// P1 is fp32 (vConstFloatPrgm1); P0, P2, P3 are exactly representable in fp16.
+constexpr float SOFTPLUS_BF16_P0 = 1.0f;
 constexpr float SOFTPLUS_BF16_P1 = 0.6954193115234375f;
 constexpr float SOFTPLUS_BF16_P2 = 0.2264404296875f;  // 1855 * 2^-13
 constexpr float SOFTPLUS_BF16_P3 = 0.078125f;         // 5 * 2^-6
@@ -117,12 +121,15 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 //   u = p(f) * 2^(k-127) is exactly setexp(p(f), k).
 //   For a > 88 (exp(-a) below the bf16 normal range) yh = 0: k = 0 and p(1/2)
 //   land under a zero exponent, i.e. a denormal the SFPU flushes to zero.
+//   The caller's max(yh, 0) is required: the conversion takes the magnitude,
+//   so an unclamped negative yh comes back as a positive k.
 // ======================================================================
 sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat yh) {
     sfpi::vUInt16 k = sfpi::convert<sfpi::vUInt16>(yh, sfpi::RoundMode::Nearest);
     sfpi::vFloat f = yh - sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
     f = f + 0.5f;
-    sfpi::vFloat p = PolynomialEvaluator::eval(f, 1.0f, sfpi::vConstFloatPrgm1, SOFTPLUS_BF16_P2, SOFTPLUS_BF16_P3);
+    sfpi::vFloat p =
+        PolynomialEvaluator::eval(f, SOFTPLUS_BF16_P0, sfpi::vConstFloatPrgm1, SOFTPLUS_BF16_P2, SOFTPLUS_BF16_P3);
     return sfpi::setexp(p, sfpi::as<sfpi::vInt>(k));
 }
 
@@ -174,6 +181,9 @@ inline void softplus_init() {
 // Lanes with t > threshold are left untouched by a predicated store, so they
 // keep the input value (the identity result) without a separate select.
 // Does not advance dst_reg; the caller does (calculate_softplus, SDPA).
+// The bf16 path reads vConstFloatPrgm0/1/2 loaded by softplus_init(). Call that
+// init first, and again after another SFPU init overwrites those registers.
+// SDPA's calculate_softplus_first_column uses this body and has that dependency.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];
@@ -229,8 +239,11 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 // BF16: two rows per iteration (dst_reg[0] and dst_reg[1]), hand-interleaved
 // step by step so the two dependent chains overlap. Same arithmetic as
 // softplus_bf16_eval; PolynomialEvaluator is not used so the two Horner chains
-// can be alternated. Results are evaluated unpredicated; the predicated stores
-// then keep the identity lanes. Does not advance dst_reg; the caller does.
+// can be alternated. Keep the two copies bit-identical: a coefficient or
+// formula change has to land in both, since a shared helper would serialize
+// the chains this interleave exists to overlap. Results are evaluated
+// unpredicated; the predicated stores then keep the identity lanes. Does not
+// advance dst_reg; the caller does. Reads vConstFloatPrgm0/1/2 from softplus_init().
 // The lreg budget (L0-L7) is tight, so only |t| is kept up front and t is
 // re-read from dest where needed (a load is cheaper than a live lreg here).
 template <bool is_fp32_dest_acc_en>
@@ -256,8 +269,8 @@ sfpi_inline void softplus_body_bf16_x2(const float beta, const float beta_recipr
     sfpi::vFloat p1 = f1 * cP3 + cP2;
     p0 = f0 * p0 + sfpi::vConstFloatPrgm1;
     p1 = f1 * p1 + sfpi::vConstFloatPrgm1;
-    p0 = f0 * p0 + 1.0f;
-    p1 = f1 * p1 + 1.0f;
+    p0 = f0 * p0 + SOFTPLUS_BF16_P0;
+    p1 = f1 * p1 + SOFTPLUS_BF16_P0;
     sfpi::vFloat u0 = sfpi::setexp(p0, sfpi::as<sfpi::vInt>(k0));
     sfpi::vFloat u1 = sfpi::setexp(p1, sfpi::as<sfpi::vInt>(k1));
 

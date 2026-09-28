@@ -37,10 +37,11 @@ constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
 constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
 
 // BF16: same coefficients as the Blackhole/Wormhole kernel. -1/ln2, P1 and H1 live in the
-// programmable constant registers (loaded in calculate_softplus); the rest are fp16-exact.
+// programmable constant registers (loaded by softplus_init); the rest are fp16-exact.
 // p(f) ~ 2^f on [0, 1) is pinned to p(0) = 1 and p(1) = 2 - 2^-16 so it stays in [1, 2).
 // h(u) = (ln(1+u)/u - 1)/u on [0, 1], degree 4, h(0) = -1/2 pinned.
 constexpr float SOFTPLUS_BF16_NEG_ONE_LN2 = -1.4426950216293334961f;
+constexpr float SOFTPLUS_BF16_P0 = 1.0f;
 constexpr float SOFTPLUS_BF16_P1 = 0.6954193115234375f;
 constexpr float SOFTPLUS_BF16_P2 = 0.2264404296875f;  // 1855 * 2^-13
 constexpr float SOFTPLUS_BF16_P3 = 0.078125f;         // 5 * 2^-6
@@ -53,11 +54,14 @@ constexpr float SOFTPLUS_BF16_H4 = -0.03411865234375f;  // -559 * 2^-14
 // BF16: u = 2^(y-127), y = max(127 - a/ln2, 0), i.e. exp(-a) for a >= 0.
 // Quasar has the truncating fp32->uint16 conversion (RoundMode::Zero), same as Blackhole.
 // k = trunc(y), f = y - k in [0, 1), p(f) ~ 2^f in [1, 2), u = setexp(p(f), k).
-// a > 88 lands under exponent 0 and flushes to 0, the right bf16 answer.
+// The max(y, 0) in softplus_bf16_eval is what sends y < 0 to k = 0: the conversion
+// takes the magnitude, so an unclamped negative y comes back as a positive k.
+// a > 88 clamps to y = 0 and flushes to 0, the right bf16 answer.
 sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat y) {
     sfpi::vUInt16 k = sfpi::convert<sfpi::vUInt16>(y, sfpi::RoundMode::Zero);
     sfpi::vFloat f = y - sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
-    sfpi::vFloat p = PolynomialEvaluator::eval(f, 1.0f, sfpi::vConstFloatPrgm1, SOFTPLUS_BF16_P2, SOFTPLUS_BF16_P3);
+    sfpi::vFloat p =
+        PolynomialEvaluator::eval(f, SOFTPLUS_BF16_P0, sfpi::vConstFloatPrgm1, SOFTPLUS_BF16_P2, SOFTPLUS_BF16_P3);
     return sfpi::setexp(p, sfpi::as<sfpi::vInt>(k));
 }
 
@@ -118,6 +122,18 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
     sfpi::dst_reg++;
 }
 
+// Loads vConstFloatPrgm0/1/2 for the bf16 path. Wired from softplus_tile_init via
+// SFPU_UNARY_INIT_FN, so it runs once per init rather than on every face. The fp32
+// path does not read these registers. Call again after another SFPU init overwrites them.
+template <bool is_fp32_dest_acc_en>
+inline void softplus_init() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm0 = SOFTPLUS_BF16_NEG_ONE_LN2;
+        sfpi::vConstFloatPrgm1 = SOFTPLUS_BF16_P1;
+        sfpi::vConstFloatPrgm2 = SOFTPLUS_BF16_H1;
+    }
+}
+
 /**
  * @brief Compute softplus (1/beta * ln(1 + exp(beta * x))) in-place over a Dest tile.
  *
@@ -136,18 +152,14 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  * @param threshold: Linear-region threshold on beta*x above which softplus(x) = x, as an fp32 bit pattern.
  * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t <= threshold` compare relies on
  *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_. The bf16
- *       path's programmable constants are loaded at the start of this function.
+ *       path reads vConstFloatPrgm0/1/2 loaded by @ref softplus_init. Call that init first, and again
+ *       after another SFPU init overwrites those registers.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold) {
     const float beta_f = Converter::as_float(beta);
     const float beta_reciprocal_f = Converter::as_float(beta_reciprocal);
     const float threshold_f = Converter::as_float(threshold);
-    // Programmable constants for the bf16 path. Loaded here rather than in an op init: Quasar's
-    // SFPU_UNARY_INIT(softplus) only resets the counters.
-    sfpi::vConstFloatPrgm0 = SOFTPLUS_BF16_NEG_ONE_LN2;
-    sfpi::vConstFloatPrgm1 = SOFTPLUS_BF16_P1;
-    sfpi::vConstFloatPrgm2 = SOFTPLUS_BF16_H1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_softplus_body_<is_fp32_dest_acc_en>(beta_f, beta_reciprocal_f, threshold_f);

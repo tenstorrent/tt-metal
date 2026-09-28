@@ -194,11 +194,11 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         span = 8.0 / abs(scale)
         return _ramp(0.0, span) if scale < 0.0 else _ramp(-span, 0.0)
 
-    # Softplus. The bound keeps |beta*x| inside the residual polynomial's [0, 5] fit domain, so
-    # the test measures the polynomial rather than the clamp beyond it. Where beta*x clears the
-    # threshold the body writes nothing and the golden returns x, so a low threshold covers the
-    # pass-through arm without needing its own stimulus.
-    bound = 4.0 / variant.softplus.beta
+    # Softplus. |beta*x| runs past 5 so the single-row body (calculate_softplus_body, not the
+    # two-row eltwise loop) covers the negative tail the bf16 path used to flush to 0. A low
+    # threshold still crosses the pass-through arm: where beta*x clears it the body writes
+    # nothing and the golden returns x.
+    bound = 12.0 / variant.softplus.beta
     return _ramp(-bound, bound)
 
 
