@@ -1246,6 +1246,23 @@ inline void init_acosh_tt_poly_bf16() {
 
 #if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
     !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_asinh_bf16.h"
+#define TT_POLY_ASINH_BF16_AVAILABLE 1
+#endif
+
+namespace ckernel::sfpu {
+
+#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_asinh_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_symmetric_factored_log<ttpoly_generated::AsinhBf16Config, ITERATIONS>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
+
+#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
+    !defined(TT_POLY_LLK_DISABLE)
 #include "ckernel_sfpu_atanh_bf16.h"
 #define TT_POLY_ATANH_BF16_AVAILABLE 1
 #endif

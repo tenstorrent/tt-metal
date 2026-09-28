@@ -378,6 +378,8 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_interleaved_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_scalar_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_symmetric_factored_log.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_symmetric_factored_log_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_cbrt_bf16.h
