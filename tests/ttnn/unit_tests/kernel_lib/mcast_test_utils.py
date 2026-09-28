@@ -138,7 +138,23 @@ def inspect_mcast(kernel, core, prefix="mcast"):
     ct = inspect_mcast_ct(kernel, prefix)
     rt = kernel.runtime_args[core.x][core.y][named[prefix + "_rt_offset"] :]
     if (ct["flags"] >> 3) & 3:
-        return dict(roles=rt[9], phase=rt[10], rectangles=0, ack=rt[1], coordinates=list(rt[2:4]))
+        offset = 0
+        roles = ct["roles"]
+        if roles == 0xFFFFFFFF:
+            roles = rt[offset]
+            offset += 1
+        coordinates = []
+        if ct["capabilities"] & 2:
+            coordinates = list(rt[offset : offset + 2])
+            offset += 2
+        successor_x = rt[offset + 2]
+        return dict(
+            roles=roles,
+            phase=0,
+            rectangles=0,
+            ack=int(successor_x != 0xFFFFFFFF),
+            coordinates=coordinates,
+        )
     offset = 0
     roles = ct["roles"]
     if roles == 0xFFFFFFFF:
