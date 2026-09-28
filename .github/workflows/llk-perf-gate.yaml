@@ -3,15 +3,22 @@ name: "LLK perf gate"
 on:
   pull_request:
     types: [labeled, synchronize]
+  schedule:
+    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
       perf_run_id:
-        description: "Workflow run holding the CURRENT side's perf artifacts"
-        required: true
+        description: "Gate this run's perf artifacts (blank = measure the nightly suite now)"
+        required: false
         type: string
       baseline_run_id:
-        description: "Workflow run holding the BASELINE side's perf artifacts"
-        required: true
+        description: "Compare against this run's artifacts (blank = the warehouse baseline, nightly mode)"
+        required: false
+        type: string
+      baseline_pipeline:
+        description: "Nightly mode: warehouse baseline, 'baseline' (pinned) or 'nightly' (previous night)"
+        required: false
+        default: baseline
         type: string
       arch:
         description: "Architecture to gate on"
@@ -124,7 +131,7 @@ jobs:
     if: >-
       always() &&
       (
-        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id != '') ||
         (
           github.event.pull_request.head.repo.full_name == github.repository &&
           (
@@ -157,4 +164,41 @@ jobs:
       perf_run_id: ${{ inputs.perf_run_id || '' }}
       baseline_run_id: ${{ inputs.baseline_run_id || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
+    secrets: inherit
+
+  nightly-measure:
+    name: "Nightly: measure the suite (non speed-of-light)"
+    if: >-
+      github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch'
+      && inputs.baseline_run_id == '' && inputs.perf_run_id == '')
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: all
+      speed-of-light: false
+      upload-to-warehouse: true
+      pipeline: nightly
+    secrets: inherit
+
+  nightly-gate:
+    name: "Nightly gate ${{ matrix.arch }} (non speed-of-light)"
+    needs: nightly-measure
+    if: >-
+      always() && (github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == ''))
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.arch == 'wormhole' && '[{"arch":"wormhole","threshold":"0.10","module_thresholds":"perf_matmul=0.25,perf_math_matmul=0.25","run_types":"L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE"}]' || inputs.arch == 'blackhole' && '[{"arch":"blackhole","threshold":"0.02","module_thresholds":"","run_types":"L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE"}]' || '[{"arch":"blackhole","threshold":"0.02","module_thresholds":"","run_types":"L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE"},{"arch":"wormhole","threshold":"0.10","module_thresholds":"perf_matmul=0.25,perf_math_matmul=0.25","run_types":"L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE"}]') }}
+    uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      arch: ${{ matrix.arch }}
+      perf_run_id: ${{ inputs.perf_run_id || '' }}
+      baseline_pipeline: ${{ inputs.baseline_pipeline || 'baseline' }}
+      speed_of_light: "false"
+      run_types: ${{ matrix.run_types }}
+      threshold: ${{ matrix.threshold }}
+      min_cycles: "30"
+      module_thresholds: ${{ matrix.module_thresholds }}
+      measure_result: ${{ needs.nightly-measure.result }}
+      fail_on_regression: false
     secrets: inherit
