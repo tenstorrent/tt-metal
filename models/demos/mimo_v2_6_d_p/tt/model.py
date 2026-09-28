@@ -188,6 +188,12 @@ class TtMiMoBlock:
         else:
             self.mlp = build_mlp(mesh, loader, layer)
         self.graph = list(MOE_GRAPH if self.moe else DENSE_GRAPH)
+        # Residual add + the next RMSNorm in one call (MIMO_FUSE_RESIDUAL_NORM, set by TtMiMoModel): the residual step
+        # returns the sum and parks the norm in `stash`, which the norm step that follows (ffn_norm, or the next
+        # block's attn_norm) returns instead of recomputing it. The graph's boundaries are unchanged; a block built on
+        # its own (component and swap tests) has no stash and runs unfused.
+        self.stash = None
+        self.next_norm = None  # the next block's attn_norm (TtMiMoModel)
         self._build_steps()
 
     def _build_steps(self):
@@ -196,12 +202,29 @@ class TtMiMoBlock:
         n = self.norms
 
         def norm(k):
-            return lambda ctx, x: n[k](x)
+            def fn(ctx, x):
+                hit = self.stash.pop(id(x), None) if self.stash is not None else None
+                if hit is not None and hit[0] is x:
+                    return hit[1]
+                return n[k](x)
+
+            return fn
+
+        def residual(next_norm):
+            def fn(ctx, a, b):
+                nn = next_norm()
+                if self.stash is None or nn is None:
+                    return self.add(a, b)
+                y, t = nn.fused_add(a, b)
+                self.stash[id(t)] = (t, y)
+                return t
+
+            return fn
 
         steps = {k: norm(k) for k in n}
         steps.update(
             attention=lambda ctx, x: self.attn(x, ctx.start, ctx.state, kv_sink=ctx.extra.get("kv_sink")),
-            attn_residual=lambda ctx, a, b: self.add(a, b),
+            attn_residual=residual(lambda: n["ffn_norm"]),
         )
         if self.moe:
 
@@ -213,10 +236,10 @@ class TtMiMoBlock:
             steps.update(
                 router=router,
                 experts=lambda ctx, x, r: self.experts(x, idx=r[0], wts=r[1]),
-                ffn_residual=lambda ctx, a, b: self.add(a, b),
+                ffn_residual=residual(lambda: self.next_norm),
             )
         else:
-            steps.update(mlp=lambda ctx, x: self.mlp(x), mlp_residual=lambda ctx, a, b: self.add(a, b))
+            steps.update(mlp=lambda ctx, x: self.mlp(x), mlp_residual=residual(lambda: self.next_norm))
         assert set(steps) == {st.name for st in self.graph}, (sorted(steps), [st.name for st in self.graph])
         last_use = {}
         for k, st in enumerate(self.graph):
@@ -271,6 +294,12 @@ class TtMiMoModel:
         self.max_chunk = int(max_chunk)
         self.embed = TtEmbedding(mesh, loader.get("model.embed_tokens.weight"))
         self.blocks = [TtMiMoBlock(mesh, cfg, loader, i, self.max_seq, self.max_chunk) for i in self.layer_ids]
+        if os.environ.get("MIMO_FUSE_RESIDUAL_NORM", "1") != "0":
+            stash = {}
+            for k, blk in enumerate(self.blocks):
+                blk.stash = stash
+                nxt = self.blocks[k + 1] if k + 1 < len(self.blocks) else None
+                blk.next_norm = nxt.norms["attn_norm"] if nxt is not None and nxt.i == blk.i + 1 else None
         self.final_norm = TtRMSNorm(mesh, loader.get("model.norm.weight"), eps=cfg.layernorm_epsilon)
 
     def prefill_chunk(
