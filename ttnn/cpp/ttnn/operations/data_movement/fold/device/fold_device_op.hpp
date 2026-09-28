@@ -16,9 +16,9 @@ namespace ttnn::operations::data_movement {
 // Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op.
 bool is_fast_path_input(const Tensor& t);
 
-// TILE-native tiled factory needs (logical C * elem_size) aligned to the output buffer's NoC align
-// (writer scatters `c_bytes` at `patch_idx * c_bytes` intra-page); else fall back to composite untilize.
-bool is_tile_native_fold_supported(const Tensor& input_tensor);
+// Tile-native tiled factory holds one full output row in L1 scratch (`out_W * sh * sw * C * out_elem`);
+// if that overflows the per-core budget, composite untilize→RM does the same work with 1-stick scratch.
+bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
 
 // Fresh shard-spec for specless sharded outputs, sized to the populated shard count (not the
 // full compute grid): H/W → num_cores_to_corerangeset over used cores; B → rectangular CoreRange.

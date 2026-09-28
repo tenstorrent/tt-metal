@@ -13,39 +13,35 @@
 void kernel_main() {
     constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);
     constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);
+    constexpr uint32_t stride_height = get_arg(args::stride_height);
 
-    uint32_t start_block_id = get_arg(args::start_block_id);
-    uint32_t num_blocks = get_arg(args::num_blocks);
+    const uint32_t start_super_block_id = get_arg(args::start_block_id);
+    const uint32_t num_super_blocks = get_arg(args::num_blocks);
 
-    // Initialize interleaved address generator for DRAM access
     const auto s = TensorAccessor(tensor::src);
-
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
-
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
 
-    // Process each block of data
-    uint32_t end_block_id = start_block_id + num_blocks;
-    for (uint32_t i = start_block_id; i < end_block_id; ++i) {
-        // Reserve space in the circular buffer for a row of tiles
-        for (uint32_t j = 0; j < tiles_per_width_dim; ++j) {
-            dfb_in0.reserve_back(tiles_per_channel_dim);
-            uint32_t l1_offset = 0;
-
-            // Read each tile in the current row
-            for (uint32_t k = 0; k < tiles_per_channel_dim; ++k) {
-                // Calculate tile index and read from DRAM to L1
-                uint32_t tile_index = tiles_per_width_dim * tiles_per_channel_dim * i + tiles_per_channel_dim * j + k;
-                noc.async_read(s, dfb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = l1_offset});
-                l1_offset += tile_bytes;
+    // Each super-block = `stride_height` consecutive input rows; the writer gathers them into cb_asm before
+    // emitting one aligned output row, so work must split at super-block granularity across cores.
+    const uint32_t end_super_block_id = start_super_block_id + num_super_blocks;
+    for (uint32_t sb = start_super_block_id; sb < end_super_block_id; ++sb) {
+        const uint32_t input_h_base = sb * stride_height;
+        for (uint32_t local_h = 0; local_h < stride_height; ++local_h) {
+            const uint32_t input_h = input_h_base + local_h;
+            for (uint32_t w_tile = 0; w_tile < tiles_per_width_dim; ++w_tile) {
+                dfb_in0.reserve_back(tiles_per_channel_dim);
+                uint32_t l1_offset = 0;
+                for (uint32_t c_tile = 0; c_tile < tiles_per_channel_dim; ++c_tile) {
+                    const uint32_t tile_index =
+                        input_h * tiles_per_width_dim * tiles_per_channel_dim + w_tile * tiles_per_channel_dim + c_tile;
+                    noc.async_read(s, dfb_in0, tile_bytes, {.page_id = tile_index}, {.offset_bytes = l1_offset});
+                    l1_offset += tile_bytes;
+                }
+                noc.async_read_barrier();
+                dfb_in0.push_back(tiles_per_channel_dim);
             }
-
-            noc.async_read_barrier();
-
-            // Ensure all async reads are complete before proceeding
-            // Push the completed row of tiles to the circular buffer
-            dfb_in0.push_back(tiles_per_channel_dim);
         }
     }
 }
