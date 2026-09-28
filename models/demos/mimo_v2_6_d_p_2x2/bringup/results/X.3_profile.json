@@ -1,0 +1,5300 @@
+{
+ "rung": "last",
+ "chunk": [
+  51200,
+  56320
+ ],
+ "layers": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "wall_ms": 251.05786323547363,
+ "device_ms": {
+  "experts": 135.890203,
+  "attention": 95.480089,
+  "router": 7.082084,
+  "mlp": 6.312136,
+  "attn_residual": 2.514521,
+  "ffn_residual": 1.960679,
+  "mlp_residual": 0.42009,
+  "attn_norm": 0.21834,
+  "ffn_norm": 0.0
+ },
+ "sections_ms": {
+  "experts": 135.890203,
+  "attention.sdpa": 44.92657,
+  "attention.qkv": 23.980035,
+  "attention.o_proj": 14.174301,
+  "attention.ccl": 7.139999,
+  "router": 7.082084,
+  "mlp": 6.312136,
+  "attn_residual": 2.514521,
+  "attention.rope": 2.191948,
+  "attention.sliding_sdpa": 1.996664,
+  "ffn_residual": 1.960679,
+  "attention.kv_tail": 0.876143,
+  "mlp_residual": 0.42009,
+  "attn_norm": 0.21834,
+  "attention.kv_write": 0.194429,
+  "attention": 0.0,
+  "ffn_norm": 0.0
+ },
+ "sections_ms_per_chip": {
+  "attn_norm": {
+   "1": 0.21834,
+   "2": 0.215236,
+   "0": 0.214381,
+   "3": 0.215964
+  },
+  "attention": {},
+  "attention.qkv": {
+   "1": 23.969806,
+   "2": 23.967752,
+   "0": 23.967154,
+   "3": 23.970699
+  },
+  "attention.rope": {
+   "1": 2.187628,
+   "2": 2.18467,
+   "0": 2.177344,
+   "3": 2.168121
+  },
+  "attention.kv_write": {
+   "1": 0.191881,
+   "2": 0.191835,
+   "0": 0.191689,
+   "3": 0.193017
+  },
+  "attention.sdpa": {
+   "1": 44.924731,
+   "2": 44.924602,
+   "0": 44.92398,
+   "3": 44.92657
+  },
+  "attention.o_proj": {
+   "1": 14.167093,
+   "2": 14.163669,
+   "0": 14.168679,
+   "3": 14.163263
+  },
+  "attention.ccl": {
+   "1": 7.082974,
+   "2": 7.108534,
+   "0": 7.049494,
+   "3": 7.136987
+  },
+  "attn_residual": {
+   "1": 2.489857,
+   "2": 2.507403,
+   "0": 2.485458,
+   "3": 2.490421
+  },
+  "ffn_norm": {},
+  "mlp": {
+   "1": 6.309071,
+   "2": 6.308021,
+   "0": 6.312136,
+   "3": 6.303374
+  },
+  "mlp_residual": {
+   "1": 0.41545,
+   "2": 0.4183,
+   "0": 0.42009,
+   "3": 0.415308
+  },
+  "attention.kv_tail": {
+   "1": 0.872012,
+   "2": 0.872228,
+   "0": 0.870186,
+   "3": 0.87322
+  },
+  "attention.sliding_sdpa": {
+   "1": 1.990478,
+   "2": 1.99208,
+   "0": 1.989533,
+   "3": 1.992475
+  },
+  "router": {
+   "1": 7.065082,
+   "2": 7.068686,
+   "0": 7.052922,
+   "3": 7.064091
+  },
+  "experts": {
+   "1": 135.819156,
+   "2": 135.852803,
+   "0": 135.779712,
+   "3": 135.890203
+  },
+  "ffn_residual": {
+   "1": 1.951257,
+   "2": 1.946589,
+   "0": 1.950234,
+   "3": 1.940075
+  }
+ },
+ "programs": {
+  "attn_norm": 4,
+  "attention": 0,
+  "attention.qkv": 96,
+  "attention.rope": 192,
+  "attention.kv_write": 48,
+  "attention.sdpa": 8,
+  "attention.o_proj": 48,
+  "attention.ccl": 96,
+  "attn_residual": 24,
+  "ffn_norm": 0,
+  "mlp": 36,
+  "mlp_residual": 4,
+  "attention.kv_tail": 96,
+  "attention.sliding_sdpa": 32,
+  "router": 340,
+  "experts": 360,
+  "ffn_residual": 20
+ },
+ "settings": {
+  "sdpa_full_cfg": "A",
+  "sdpa_sliding_cfg": "S",
+  "sdpa_full_chunks": [
+   512,
+   128
+  ],
+  "sdpa_sliding_chunks": [
+   128,
+   128
+  ],
+  "experts_mode": "unified",
+  "router_mode": "fp32",
+  "fuse_residual_norm": true,
+  "attn_v_pad": false
+ },
+ "full_prefill": {
+  "tokens": 56320,
+  "chunk": 5120,
+  "ms": 2524.512529373169,
+  "chunk_ms": [
+   209.3,
+   214.1,
+   217.7,
+   221.9,
+   227.8,
+   231.1,
+   233.5,
+   237.5,
+   242.2,
+   245.5,
+   251.3
+  ]
+ },
+ "ops": {
+  "L0.attn_norm": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 1x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2186,
+    "ms_per_chip": {
+     "0": 0.2159,
+     "1": 0.2175,
+     "2": 0.2173,
+     "3": 0.2186
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.222,
+    "host_ms": 0.0858,
+    "timeline_kernel_ms": 0.2215
+   }
+  ],
+  "L0.attention.qkv": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x3072 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 3.1872,
+    "ms_per_chip": {
+     "0": 3.1842,
+     "1": 3.1816,
+     "2": 3.1872,
+     "3": 3.1833
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 3.1862,
+    "host_ms": 0.1106,
+    "timeline_kernel_ms": 3.1857
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x320 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3473,
+    "ms_per_chip": {
+     "0": 0.3459,
+     "1": 0.3471,
+     "2": 0.3472,
+     "3": 0.3473
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3413,
+    "host_ms": 0.0779,
+    "timeline_kernel_ms": 0.3408
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x3072 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.18,
+    "ms_per_chip": {
+     "0": 0.18,
+     "1": 0.1777,
+     "2": 0.1773,
+     "3": 0.1788
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1783,
+    "host_ms": 0.0907,
+    "timeline_kernel_ms": 0.1778
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x320 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.019,
+    "ms_per_chip": {
+     "0": 0.019,
+     "1": 0.0187,
+     "2": 0.0185,
+     "3": 0.0184
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0198,
+    "host_ms": 0.0673,
+    "timeline_kernel_ms": 0.0193
+   }
+  ],
+  "L0.attention.rope": [
+   {
+    "op": "slice",
+    "shape": "56320x64 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0071,
+    "ms_per_chip": {
+     "0": 0.0067,
+     "1": 0.007,
+     "2": 0.0067,
+     "3": 0.0071
+    },
+    "gap_ms": 0.0011,
+    "slot_ms": 0.0084,
+    "host_ms": 0.175,
+    "timeline_kernel_ms": 0.0073
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "16x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1313,
+    "ms_per_chip": {
+     "0": 0.1294,
+     "1": 0.1304,
+     "2": 0.1313,
+     "3": 0.1309
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1303,
+    "host_ms": 0.0785,
+    "timeline_kernel_ms": 0.1296
+   },
+   {
+    "op": "concat",
+    "shape": "16x5120x64 bf16 \u00b7 16x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.173,
+    "ms_per_chip": {
+     "0": 0.1694,
+     "1": 0.173,
+     "2": 0.1698,
+     "3": 0.1697
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1709,
+    "host_ms": 0.0797,
+    "timeline_kernel_ms": 0.1704
+   },
+   {
+    "op": "slice",
+    "shape": "5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0107,
+    "ms_per_chip": {
+     "0": 0.0107,
+     "1": 0.0102,
+     "2": 0.0104,
+     "3": 0.0106
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0121,
+    "host_ms": 0.1605,
+    "timeline_kernel_ms": 0.0109
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0162,
+    "ms_per_chip": {
+     "0": 0.0159,
+     "1": 0.0158,
+     "2": 0.0162,
+     "3": 0.0159
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0167,
+    "host_ms": 0.0677,
+    "timeline_kernel_ms": 0.0161
+   },
+   {
+    "op": "concat",
+    "shape": "5120x64 bf16 \u00b7 5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0111,
+    "ms_per_chip": {
+     "0": 0.011,
+     "1": 0.0109,
+     "2": 0.0111,
+     "3": 0.0108
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0119,
+    "host_ms": 0.0646,
+    "timeline_kernel_ms": 0.0114
+   }
+  ],
+  "L0.attention.kv_write": [
+   {
+    "op": "experimental.paged_fill_cache",
+    "shape": "880x1x64x192 bf16 \u00b7 5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0108,
+    "ms_per_chip": {
+     "0": 0.0106,
+     "1": 0.0105,
+     "2": 0.0108,
+     "3": 0.0107
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0116,
+    "host_ms": 0.1103,
+    "timeline_kernel_ms": 0.0111
+   },
+   {
+    "op": "experimental.paged_fill_cache",
+    "shape": "880x1x64x128 bf16 \u00b7 5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0083,
+    "ms_per_chip": {
+     "0": 0.008,
+     "1": 0.0082,
+     "2": 0.0083,
+     "3": 0.0083
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0089,
+    "host_ms": 0.0869,
+    "timeline_kernel_ms": 0.0083
+   }
+  ],
+  "L0.attention.sdpa": [
+   {
+    "op": "bringup.chunked_scaled_dot_product_attention",
+    "shape": "16x5120x192 bf16 \u00b7 880x1x64x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 22.4542,
+    "ms_per_chip": {
+     "0": 22.4542,
+     "1": 22.4539,
+     "2": 22.4539,
+     "3": 22.4541
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 22.455,
+    "host_ms": 0.0922,
+    "timeline_kernel_ms": 22.4544
+   }
+  ],
+  "L0.attention.o_proj": [
+   {
+    "op": "experimental.nlp_concat_heads",
+    "shape": "16x5120x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1262,
+    "ms_per_chip": {
+     "0": 0.1248,
+     "1": 0.1262,
+     "2": 0.1242,
+     "3": 0.1257
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1252,
+    "host_ms": 0.0499,
+    "timeline_kernel_ms": 0.1246
+   },
+   {
+    "op": "linear",
+    "shape": "5120x2048 bf16 \u00b7 2048x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 2.2399,
+    "ms_per_chip": {
+     "0": 2.2388,
+     "1": 2.2399,
+     "2": 2.2375,
+     "3": 2.2371
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 2.2368,
+    "host_ms": 0.0807,
+    "timeline_kernel_ms": 2.2363
+   }
+  ],
+  "L0.attention.ccl": [
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.2039,
+    "ms_per_chip": {
+     "0": 1.1851,
+     "1": 1.1896,
+     "2": 1.1964,
+     "3": 1.2039
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 1.2062,
+    "host_ms": 0.3943,
+    "timeline_kernel_ms": 1.2041
+   }
+  ],
+  "L0.attn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4181,
+    "ms_per_chip": {
+     "0": 0.4125,
+     "1": 0.4123,
+     "2": 0.4106,
+     "3": 0.4181
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4187,
+    "host_ms": 0.0794,
+    "timeline_kernel_ms": 0.4182
+   }
+  ],
+  "L0.mlp": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 12,
+    "ms": 3.3243,
+    "ms_per_chip": {
+     "0": 3.3208,
+     "1": 3.3197,
+     "2": 3.3236,
+     "3": 3.311
+    },
+    "gap_ms": 0.0011,
+    "slot_ms": 3.3221,
+    "host_ms": 0.2234,
+    "timeline_kernel_ms": 3.3205
+   },
+   {
+    "op": "multiply",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2853,
+    "ms_per_chip": {
+     "0": 0.2827,
+     "1": 0.2853,
+     "2": 0.2834,
+     "3": 0.2817
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.2781,
+    "host_ms": 0.1623,
+    "timeline_kernel_ms": 0.2775
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 1.5043,
+    "ms_per_chip": {
+     "0": 1.5032,
+     "1": 1.5035,
+     "2": 1.5023,
+     "3": 1.5043
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 1.5042,
+    "host_ms": 0.0695,
+    "timeline_kernel_ms": 1.5037
+   },
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.2112,
+    "ms_per_chip": {
+     "0": 1.1916,
+     "1": 1.1977,
+     "2": 1.2033,
+     "3": 1.2112
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 1.174,
+    "host_ms": 0.3653,
+    "timeline_kernel_ms": 1.1719
+   }
+  ],
+  "L0.mlp_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4181,
+    "ms_per_chip": {
+     "0": 0.4135,
+     "1": 0.4165,
+     "2": 0.4181,
+     "3": 0.4161
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.4152,
+    "host_ms": 0.0743,
+    "timeline_kernel_ms": 0.4146
+   }
+  ],
+  "L1.attention.qkv": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x3072 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 3.1935,
+    "ms_per_chip": {
+     "0": 3.1928,
+     "1": 3.1934,
+     "2": 3.1918,
+     "3": 3.1935
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 3.1912,
+    "host_ms": 0.0792,
+    "timeline_kernel_ms": 3.1906
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x640 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.7224,
+    "ms_per_chip": {
+     "0": 0.7221,
+     "1": 0.7224,
+     "2": 0.722,
+     "3": 0.7215
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.724,
+    "host_ms": 0.0709,
+    "timeline_kernel_ms": 0.7235
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x3072 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1824,
+    "ms_per_chip": {
+     "0": 0.1785,
+     "1": 0.1775,
+     "2": 0.1791,
+     "3": 0.1824
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1813,
+    "host_ms": 0.067,
+    "timeline_kernel_ms": 0.1807
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x640 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0395,
+    "ms_per_chip": {
+     "0": 0.039,
+     "1": 0.0388,
+     "2": 0.0395,
+     "3": 0.0395
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0405,
+    "host_ms": 0.0596,
+    "timeline_kernel_ms": 0.04
+   }
+  ],
+  "L1.attention.rope": [
+   {
+    "op": "slice",
+    "shape": "56320x64 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.007,
+    "ms_per_chip": {
+     "0": 0.0067,
+     "1": 0.0067,
+     "2": 0.0069,
+     "3": 0.0068
+    },
+    "gap_ms": 0.001,
+    "slot_ms": 0.0084,
+    "host_ms": 0.1432,
+    "timeline_kernel_ms": 0.0073
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "16x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1306,
+    "ms_per_chip": {
+     "0": 0.1306,
+     "1": 0.1306,
+     "2": 0.1301,
+     "3": 0.13
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1328,
+    "host_ms": 0.057,
+    "timeline_kernel_ms": 0.1322
+   },
+   {
+    "op": "concat",
+    "shape": "16x5120x64 bf16 \u00b7 16x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1727,
+    "ms_per_chip": {
+     "0": 0.1727,
+     "1": 0.1719,
+     "2": 0.1726,
+     "3": 0.169
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1724,
+    "host_ms": 0.065,
+    "timeline_kernel_ms": 0.172
+   },
+   {
+    "op": "slice",
+    "shape": "2x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0226,
+    "ms_per_chip": {
+     "0": 0.0223,
+     "1": 0.0224,
+     "2": 0.0219,
+     "3": 0.0221
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0241,
+    "host_ms": 0.1468,
+    "timeline_kernel_ms": 0.0229
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "2x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0217,
+    "ms_per_chip": {
+     "0": 0.0213,
+     "1": 0.021,
+     "2": 0.0212,
+     "3": 0.0217
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0202,
+    "host_ms": 0.0662,
+    "timeline_kernel_ms": 0.0196
+   },
+   {
+    "op": "concat",
+    "shape": "2x5120x64 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0221,
+    "ms_per_chip": {
+     "0": 0.0213,
+     "1": 0.021,
+     "2": 0.0221,
+     "3": 0.0213
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0234,
+    "host_ms": 0.0636,
+    "timeline_kernel_ms": 0.0229
+   }
+  ],
+  "L1.attention.kv_write": [
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0222,
+    "ms_per_chip": {
+     "0": 0.0219,
+     "1": 0.0219,
+     "2": 0.0218,
+     "3": 0.0222
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0224,
+    "host_ms": 0.0663,
+    "timeline_kernel_ms": 0.0218
+   },
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0177,
+    "ms_per_chip": {
+     "0": 0.0174,
+     "1": 0.0177,
+     "2": 0.0173,
+     "3": 0.0174
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0181,
+    "host_ms": 0.0504,
+    "timeline_kernel_ms": 0.0175
+   }
+  ],
+  "L1.attention.kv_tail": [
+   {
+    "op": "slice",
+    "shape": "2x56320x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0012,
+    "ms_per_chip": {
+     "0": 0.0012,
+     "1": 0.0012,
+     "2": 0.0012,
+     "3": 0.0012
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0018,
+    "host_ms": 0.0774,
+    "timeline_kernel_ms": 0.0012
+   },
+   {
+    "op": "slice",
+    "shape": "2x56320x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0012,
+    "ms_per_chip": {
+     "0": 0.0011,
+     "1": 0.0012,
+     "2": 0.0012,
+     "3": 0.0011
+    },
+    "gap_ms": 0.0011,
+    "slot_ms": 0.0023,
+    "host_ms": 0.0626,
+    "timeline_kernel_ms": 0.0013
+   },
+   {
+    "op": "slice",
+    "shape": "16x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0056,
+    "ms_per_chip": {
+     "0": 0.0051,
+     "1": 0.0051,
+     "2": 0.0056,
+     "3": 0.0053
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0056,
+    "host_ms": 0.0687,
+    "timeline_kernel_ms": 0.0052
+   },
+   {
+    "op": "concat",
+    "shape": "16x128x192 bf16 \u00b7 16x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1743,
+    "ms_per_chip": {
+     "0": 0.1727,
+     "1": 0.1694,
+     "2": 0.1725,
+     "3": 0.1743
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1732,
+    "host_ms": 0.0649,
+    "timeline_kernel_ms": 0.1727
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0225,
+    "ms_per_chip": {
+     "0": 0.0225,
+     "1": 0.0221,
+     "2": 0.0224,
+     "3": 0.0221
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0224,
+    "host_ms": 0.0555,
+    "timeline_kernel_ms": 0.0218
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0179,
+    "ms_per_chip": {
+     "0": 0.0179,
+     "1": 0.0174,
+     "2": 0.0176,
+     "3": 0.0173
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0186,
+    "host_ms": 0.052,
+    "timeline_kernel_ms": 0.018
+   }
+  ],
+  "L1.attention.sliding_sdpa": [
+   {
+    "op": "bringup.scaled_dot_product_attention",
+    "shape": "16x5248x192 bf16 \u00b7 2x5248x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3849,
+    "ms_per_chip": {
+     "0": 0.3811,
+     "1": 0.382,
+     "2": 0.3817,
+     "3": 0.3849
+    },
+    "gap_ms": 0.007,
+    "slot_ms": 0.3901,
+    "host_ms": 0.0841,
+    "timeline_kernel_ms": 0.3832
+   },
+   {
+    "op": "slice",
+    "shape": "16x5248x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1137,
+    "ms_per_chip": {
+     "0": 0.1129,
+     "1": 0.1137,
+     "2": 0.1136,
+     "3": 0.1131
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1134,
+    "host_ms": 0.0849,
+    "timeline_kernel_ms": 0.1128
+   }
+  ],
+  "L1.attention.o_proj": [
+   {
+    "op": "experimental.nlp_concat_heads",
+    "shape": "16x5120x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1256,
+    "ms_per_chip": {
+     "0": 0.1254,
+     "1": 0.1246,
+     "2": 0.1256,
+     "3": 0.1249
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1254,
+    "host_ms": 0.0421,
+    "timeline_kernel_ms": 0.1248
+   },
+   {
+    "op": "linear",
+    "shape": "5120x2048 bf16 \u00b7 2048x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 2.2376,
+    "ms_per_chip": {
+     "0": 2.2361,
+     "1": 2.2358,
+     "2": 2.2376,
+     "3": 2.2356
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 2.2356,
+    "host_ms": 0.0668,
+    "timeline_kernel_ms": 2.2351
+   }
+  ],
+  "L1.attention.ccl": [
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.1834,
+    "ms_per_chip": {
+     "0": 1.1746,
+     "1": 1.1786,
+     "2": 1.1803,
+     "3": 1.1834
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 1.1731,
+    "host_ms": 0.2358,
+    "timeline_kernel_ms": 1.171
+   }
+  ],
+  "L1.attn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4201,
+    "ms_per_chip": {
+     "0": 0.4183,
+     "1": 0.4201,
+     "2": 0.4168,
+     "3": 0.4177
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.4208,
+    "host_ms": 0.0716,
+    "timeline_kernel_ms": 0.4202
+   }
+  ],
+  "L1.router": [
+   {
+    "op": "typecast",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3448,
+    "ms_per_chip": {
+     "0": 0.3426,
+     "1": 0.3418,
+     "2": 0.3448,
+     "3": 0.3435
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3379,
+    "host_ms": 0.0533,
+    "timeline_kernel_ms": 0.3374
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 fp32 \u00b7 4096x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5315,
+    "ms_per_chip": {
+     "0": 0.5315,
+     "1": 0.5304,
+     "2": 0.5293,
+     "3": 0.5288
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.5241,
+    "host_ms": 0.0755,
+    "timeline_kernel_ms": 0.5235
+   },
+   {
+    "op": "sigmoid",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0354,
+    "ms_per_chip": {
+     "0": 0.0352,
+     "1": 0.0348,
+     "2": 0.0354,
+     "3": 0.0351
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0357,
+    "host_ms": 0.0744,
+    "timeline_kernel_ms": 0.0352
+   },
+   {
+    "op": "add",
+    "shape": "5120x256 fp32 \u00b7 1x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0485,
+    "ms_per_chip": {
+     "0": 0.0482,
+     "1": 0.0468,
+     "2": 0.0485,
+     "3": 0.0463
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0459,
+    "host_ms": 0.1455,
+    "timeline_kernel_ms": 0.0453
+   },
+   {
+    "op": "topk",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0877,
+    "ms_per_chip": {
+     "0": 0.0876,
+     "1": 0.0876,
+     "2": 0.0877,
+     "3": 0.0875
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0877,
+    "host_ms": 0.0914,
+    "timeline_kernel_ms": 0.0872
+   },
+   {
+    "op": "gather",
+    "shape": "5120x256 fp32 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0947,
+    "ms_per_chip": {
+     "0": 0.0947,
+     "1": 0.0943,
+     "2": 0.0936,
+     "3": 0.0947
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0927,
+    "host_ms": 0.1084,
+    "timeline_kernel_ms": 0.0917
+   },
+   {
+    "op": "sum",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0136,
+     "1": 0.0136,
+     "2": 0.0134,
+     "3": 0.0137
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0145,
+    "host_ms": 0.1095,
+    "timeline_kernel_ms": 0.0134
+   },
+   {
+    "op": "div",
+    "shape": "5120x8 fp32 \u00b7 5120x1 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0137,
+     "1": 0.0134,
+     "2": 0.0135,
+     "3": 0.0134
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0139,
+    "host_ms": 0.1445,
+    "timeline_kernel_ms": 0.0134
+   },
+   {
+    "op": "typecast",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0036,
+    "ms_per_chip": {
+     "0": 0.0035,
+     "1": 0.0036,
+     "2": 0.0035,
+     "3": 0.0034
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0043,
+    "host_ms": 0.0485,
+    "timeline_kernel_ms": 0.0038
+   },
+   {
+    "op": "slice",
+    "shape": "8192x256 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0162,
+    "ms_per_chip": {
+     "0": 0.0156,
+     "1": 0.016,
+     "2": 0.0161,
+     "3": 0.0162
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0163,
+    "host_ms": 0.1124,
+    "timeline_kernel_ms": 0.0158
+   },
+   {
+    "op": "scatter",
+    "shape": "5120x256 bf16 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 20,
+    "ms": 0.2401,
+    "ms_per_chip": {
+     "0": 0.2392,
+     "1": 0.2401,
+     "2": 0.2395,
+     "3": 0.2397
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.243,
+    "host_ms": 0.2704,
+    "timeline_kernel_ms": 0.2402
+   }
+  ],
+  "L1.experts": [
+   {
+    "op": "mesh_partition",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1116,
+    "ms_per_chip": {
+     "0": 0.1116,
+     "1": 0.1101,
+     "2": 0.1112,
+     "3": 0.1109
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1108,
+    "host_ms": 0.0756,
+    "timeline_kernel_ms": 0.1103
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.0021,
+     "2": 0.002,
+     "3": 0.002
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0602,
+    "timeline_kernel_ms": 0.0021
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.0021,
+     "2": 0.002,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0028,
+    "host_ms": 0.0569,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.002,
+    "ms_per_chip": {
+     "0": 0.0019,
+     "1": 0.0019,
+     "2": 0.002,
+     "3": 0.0019
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0027,
+    "host_ms": 0.046,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "experimental.deepseek_prefill.masked_bincount",
+    "shape": "2560x8 u16 \u00b7 1x257 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0664,
+    "ms_per_chip": {
+     "0": 0.0664,
+     "1": 0.0663,
+     "2": 0.066,
+     "3": 0.0663
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0673,
+    "host_ms": 0.0622,
+    "timeline_kernel_ms": 0.0667
+   },
+   {
+    "op": "bringup.offset_cumsum",
+    "shape": "256 u32",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0263,
+    "ms_per_chip": {
+     "0": 0.0189,
+     "1": 0.0191,
+     "2": 0.0254,
+     "3": 0.0263
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0222,
+    "host_ms": 0.1775,
+    "timeline_kernel_ms": 0.02
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 u16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.0641,
+    "timeline_kernel_ms": 0.0105
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.002,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.002,
+     "2": 0.002,
+     "3": 0.002
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0028,
+    "host_ms": 0.046,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.011,
+    "host_ms": 0.0603,
+    "timeline_kernel_ms": 0.0105
+   },
+   {
+    "op": "bringup.dispatch",
+    "shape": "2560x4096 bf16 \u00b7 2560x8 u16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 7.8245,
+    "ms_per_chip": {
+     "0": 7.3829,
+     "1": 7.8147,
+     "2": 7.3933,
+     "3": 7.8245
+    },
+    "gap_ms": 0.0007,
+    "slot_ms": 7.3839,
+    "host_ms": 0.1147,
+    "timeline_kernel_ms": 7.3833
+   },
+   {
+    "op": "bringup.unified_routed_expert_moe",
+    "shape": "42976x4096 bf16 \u00b7 1x256 u32",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 11.912,
+    "ms_per_chip": {
+     "0": 10.3502,
+     "1": 11.912,
+     "2": 11.9062,
+     "3": 11.0114
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 10.3383,
+    "host_ms": 0.3383,
+    "timeline_kernel_ms": 10.3377
+   },
+   {
+    "op": "bringup.combine",
+    "shape": "42976x4096 bf16 \u00b7 42976x3 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 4.9628,
+    "ms_per_chip": {
+     "0": 4.7197,
+     "1": 4.9525,
+     "2": 4.7288,
+     "3": 4.9628
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 6.3137,
+    "host_ms": 0.1046,
+    "timeline_kernel_ms": 6.313
+   },
+   {
+    "op": "unsqueeze",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0337,
+    "ms_per_chip": {
+     "0": 0.0337,
+     "1": 0.0336,
+     "2": 0.0334,
+     "3": 0.0336
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0337,
+    "host_ms": 0.0613,
+    "timeline_kernel_ms": 0.0332
+   },
+   {
+    "op": "experimental.deepseek_prefill.post_combine_reduce",
+    "shape": "2560x8x4096 bf16 \u00b7 2560x8x1 bf16",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5177,
+    "ms_per_chip": {
+     "0": 0.5128,
+     "1": 0.5177,
+     "2": 0.5161,
+     "3": 0.5135
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.5142,
+    "host_ms": 0.0652,
+    "timeline_kernel_ms": 0.5137
+   },
+   {
+    "op": "all_reduce",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.311,
+    "ms_per_chip": {
+     "0": 0.3001,
+     "1": 0.3084,
+     "2": 0.3064,
+     "3": 0.311
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.9806,
+    "host_ms": 0.1893,
+    "timeline_kernel_ms": 0.9796
+   },
+   {
+    "op": "all_gather",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2661,
+    "ms_per_chip": {
+     "0": 0.2598,
+     "1": 0.2594,
+     "2": 0.2637,
+     "3": 0.2661
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.2579,
+    "host_ms": 0.0822,
+    "timeline_kernel_ms": 0.2574
+   }
+  ],
+  "L1.ffn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4203,
+    "ms_per_chip": {
+     "0": 0.4146,
+     "1": 0.4203,
+     "2": 0.4174,
+     "3": 0.413
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.4146,
+    "host_ms": 0.0709,
+    "timeline_kernel_ms": 0.414
+   }
+  ],
+  "L2.attention.qkv": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x3072 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 3.1886,
+    "ms_per_chip": {
+     "0": 3.1886,
+     "1": 3.1884,
+     "2": 3.1875,
+     "3": 3.1866
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 3.1929,
+    "host_ms": 0.0811,
+    "timeline_kernel_ms": 3.1923
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x640 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.7233,
+    "ms_per_chip": {
+     "0": 0.7232,
+     "1": 0.7223,
+     "2": 0.7233,
+     "3": 0.7229
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.7244,
+    "host_ms": 0.0651,
+    "timeline_kernel_ms": 0.7239
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x3072 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1791,
+    "ms_per_chip": {
+     "0": 0.1769,
+     "1": 0.1784,
+     "2": 0.1782,
+     "3": 0.1791
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1786,
+    "host_ms": 0.0655,
+    "timeline_kernel_ms": 0.178
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x640 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0409,
+    "ms_per_chip": {
+     "0": 0.0407,
+     "1": 0.0393,
+     "2": 0.0383,
+     "3": 0.0409
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0411,
+    "host_ms": 0.0573,
+    "timeline_kernel_ms": 0.0406
+   }
+  ],
+  "L2.attention.rope": [
+   {
+    "op": "slice",
+    "shape": "56320x64 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0072,
+    "ms_per_chip": {
+     "0": 0.0072,
+     "1": 0.0068,
+     "2": 0.0068,
+     "3": 0.0069
+    },
+    "gap_ms": 0.0011,
+    "slot_ms": 0.0082,
+    "host_ms": 0.1382,
+    "timeline_kernel_ms": 0.0072
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "16x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1331,
+    "ms_per_chip": {
+     "0": 0.1298,
+     "1": 0.1299,
+     "2": 0.1308,
+     "3": 0.1331
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1322,
+    "host_ms": 0.058,
+    "timeline_kernel_ms": 0.1316
+   },
+   {
+    "op": "concat",
+    "shape": "16x5120x64 bf16 \u00b7 16x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1717,
+    "ms_per_chip": {
+     "0": 0.1675,
+     "1": 0.171,
+     "2": 0.1717,
+     "3": 0.1696
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1711,
+    "host_ms": 0.0637,
+    "timeline_kernel_ms": 0.1706
+   },
+   {
+    "op": "slice",
+    "shape": "2x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.023,
+    "ms_per_chip": {
+     "0": 0.023,
+     "1": 0.0222,
+     "2": 0.0215,
+     "3": 0.022
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0232,
+    "host_ms": 0.1268,
+    "timeline_kernel_ms": 0.022
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "2x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0226,
+    "ms_per_chip": {
+     "0": 0.022,
+     "1": 0.0226,
+     "2": 0.0211,
+     "3": 0.0214
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0205,
+    "host_ms": 0.0567,
+    "timeline_kernel_ms": 0.0199
+   },
+   {
+    "op": "concat",
+    "shape": "2x5120x64 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0215,
+    "ms_per_chip": {
+     "0": 0.0215,
+     "1": 0.0214,
+     "2": 0.0207,
+     "3": 0.0211
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0232,
+    "host_ms": 0.0541,
+    "timeline_kernel_ms": 0.0226
+   }
+  ],
+  "L2.attention.kv_write": [
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0223,
+    "ms_per_chip": {
+     "0": 0.0223,
+     "1": 0.0218,
+     "2": 0.0215,
+     "3": 0.0218
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0224,
+    "host_ms": 0.0539,
+    "timeline_kernel_ms": 0.0218
+   },
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0176,
+    "ms_per_chip": {
+     "0": 0.0157,
+     "1": 0.0175,
+     "2": 0.0172,
+     "3": 0.0176
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0176,
+    "host_ms": 0.0461,
+    "timeline_kernel_ms": 0.017
+   }
+  ],
+  "L2.attention.kv_tail": [
+   {
+    "op": "slice",
+    "shape": "2x56320x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0012,
+    "ms_per_chip": {
+     "0": 0.0012,
+     "1": 0.0012,
+     "2": 0.0012,
+     "3": 0.0012
+    },
+    "gap_ms": 0.0007,
+    "slot_ms": 0.0019,
+    "host_ms": 0.0648,
+    "timeline_kernel_ms": 0.0012
+   },
+   {
+    "op": "slice",
+    "shape": "2x56320x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0012,
+    "ms_per_chip": {
+     "0": 0.0012,
+     "1": 0.0012,
+     "2": 0.0011,
+     "3": 0.0011
+    },
+    "gap_ms": 0.001,
+    "slot_ms": 0.0023,
+    "host_ms": 0.0521,
+    "timeline_kernel_ms": 0.0013
+   },
+   {
+    "op": "slice",
+    "shape": "16x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0057,
+    "ms_per_chip": {
+     "0": 0.005,
+     "1": 0.0051,
+     "2": 0.0051,
+     "3": 0.0057
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0062,
+    "host_ms": 0.0625,
+    "timeline_kernel_ms": 0.0056
+   },
+   {
+    "op": "concat",
+    "shape": "16x128x192 bf16 \u00b7 16x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1718,
+    "ms_per_chip": {
+     "0": 0.1718,
+     "1": 0.1697,
+     "2": 0.1695,
+     "3": 0.1694
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1699,
+    "host_ms": 0.0704,
+    "timeline_kernel_ms": 0.1693
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0223,
+    "ms_per_chip": {
+     "0": 0.0223,
+     "1": 0.0223,
+     "2": 0.022,
+     "3": 0.0217
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0228,
+    "host_ms": 0.0541,
+    "timeline_kernel_ms": 0.0222
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.019,
+    "ms_per_chip": {
+     "0": 0.0177,
+     "1": 0.019,
+     "2": 0.0178,
+     "3": 0.0177
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0186,
+    "host_ms": 0.0498,
+    "timeline_kernel_ms": 0.018
+   }
+  ],
+  "L2.attention.sliding_sdpa": [
+   {
+    "op": "bringup.scaled_dot_product_attention",
+    "shape": "16x5248x192 bf16 \u00b7 2x5248x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3846,
+    "ms_per_chip": {
+     "0": 0.3837,
+     "1": 0.3846,
+     "2": 0.3828,
+     "3": 0.3826
+    },
+    "gap_ms": 0.0069,
+    "slot_ms": 0.3905,
+    "host_ms": 0.0717,
+    "timeline_kernel_ms": 0.3835
+   },
+   {
+    "op": "slice",
+    "shape": "16x5248x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1136,
+    "ms_per_chip": {
+     "0": 0.112,
+     "1": 0.1132,
+     "2": 0.1136,
+     "3": 0.1128
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.113,
+    "host_ms": 0.0729,
+    "timeline_kernel_ms": 0.1125
+   }
+  ],
+  "L2.attention.o_proj": [
+   {
+    "op": "experimental.nlp_concat_heads",
+    "shape": "16x5120x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1262,
+    "ms_per_chip": {
+     "0": 0.1262,
+     "1": 0.1236,
+     "2": 0.1262,
+     "3": 0.1255
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1275,
+    "host_ms": 0.0431,
+    "timeline_kernel_ms": 0.127
+   },
+   {
+    "op": "linear",
+    "shape": "5120x2048 bf16 \u00b7 2048x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 2.2373,
+    "ms_per_chip": {
+     "0": 2.2369,
+     "1": 2.2351,
+     "2": 2.2363,
+     "3": 2.2373
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 2.2353,
+    "host_ms": 0.0696,
+    "timeline_kernel_ms": 2.2348
+   }
+  ],
+  "L2.attention.ccl": [
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.1939,
+    "ms_per_chip": {
+     "0": 1.1901,
+     "1": 1.1905,
+     "2": 1.1896,
+     "3": 1.1939
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 1.1741,
+    "host_ms": 0.2483,
+    "timeline_kernel_ms": 1.1721
+   }
+  ],
+  "L2.attn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4173,
+    "ms_per_chip": {
+     "0": 0.4157,
+     "1": 0.4173,
+     "2": 0.4168,
+     "3": 0.4115
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4206,
+    "host_ms": 0.0707,
+    "timeline_kernel_ms": 0.4201
+   }
+  ],
+  "L2.router": [
+   {
+    "op": "typecast",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.346,
+    "ms_per_chip": {
+     "0": 0.3445,
+     "1": 0.346,
+     "2": 0.3421,
+     "3": 0.3435
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3396,
+    "host_ms": 0.0448,
+    "timeline_kernel_ms": 0.339
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 fp32 \u00b7 4096x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5314,
+    "ms_per_chip": {
+     "0": 0.5274,
+     "1": 0.5314,
+     "2": 0.5285,
+     "3": 0.5279
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.5254,
+    "host_ms": 0.0708,
+    "timeline_kernel_ms": 0.5249
+   },
+   {
+    "op": "sigmoid",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0354,
+    "ms_per_chip": {
+     "0": 0.0341,
+     "1": 0.0354,
+     "2": 0.0352,
+     "3": 0.035
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0364,
+    "host_ms": 0.0605,
+    "timeline_kernel_ms": 0.0359
+   },
+   {
+    "op": "add",
+    "shape": "5120x256 fp32 \u00b7 1x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0491,
+    "ms_per_chip": {
+     "0": 0.0475,
+     "1": 0.0491,
+     "2": 0.0478,
+     "3": 0.0477
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0476,
+    "host_ms": 0.1261,
+    "timeline_kernel_ms": 0.047
+   },
+   {
+    "op": "topk",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0878,
+    "ms_per_chip": {
+     "0": 0.0876,
+     "1": 0.0876,
+     "2": 0.0876,
+     "3": 0.0878
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0878,
+    "host_ms": 0.0816,
+    "timeline_kernel_ms": 0.0872
+   },
+   {
+    "op": "gather",
+    "shape": "5120x256 fp32 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0954,
+    "ms_per_chip": {
+     "0": 0.0941,
+     "1": 0.0954,
+     "2": 0.0947,
+     "3": 0.0939
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0941,
+    "host_ms": 0.0858,
+    "timeline_kernel_ms": 0.0931
+   },
+   {
+    "op": "sum",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0137,
+     "1": 0.0136,
+     "2": 0.0136,
+     "3": 0.0136
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0147,
+    "host_ms": 0.0855,
+    "timeline_kernel_ms": 0.0137
+   },
+   {
+    "op": "div",
+    "shape": "5120x8 fp32 \u00b7 5120x1 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0136,
+    "ms_per_chip": {
+     "0": 0.0135,
+     "1": 0.0136,
+     "2": 0.0134,
+     "3": 0.0132
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0136,
+    "host_ms": 0.1264,
+    "timeline_kernel_ms": 0.0131
+   },
+   {
+    "op": "typecast",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0036,
+    "ms_per_chip": {
+     "0": 0.0035,
+     "1": 0.0035,
+     "2": 0.0036,
+     "3": 0.0034
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0044,
+    "host_ms": 0.0403,
+    "timeline_kernel_ms": 0.0039
+   },
+   {
+    "op": "slice",
+    "shape": "8192x256 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.016,
+    "ms_per_chip": {
+     "0": 0.0155,
+     "1": 0.0156,
+     "2": 0.0159,
+     "3": 0.016
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0167,
+    "host_ms": 0.0749,
+    "timeline_kernel_ms": 0.0162
+   },
+   {
+    "op": "scatter",
+    "shape": "5120x256 bf16 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 20,
+    "ms": 0.2399,
+    "ms_per_chip": {
+     "0": 0.2399,
+     "1": 0.2397,
+     "2": 0.2395,
+     "3": 0.2395
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.2426,
+    "host_ms": 0.2082,
+    "timeline_kernel_ms": 0.2397
+   }
+  ],
+  "L2.experts": [
+   {
+    "op": "mesh_partition",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1124,
+    "ms_per_chip": {
+     "0": 0.1124,
+     "1": 0.1118,
+     "2": 0.1119,
+     "3": 0.1119
+    },
+    "gap_ms": 0.0004,
+    "slot_ms": 0.1148,
+    "host_ms": 0.0559,
+    "timeline_kernel_ms": 0.1143
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.0019,
+     "1": 0.0021,
+     "2": 0.0021,
+     "3": 0.002
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0026,
+    "host_ms": 0.0436,
+    "timeline_kernel_ms": 0.002
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.0021,
+     "2": 0.0021,
+     "3": 0.002
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0417,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0019,
+    "ms_per_chip": {
+     "0": 0.0019,
+     "1": 0.0019,
+     "2": 0.0019,
+     "3": 0.0019
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0384,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "experimental.deepseek_prefill.masked_bincount",
+    "shape": "2560x8 u16 \u00b7 1x257 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0671,
+    "ms_per_chip": {
+     "0": 0.0659,
+     "1": 0.0671,
+     "2": 0.0661,
+     "3": 0.0667
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0671,
+    "host_ms": 0.051,
+    "timeline_kernel_ms": 0.0666
+   },
+   {
+    "op": "bringup.offset_cumsum",
+    "shape": "256 u32",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0258,
+    "ms_per_chip": {
+     "0": 0.019,
+     "1": 0.019,
+     "2": 0.0254,
+     "3": 0.0258
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0222,
+    "host_ms": 0.1326,
+    "timeline_kernel_ms": 0.02
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 u16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.054,
+    "timeline_kernel_ms": 0.0105
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.0021,
+     "2": 0.002,
+     "3": 0.002
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0029,
+    "host_ms": 0.0403,
+    "timeline_kernel_ms": 0.0023
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.011,
+    "host_ms": 0.0494,
+    "timeline_kernel_ms": 0.0104
+   },
+   {
+    "op": "bringup.dispatch",
+    "shape": "2560x4096 bf16 \u00b7 2560x8 u16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 10.1459,
+    "ms_per_chip": {
+     "0": 5.8849,
+     "1": 10.136,
+     "2": 5.8954,
+     "3": 10.1459
+    },
+    "gap_ms": 0.0009,
+    "slot_ms": 5.8865,
+    "host_ms": 0.0829,
+    "timeline_kernel_ms": 5.8856
+   },
+   {
+    "op": "bringup.unified_routed_expert_moe",
+    "shape": "42976x4096 bf16 \u00b7 1x256 u32",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 14.0742,
+    "ms_per_chip": {
+     "0": 9.8147,
+     "1": 11.017,
+     "2": 11.0404,
+     "3": 14.0742
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 9.8234,
+    "host_ms": 0.3212,
+    "timeline_kernel_ms": 9.8229
+   },
+   {
+    "op": "bringup.combine",
+    "shape": "42976x4096 bf16 \u00b7 42976x3 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 6.3726,
+    "ms_per_chip": {
+     "0": 3.8599,
+     "1": 6.3642,
+     "2": 3.8683,
+     "3": 6.3726
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 5.0577,
+    "host_ms": 0.0743,
+    "timeline_kernel_ms": 5.0571
+   },
+   {
+    "op": "unsqueeze",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0335,
+    "ms_per_chip": {
+     "0": 0.0335,
+     "1": 0.0335,
+     "2": 0.0334,
+     "3": 0.0333
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0337,
+    "host_ms": 0.0522,
+    "timeline_kernel_ms": 0.0332
+   },
+   {
+    "op": "experimental.deepseek_prefill.post_combine_reduce",
+    "shape": "2560x8x4096 bf16 \u00b7 2560x8x1 bf16",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5174,
+    "ms_per_chip": {
+     "0": 0.5161,
+     "1": 0.5174,
+     "2": 0.5135,
+     "3": 0.5127
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.5161,
+    "host_ms": 0.0571,
+    "timeline_kernel_ms": 0.5156
+   },
+   {
+    "op": "all_reduce",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.3107,
+    "ms_per_chip": {
+     "0": 0.3044,
+     "1": 0.3089,
+     "2": 0.3012,
+     "3": 0.3107
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 10.1117,
+    "host_ms": 0.1352,
+    "timeline_kernel_ms": 10.1106
+   },
+   {
+    "op": "all_gather",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2647,
+    "ms_per_chip": {
+     "0": 0.2556,
+     "1": 0.2599,
+     "2": 0.2623,
+     "3": 0.2647
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.2578,
+    "host_ms": 0.054,
+    "timeline_kernel_ms": 0.2573
+   }
+  ],
+  "L2.ffn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4196,
+    "ms_per_chip": {
+     "0": 0.4196,
+     "1": 0.4153,
+     "2": 0.4163,
+     "3": 0.4175
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4148,
+    "host_ms": 0.0838,
+    "timeline_kernel_ms": 0.4143
+   }
+  ],
+  "L3.attention.qkv": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x3072 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 3.1901,
+    "ms_per_chip": {
+     "0": 3.1901,
+     "1": 3.1871,
+     "2": 3.1896,
+     "3": 3.1887
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 3.1904,
+    "host_ms": 0.0788,
+    "timeline_kernel_ms": 3.1898
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x640 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.7242,
+    "ms_per_chip": {
+     "0": 0.7235,
+     "1": 0.7231,
+     "2": 0.7242,
+     "3": 0.7238
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.7245,
+    "host_ms": 0.0618,
+    "timeline_kernel_ms": 0.7239
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x3072 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1816,
+    "ms_per_chip": {
+     "0": 0.1816,
+     "1": 0.1786,
+     "2": 0.1805,
+     "3": 0.18
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.18,
+    "host_ms": 0.0774,
+    "timeline_kernel_ms": 0.1794
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x640 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0403,
+    "ms_per_chip": {
+     "0": 0.0394,
+     "1": 0.0393,
+     "2": 0.0403,
+     "3": 0.0399
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0392,
+    "host_ms": 0.0538,
+    "timeline_kernel_ms": 0.0387
+   }
+  ],
+  "L3.attention.rope": [
+   {
+    "op": "slice",
+    "shape": "56320x64 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0071,
+    "ms_per_chip": {
+     "0": 0.0069,
+     "1": 0.0067,
+     "2": 0.0069,
+     "3": 0.0068
+    },
+    "gap_ms": 0.001,
+    "slot_ms": 0.0082,
+    "host_ms": 0.1365,
+    "timeline_kernel_ms": 0.0072
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "16x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1324,
+    "ms_per_chip": {
+     "0": 0.1298,
+     "1": 0.1324,
+     "2": 0.1305,
+     "3": 0.1301
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1306,
+    "host_ms": 0.0564,
+    "timeline_kernel_ms": 0.13
+   },
+   {
+    "op": "concat",
+    "shape": "16x5120x64 bf16 \u00b7 16x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1734,
+    "ms_per_chip": {
+     "0": 0.1734,
+     "1": 0.1704,
+     "2": 0.1705,
+     "3": 0.1723
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1698,
+    "host_ms": 0.0644,
+    "timeline_kernel_ms": 0.1693
+   },
+   {
+    "op": "slice",
+    "shape": "2x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0231,
+    "ms_per_chip": {
+     "0": 0.0227,
+     "1": 0.0225,
+     "2": 0.0217,
+     "3": 0.0231
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0246,
+    "host_ms": 0.1329,
+    "timeline_kernel_ms": 0.0234
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "2x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0221,
+    "ms_per_chip": {
+     "0": 0.0214,
+     "1": 0.0219,
+     "2": 0.0218,
+     "3": 0.0221
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0204,
+    "host_ms": 0.0604,
+    "timeline_kernel_ms": 0.0198
+   },
+   {
+    "op": "concat",
+    "shape": "2x5120x64 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0222,
+    "ms_per_chip": {
+     "0": 0.0219,
+     "1": 0.0213,
+     "2": 0.0222,
+     "3": 0.0216
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0221,
+    "host_ms": 0.0612,
+    "timeline_kernel_ms": 0.0215
+   }
+  ],
+  "L3.attention.kv_write": [
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0223,
+    "ms_per_chip": {
+     "0": 0.0218,
+     "1": 0.0223,
+     "2": 0.0214,
+     "3": 0.0217
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0229,
+    "host_ms": 0.056,
+    "timeline_kernel_ms": 0.0223
+   },
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0176,
+    "ms_per_chip": {
+     "0": 0.0169,
+     "1": 0.0173,
+     "2": 0.0172,
+     "3": 0.0176
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0171,
+    "host_ms": 0.0469,
+    "timeline_kernel_ms": 0.0165
+   }
+  ],
+  "L3.attention.kv_tail": [
+   {
+    "op": "slice",
+    "shape": "2x56320x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0013,
+    "ms_per_chip": {
+     "0": 0.0012,
+     "1": 0.0012,
+     "2": 0.0012,
+     "3": 0.0013
+    },
+    "gap_ms": 0.0007,
+    "slot_ms": 0.0019,
+    "host_ms": 0.0651,
+    "timeline_kernel_ms": 0.0012
+   },
+   {
+    "op": "slice",
+    "shape": "2x56320x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0012,
+    "ms_per_chip": {
+     "0": 0.0011,
+     "1": 0.0012,
+     "2": 0.0011,
+     "3": 0.0011
+    },
+    "gap_ms": 0.001,
+    "slot_ms": 0.0023,
+    "host_ms": 0.0503,
+    "timeline_kernel_ms": 0.0013
+   },
+   {
+    "op": "slice",
+    "shape": "16x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0057,
+    "ms_per_chip": {
+     "0": 0.0052,
+     "1": 0.0052,
+     "2": 0.0054,
+     "3": 0.0057
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0059,
+    "host_ms": 0.0666,
+    "timeline_kernel_ms": 0.0054
+   },
+   {
+    "op": "concat",
+    "shape": "16x128x192 bf16 \u00b7 16x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1721,
+    "ms_per_chip": {
+     "0": 0.1721,
+     "1": 0.1698,
+     "2": 0.1715,
+     "3": 0.1692
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1723,
+    "host_ms": 0.0571,
+    "timeline_kernel_ms": 0.1718
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0224,
+    "ms_per_chip": {
+     "0": 0.0223,
+     "1": 0.0222,
+     "2": 0.0224,
+     "3": 0.0221
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0229,
+    "host_ms": 0.0491,
+    "timeline_kernel_ms": 0.0223
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.019,
+    "ms_per_chip": {
+     "0": 0.0181,
+     "1": 0.019,
+     "2": 0.0182,
+     "3": 0.0174
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0177,
+    "host_ms": 0.0478,
+    "timeline_kernel_ms": 0.0172
+   }
+  ],
+  "L3.attention.sliding_sdpa": [
+   {
+    "op": "bringup.scaled_dot_product_attention",
+    "shape": "16x5248x192 bf16 \u00b7 2x5248x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3848,
+    "ms_per_chip": {
+     "0": 0.3833,
+     "1": 0.3827,
+     "2": 0.3848,
+     "3": 0.3846
+    },
+    "gap_ms": 0.0071,
+    "slot_ms": 0.3916,
+    "host_ms": 0.0717,
+    "timeline_kernel_ms": 0.3846
+   },
+   {
+    "op": "slice",
+    "shape": "16x5248x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1149,
+    "ms_per_chip": {
+     "0": 0.1149,
+     "1": 0.1146,
+     "2": 0.1112,
+     "3": 0.1142
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1147,
+    "host_ms": 0.0688,
+    "timeline_kernel_ms": 0.1142
+   }
+  ],
+  "L3.attention.o_proj": [
+   {
+    "op": "experimental.nlp_concat_heads",
+    "shape": "16x5120x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1263,
+    "ms_per_chip": {
+     "0": 0.1263,
+     "1": 0.1237,
+     "2": 0.1253,
+     "3": 0.1249
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1264,
+    "host_ms": 0.0407,
+    "timeline_kernel_ms": 0.1258
+   },
+   {
+    "op": "linear",
+    "shape": "5120x2048 bf16 \u00b7 2048x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 2.2394,
+    "ms_per_chip": {
+     "0": 2.2394,
+     "1": 2.2345,
+     "2": 2.2378,
+     "3": 2.237
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 2.2355,
+    "host_ms": 0.0663,
+    "timeline_kernel_ms": 2.235
+   }
+  ],
+  "L3.attention.ccl": [
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.1826,
+    "ms_per_chip": {
+     "0": 1.1715,
+     "1": 1.1742,
+     "2": 1.1785,
+     "3": 1.1826
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 1.1844,
+    "host_ms": 0.2436,
+    "timeline_kernel_ms": 1.1823
+   }
+  ],
+  "L3.attn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4219,
+    "ms_per_chip": {
+     "0": 0.417,
+     "1": 0.4219,
+     "2": 0.4151,
+     "3": 0.4139
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4157,
+    "host_ms": 0.0708,
+    "timeline_kernel_ms": 0.4151
+   }
+  ],
+  "L3.router": [
+   {
+    "op": "typecast",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3483,
+    "ms_per_chip": {
+     "0": 0.3408,
+     "1": 0.3399,
+     "2": 0.3483,
+     "3": 0.3345
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3401,
+    "host_ms": 0.0438,
+    "timeline_kernel_ms": 0.3396
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 fp32 \u00b7 4096x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.53,
+    "ms_per_chip": {
+     "0": 0.5268,
+     "1": 0.529,
+     "2": 0.5285,
+     "3": 0.53
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.5226,
+    "host_ms": 0.0671,
+    "timeline_kernel_ms": 0.5221
+   },
+   {
+    "op": "sigmoid",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0353,
+    "ms_per_chip": {
+     "0": 0.0352,
+     "1": 0.0351,
+     "2": 0.0351,
+     "3": 0.0353
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0358,
+    "host_ms": 0.0601,
+    "timeline_kernel_ms": 0.0352
+   },
+   {
+    "op": "add",
+    "shape": "5120x256 fp32 \u00b7 1x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.049,
+    "ms_per_chip": {
+     "0": 0.0474,
+     "1": 0.0475,
+     "2": 0.049,
+     "3": 0.0476
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0469,
+    "host_ms": 0.1226,
+    "timeline_kernel_ms": 0.0463
+   },
+   {
+    "op": "topk",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0879,
+    "ms_per_chip": {
+     "0": 0.0876,
+     "1": 0.0879,
+     "2": 0.0879,
+     "3": 0.0874
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0879,
+    "host_ms": 0.0797,
+    "timeline_kernel_ms": 0.0873
+   },
+   {
+    "op": "gather",
+    "shape": "5120x256 fp32 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0944,
+    "ms_per_chip": {
+     "0": 0.0939,
+     "1": 0.0942,
+     "2": 0.0944,
+     "3": 0.0934
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0935,
+    "host_ms": 0.0856,
+    "timeline_kernel_ms": 0.0925
+   },
+   {
+    "op": "sum",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0138,
+    "ms_per_chip": {
+     "0": 0.0135,
+     "1": 0.0135,
+     "2": 0.0137,
+     "3": 0.0138
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0145,
+    "host_ms": 0.085,
+    "timeline_kernel_ms": 0.0135
+   },
+   {
+    "op": "div",
+    "shape": "5120x8 fp32 \u00b7 5120x1 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0132,
+     "1": 0.0137,
+     "2": 0.0134,
+     "3": 0.0135
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0138,
+    "host_ms": 0.1166,
+    "timeline_kernel_ms": 0.0133
+   },
+   {
+    "op": "typecast",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0034,
+    "ms_per_chip": {
+     "0": 0.0034,
+     "1": 0.0034,
+     "2": 0.0033,
+     "3": 0.0034
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0042,
+    "host_ms": 0.0412,
+    "timeline_kernel_ms": 0.0037
+   },
+   {
+    "op": "slice",
+    "shape": "8192x256 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0157,
+    "ms_per_chip": {
+     "0": 0.0156,
+     "1": 0.0157,
+     "2": 0.015,
+     "3": 0.0157
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0166,
+    "host_ms": 0.0725,
+    "timeline_kernel_ms": 0.0161
+   },
+   {
+    "op": "scatter",
+    "shape": "5120x256 bf16 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 20,
+    "ms": 0.24,
+    "ms_per_chip": {
+     "0": 0.2394,
+     "1": 0.2394,
+     "2": 0.24,
+     "3": 0.2392
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.2431,
+    "host_ms": 0.2003,
+    "timeline_kernel_ms": 0.2404
+   }
+  ],
+  "L3.experts": [
+   {
+    "op": "mesh_partition",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1116,
+    "ms_per_chip": {
+     "0": 0.1098,
+     "1": 0.1113,
+     "2": 0.1105,
+     "3": 0.1116
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.112,
+    "host_ms": 0.055,
+    "timeline_kernel_ms": 0.1115
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.0021,
+     "2": 0.0021,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0026,
+    "host_ms": 0.0429,
+    "timeline_kernel_ms": 0.002
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.0021,
+     "1": 0.0021,
+     "2": 0.0021,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0026,
+    "host_ms": 0.0398,
+    "timeline_kernel_ms": 0.0021
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0019,
+    "ms_per_chip": {
+     "0": 0.0019,
+     "1": 0.0019,
+     "2": 0.0019,
+     "3": 0.0019
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0028,
+    "host_ms": 0.0406,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "experimental.deepseek_prefill.masked_bincount",
+    "shape": "2560x8 u16 \u00b7 1x257 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0665,
+    "ms_per_chip": {
+     "0": 0.0663,
+     "1": 0.0661,
+     "2": 0.0665,
+     "3": 0.0664
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0676,
+    "host_ms": 0.0501,
+    "timeline_kernel_ms": 0.067
+   },
+   {
+    "op": "bringup.offset_cumsum",
+    "shape": "256 u32",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.026,
+    "ms_per_chip": {
+     "0": 0.0191,
+     "1": 0.019,
+     "2": 0.0251,
+     "3": 0.026
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0278,
+    "host_ms": 0.1566,
+    "timeline_kernel_ms": 0.0256
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 u16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.0576,
+    "timeline_kernel_ms": 0.0104
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.002,
+     "2": 0.0021,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0393,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.0496,
+    "timeline_kernel_ms": 0.0104
+   },
+   {
+    "op": "bringup.dispatch",
+    "shape": "2560x4096 bf16 \u00b7 2560x8 u16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 7.7412,
+    "ms_per_chip": {
+     "0": 7.7314,
+     "1": 7.1151,
+     "2": 7.7412,
+     "3": 7.1293
+    },
+    "gap_ms": 0.0011,
+    "slot_ms": 7.7344,
+    "host_ms": 0.0795,
+    "timeline_kernel_ms": 7.7333
+   },
+   {
+    "op": "bringup.unified_routed_expert_moe",
+    "shape": "42976x4096 bf16 \u00b7 1x256 u32",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 11.3586,
+    "ms_per_chip": {
+     "0": 11.0224,
+     "1": 9.3772,
+     "2": 11.3586,
+     "3": 11.2262
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 11.0058,
+    "host_ms": 0.3039,
+    "timeline_kernel_ms": 11.0053
+   },
+   {
+    "op": "bringup.combine",
+    "shape": "42976x4096 bf16 \u00b7 42976x3 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 4.8979,
+    "ms_per_chip": {
+     "0": 4.89,
+     "1": 4.5553,
+     "2": 4.8979,
+     "3": 4.564
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 5.2398,
+    "host_ms": 0.0698,
+    "timeline_kernel_ms": 5.2392
+   },
+   {
+    "op": "unsqueeze",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0336,
+    "ms_per_chip": {
+     "0": 0.0336,
+     "1": 0.0334,
+     "2": 0.0335,
+     "3": 0.0336
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.034,
+    "host_ms": 0.0514,
+    "timeline_kernel_ms": 0.0335
+   },
+   {
+    "op": "experimental.deepseek_prefill.post_combine_reduce",
+    "shape": "2560x8x4096 bf16 \u00b7 2560x8x1 bf16",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5182,
+    "ms_per_chip": {
+     "0": 0.5143,
+     "1": 0.5175,
+     "2": 0.5182,
+     "3": 0.5094
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.5115,
+    "host_ms": 0.0524,
+    "timeline_kernel_ms": 0.511
+   },
+   {
+    "op": "all_reduce",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.3093,
+    "ms_per_chip": {
+     "0": 0.3017,
+     "1": 0.3071,
+     "2": 0.3008,
+     "3": 0.3093
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3011,
+    "host_ms": 0.1399,
+    "timeline_kernel_ms": 0.3
+   },
+   {
+    "op": "all_gather",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2648,
+    "ms_per_chip": {
+     "0": 0.2578,
+     "1": 0.2566,
+     "2": 0.2648,
+     "3": 0.2609
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.2652,
+    "host_ms": 0.0548,
+    "timeline_kernel_ms": 0.2647
+   }
+  ],
+  "L3.ffn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4182,
+    "ms_per_chip": {
+     "0": 0.4182,
+     "1": 0.4153,
+     "2": 0.4171,
+     "3": 0.4173
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4161,
+    "host_ms": 0.0701,
+    "timeline_kernel_ms": 0.4156
+   }
+  ],
+  "L4.attention.qkv": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x3072 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 3.1914,
+    "ms_per_chip": {
+     "0": 3.1897,
+     "1": 3.189,
+     "2": 3.1894,
+     "3": 3.1914
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 3.189,
+    "host_ms": 0.0797,
+    "timeline_kernel_ms": 3.1884
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x640 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.7228,
+    "ms_per_chip": {
+     "0": 0.722,
+     "1": 0.7225,
+     "2": 0.7228,
+     "3": 0.7225
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.7241,
+    "host_ms": 0.0603,
+    "timeline_kernel_ms": 0.7236
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x3072 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1803,
+    "ms_per_chip": {
+     "0": 0.1777,
+     "1": 0.1786,
+     "2": 0.1789,
+     "3": 0.1803
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1762,
+    "host_ms": 0.0642,
+    "timeline_kernel_ms": 0.1757
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x640 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0397,
+    "ms_per_chip": {
+     "0": 0.0384,
+     "1": 0.0387,
+     "2": 0.0388,
+     "3": 0.0397
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0394,
+    "host_ms": 0.0536,
+    "timeline_kernel_ms": 0.0388
+   }
+  ],
+  "L4.attention.rope": [
+   {
+    "op": "slice",
+    "shape": "56320x64 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0069,
+    "ms_per_chip": {
+     "0": 0.0069,
+     "1": 0.0068,
+     "2": 0.0068,
+     "3": 0.0069
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0083,
+    "host_ms": 0.1405,
+    "timeline_kernel_ms": 0.0071
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "16x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1321,
+    "ms_per_chip": {
+     "0": 0.13,
+     "1": 0.1297,
+     "2": 0.1321,
+     "3": 0.1311
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1324,
+    "host_ms": 0.0545,
+    "timeline_kernel_ms": 0.1318
+   },
+   {
+    "op": "concat",
+    "shape": "16x5120x64 bf16 \u00b7 16x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1726,
+    "ms_per_chip": {
+     "0": 0.1718,
+     "1": 0.1726,
+     "2": 0.1711,
+     "3": 0.1683
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1697,
+    "host_ms": 0.0608,
+    "timeline_kernel_ms": 0.1693
+   },
+   {
+    "op": "slice",
+    "shape": "2x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.023,
+    "ms_per_chip": {
+     "0": 0.023,
+     "1": 0.0226,
+     "2": 0.0213,
+     "3": 0.0218
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0238,
+    "host_ms": 0.1246,
+    "timeline_kernel_ms": 0.0226
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "2x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0217,
+    "ms_per_chip": {
+     "0": 0.0217,
+     "1": 0.0213,
+     "2": 0.0216,
+     "3": 0.0217
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0202,
+    "host_ms": 0.0607,
+    "timeline_kernel_ms": 0.0196
+   },
+   {
+    "op": "concat",
+    "shape": "2x5120x64 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0221,
+    "ms_per_chip": {
+     "0": 0.0213,
+     "1": 0.0221,
+     "2": 0.0212,
+     "3": 0.0214
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0223,
+    "host_ms": 0.0562,
+    "timeline_kernel_ms": 0.0218
+   }
+  ],
+  "L4.attention.kv_write": [
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0224,
+    "ms_per_chip": {
+     "0": 0.0219,
+     "1": 0.0224,
+     "2": 0.0217,
+     "3": 0.0222
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0227,
+    "host_ms": 0.056,
+    "timeline_kernel_ms": 0.0222
+   },
+   {
+    "op": "fill_cache",
+    "shape": "2x56320x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0176,
+    "ms_per_chip": {
+     "0": 0.0171,
+     "1": 0.0174,
+     "2": 0.0168,
+     "3": 0.0176
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0174,
+    "host_ms": 0.043,
+    "timeline_kernel_ms": 0.0168
+   }
+  ],
+  "L4.attention.kv_tail": [
+   {
+    "op": "slice",
+    "shape": "2x56320x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0013,
+    "ms_per_chip": {
+     "0": 0.0012,
+     "1": 0.0012,
+     "2": 0.0012,
+     "3": 0.0013
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0019,
+    "host_ms": 0.0649,
+    "timeline_kernel_ms": 0.0013
+   },
+   {
+    "op": "slice",
+    "shape": "2x56320x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0012,
+    "ms_per_chip": {
+     "0": 0.0012,
+     "1": 0.0011,
+     "2": 0.0011,
+     "3": 0.0012
+    },
+    "gap_ms": 0.001,
+    "slot_ms": 0.0023,
+    "host_ms": 0.049,
+    "timeline_kernel_ms": 0.0013
+   },
+   {
+    "op": "slice",
+    "shape": "16x5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0057,
+    "ms_per_chip": {
+     "0": 0.0057,
+     "1": 0.0052,
+     "2": 0.0051,
+     "3": 0.0052
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0058,
+    "host_ms": 0.0601,
+    "timeline_kernel_ms": 0.0053
+   },
+   {
+    "op": "concat",
+    "shape": "16x128x192 bf16 \u00b7 16x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1711,
+    "ms_per_chip": {
+     "0": 0.1709,
+     "1": 0.1698,
+     "2": 0.1711,
+     "3": 0.1701
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1711,
+    "host_ms": 0.0568,
+    "timeline_kernel_ms": 0.1706
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x192 bf16 \u00b7 2x5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0226,
+    "ms_per_chip": {
+     "0": 0.0222,
+     "1": 0.0219,
+     "2": 0.0226,
+     "3": 0.0226
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0225,
+    "host_ms": 0.0506,
+    "timeline_kernel_ms": 0.0219
+   },
+   {
+    "op": "concat",
+    "shape": "2x128x128 bf16 \u00b7 2x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0181,
+    "ms_per_chip": {
+     "0": 0.0179,
+     "1": 0.0181,
+     "2": 0.018,
+     "3": 0.0181
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0176,
+    "host_ms": 0.0454,
+    "timeline_kernel_ms": 0.017
+   }
+  ],
+  "L4.attention.sliding_sdpa": [
+   {
+    "op": "bringup.scaled_dot_product_attention",
+    "shape": "16x5248x192 bf16 \u00b7 2x5248x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3844,
+    "ms_per_chip": {
+     "0": 0.383,
+     "1": 0.3844,
+     "2": 0.3832,
+     "3": 0.3841
+    },
+    "gap_ms": 0.0071,
+    "slot_ms": 0.3905,
+    "host_ms": 0.071,
+    "timeline_kernel_ms": 0.3834
+   },
+   {
+    "op": "slice",
+    "shape": "16x5248x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1146,
+    "ms_per_chip": {
+     "0": 0.1123,
+     "1": 0.1136,
+     "2": 0.1129,
+     "3": 0.1146
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.115,
+    "host_ms": 0.0684,
+    "timeline_kernel_ms": 0.1144
+   }
+  ],
+  "L4.attention.o_proj": [
+   {
+    "op": "experimental.nlp_concat_heads",
+    "shape": "16x5120x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1261,
+    "ms_per_chip": {
+     "0": 0.1261,
+     "1": 0.1243,
+     "2": 0.1251,
+     "3": 0.124
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.126,
+    "host_ms": 0.04,
+    "timeline_kernel_ms": 0.1254
+   },
+   {
+    "op": "linear",
+    "shape": "5120x2048 bf16 \u00b7 2048x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 2.2374,
+    "ms_per_chip": {
+     "0": 2.2374,
+     "1": 2.2363,
+     "2": 2.2354,
+     "3": 2.2344
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 2.2374,
+    "host_ms": 0.0656,
+    "timeline_kernel_ms": 2.2369
+   }
+  ],
+  "L4.attention.ccl": [
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.1882,
+    "ms_per_chip": {
+     "0": 1.1726,
+     "1": 1.1816,
+     "2": 1.1855,
+     "3": 1.1882
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 1.1778,
+    "host_ms": 0.2455,
+    "timeline_kernel_ms": 1.1757
+   }
+  ],
+  "L4.attn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4182,
+    "ms_per_chip": {
+     "0": 0.4123,
+     "1": 0.4145,
+     "2": 0.4141,
+     "3": 0.4182
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4111,
+    "host_ms": 0.0703,
+    "timeline_kernel_ms": 0.4106
+   }
+  ],
+  "L4.router": [
+   {
+    "op": "typecast",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3449,
+    "ms_per_chip": {
+     "0": 0.3449,
+     "1": 0.3374,
+     "2": 0.3427,
+     "3": 0.3448
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.3397,
+    "host_ms": 0.0443,
+    "timeline_kernel_ms": 0.3391
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 fp32 \u00b7 4096x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5328,
+    "ms_per_chip": {
+     "0": 0.5294,
+     "1": 0.5328,
+     "2": 0.5312,
+     "3": 0.5296
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.5281,
+    "host_ms": 0.0762,
+    "timeline_kernel_ms": 0.5275
+   },
+   {
+    "op": "sigmoid",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0362,
+    "ms_per_chip": {
+     "0": 0.0347,
+     "1": 0.0362,
+     "2": 0.0352,
+     "3": 0.0353
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0351,
+    "host_ms": 0.0648,
+    "timeline_kernel_ms": 0.0345
+   },
+   {
+    "op": "add",
+    "shape": "5120x256 fp32 \u00b7 1x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0491,
+    "ms_per_chip": {
+     "0": 0.0491,
+     "1": 0.0469,
+     "2": 0.0483,
+     "3": 0.0474
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0466,
+    "host_ms": 0.1161,
+    "timeline_kernel_ms": 0.046
+   },
+   {
+    "op": "topk",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0878,
+    "ms_per_chip": {
+     "0": 0.0878,
+     "1": 0.0873,
+     "2": 0.0877,
+     "3": 0.0876
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0879,
+    "host_ms": 0.0735,
+    "timeline_kernel_ms": 0.0874
+   },
+   {
+    "op": "gather",
+    "shape": "5120x256 fp32 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0942,
+    "ms_per_chip": {
+     "0": 0.0942,
+     "1": 0.0928,
+     "2": 0.0937,
+     "3": 0.0939
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0925,
+    "host_ms": 0.0829,
+    "timeline_kernel_ms": 0.0916
+   },
+   {
+    "op": "sum",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0139,
+    "ms_per_chip": {
+     "0": 0.0137,
+     "1": 0.0136,
+     "2": 0.0135,
+     "3": 0.0139
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0145,
+    "host_ms": 0.086,
+    "timeline_kernel_ms": 0.0134
+   },
+   {
+    "op": "div",
+    "shape": "5120x8 fp32 \u00b7 5120x1 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0135,
+     "1": 0.0135,
+     "2": 0.0137,
+     "3": 0.0133
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0138,
+    "host_ms": 0.1124,
+    "timeline_kernel_ms": 0.0133
+   },
+   {
+    "op": "typecast",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0036,
+    "ms_per_chip": {
+     "0": 0.0035,
+     "1": 0.0035,
+     "2": 0.0034,
+     "3": 0.0036
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0042,
+    "host_ms": 0.0404,
+    "timeline_kernel_ms": 0.0037
+   },
+   {
+    "op": "slice",
+    "shape": "8192x256 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0161,
+    "ms_per_chip": {
+     "0": 0.0158,
+     "1": 0.0161,
+     "2": 0.0159,
+     "3": 0.0159
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0159,
+    "host_ms": 0.0672,
+    "timeline_kernel_ms": 0.0154
+   },
+   {
+    "op": "scatter",
+    "shape": "5120x256 bf16 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 20,
+    "ms": 0.2398,
+    "ms_per_chip": {
+     "0": 0.2389,
+     "1": 0.2394,
+     "2": 0.2398,
+     "3": 0.2398
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.2428,
+    "host_ms": 0.2033,
+    "timeline_kernel_ms": 0.2401
+   }
+  ],
+  "L4.experts": [
+   {
+    "op": "mesh_partition",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1121,
+    "ms_per_chip": {
+     "0": 0.1109,
+     "1": 0.1121,
+     "2": 0.1119,
+     "3": 0.111
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.114,
+    "host_ms": 0.0559,
+    "timeline_kernel_ms": 0.1136
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.0021,
+     "1": 0.0021,
+     "2": 0.002,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0026,
+    "host_ms": 0.0416,
+    "timeline_kernel_ms": 0.002
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.0021,
+     "1": 0.0021,
+     "2": 0.002,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0026,
+    "host_ms": 0.0394,
+    "timeline_kernel_ms": 0.0021
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0019,
+    "ms_per_chip": {
+     "0": 0.0019,
+     "1": 0.0019,
+     "2": 0.0019,
+     "3": 0.0019
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0389,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "experimental.deepseek_prefill.masked_bincount",
+    "shape": "2560x8 u16 \u00b7 1x257 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0665,
+    "ms_per_chip": {
+     "0": 0.0665,
+     "1": 0.0661,
+     "2": 0.0661,
+     "3": 0.0661
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0672,
+    "host_ms": 0.0489,
+    "timeline_kernel_ms": 0.0667
+   },
+   {
+    "op": "bringup.offset_cumsum",
+    "shape": "256 u32",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0261,
+    "ms_per_chip": {
+     "0": 0.0191,
+     "1": 0.0191,
+     "2": 0.0249,
+     "3": 0.0261
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0263,
+    "host_ms": 0.1247,
+    "timeline_kernel_ms": 0.0241
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 u16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.0512,
+    "timeline_kernel_ms": 0.0104
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.0021,
+     "2": 0.002,
+     "3": 0.002
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0028,
+    "host_ms": 0.0398,
+    "timeline_kernel_ms": 0.0023
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.011,
+    "host_ms": 0.049,
+    "timeline_kernel_ms": 0.0105
+   },
+   {
+    "op": "bringup.dispatch",
+    "shape": "2560x4096 bf16 \u00b7 2560x8 u16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 8.2019,
+    "ms_per_chip": {
+     "0": 8.1871,
+     "1": 6.3785,
+     "2": 8.2019,
+     "3": 6.3884
+    },
+    "gap_ms": 0.0008,
+    "slot_ms": 8.1882,
+    "host_ms": 0.0754,
+    "timeline_kernel_ms": 8.1875
+   },
+   {
+    "op": "bringup.unified_routed_expert_moe",
+    "shape": "42976x4096 bf16 \u00b7 1x256 u32",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 12.4373,
+    "ms_per_chip": {
+     "0": 11.0184,
+     "1": 10.0791,
+     "2": 12.4373,
+     "3": 10.8056
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 10.997,
+    "host_ms": 0.297,
+    "timeline_kernel_ms": 10.9965
+   },
+   {
+    "op": "bringup.combine",
+    "shape": "42976x4096 bf16 \u00b7 42976x3 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 5.157,
+    "ms_per_chip": {
+     "0": 5.1484,
+     "1": 4.123,
+     "2": 5.157,
+     "3": 4.1328
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 6.5669,
+    "host_ms": 0.0705,
+    "timeline_kernel_ms": 6.5663
+   },
+   {
+    "op": "unsqueeze",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0336,
+    "ms_per_chip": {
+     "0": 0.0336,
+     "1": 0.0335,
+     "2": 0.0336,
+     "3": 0.0334
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.034,
+    "host_ms": 0.0802,
+    "timeline_kernel_ms": 0.0335
+   },
+   {
+    "op": "experimental.deepseek_prefill.post_combine_reduce",
+    "shape": "2560x8x4096 bf16 \u00b7 2560x8x1 bf16",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5185,
+    "ms_per_chip": {
+     "0": 0.5134,
+     "1": 0.5185,
+     "2": 0.5157,
+     "3": 0.5145
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.5112,
+    "host_ms": 0.0559,
+    "timeline_kernel_ms": 0.5107
+   },
+   {
+    "op": "all_reduce",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.3095,
+    "ms_per_chip": {
+     "0": 0.3045,
+     "1": 0.3091,
+     "2": 0.3039,
+     "3": 0.3095
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3001,
+    "host_ms": 0.1333,
+    "timeline_kernel_ms": 0.299
+   },
+   {
+    "op": "all_gather",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2639,
+    "ms_per_chip": {
+     "0": 0.2575,
+     "1": 0.2594,
+     "2": 0.2617,
+     "3": 0.2639
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.2652,
+    "host_ms": 0.0533,
+    "timeline_kernel_ms": 0.2647
+   }
+  ],
+  "L4.ffn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4195,
+    "ms_per_chip": {
+     "0": 0.4185,
+     "1": 0.4147,
+     "2": 0.4181,
+     "3": 0.4195
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4158,
+    "host_ms": 0.0678,
+    "timeline_kernel_ms": 0.4153
+   }
+  ],
+  "L5.attention.qkv": [
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x3072 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 3.1904,
+    "ms_per_chip": {
+     "0": 3.1904,
+     "1": 3.1895,
+     "2": 3.1902,
+     "3": 3.19
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 3.192,
+    "host_ms": 0.0772,
+    "timeline_kernel_ms": 3.1915
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 bf16 \u00b7 4096x320 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3467,
+    "ms_per_chip": {
+     "0": 0.3432,
+     "1": 0.3454,
+     "2": 0.3459,
+     "3": 0.3467
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3378,
+    "host_ms": 0.0627,
+    "timeline_kernel_ms": 0.3372
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x3072 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1815,
+    "ms_per_chip": {
+     "0": 0.1815,
+     "1": 0.1805,
+     "2": 0.1788,
+     "3": 0.1775
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1779,
+    "host_ms": 0.0645,
+    "timeline_kernel_ms": 0.1774
+   },
+   {
+    "op": "experimental.nlp_create_q_heads_split",
+    "shape": "5120x320 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0195,
+    "ms_per_chip": {
+     "0": 0.0194,
+     "1": 0.0195,
+     "2": 0.0191,
+     "3": 0.0192
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0199,
+    "host_ms": 0.0557,
+    "timeline_kernel_ms": 0.0194
+   }
+  ],
+  "L5.attention.rope": [
+   {
+    "op": "slice",
+    "shape": "56320x64 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.007,
+    "ms_per_chip": {
+     "0": 0.0067,
+     "1": 0.0068,
+     "2": 0.007,
+     "3": 0.0069
+    },
+    "gap_ms": 0.0011,
+    "slot_ms": 0.0081,
+    "host_ms": 0.1404,
+    "timeline_kernel_ms": 0.007
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "16x5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1311,
+    "ms_per_chip": {
+     "0": 0.1295,
+     "1": 0.1306,
+     "2": 0.1307,
+     "3": 0.1311
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1306,
+    "host_ms": 0.0545,
+    "timeline_kernel_ms": 0.13
+   },
+   {
+    "op": "concat",
+    "shape": "16x5120x64 bf16 \u00b7 16x5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1727,
+    "ms_per_chip": {
+     "0": 0.1713,
+     "1": 0.1691,
+     "2": 0.1668,
+     "3": 0.1727
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1692,
+    "host_ms": 0.0632,
+    "timeline_kernel_ms": 0.1688
+   },
+   {
+    "op": "slice",
+    "shape": "5120x192 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 2,
+    "programs": 8,
+    "ms": 0.0107,
+    "ms_per_chip": {
+     "0": 0.0102,
+     "1": 0.0106,
+     "2": 0.0104,
+     "3": 0.0101
+    },
+    "gap_ms": 0.0012,
+    "slot_ms": 0.0118,
+    "host_ms": 0.1428,
+    "timeline_kernel_ms": 0.0106
+   },
+   {
+    "op": "experimental.rotary_embedding",
+    "shape": "5120x64 bf16 \u00b7 5120x64 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0159,
+    "ms_per_chip": {
+     "0": 0.0159,
+     "1": 0.0158,
+     "2": 0.0157,
+     "3": 0.0158
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0169,
+    "host_ms": 0.0675,
+    "timeline_kernel_ms": 0.0164
+   },
+   {
+    "op": "concat",
+    "shape": "5120x64 bf16 \u00b7 5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0114,
+    "ms_per_chip": {
+     "0": 0.0104,
+     "1": 0.0112,
+     "2": 0.0107,
+     "3": 0.0114
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.012,
+    "host_ms": 0.0628,
+    "timeline_kernel_ms": 0.0115
+   }
+  ],
+  "L5.attention.kv_write": [
+   {
+    "op": "experimental.paged_fill_cache",
+    "shape": "880x1x64x192 bf16 \u00b7 5120x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0109,
+    "ms_per_chip": {
+     "0": 0.0109,
+     "1": 0.0107,
+     "2": 0.0106,
+     "3": 0.0107
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0118,
+    "host_ms": 0.1046,
+    "timeline_kernel_ms": 0.0112
+   },
+   {
+    "op": "experimental.paged_fill_cache",
+    "shape": "880x1x64x128 bf16 \u00b7 5120x128 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0084,
+    "ms_per_chip": {
+     "0": 0.0083,
+     "1": 0.0082,
+     "2": 0.0084,
+     "3": 0.0084
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0088,
+    "host_ms": 0.081,
+    "timeline_kernel_ms": 0.0083
+   }
+  ],
+  "L5.attention.sdpa": [
+   {
+    "op": "bringup.chunked_scaled_dot_product_attention",
+    "shape": "16x5120x192 bf16 \u00b7 880x1x64x192 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 22.4728,
+    "ms_per_chip": {
+     "0": 22.4728,
+     "1": 22.4717,
+     "2": 22.4705,
+     "3": 22.4722
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 22.4723,
+    "host_ms": 0.0784,
+    "timeline_kernel_ms": 22.4718
+   }
+  ],
+  "L5.attention.o_proj": [
+   {
+    "op": "experimental.nlp_concat_heads",
+    "shape": "16x5120x128 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1267,
+    "ms_per_chip": {
+     "0": 0.1242,
+     "1": 0.1267,
+     "2": 0.1238,
+     "3": 0.1261
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.1252,
+    "host_ms": 0.0412,
+    "timeline_kernel_ms": 0.1246
+   },
+   {
+    "op": "linear",
+    "shape": "5120x2048 bf16 \u00b7 2048x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 2.236,
+    "ms_per_chip": {
+     "0": 2.2348,
+     "1": 2.2359,
+     "2": 2.2339,
+     "3": 2.236
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 2.2392,
+    "host_ms": 0.0686,
+    "timeline_kernel_ms": 2.2387
+   }
+  ],
+  "L5.attention.ccl": [
+   {
+    "op": "all_reduce",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 16,
+    "ms": 1.2045,
+    "ms_per_chip": {
+     "0": 1.1851,
+     "1": 1.1909,
+     "2": 1.2023,
+     "3": 1.2045
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 1.1898,
+    "host_ms": 0.2433,
+    "timeline_kernel_ms": 1.1877
+   }
+  ],
+  "L5.attn_residual": [
+   {
+    "op": "bringup.rms_norm",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.4178,
+    "ms_per_chip": {
+     "0": 0.4169,
+     "1": 0.4178,
+     "2": 0.4169,
+     "3": 0.4138
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.4154,
+    "host_ms": 0.0676,
+    "timeline_kernel_ms": 0.4149
+   }
+  ],
+  "L5.router": [
+   {
+    "op": "typecast",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.3502,
+    "ms_per_chip": {
+     "0": 0.3389,
+     "1": 0.3383,
+     "2": 0.3502,
+     "3": 0.3338
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.3454,
+    "host_ms": 0.0437,
+    "timeline_kernel_ms": 0.3448
+   },
+   {
+    "op": "linear",
+    "shape": "5120x4096 fp32 \u00b7 4096x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.5308,
+    "ms_per_chip": {
+     "0": 0.5304,
+     "1": 0.529,
+     "2": 0.5308,
+     "3": 0.5291
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.526,
+    "host_ms": 0.0667,
+    "timeline_kernel_ms": 0.5254
+   },
+   {
+    "op": "sigmoid",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0353,
+    "ms_per_chip": {
+     "0": 0.0353,
+     "1": 0.0344,
+     "2": 0.0351,
+     "3": 0.0348
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0347,
+    "host_ms": 0.0577,
+    "timeline_kernel_ms": 0.0342
+   },
+   {
+    "op": "add",
+    "shape": "5120x256 fp32 \u00b7 1x256 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0478,
+    "ms_per_chip": {
+     "0": 0.0476,
+     "1": 0.0478,
+     "2": 0.0472,
+     "3": 0.0473
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0466,
+    "host_ms": 0.1124,
+    "timeline_kernel_ms": 0.046
+   },
+   {
+    "op": "topk",
+    "shape": "5120x256 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved \u00b7 DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0878,
+    "ms_per_chip": {
+     "0": 0.0877,
+     "1": 0.0877,
+     "2": 0.0878,
+     "3": 0.0877
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0876,
+    "host_ms": 0.0757,
+    "timeline_kernel_ms": 0.0871
+   },
+   {
+    "op": "gather",
+    "shape": "5120x256 fp32 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0948,
+    "ms_per_chip": {
+     "0": 0.0938,
+     "1": 0.0939,
+     "2": 0.0941,
+     "3": 0.0948
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0945,
+    "host_ms": 0.083,
+    "timeline_kernel_ms": 0.0935
+   },
+   {
+    "op": "sum",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0136,
+     "1": 0.0137,
+     "2": 0.0135,
+     "3": 0.0137
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0146,
+    "host_ms": 0.0824,
+    "timeline_kernel_ms": 0.0136
+   },
+   {
+    "op": "div",
+    "shape": "5120x8 fp32 \u00b7 5120x1 fp32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0137,
+    "ms_per_chip": {
+     "0": 0.0137,
+     "1": 0.0136,
+     "2": 0.0134,
+     "3": 0.0134
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0138,
+    "host_ms": 0.1109,
+    "timeline_kernel_ms": 0.0133
+   },
+   {
+    "op": "typecast",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0035,
+    "ms_per_chip": {
+     "0": 0.0035,
+     "1": 0.0034,
+     "2": 0.0035,
+     "3": 0.0035
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.004,
+    "host_ms": 0.0398,
+    "timeline_kernel_ms": 0.0035
+   },
+   {
+    "op": "slice",
+    "shape": "8192x256 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0163,
+    "ms_per_chip": {
+     "0": 0.0151,
+     "1": 0.0163,
+     "2": 0.016,
+     "3": 0.0149
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0162,
+    "host_ms": 0.0713,
+    "timeline_kernel_ms": 0.0157
+   },
+   {
+    "op": "scatter",
+    "shape": "5120x256 bf16 \u00b7 5120x8 u32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 20,
+    "ms": 0.2403,
+    "ms_per_chip": {
+     "0": 0.2393,
+     "1": 0.2397,
+     "2": 0.2396,
+     "3": 0.2403
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.2425,
+    "host_ms": 0.2016,
+    "timeline_kernel_ms": 0.2397
+   }
+  ],
+  "L5.experts": [
+   {
+    "op": "mesh_partition",
+    "shape": "5120x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.1122,
+    "ms_per_chip": {
+     "0": 0.1105,
+     "1": 0.1109,
+     "2": 0.1104,
+     "3": 0.1122
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.1127,
+    "host_ms": 0.0529,
+    "timeline_kernel_ms": 0.1122
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0023,
+    "ms_per_chip": {
+     "0": 0.0023,
+     "1": 0.0021,
+     "2": 0.0021,
+     "3": 0.002
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0415,
+    "timeline_kernel_ms": 0.0021
+   },
+   {
+    "op": "mesh_partition",
+    "shape": "5120x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0021,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.002,
+     "2": 0.002,
+     "3": 0.0021
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0028,
+    "host_ms": 0.0377,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 u32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.002,
+    "ms_per_chip": {
+     "0": 0.0019,
+     "1": 0.002,
+     "2": 0.002,
+     "3": 0.0019
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0027,
+    "host_ms": 0.0388,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "experimental.deepseek_prefill.masked_bincount",
+    "shape": "2560x8 u16 \u00b7 1x257 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0664,
+    "ms_per_chip": {
+     "0": 0.0659,
+     "1": 0.0664,
+     "2": 0.0664,
+     "3": 0.0664
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0674,
+    "host_ms": 0.0466,
+    "timeline_kernel_ms": 0.0668
+   },
+   {
+    "op": "bringup.offset_cumsum",
+    "shape": "256 u32",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.0255,
+    "ms_per_chip": {
+     "0": 0.0193,
+     "1": 0.019,
+     "2": 0.0252,
+     "3": 0.0255
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.0249,
+    "host_ms": 0.1317,
+    "timeline_kernel_ms": 0.0227
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 u16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.053,
+    "timeline_kernel_ms": 0.0104
+   },
+   {
+    "op": "typecast",
+    "shape": "2560x8 fp32",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.002,
+    "ms_per_chip": {
+     "0": 0.002,
+     "1": 0.002,
+     "2": 0.002,
+     "3": 0.002
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.0028,
+    "host_ms": 0.0379,
+    "timeline_kernel_ms": 0.0022
+   },
+   {
+    "op": "to_layout",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0099,
+    "ms_per_chip": {
+     "0": 0.0099,
+     "1": 0.0099,
+     "2": 0.0099,
+     "3": 0.0099
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.011,
+    "host_ms": 0.0486,
+    "timeline_kernel_ms": 0.0105
+   },
+   {
+    "op": "bringup.dispatch",
+    "shape": "2560x4096 bf16 \u00b7 2560x8 u16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM \u00b7 DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 7.776,
+    "ms_per_chip": {
+     "0": 6.7385,
+     "1": 7.7625,
+     "2": 6.7522,
+     "3": 7.776
+    },
+    "gap_ms": 0.0009,
+    "slot_ms": 6.7567,
+    "host_ms": 0.0745,
+    "timeline_kernel_ms": 6.7558
+   },
+   {
+    "op": "bringup.unified_routed_expert_moe",
+    "shape": "42976x4096 bf16 \u00b7 1x256 u32",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 11.4896,
+    "ms_per_chip": {
+     "0": 10.7137,
+     "1": 11.4896,
+     "2": 10.0955,
+     "3": 10.5808
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 10.7113,
+    "host_ms": 0.2919,
+    "timeline_kernel_ms": 10.7108
+   },
+   {
+    "op": "bringup.combine",
+    "shape": "42976x4096 bf16 \u00b7 42976x3 i32",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 4.9089,
+    "ms_per_chip": {
+     "0": 4.4088,
+     "1": 4.8984,
+     "2": 4.4233,
+     "3": 4.9089
+    },
+    "gap_ms": 0.0008,
+    "slot_ms": 4.382,
+    "host_ms": 0.0719,
+    "timeline_kernel_ms": 4.3812
+   },
+   {
+    "op": "unsqueeze",
+    "shape": "2560x8 bf16",
+    "mem": "DRAM interleaved RM -> DRAM interleaved RM",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.0335,
+    "ms_per_chip": {
+     "0": 0.0335,
+     "1": 0.0334,
+     "2": 0.0334,
+     "3": 0.0335
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.034,
+    "host_ms": 0.0493,
+    "timeline_kernel_ms": 0.0335
+   },
+   {
+    "op": "experimental.deepseek_prefill.post_combine_reduce",
+    "shape": "2560x8x4096 bf16 \u00b7 2560x8x1 bf16",
+    "mem": "DRAM interleaved RM \u00b7 DRAM interleaved RM -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.518,
+    "ms_per_chip": {
+     "0": 0.518,
+     "1": 0.5155,
+     "2": 0.516,
+     "3": 0.5113
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.5204,
+    "host_ms": 0.0522,
+    "timeline_kernel_ms": 0.5199
+   },
+   {
+    "op": "all_reduce",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 8,
+    "ms": 0.3104,
+    "ms_per_chip": {
+     "0": 0.2999,
+     "1": 0.3043,
+     "2": 0.3029,
+     "3": 0.3104
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 2.6505,
+    "host_ms": 0.1326,
+    "timeline_kernel_ms": 2.6494
+   },
+   {
+    "op": "all_gather",
+    "shape": "2560x4096 bf16",
+    "mem": "DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2649,
+    "ms_per_chip": {
+     "0": 0.2563,
+     "1": 0.2587,
+     "2": 0.2649,
+     "3": 0.2647
+    },
+    "gap_ms": 0.0006,
+    "slot_ms": 0.2574,
+    "host_ms": 0.0621,
+    "timeline_kernel_ms": 0.2568
+   }
+  ],
+  "L5.ffn_residual": [
+   {
+    "op": "add",
+    "shape": "5120x4096 bf16 \u00b7 5120x4096 bf16",
+    "mem": "DRAM interleaved \u00b7 DRAM interleaved -> DRAM interleaved",
+    "calls": 1,
+    "programs": 4,
+    "ms": 0.2838,
+    "ms_per_chip": {
+     "0": 0.282,
+     "1": 0.2838,
+     "2": 0.2808,
+     "3": 0.282
+    },
+    "gap_ms": 0.0005,
+    "slot_ms": 0.2834,
+    "host_ms": 0.1332,
+    "timeline_kernel_ms": 0.2829
+   }
+  ]
+ },
+ "timeline": {
+  "critical_chip": 0,
+  "device_timeline_ms": 250.185,
+  "kernel_ms": 249.96,
+  "gap_ms": 0.188,
+  "host_dispatch_ms": 28.941,
+  "calls": 640,
+  "host_wall_ms": 251.131
+ }
+}
