@@ -72,6 +72,6 @@ using MeshPlacement = std::map<ttnn::MeshCoordinate, DevicePlacement>;
 // name the worker serving the same stream on the downstream chip. `untilizers_per_group` of zero reserves no
 // untilizer cores at all, which is what a caller with nothing to untilize asks for.
 MeshPlacement decide_placement(
-    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group, bool with_collector);
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine
