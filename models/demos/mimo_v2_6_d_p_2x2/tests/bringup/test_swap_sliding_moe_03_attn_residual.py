@@ -1,0 +1,209 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Swap test 3: block type sliding_moe (layer 1) with attn_residual swapped in last.
+
+Rendered from models/demos/common/bringup/testing/templates.py. Frozen: an implementation may not edit this file.
+Runs the whole block of layer 1 (sliding_moe) with these steps on the device and the rest on the CPU reference:
+    attn_norm
+    attention
+    attn_residual
+
+Reviewed (S.sliding_moe.03.test.1, 2x2; copied from the 1x4 prior mimo_v2_6_d_p, same golden and CPU reference, with
+the attention limits of this run's swap 02 (owner-widened 2026-09-28 for preset S: rel L2 0.022, norm ratio [0.95, 1.08];
+the prior's swap 03 predates that and still has 0.02 / [0.95, 1.05]). Measurements below are the prior's): same body as test_swap_sliding_moe_02_attention.py (golden s4096 chunk 1, KV prefix
+[0, 2048) from the golden state, window 128) plus the attn_residual checks of test_c_sliding_moe_attn_residual.py.
+Gated metric pcc_swap_out (PCC, float [2048, 4096], spec block threshold 0.98), weak on its own (the residual dominates
+`out`, and the sink keeps attn_out ~1% of ||in||). Extra asserted checks (informational metrics):
+  - every swapped float step's own output vs golden: finite, PCC >= spec component threshold; attn_norm rel L2 <= 0.03,
+    ratio [0.97, 1.03]; attention rel L2 <= 0.022 (whole chunk and first 128 rows), ratio [0.95, 1.08], worst row
+    <= 0.08, rel <= 0.015 vs the CPU attention on the same device input, and closer to CPU window 128 than to 127 / 129
+    (all as swap 02); attn_residual (h_mid) rel L2 <= 0.01 (whole chunk and first 128 rows), ratio [0.99, 1.01];
+  - the attention term of the residual, on delta = h_mid - in against the attn_out the swap actually fed it (the
+    device attention): coefficient <delta, attn_out> / ||attn_out||^2 in [0.95, 1.05] and
+    ||delta - attn_out|| / ||attn_out|| <= 0.3 (component test: a dropped, halved or shifted attn_out passes the
+    whole-output checks and fails these);
+  - block out: finite, rel L2 <= 0.01 whole chunk and first 128 rows.
+Measured: BRINGUP_IMPL=reference out 0.999997 / rel 0.0030; h_mid rel 0.0024 / first rows 0.0024, ratio
+[0.9990, 1.0008], coef 1.0000, attn rel 0.0000. Zero stub fails every check. Precompile pass (zero attention output):
+out rel 0.0142 and h_mid rel 0.0113, ratio [0.9785, 0.9970], coef 0 all fail. Device (TtRMSNorm + TtSlidingAttention +
+TtResidualAdd): pcc_swap_out 0.999993, out rel 0.0037 / first rows 0.0029; attention rel 0.0145 / 0.0128, vs CPU w128
+0.0070, w127 0.0081, w129 0.0141; h_mid rel 0.0029 / 0.0029, ratio [0.9991, 1.0016], coef 1.0198, attn rel 0.154.
+The K/V the attention writes to the state is not returned here; the state metrics check it.
+"""
+
+import torch
+
+from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.reference.interface import run_block
+from models.demos.common.bringup.testing.component import _step, module_under_test
+from models.demos.common.bringup.testing.harness import (
+    compare,
+    component_golden,
+    default_mode,
+    device_ctx,
+    mesh_parametrize,
+    reference_ctx,
+    spec,
+    threshold,
+)
+
+S = spec()
+BLOCK_TYPE = "sliding_moe"
+SWAPPED = ["attn_norm", "attention", "attn_residual"]
+THRESHOLD = None  # None = spec thresholds.block (default 0.98)
+STEP_MAX_REL_L2 = {"attn_norm": 0.03, "attention": 0.022, "attn_residual": 0.01}  # swapped step output, whole chunk
+STEP_ROW_NORM_RATIO = {
+    "attn_norm": (0.97, 1.03),
+    "attention": (0.95, 1.08),  # owner-widened, as swap 02
+    "attn_residual": (0.99, 1.01),
+}  # per-token ||got|| / ||want||
+STEP_MAX_WORST_ROW_REL_L2 = {"attention": 0.08}  # max over tokens of ||got_t - want_t|| / ||want_t||
+HEAD_ROWS = 128  # first rows of the chunk: the only rows that attend into the KV prefix
+HEAD_ROW_STEPS = {"attention", "attn_residual"}  # stateful steps whose first HEAD_ROWS rows are checked separately
+WINDOW_ALTERNATIVES = (-1, 1)  # attention must be closer to the CPU window-W attention than to W-1 and W+1
+ATTN_MAX_REL_L2_VS_CPU = 0.015  # attention vs the CPU attention on the same device input (device 0.0070, x1.02 0.020)
+ATTN_COEF = (0.95, 1.05)  # attn_residual: <h_mid - in, attn_out> / ||attn_out||^2
+MAX_ATTN_REL = 0.3  # attn_residual: ||(h_mid - in) - attn_out|| / ||attn_out|| (bf16 rounding alone 0.15)
+OUT_MAX_REL_L2 = 0.01  # block output, whole chunk and first HEAD_ROWS rows (device 0.0031, zeroed attention 0.0142)
+
+
+def _rel(got, want):
+    got, want = got.float().reshape(want.shape), want.float()
+    return ((got - want).norm() / want.norm().clamp_min(1e-12)).item()
+
+
+def _cpu_attention_at_window(ref, layer, g, c, x, window):
+    """The CPU reference attention on input x with a different sliding window (restored afterwards)."""
+    old = ref.cfg.sliding_window
+    ref.cfg.sliding_window = window
+    try:
+        return ref.component(layer, "attention")(reference_ctx(ref, layer, g, c), x).float()
+    finally:
+        ref.cfg.sliding_window = old
+
+
+@mesh_parametrize
+def test_swap(mesh_device):
+    g, c = component_golden(S)
+    assert c * g.chunk > 0, "swap chunk must start after 0 so the attention reads a real KV prefix"
+    layer = S.representative_layer(BLOCK_TYPE)
+    ref = S.hooks().reference(S, layers=[layer], dtype=torch.float32)
+    assert ref.cfg.is_sliding(layer), f"layer {layer} must be a sliding-window layer"
+    steps = ref.block_graph(layer)
+    rctx, dctx = reference_ctx(ref, layer, g, c), device_ctx(layer, g, c)
+    overrides = {}
+    for name in SWAPPED:
+        _step(ref, layer, name)
+        mut = module_under_test(S, ref, mesh_device, layer, name)
+        overrides[name] = lambda ctx, *x, mut=mut: mut(ctx, dctx, *x)
+    gl = g.layer(c, layer)
+    seen = {}
+    run_block(
+        steps,
+        lambda n: ref.component(layer, n),
+        rctx,
+        gl["in"].float(),
+        rec=lambda n, t: seen.__setitem__(n, t),
+        overrides=overrides,
+    )
+    for n, t in seen.items():
+        if n not in ("in", "out") and n in gl:
+            compare(f"pcc_swap_{n}", t, gl[n], default_mode(gl[n]), 0.0)  # the trail, for diagnosis; not gated
+    thr = threshold(S, "block") if THRESHOLD is None else THRESHOLD
+    _, ok = compare("pcc_swap_out", seen["out"], gl["out"], "pcc", thr)
+
+    # Extra checks (see the module docstring). Recorded as informational metrics, asserted here.
+    failures = [] if ok else [f"pcc_swap_out below {thr}"]
+    want_out = gl["out"].float()
+    got_out = seen["out"].float().reshape(want_out.shape)
+    rows = min(HEAD_ROWS, want_out.shape[0])
+    out_rel = _rel(got_out, want_out)
+    out_rel_head = _rel(got_out[:rows], want_out[:rows])
+    metrics.record("rel_l2_swap_out", out_rel)
+    metrics.record("rel_l2_head_rows_swap_out", out_rel_head)
+    print(f"rel_l2_swap_out={out_rel:.6f} first_{rows}_rows={out_rel_head:.6f} (<= {OUT_MAX_REL_L2})")
+    if not torch.isfinite(got_out).all():
+        failures.append("block out non-finite")
+    if out_rel > OUT_MAX_REL_L2 or out_rel_head > OUT_MAX_REL_L2:
+        failures.append(f"block out rel L2 {out_rel:.4f} / first {rows} rows {out_rel_head:.4f} > {OUT_MAX_REL_L2}")
+    comp_thr = threshold(S, "component")
+    for name in SWAPPED:
+        st = _step(ref, layer, name)
+        o = st.output
+        want = gl[o]
+        if not want.is_floating_point():
+            continue
+        if seen[o].numel() != want.numel():
+            failures.append(f"swapped step {name}: shape {tuple(seen[o].shape)} vs golden {tuple(want.shape)}")
+            continue
+        got, w = seen[o].float().reshape(want.shape), want.float()
+        v = metrics.pcc(got, w)
+        rel = _rel(got, w)
+        lim = STEP_MAX_REL_L2[name]
+        rlo, rhi = STEP_ROW_NORM_RATIO[name]
+        ratio = got.norm(dim=-1) / w.norm(dim=-1).clamp_min(1e-12)
+        rmin, rmax = ratio.min().item(), ratio.max().item()
+        worst = ((got - w).norm(dim=-1) / w.norm(dim=-1).clamp_min(1e-12)).max().item()
+        metrics.record(f"rel_l2_swap_{o}", rel)
+        metrics.record(f"row_norm_ratio_min_swap_{o}", rmin)
+        metrics.record(f"row_norm_ratio_max_swap_{o}", rmax)
+        metrics.record(f"worst_row_rel_l2_swap_{o}", worst)
+        msg = (
+            f"swapped {name}: pcc={v:.6f} (>= {comp_thr}) rel_l2={rel:.6f} (<= {lim}) "
+            f"row_norm_ratio=[{rmin:.4f}, {rmax:.4f}] (in [{rlo}, {rhi}]) worst_row_rel_l2={worst:.4f}"
+        )
+        if not torch.isfinite(got).all():
+            failures.append(f"swapped step {name}: non-finite output")
+        if v < comp_thr or rel > lim:
+            failures.append(f"swapped step {name}: pcc {v:.4f} / rel L2 {rel:.4f} > {lim} (scale, weight or state bug)")
+        if not (rlo <= rmin and rmax <= rhi):
+            failures.append(f"swapped step {name}: per-token norm ratio [{rmin:.4f}, {rmax:.4f}]")
+        if name in STEP_MAX_WORST_ROW_REL_L2 and worst > STEP_MAX_WORST_ROW_REL_L2[name]:
+            failures.append(
+                f"swapped step {name}: worst per-token rel L2 {worst:.4f} > {STEP_MAX_WORST_ROW_REL_L2[name]}"
+            )
+        if name in HEAD_ROW_STEPS:
+            r = min(HEAD_ROWS, w.shape[0])
+            rel_head = _rel(got[:r], w[:r])
+            metrics.record(f"rel_l2_head_rows_swap_{o}", rel_head)
+            msg += f" first_{r}_rows={rel_head:.6f} (<= {lim})"
+            if rel_head > lim:
+                failures.append(
+                    f"swapped step {name}: rel L2 on the first {r} rows {rel_head:.4f} > {lim} "
+                    "(KV prefix ignored, RoPE positions not offset by the chunk start, or window mask wrong?)"
+                )
+        print(msg)
+        if name == "attention":
+            # Window discriminator against the CPU attention on the same (device) input.
+            x = seen[st.inputs[0]].float().reshape(gl[st.inputs[0]].shape)
+            window = int(ref.cfg.sliding_window)
+            d_w = _rel(got, _cpu_attention_at_window(ref, layer, g, c, x, window))
+            metrics.record(f"rel_l2_vs_cpu_window_swap_{o}", d_w)
+            if d_w > ATTN_MAX_REL_L2_VS_CPU:
+                failures.append(
+                    f"attention rel L2 vs the CPU attention on the same input {d_w:.4f} > {ATTN_MAX_REL_L2_VS_CPU}"
+                )
+            for dw in WINDOW_ALTERNATIVES:
+                alt = window + dw
+                d_alt = _rel(got, _cpu_attention_at_window(ref, layer, g, c, x, alt))
+                print(f"attention rel_l2 vs CPU window {window}: {d_w:.6f}; vs CPU window {alt}: {d_alt:.6f}")
+                if not d_w < d_alt:
+                    failures.append(
+                        f"attention output closer to a window-{alt} attention (rel {d_alt:.5f}) than to window "
+                        f"{window} (rel {d_w:.5f}): key j must be visible to query i iff i - {window} < j <= i"
+                    )
+        if name == "attn_residual":
+            # The attention term is ~1% of h_mid: check it directly on delta = h_mid - in, against the inputs fed in.
+            res, attn = (seen[i].float().reshape(gl[i].shape) for i in st.inputs)
+            delta = got - res
+            coef = ((delta * attn).sum() / (attn * attn).sum().clamp_min(1e-30)).item()
+            arel = ((delta - attn).norm() / attn.norm().clamp_min(1e-30)).item()
+            metrics.record(f"attn_coef_swap_{o}", coef)
+            metrics.record(f"attn_rel_l2_swap_{o}", arel)
+            print(f"attn term: coef={coef:.4f} (in {ATTN_COEF}) rel={arel:.4f} (<= {MAX_ATTN_REL})")
+            if not (ATTN_COEF[0] <= coef <= ATTN_COEF[1]):
+                failures.append(f"attn_residual: attn_out coefficient {coef:.4f} outside {ATTN_COEF} (dropped/scaled?)")
+            if not arel <= MAX_ATTN_REL:
+                failures.append(f"attn_residual: attn term rel L2 {arel:.4f} > {MAX_ATTN_REL} (misaligned/corrupted?)")
+    assert not failures, "; ".join(failures)
