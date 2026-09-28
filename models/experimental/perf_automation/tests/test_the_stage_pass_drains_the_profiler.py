@@ -249,6 +249,7 @@ def test_make_run_profiled_passes_it(tmp_path, monkeypatch):
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
     assert seen and seen[0][seen[0].index("-p", 7) + 1] == "x.profiler_drain"
     assert "--dump-device-data-mid-run" in seen[0]
+    assert "--disable-device-data-push-to-tracy" in seen[0], "device markers stay out of tracy-capture"
 
 
 def test_a_read_by_the_tests_own_wrapper_is_not_repeated(profiling, small_buffer, monkeypatch):
@@ -299,3 +300,9 @@ def test_a_half_built_proxy_does_not_recurse():
     assert copy.copy(proxy)() == "r"
     with pytest.raises(AttributeError):  # allow-pytest.raises: no expect_error fixture
         pd.FastOperation.__new__(pd.FastOperation).anything
+
+
+def test_device_data_goes_to_tracy_unless_asked_not_to():
+    assert "--disable-device-data-push-to-tracy" not in probes.build_tracy_command("t.py", None, "/tmp/out")
+    cmd = probes.build_tracy_command("t.py", None, "/tmp/out", push_device_to_tracy=False)
+    assert cmd.index("--disable-device-data-push-to-tracy") < cmd.index("-m", 3)

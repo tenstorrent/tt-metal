@@ -575,7 +575,12 @@ PROFILING_ENV = {
 
 
 def build_tracy_command(
-    perf_test: str, case: str | None, out_dir: str | Path, plugins=(), mid_run_dump: bool = False
+    perf_test: str,
+    case: str | None,
+    out_dir: str | Path,
+    plugins=(),
+    mid_run_dump: bool = False,
+    push_device_to_tracy: bool = True,
 ) -> list[str]:
     """The raw profile_this command (C++ post-processing default) + -o.
 
@@ -583,7 +588,9 @@ def build_tracy_command(
     Run directly (never via profile_this.py: it swallows the exit code). `plugins` are pytest
     plugin modules loaded into the profiled run (`-p <module>`). `mid_run_dump` is tracy's own
     --dump-device-data-mid-run: each profiler read is written out and released instead of held in
-    host memory until exit.
+    host memory until exit. `push_device_to_tracy=False` is its --disable-device-data-push-to-tracy:
+    device markers still go to the device log the ops report is built from, but not into the tracy
+    stream, whose capture tool only needs the host side.
     """
     cmd = [
         sys.executable,
@@ -593,6 +600,7 @@ def build_tracy_command(
         "-r",
         "-p",
         *(["--dump-device-data-mid-run"] if mid_run_dump else []),
+        *([] if push_device_to_tracy else ["--disable-device-data-push-to-tracy"]),
         "-o",
         str(out_dir),
         "-m",
@@ -1840,11 +1848,17 @@ def make_run_profiled(
         except Exception as exc:  # noqa: BLE001 -- never let the gate stop the run
             _warn_thermal_inert("make_run_profiled", exc)
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
-        # Drain from the first op (profiler_drain), and release each read (mid-run dump): kept, every
-        # marker sat in host memory until exit -- 320 GB and climbing on a WH Galaxy, 2026-09-28.
+        # Drain from the first op (profiler_drain), release each read (mid-run dump), and keep the
+        # device markers out of the tracy stream: every marker held until exit was 320 GB and
+        # climbing, and pushed into tracy it segfaulted tracy-capture (WH Galaxy, 2026-09-28).
         _drain = profiler_drain_plugin(root)
         cmd = build_tracy_command(
-            node_id, None, out_dir, plugins=(_drain,) if _drain else (), mid_run_dump=bool(_drain)
+            node_id,
+            None,
+            out_dir,
+            plugins=(_drain,) if _drain else (),
+            mid_run_dump=bool(_drain),
+            push_device_to_tracy=not _drain,
         )
         support_count = int(env.get(_SUPPORT_COUNT_ENV) or 0)
         t_start = time.monotonic()
