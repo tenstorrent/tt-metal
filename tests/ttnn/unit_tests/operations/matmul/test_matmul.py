@@ -3557,6 +3557,74 @@ def test_matmul_block_float_ktile_padding_fp32_dest_acc(device, fp32_dest_acc_en
     assert_with_pcc(torch_output, output, pcc=pcc)
 
 
+@pytest.mark.parametrize("out_block_w", [4, 2, 1])
+def test_matmul_1d_in0_sharded_output_narrow_out_block(device, out_block_w):
+    """#58046: 1D in0-mcast with a width-sharded output and out_block_w < per_core_N (allowed when out_block_h
+    == 1) must match the interleaved output. The partials must not share the output shard in place when the
+    core computes more than one output block."""
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    per_core_N = 4
+    M, K, N = 32, 1024, 32 * per_core_N * num_cores
+    torch_input_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    torch_output = torch_input_a.float() @ torch_input_b.float()
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=out_block_w,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    output = ttnn.matmul(
+        ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    )
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
+@pytest.mark.parametrize("out_block_w", [4, 2, 1])
+def test_matmul_2d_sharded_output_narrow_out_block(device, out_block_w):
+    """#58046 for the 2D factory: a block-sharded output with out_block_w < per_core_N (out_block_h == 1)."""
+    torch.manual_seed(0)
+    grid_x, grid_y = 4, 4
+    per_core_M, per_core_N = 1, 4  # per_core_M == out_block_h: only the N split separates the blocks
+    M, K, N = 32 * per_core_M * grid_y, 512, 32 * per_core_N * grid_x
+    torch_input_a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
+    torch_output = torch_input_a.float() @ torch_input_b.float()
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    output_memory_config = ttnn.create_sharded_memory_config(
+        (M, N),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output = ttnn.matmul(ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=output_memory_config)
+    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 def test_matmul_ktile_padding_non_block_float(device, dtype):
     """Control: the Float32/Float16_b padding paths this change also touches must not regress."""
