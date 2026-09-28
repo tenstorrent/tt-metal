@@ -165,6 +165,13 @@ SHAPES = [
     (2336, 3072, 3584, 12, 9, True, "ff1_gelu"),  # 5B 720p ffn1 (gelu_tanh)
     (1024, 3584, 3072, 12, 8, False, "mmrs"),  # 5B 480p ffn2 (fused MMRS, ring)
     (2336, 3584, 3072, 12, 8, False, "mmrs"),  # 5B 720p ffn2 (fused MMRS, ring)
+    # 5B N=768 projections as fused MMRS instead of AGMM (K is the per-device 768 here, N the
+    # full 3072 that the reduce-scatter brings back to 768): attn1.to_out with its addcmul, and
+    # attn2.to_q / attn2.to_out without. Compare against the (M, 3072, 768) "to_out" AGMM rows.
+    (1024, 768, 3072, 12, 8, False, "mmrs_attn"),  # 5B 480p attn1.to_out as MMRS (+addcmul)
+    (2336, 768, 3072, 12, 8, False, "mmrs_attn"),  # 5B 720p attn1.to_out as MMRS (+addcmul)
+    (1024, 768, 3072, 12, 8, False, "mmrs_attn_noadd"),  # 5B 480p attn2.to_q / to_out as MMRS
+    (2336, 768, 3072, 12, 8, False, "mmrs_attn_noadd"),  # 5B 720p attn2.to_q / to_out as MMRS
     (1024, 3072, 192, 11, 10, False, "plain"),  # 5B 480p proj_out
     (2336, 3072, 192, 11, 10, False, "plain"),  # 5B 720p proj_out
     (512, 3072, 1536, 11, 10, False, "cross_attn_kv"),  # 5B cross-attn kv (prompt seq 512)
@@ -513,7 +520,20 @@ USE_CASE_CONFIGS = {
     # per-device here (row-parallel fractures the input), so it is not gathered.
     "mmrs": {
         "is_mmrs": True,
-        "use_addcmul": True,  # for the L1 estimate; the runner always passes addcmul tensors
+        "use_addcmul": True,  # the runner passes the addcmul tensors when this is set
+    },
+    # The attention projections in the row-parallel form (sprint-6 experiment, notes 7.11):
+    # attn1.to_out keeps its fused gated residual (addcmul), attn2.to_q / attn2.to_out have none.
+    # Both use the attention matmul compute config (math_approx_mode=True), not the FFN one.
+    "mmrs_attn": {
+        "is_mmrs": True,
+        "use_addcmul": True,
+        "math_approx_mode": True,
+    },
+    "mmrs_attn_noadd": {
+        "is_mmrs": True,
+        "use_addcmul": False,
+        "math_approx_mode": True,
     },
     # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
     # fp32_dest_acc_en=True (always on); N_block MUST be even (gate/up tile-pairs interleave along N).
@@ -839,7 +859,7 @@ def format_paste_line(M, K, N, cgx, cgy, op_type, use_case, best):
     us = best["duration_ns"] / 1000.0
     blocks = f"{best['M_block']}, {best['K_block']}, {best['N_block']}"
     sub = f"{best['subblock_h']}, {best['subblock_w']}"
-    if use_case == "mmrs":
+    if USE_CASE_CONFIGS.get(use_case, {}).get("is_mmrs", False):
         return (
             f"({M}, {K}, {N}): FusedMMRSConfig(ttnn.CoreCoord({cgx}, {cgy}), {blocks}, {sub}, None, 1),"
             f"  # {op_type} {use_case}, {us:.1f} us"
@@ -963,14 +983,24 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         tt_bias = ttnn.from_torch(
             torch.randn((1, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
-        # The addcmul operands are already at the post-scatter width.
+        # The addcmul operands are already at the post-scatter width. Without use_addcmul the op
+        # runs as a plain fused matmul + reduce-scatter (attn2.to_q / attn2.to_out form).
+        use_addcmul = uc_cfg.get("use_addcmul", False)
         addcmul_shape = (1, 1, M, N // cluster_size)
-        tt_addcmul_a = ttnn.from_torch(
-            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        tt_addcmul_b = ttnn.from_torch(
-            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
-        )
+        tt_addcmul_a = tt_addcmul_b = None
+        if use_addcmul:
+            tt_addcmul_a = ttnn.from_torch(
+                torch.randn(addcmul_shape, dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            tt_addcmul_b = ttnn.from_torch(
+                torch.randn(addcmul_shape, dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
 
         ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
@@ -1032,7 +1062,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 cluster_axis=cluster_axis,
                 compute_kernel_config=compute_config,
                 barrier_semaphore=barrier_semaphore,
-                fused_ternary_scalar=1.0,
+                fused_ternary_scalar=1.0 if use_addcmul else None,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
                 mm_window_blocks=window,

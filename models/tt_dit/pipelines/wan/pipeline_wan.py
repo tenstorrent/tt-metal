@@ -124,6 +124,9 @@ class WanPipelineConfig:
     # (is_blackhole, sp, tp) and so is shared between the 5B and the 14B at the same
     # parallelism. Per-variant retuning goes here rather than editing that table.
     sdpa_chunk_size_overrides: dict | None = None
+    # "agmm" (default) or "mmrs": how the D-fractured projections (to_out, cross-attention to_q)
+    # are computed; see WanAttention. Per variant, like the SDPA chunk overrides.
+    small_n_projection: str = "agmm"
 
     height: int
     width: int
@@ -152,6 +155,7 @@ class WanPipelineConfig:
         vae_t_chunk_size: object = _UNSET,
         sdpa_t_fracture_w_only: bool | None = None,
         sdpa_chunk_size_overrides: dict | None = None,
+        small_n_projection: str = "agmm",
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -200,6 +204,7 @@ class WanPipelineConfig:
                 else preset.get("sdpa_t_fracture_w_only", False)
             ),
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
+            small_n_projection=small_n_projection,
             height=height,
             width=width,
             num_frames=num_frames,
@@ -403,6 +408,7 @@ class WanPipeline(PipelineAPIMixin):
             model_type=self.model_type,
             lora_enabled=lora_enabled,
             sdpa_chunk_size_overrides=config.sdpa_chunk_size_overrides,
+            small_n_projection=config.small_n_projection,
         )
 
         self.transformer_2 = (
@@ -415,6 +421,7 @@ class WanPipeline(PipelineAPIMixin):
                 model_type=self.model_type,
                 lora_enabled=lora_enabled,
                 sdpa_chunk_size_overrides=config.sdpa_chunk_size_overrides,
+                small_n_projection=config.small_n_projection,
             )
         )
 

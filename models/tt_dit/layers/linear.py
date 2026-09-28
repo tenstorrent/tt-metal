@@ -638,8 +638,8 @@ class RowParallelLinear(Module):
     def forward_fused_addcmul(
         self,
         x: ttnn.Tensor | list[ttnn.Tensor],
-        addcmul_a: ttnn.Tensor,
-        addcmul_b: ttnn.Tensor,
+        addcmul_a: ttnn.Tensor | None,
+        addcmul_b: ttnn.Tensor | None,
         scalar: float = 1.0,
         *,
         compute_kernel_config=None,
@@ -654,8 +654,14 @@ class RowParallelLinear(Module):
 
         Both addcmul_a and addcmul_b must already be at their per-TP-device slice size
         [D/tp]. The RS kernel fuses the addcmul at the final ring write, eliminating
-        extra CCL ops entirely.
+        extra CCL ops entirely. With ``addcmul_a`` and ``addcmul_b`` both ``None`` the op runs
+        as a plain fused matmul + reduce-scatter (the same kernel without the epilogue), which
+        is how a projection with no residual (Wan cross-attention ``to_q``) takes this path
+        instead of ``forward``'s separate matmul and reduce-scatter.
         """
+        assert (addcmul_a is None) == (addcmul_b is None), "addcmul_a and addcmul_b must be given together"
+        if addcmul_a is None:
+            scalar = None
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
@@ -701,9 +707,11 @@ class RowParallelLinear(Module):
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
             **mmrs_params,
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-            if use_l1_handoff
-            else self.mm_memory_config,
+            memory_config_mm=(
+                ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+                if use_l1_handoff
+                else self.mm_memory_config
+            ),
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,

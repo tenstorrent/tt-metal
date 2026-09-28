@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, LoRAColParallelLinear
+from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, RowParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -46,6 +46,7 @@ class WanAttention(Module):
         is_self: bool = True,
         sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        small_n_projection: str = "agmm",
     ) -> None:
         super().__init__()
 
@@ -60,6 +61,22 @@ class WanAttention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_self = is_self
+
+        # How the projections whose output is D-fractured on TP (to_out, cross-attention to_q)
+        # are computed. "agmm": ColParallelLinear, all-gather the K-fractured activation then
+        # matmul (N = D/tp output columns). "mmrs": RowParallelLinear, matmul the un-gathered
+        # K = D/tp slice against a [D/tp, D] weight and fused strided reduce-scatter back to D/tp
+        # (the ff2 form). Same math, different summation order; Ring topology and TP > 1 only.
+        # Per-variant choice (the TI2V-5B pays 20 % of its step in these three N=768 AGMMs).
+        assert small_n_projection in ("agmm", "mmrs"), small_n_projection
+        if small_n_projection == "mmrs":
+            assert parallel_config.tensor_parallel.factor > 1, "small_n_projection='mmrs' needs TP > 1"
+            assert ccl_manager is not None and ccl_manager.topology != ttnn.Topology.Linear, (
+                "small_n_projection='mmrs' needs a Ring topology (the fused matmul + strided "
+                "reduce-scatter is Ring-only)"
+            )
+            assert not lora_enabled, "small_n_projection='mmrs' has no LoRA row-parallel form"
+        self.small_n_projection = small_n_projection
 
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
@@ -97,7 +114,10 @@ class WanAttention(Module):
             )
         else:
             # Cross-attention: Q from spatial, K/V from prompt
-            self.to_q = ColCls(dim, dim, **col_parallel_kwargs)
+            if self.small_n_projection == "mmrs":
+                self.to_q = RowParallelLinear(dim, dim, **col_parallel_kwargs)
+            else:
+                self.to_q = ColCls(dim, dim, **col_parallel_kwargs)
             # Fused KV: single matmul split into 2 outputs
             self.to_kv = ColCls(
                 dim,
@@ -106,7 +126,11 @@ class WanAttention(Module):
                 **col_parallel_kwargs,
             )
 
-        self.to_out = ColCls(
+        # concatenate_heads on device d yields heads [d*n_local .. (d+1)*n_local), i.e. exactly the
+        # K rows [d*D/tp, (d+1)*D/tp) of the full to_out weight (to_qkv is interleaved per device
+        # and to_q's column shards are contiguous), so the row-parallel weight needs no permute.
+        OutCls = RowParallelLinear if self.small_n_projection == "mmrs" else ColCls
+        self.to_out = OutCls(
             dim,
             dim,
             bias=True,
@@ -242,6 +266,19 @@ class WanAttention(Module):
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
 
+        if isinstance(to_out, RowParallelLinear):
+            # Row-parallel form: matmul on the un-gathered K = D/tp slice, strided reduce-scatter
+            # back to D/tp, addcmul applied at the final ring write (ff2's kernel).
+            assert parallel_config is not None, "row-parallel to_out needs the fused (Ring) path"
+            return to_out.forward_fused_addcmul(
+                x,
+                addcmul_residual,
+                addcmul_gate,
+                scalar=1.0,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                dtype=dtype,
+            )
+
         # Reads to_out.weight.data directly, so runtime-mode LoRA (which keeps
         # the delta in self._runtime_A/B) would silently no-op. Fuse mode is
         # fine — the delta lives in weight.data.
@@ -370,11 +407,17 @@ class WanAttention(Module):
             # Cross-attention: Q from spatial, fused KV from prompt
             assert prompt_1BLP is not None
             kv_input = prompt_1BLP
-            q_1BNF = self.to_q(
-                spatial_1BND,
-                compute_kernel_config=self.mm_compute_kernel_config,
-                parallel_config=None if use_nonfused_agmm else self.parallel_config,
-            )
+            if isinstance(self.to_q, RowParallelLinear):
+                assert not use_nonfused_agmm, "row-parallel to_q needs the Ring topology"
+                q_1BNF = self.to_q.forward_fused_addcmul(
+                    spatial_1BND, None, None, compute_kernel_config=self.mm_compute_kernel_config
+                )
+            else:
+                q_1BNF = self.to_q(
+                    spatial_1BND,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    parallel_config=None if use_nonfused_agmm else self.parallel_config,
+                )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Set norm output dtype to the input dtype required for ring self-attn.
@@ -521,6 +564,11 @@ class WanAttention(Module):
                 addcmul_gate,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
+            )
+        elif isinstance(self.to_out, RowParallelLinear):
+            assert not use_nonfused_agmm, "row-parallel to_out needs the Ring topology"
+            spatial_1BND = self.to_out.forward_fused_addcmul(
+                spatial_1BND, None, None, compute_kernel_config=self.mm_compute_kernel_config
             )
         else:
             spatial_1BND = self.to_out(
