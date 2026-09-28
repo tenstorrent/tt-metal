@@ -1123,32 +1123,9 @@ class Qwen36Model:
             ttnn.deallocate(hidden)
             return logits
 
-        self._reset_gdn_state_for_new_sequence()
-        last_hidden = None
-        for c in range(num_full):
-            cs = c * chunk_size
-            if last_hidden is not None:
-                ttnn.deallocate(last_hidden)
-            last_hidden = self._forward_prefill_chunk_masked_tp(
-                token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size, flex_sdpa=True
-            )
-            ttnn.synchronize_device(self.device)
-            if c < num_full - 1 or tail_real > 0:
-                on_chunk(last_hidden, cs, chunk_size)
-        if tail_real > 0:
-            ttnn.deallocate(last_hidden)
-            cs = num_full * chunk_size
-            logits, hidden = self.prefill_masked_bucket(
-                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True
-            )
-            on_chunk(hidden, cs, tail_real)
-            ttnn.deallocate(hidden)
-            return logits
-        # Exact multiple of chunk_size: the last chunk supplies both the logits and the last hidden.
-        logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
-        on_chunk(last_hidden, (num_full - 1) * chunk_size, chunk_size)
-        ttnn.deallocate(last_hidden)
-        return logits
+        return self._prefill_chunked_eager_tp(
+            token_ids, page_table, actual_len, num_full, chunk_size, tail_real, on_chunk=on_chunk
+        )
 
     def ttnn_mtp_decode_forward(self, hidden_states, token_id, position, page_table, need_logits=True):
         """One MTP draft step at an absolute position (B=1); returns (logits, next_hidden)."""
@@ -3198,10 +3175,22 @@ class Qwen36Model:
         return logits.cpu()
 
     def _prefill_chunked_eager_tp(
-        self, token_ids, page_table, actual_len, num_full, chunk_size, tail_real, flex_sdpa=True, vision_tokens=None
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        num_full,
+        chunk_size,
+        tail_real,
+        flex_sdpa=True,
+        vision_tokens=None,
+        on_chunk=None,
     ):
         """TP eager long-prompt prefill via warmed bucket=chunk_size programs.
-        Returns logits [1,1,vocab] at actual_len-1."""
+        Returns logits [1,1,vocab] at actual_len-1.
+
+        on_chunk(hidden, chunk_start, valid_len) sees each chunk's hidden before it is freed; the
+        spec-decode prefill uses it to reseed the drafter. Requires num_full >= 1."""
         # Re-zero GDN at sequence start; tail (chunk_start>0) keeps carried state.
         self._reset_gdn_state_for_new_sequence()
         last_hidden = None
@@ -3220,10 +3209,13 @@ class Qwen36Model:
                 token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size, flex_sdpa=flex_sdpa
             )
             ttnn.synchronize_device(self.device)
+            # The last full chunk is held back when it also supplies the logits below.
+            if on_chunk is not None and (c < num_full - 1 or tail_real > 0):
+                on_chunk(last_hidden, cs, chunk_size)
         if tail_real > 0:
             ttnn.deallocate(last_hidden)
             cs = num_full * chunk_size
-            return self.prefill_masked_bucket(
+            out = self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len],
                 page_table,
                 actual_len=tail_real,
@@ -3231,9 +3223,19 @@ class Qwen36Model:
                 flex_sdpa=flex_sdpa,
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
+                return_hidden=on_chunk is not None,
             )
+            if on_chunk is None:
+                return out
+            logits, hidden = out
+            on_chunk(hidden, cs, tail_real)
+            ttnn.deallocate(hidden)
+            return logits
         # Exact multiple of chunk_size: logit from last full chunk.
+        assert last_hidden is not None, "_prefill_chunked_eager_tp needs num_full >= 1"
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
+        if on_chunk is not None:
+            on_chunk(last_hidden, (num_full - 1) * chunk_size, chunk_size)
         ttnn.deallocate(last_hidden)
         return logits
 

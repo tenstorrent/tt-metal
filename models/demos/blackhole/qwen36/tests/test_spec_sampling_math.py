@@ -7,7 +7,8 @@ Seeded end to end; the total-variation bounds are headroom over that fixed draw.
 import pytest
 import torch
 
-from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler, SpecSamplingParams
+from models.common.sampling import SamplingParams
+from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSampler
 
 # (temperature, top_k, top_p)
 _DIST_GRID = [
@@ -77,7 +78,7 @@ def _tv(counts, probs):
 def test_dist_matches_reference(vocab, params):
     temperature, top_k, top_p = params
     logits = torch.randn(vocab, generator=torch.Generator().manual_seed(vocab)) * 3
-    sampler = SpecSampler(SpecSamplingParams(temperature, top_k, top_p, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(temperature, top_k, top_p, seed=0), vocab)
 
     got = _dense_of(sampler, logits)
     want = _ref_dense_dist(logits, temperature, top_k, top_p)
@@ -100,7 +101,7 @@ def test_dist_top_p_prefix_fast_path():
     """A peaked 248k row: top-p is exact from the 2048-prefix, without a full sort."""
     vocab = 248320
     logits = torch.randn(vocab, generator=torch.Generator().manual_seed(7)) * 5
-    sampler = SpecSampler(SpecSamplingParams(1.0, 0, 0.95, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(1.0, 0, 0.95, seed=0), vocab)
 
     got = _dense_of(sampler, logits)
     want = _ref_dense_dist(logits, 1.0, 0, 0.95)
@@ -113,7 +114,7 @@ def test_dist_top_p_full_sort_fallback():
     """A near-uniform row: the top-p support runs past 2048, so the slow path must fire."""
     vocab = 5000
     logits = torch.zeros(vocab) + 1e-3 * torch.randn(vocab, generator=torch.Generator().manual_seed(8))
-    sampler = SpecSampler(SpecSamplingParams(1.0, 0, 0.999, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(1.0, 0, 0.999, seed=0), vocab)
 
     got = _dense_of(sampler, logits)
     want = _ref_dense_dist(logits, 1.0, 0, 0.999)
@@ -131,7 +132,7 @@ def test_accept_lossless_single_position(params):
     drafts = [int(order[0]), int(order[1])] + ([int(order[19])] if params[1] == 8 else [])
 
     for slot, draft in enumerate(drafts):
-        sampler = SpecSampler(SpecSamplingParams(*params, seed=0), vocab)
+        sampler = SpecSampler(SamplingParams(*params, seed=0), vocab)
         target = _dense_of(sampler, logits[0])
         if slot == 2:  # the out-of-support draft can never be accepted
             assert sampler.prob_of(sampler.dist(logits[0]), draft) == 0.0
@@ -149,7 +150,7 @@ def test_accept_lossless_chain():
     vocab, num_samples = 64, 60000
     logits = torch.randn(4, vocab, generator=torch.Generator().manual_seed(3)) * 2
     drafts = [int(logits[j].argmax()) for j in range(3)]
-    sampler = SpecSampler(SpecSamplingParams(1.0, 8, 0.95, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(1.0, 8, 0.95, seed=0), vocab)
 
     counts = [torch.zeros(vocab) for _ in range(4)]
     for _ in range(num_samples):
@@ -173,7 +174,7 @@ def test_top_k1_is_greedy(temperature, top_p):
     """top_k == 1 collapses rejection sampling onto the greedy accept/argmax path."""
     vocab, num_drafts, num_cases = 300, 5, 200
     gen = torch.Generator().manual_seed(4)
-    sampler = SpecSampler(SpecSamplingParams(temperature, 1, top_p, seed=7), vocab)
+    sampler = SpecSampler(SamplingParams(temperature, 1, top_p, seed=7), vocab)
 
     for _ in range(num_cases):
         logits = torch.randn(num_drafts + 1, vocab, generator=gen) * 3
@@ -215,29 +216,38 @@ def test_seed_determinism():
         cases.append((logits, drafts))
 
     def sampler_with(seed):
-        return SpecSampler(SpecSamplingParams(1.0, 0, 1.0, seed=seed), vocab)
+        return SpecSampler(SamplingParams(1.0, 0, 1.0, seed=seed), vocab)
 
     same = _run_cases(sampler_with(123), cases)
     assert same == _run_cases(sampler_with(123), cases)
     assert same != _run_cases(sampler_with(124), cases)
 
-    unseeded = SpecSampler(SpecSamplingParams(1.0, 0, 1.0, seed=None), vocab)
+    unseeded = SpecSampler(SamplingParams(1.0, 0, 1.0, seed=None), vocab)
     assert isinstance(unseeded.seed, int)
     drawn = _run_cases(unseeded, cases)
     assert drawn == _run_cases(sampler_with(unseeded.seed), cases)
 
 
 def test_params_validation():
-    SpecSamplingParams(1.0)  # the permissive default must stay legal
+    """SamplingParams itself does not validate; SpecSampler rejects what it cannot honour."""
+    ok = dict(temperature=1.0, top_k=0, top_p=1.0)
+    SpecSampler(SamplingParams(**ok), 64)  # the permissive default must stay legal
     for bad in (
-        dict(temperature=0.0),
-        dict(temperature=-1.0),
-        dict(temperature=1.0, top_p=0.0),
-        dict(temperature=1.0, top_p=1.5),
-        dict(temperature=1.0, top_k=-1),
-        dict(temperature=1.0, presence_penalty=-0.1),
+        dict(ok, temperature=0.0),
+        dict(ok, temperature=-1.0),
+        dict(ok, top_p=0.0),
+        dict(ok, top_p=1.5),
+        dict(ok, top_k=-1),
+        dict(ok, presence_penalty=-0.1),
+        # Fields this sampler does not implement must fail loudly, not be dropped.
+        dict(ok, frequency_penalty=0.5),
+        dict(ok, repetition_penalty=1.1),
+        dict(ok, enable_log_probs=True),
+        dict(ok, num_logprobs=5),
+        # Batched input: spec decode is single-sequence.
+        dict(ok, temperature=[1.0, 1.0]),
     ):
-        _expect_raises(AssertionError, SpecSamplingParams, **bad)
+        _expect_raises(AssertionError, lambda **kw: SpecSampler(SamplingParams(**kw), 64), **bad)
 
 
 # --------------------------------------------------------------------------- presence penalty
@@ -262,7 +272,7 @@ def test_presence_penalty_dist_matches_reference(presence):
     gen = torch.Generator().manual_seed(87)
     logits = torch.randn(vocab, generator=gen)
     penalize = torch.randperm(vocab, generator=gen)[:num_penalized].to(torch.int64)
-    sampler = SpecSampler(SpecSamplingParams(temperature, top_k, top_p, presence_penalty=presence, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(temperature, top_k, top_p, presence_penalty=presence, seed=0), vocab)
 
     penalized = logits.clone()
     penalized[penalize] -= presence
@@ -277,7 +287,7 @@ def test_presence_penalty_dist_matches_reference(presence):
     assert _tv(got, unpenalized) > 0.02, "penalized set must reach the support, or the test is vacuous"
 
     # pp == 0 ignores the set entirely, bit for bit.
-    off = SpecSampler(SpecSamplingParams(temperature, top_k, top_p, seed=0), vocab)
+    off = SpecSampler(SamplingParams(temperature, top_k, top_p, seed=0), vocab)
     assert torch.equal(_dense_of(off, logits, penalize), _dense_of(off, logits))
 
 
@@ -292,7 +302,7 @@ def test_presence_penalty_accept_lossless(draft_penalized):
     assert len(base) == 10 and (draft in base) == draft_penalized
     penalize_base = torch.tensor(base, dtype=torch.int64)
 
-    sampler = SpecSampler(SpecSamplingParams(*params, presence_penalty=presence, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(*params, presence_penalty=presence, seed=0), vocab)
     target = _dense_of(sampler, logits[0], penalize_base)
     p_draft_pen = sampler.prob_of(sampler.dist(logits[0], penalize_base), draft)
     p_draft_raw = sampler.prob_of(sampler.dist(logits[0]), draft)
@@ -317,7 +327,7 @@ def test_presence_penalty_accept_chain_penalizes_drafts():
     penalize_base = torch.tensor(_PP_BASE, dtype=torch.int64)
     row1_set = torch.cat([penalize_base, torch.tensor([drafts[0]], dtype=torch.int64)]).unique()
 
-    sampler = SpecSampler(SpecSamplingParams(0.7, 8, 0.8, presence_penalty=presence, seed=0), vocab)
+    sampler = SpecSampler(SamplingParams(0.7, 8, 0.8, presence_penalty=presence, seed=0), vocab)
     want = _dense_of(sampler, logits[1], row1_set)
     without = _dense_of(sampler, logits[1], penalize_base)
     assert _tv(want, without) > 0.05, "drafts[0] must matter on row 1, or this test is vacuous"
@@ -348,7 +358,7 @@ def test_presence_penalty_zero_is_noop():
         cases.append((logits, drafts))
 
     def sampler():
-        return SpecSampler(SpecSamplingParams(1.0, 20, 0.95, seed=13), vocab)
+        return SpecSampler(SamplingParams(1.0, 20, 0.95, seed=13), vocab)
 
     with_set, without_set = sampler(), sampler()
     for case, (logits, drafts) in enumerate(cases):
@@ -358,7 +368,7 @@ def test_presence_penalty_zero_is_noop():
 
 
 def _degenerate_sampler(vocab=64):
-    return SpecSampler(SpecSamplingParams(1.0, 8, 0.95, seed=5), vocab)
+    return SpecSampler(SamplingParams(1.0, 8, 0.95, seed=5), vocab)
 
 
 def test_recover_degrades_to_draft_when_support_is_one_token():

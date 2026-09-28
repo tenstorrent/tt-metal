@@ -29,9 +29,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
-from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
@@ -555,7 +555,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         if _spec_ok and _temp > 0:
             # temperature > 0 uses rejection sampling and reads back full verify logits.
-            _sp = SpecSamplingParams(
+            _sp = SamplingParams(
                 temperature=_temp,
                 top_k=int(os.environ.get("QWEN35_TOP_K", "0") or 0),
                 top_p=float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0),
@@ -657,7 +657,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     # On-device sampling when sampler exists, temp>0, no rep-penalty/no-repeat (not wired on device); else greedy/host.
     _ondev_sample = model.sampling is not None and _temp > 0 and _rep_pen == 1.0 and _no_repeat == 0
     if _ondev_sample:
-        from models.common.sampling.generator import SamplingParams, format_sampling_params
+        from models.common.sampling.generator import format_sampling_params
 
         _sbatch = model.sampling.tt_sampling.max_batch_size
         # No explicit seed: a seed would bake a fixed value into the folded trace → same

@@ -4,40 +4,34 @@
 Host fp32; optional device top-k via accept_support. With a delta proposal, P(x) = p(x).
 """
 
-from dataclasses import dataclass
-
 import torch
 from loguru import logger
+
+from models.common.sampling import SamplingParams
 
 # Descending prefix that makes top-p exact without sorting the full row.
 _TOPP_PREFIX = 2048
 
 
-@dataclass(frozen=True)
-class SpecSamplingParams:
-    """Scalar sampling knobs for spec decode, validated on construction.
-
-    Deliberately not models.common.sampling.SamplingParams: that one is batched (every field may
-    be a list) and carries frequency_penalty/repetition_penalty/log-prob knobs this sampler does
-    not implement, so accepting it would silently ignore them.
-    """
-
-    temperature: float  # > 0; 0 is the caller's greedy path
-    top_k: int = 0  # 0 disables
-    top_p: float = 1.0  # 1.0 disables; must be in (0, 1]
-    presence_penalty: float = 0.0  # subtracted from logits of output tokens, before temperature; 0 disables
-    seed: int | None = None  # None -> sampler draws and records one seed
-
-    def __post_init__(self):
-        assert self.temperature > 0, f"temperature must be > 0 (0 is the caller's greedy path), got {self.temperature}"
-        assert self.top_k >= 0, f"top_k must be >= 0 (0 disables top-k), got {self.top_k}"
-        assert 0.0 < self.top_p <= 1.0, f"top_p must be in (0, 1], got {self.top_p}"
-        assert self.presence_penalty >= 0, f"presence_penalty must be >= 0 (0 disables it), got {self.presence_penalty}"
+def _check_params(p: SamplingParams) -> None:
+    """SamplingParams is batched and wider than this sampler; reject what it cannot honour."""
+    for name in ("temperature", "top_k", "top_p", "presence_penalty", "seed"):
+        assert not isinstance(getattr(p, name), list), f"{name} must be scalar: spec decode is single-sequence"
+    assert p.temperature > 0, f"temperature must be > 0 (0 is the caller's greedy path), got {p.temperature}"
+    assert p.top_k >= 0, f"top_k must be >= 0 (0 disables top-k), got {p.top_k}"
+    assert 0.0 < p.top_p <= 1.0, f"top_p must be in (0, 1], got {p.top_p}"
+    assert p.presence_penalty >= 0, f"presence_penalty must be >= 0 (0 disables it), got {p.presence_penalty}"
+    # Unimplemented here: fail loudly rather than drop a knob the caller set.
+    assert p.frequency_penalty == 0.0, f"frequency_penalty is not implemented, got {p.frequency_penalty}"
+    assert p.repetition_penalty == 1.0, f"repetition_penalty is not implemented, got {p.repetition_penalty}"
+    assert not p.enable_log_probs, "log probs are not implemented"
+    assert p.num_logprobs == 0, f"log probs are not implemented, got num_logprobs={p.num_logprobs}"
 
 
 class SpecSampler:
-    def __init__(self, params: SpecSamplingParams, vocab_size: int):
+    def __init__(self, params: SamplingParams, vocab_size: int):
         assert vocab_size >= 1, f"vocab_size must be >= 1, got {vocab_size}"
+        _check_params(params)
         self.params = params
         self.vocab_size = int(vocab_size)
         seed = params.seed

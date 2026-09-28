@@ -4,6 +4,7 @@
 The drafter pairs (hidden_i, token_{i+1}). Verify buffers GDN state; commit points at the accepted slot.
 """
 
+import contextlib
 import os
 import time
 
@@ -290,27 +291,13 @@ class SpeculativeDecoder:
         self._p_draft_n += len(p_draft)
         return m, next_tok
 
-    def _verify(self, tokens, p, timed=False):
-        """Replay the verify trace; returns (argmax ids, hidden rows, logits or None, device_s, readback_s).
+    @contextlib.contextmanager
+    def _readback_split(self, out):
+        """Append (device_s, readback_s) to out around a verify.
 
-        timed hooks get_device_tensors, which verify_traced calls only once the trace has finished,
-        to split the host readback out of the device time. Both timings are 0.0 when it is off.
+        Hooks get_device_tensors, which verify_traced calls only once the trace has finished, so
+        the host readback can be split out of the device time.
         """
-
-        def _run():
-            lt, vhidden, ids = self.model.verify_traced(
-                tokens,
-                p + 1,
-                read_logits=self.read_verify_logits,
-                clone_rows=False,
-                page_table=self._pt_row,
-                logits_topk=self._logits_topk,
-            )
-            return ids, vhidden, lt
-
-        if not timed:
-            return (*_run(), 0.0, 0.0)
-
         orig = ttnn.get_device_tensors
         mark = []
 
@@ -322,13 +309,13 @@ class SpeculativeDecoder:
         ttnn.get_device_tensors = hooked
         t0 = time.perf_counter()
         try:
-            out = _run()
+            yield
         finally:
             ttnn.get_device_tensors = orig
         ttnn.synchronize_device(self.mesh)
         t1 = time.perf_counter()
         t_mark = mark[0] if mark else t1
-        return (*out, t_mark - t0, t1 - t_mark)
+        out.append((t_mark - t0, t1 - t_mark))
 
     def _commit(self, mi):
         """Point durable GDN state at accepted-prefix slot mi; mi == K is a host-only early-out."""
@@ -551,10 +538,30 @@ class SpeculativeDecoder:
 
             # committed = [pending] + drafts[:m]; commit selects the accepted GDN slot.
             if self._timing:
-                vids, vhidden, vlt, _s_verify, _s_read = self._verify([pending] + drafts, p, timed=True)
+                _split = []
+                with self._readback_split(_split):
+                    vlt, vhidden, vids = self.model.verify_traced(
+                        [pending] + drafts,
+                        p + 1,
+                        read_logits=self.read_verify_logits,
+                        clone_rows=False,
+                        page_table=self._pt_row,
+                        logits_topk=self._logits_topk,
+                    )
+                _s_verify, _s_read = _split[0]
                 _t_verify = time.perf_counter()
             else:
-                vids, vhidden, vlt, _, _ = self._phase("verify", lambda: self._verify([pending] + drafts, p))
+                vlt, vhidden, vids = self._phase(
+                    "verify",
+                    lambda: self.model.verify_traced(
+                        [pending] + drafts,
+                        p + 1,
+                        read_logits=self.read_verify_logits,
+                        clone_rows=False,
+                        page_table=self._pt_row,
+                        logits_topk=self._logits_topk,
+                    ),
+                )
             # Sampling returns next_token; greedy reads it from vids[mi].
             sampled_next = None
             if self.sampler is not None:
