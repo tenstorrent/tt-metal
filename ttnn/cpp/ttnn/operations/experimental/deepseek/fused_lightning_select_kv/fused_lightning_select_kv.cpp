@@ -18,7 +18,11 @@ std::vector<Tensor> fused_lightning_select_kv(
     uint32_t k,
     const std::optional<Tensor>& valid_length_tensor,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<Tensor>& output_tensor,
+    uint32_t output_row_offset,
+    const std::optional<Tensor>& new_kv_row,
+    const std::optional<Tensor>& new_kv_row_index) {
     return ttnn::prim::fused_lightning_select_kv(
         query,
         key_cache,
@@ -29,7 +33,11 @@ std::vector<Tensor> fused_lightning_select_kv(
         k,
         valid_length_tensor,
         memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        output_tensor,
+        output_row_offset,
+        new_kv_row,
+        new_kv_row_index);
 }
 
 }  // namespace ttnn::experimental::deepseek

@@ -128,13 +128,16 @@ profiles:
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
       # CSA Lightning Indexer. true attaches it when the checkpoint has the
-      # weights. false keeps dense causal CSA.
+      # weights: every CSA step scores the index keys and attends the sliding
+      # ring plus the top-k entries (fused_lightning_select_kv). false keeps
+      # dense causal CSA, capped at compress_rate * 512 tokens.
       # env: DEEPSEEK_V4_INDEXER / DEEPSEEK_V4_INDEX_TOPK
-      indexer: false
+      indexer: true
       index_topk: 512
       # 0 = compress_rate(CSA) * index_topk. Shorter sequences keep dense causal
       # SDPA and are captured as their own trace; longer ones use the indexer.
-      index_dense_max_positions: 0
+      # Dense is faster than the indexer up to ~24K tokens.
+      index_dense_max_positions: 10240
 
     decode:
       # On-device weight precision for the whole stack.
@@ -246,13 +249,16 @@ profiles:
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
       # CSA Lightning Indexer. true attaches it when the checkpoint has the
-      # weights. false keeps dense causal CSA.
+      # weights: every CSA step scores the index keys and attends the sliding
+      # ring plus the top-k entries (fused_lightning_select_kv). false keeps
+      # dense causal CSA, capped at compress_rate * 512 tokens.
       # env: DEEPSEEK_V4_INDEXER / DEEPSEEK_V4_INDEX_TOPK
-      indexer: false
+      indexer: true
       index_topk: 512
       # 0 = compress_rate(CSA) * index_topk. Shorter sequences keep dense causal
       # SDPA and are captured as their own trace; longer ones use the indexer.
-      index_dense_max_positions: 0
+      # Dense is faster than the indexer up to ~24K tokens.
+      index_dense_max_positions: 10240
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.

@@ -36,9 +36,8 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         ``paged_scaled_dot_product_attention_decode`` takes. ``cur_pos_tensor`` ``[1]``
         INT32 is the current (inclusive) position; rows past it are never read. The
         result is ``[1, Hkv, k, Dh]`` with the dtype and layout of ``kv_cache``, so it
-        can be passed as K and V to SDPA when K == V.
-
-        The device kernel is not implemented.
+        can be passed as K and V to SDPA when K == V. Rows are in ascending key order,
+        not score order (SDPA does not depend on key order).
 
         Args:
             query (ttnn.Tensor): indexer query, ``[num_cores, Hi, 1, D]`` ROW_MAJOR
@@ -56,13 +55,25 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         Keyword Args:
             valid_length_tensor (Optional[ttnn.Tensor]): 1-element uint32 tensor.
                 Score columns at or past this length are not selectable.
-            memory_config (Optional[ttnn.MemoryConfig]): output memory config.
-                Defaults to interleaved DRAM.
+            memory_config (Optional[ttnn.MemoryConfig]): memory config of the gathered
+                rows. Must be interleaved; defaults to interleaved L1.
             compute_kernel_config (Optional[ttnn.DeviceComputeKernelConfig]): score
                 compute settings. Defaults to HiFi4 / fp32 dest acc.
+            output_tensor (Optional[ttnn.Tensor]): preallocated kv output
+                ``[1, Hkv, rows, Dh]``, row-major interleaved, same dtype as ``kv_cache``.
+                Only rows ``[output_row_offset, output_row_offset + k)`` are written.
+                ``memory_config`` is ignored when it is given.
+            output_row_offset (int): output row that selected row 0 is written to, e.g.
+                ``sliding_window`` to keep the ring rows in front. Requires ``output_tensor``.
+            new_kv_row (Optional[ttnn.Tensor]): ``[1, 1, 1, Dh]`` row-major row written into
+                ``kv_cache`` at logical row ``new_kv_row_index`` (through the page table)
+                before the gather, so this step's closing entry is selectable.
+            new_kv_row_index (Optional[ttnn.Tensor]): ``[1]`` INT32 logical row of
+                ``new_kv_row``. Given together with it.
 
         Returns:
-            List[ttnn.Tensor]: ``[kv_rows, scores]``. ``kv_rows`` is ``[1, Hkv, k, Dh]``;
+            List[ttnn.Tensor]: ``[kv_rows, scores]``. ``kv_rows`` is ``[1, Hkv, k, Dh]``
+            (or ``output_tensor`` when given);
             ``scores`` is the fp32 ROW_MAJOR index score ``[1, 1, 1, max_blocks_per_user * block_size]``,
             valid for the first ``(cur_pos + 1) // 4`` keys.
         )doc",
@@ -77,7 +88,11 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("valid_length_tensor") = std::nullopt,
         nb::arg("memory_config") = std::nullopt,
-        nb::arg("compute_kernel_config") = std::nullopt);
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("output_tensor") = std::nullopt,
+        nb::arg("output_row_offset") = 0,
+        nb::arg("new_kv_row") = std::nullopt,
+        nb::arg("new_kv_row_index") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv::detail
