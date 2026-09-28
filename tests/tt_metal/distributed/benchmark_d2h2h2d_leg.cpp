@@ -66,6 +66,12 @@ void init_counters(benchmark::State& state) {
     // cost lands on however many frames the pass posted, so posts_per_flush sets throughput.
     state.counters["posts_per_flush"] = 0;
     state.counters["starved_pass_pct"] = 0;
+    // Should read 0: every flush progress depends on is released by an event, so a deadline
+    // flush says an event did not fire. demand_* are the sender's "release credits" signal.
+    state.counters["deadline_flushes"] = 0;
+    state.counters["rx_deadline_flushes"] = 0;
+    state.counters["demand_raised"] = 0;
+    state.counters["rx_demand_served"] = 0;
     state.counters["h2h_flush_pct"] = 0;
     state.counters["d2h_poll_pct"] = 0;
     state.counters["h2h_poll_pct"] = 0;
@@ -118,6 +124,9 @@ struct RankReport {
     // Phase 0 instrumentation: the sender owns these, so they ride the same all_gather.
     double posts_per_flush = 0.0;
     double starved_pass_pct = 0.0;
+    double deadline_flushes = 0.0;
+    double demand_raised = 0.0;
+    double demand_served = 0.0;
     double h2h_flush_pct = 0.0;
     double d2h_poll_pct = 0.0;
     double h2h_poll_pct = 0.0;
@@ -356,9 +365,11 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             const auto& ps = sock_->h2h().pass_stats();
             const auto& tm = sock_->timing();
             if (ps.passes != 0) {
-                local.posts_per_flush = static_cast<double>(ps.posts) / static_cast<double>(ps.passes);
                 local.starved_pass_pct = 100.0 * static_cast<double>(ps.starved) / static_cast<double>(ps.passes);
             }
+            local.deadline_flushes = static_cast<double>(ps.flushes_by_deadline);
+            local.demand_raised = static_cast<double>(ps.demand_raised);
+            local.demand_served = static_cast<double>(ps.demand_served);
             if (tm.h2h_poll_ns != 0) {
                 local.h2h_flush_pct = 100.0 * static_cast<double>(ps.flush_ns) / static_cast<double>(tm.h2h_poll_ns);
             }
@@ -374,10 +385,17 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
             local.flushes = static_cast<double>(ps.flushes);
             local.pending_max_kb = static_cast<double>(ps.pending_max) / 1024.0;
             if (ps.flushes != 0) {
+                // Per FLUSH, not per pass: withholding made one flush span many passes, and
+                // the old denominator understated real coalescing by the held ratio.
+                local.posts_per_flush = static_cast<double>(ps.posts) / static_cast<double>(ps.flushes);
                 local.pending_avg_kb =
                     static_cast<double>(ps.pending_sum) / static_cast<double>(ps.flushes) / 1024.0;
                 local.tiny_flush_pct =
                     100.0 * static_cast<double>(ps.flushes_tiny) / static_cast<double>(ps.flushes);
+            }
+            if (ps.flushes + ps.flushes_held != 0) {
+                // Its own guard: the case this exists to expose is every flush withheld,
+                // which leaves ps.flushes at 0 and would report 0% under the guard above.
                 local.held_pct = 100.0 * static_cast<double>(ps.flushes_held) /
                                  static_cast<double>(ps.flushes + ps.flushes_held);
             }
@@ -469,6 +487,10 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         // tx: only the sending rank runs the posting loop these describe.
         state.counters["posts_per_flush"] = tx.posts_per_flush;
         state.counters["starved_pass_pct"] = tx.starved_pass_pct;
+        state.counters["deadline_flushes"] = tx.deadline_flushes;
+        state.counters["rx_deadline_flushes"] = rx.deadline_flushes;
+        state.counters["demand_raised"] = tx.demand_raised;
+        state.counters["rx_demand_served"] = rx.demand_served;
         state.counters["h2h_flush_pct"] = tx.h2h_flush_pct;
         state.counters["d2h_poll_pct"] = tx.d2h_poll_pct;
         state.counters["h2h_poll_pct"] = tx.h2h_poll_pct;
