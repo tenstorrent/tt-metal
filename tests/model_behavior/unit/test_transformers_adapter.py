@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,7 @@ from tests.model_behavior.unit.test_driver import RecordingAdapter
 
 
 @pytest.mark.parametrize("backend", ADAPTERS)
-def test_behavior_jobs_keep_existing_ci_skus_tiers_and_workflow_selectors(backend):
+def test_behavior_jobs_keep_hardware_tiers_and_workflow_selectors(backend):
     root = Path(__file__).parents[3]
     model = "llama3.3-70b-galaxy" if backend == "galaxy-llama70b" else backend
     entries = yaml.safe_load((root / "tests/pipeline_reorg/models_e2e_tests.yaml").read_text())
@@ -35,10 +36,12 @@ def test_behavior_jobs_keep_existing_ci_skus_tiers_and_workflow_selectors(backen
         skus, hf_model = ("wh_galaxy_perf",), "meta-llama/Llama-3.3-70B-Instruct"
     else:
         skus, hf_model = PROFILES[backend].skus, PROFILES[backend].hf_model
-    assert set(skus) == set(original["skus"]) == set(behavior["skus"])
+    assert set(skus) == set(original["skus"])
     assert hf_model in original["cmd"] and hf_model in behavior["cmd"]
     assert f"--model-behavior-backend={backend}" in behavior["cmd"]
-    expected_tiers = {sku: config["tier"] for sku, config in original["skus"].items()}
+    # Llama's single-device sweeps use CIv2 runners for the same hardware profiles.
+    ci_skus = {"wh_n150": "wh_n150_civ2", "bh_p150": "bh_p150b_civ2"} if backend == "llama3.1-8b" else {}
+    expected_tiers = {ci_skus.get(sku, sku): config["tier"] for sku, config in original["skus"].items()}
     assert {sku: config["tier"] for sku, config in behavior["skus"].items()} == expected_tiers
     assert set(expected_tiers.values()) <= {1, 2}
     for tier in (1, 2):
@@ -47,6 +50,13 @@ def test_behavior_jobs_keep_existing_ci_skus_tiers_and_workflow_selectors(backen
         )
         choices = workflow["on"]["workflow_dispatch"]["inputs"]["model"]["options"]
         assert (model in choices) == (tier in expected_tiers.values())
+        tier_skus = {sku for sku, sku_tier in expected_tiers.items() if sku_tier == tier}
+        sku_choices = workflow["on"]["workflow_dispatch"]["inputs"]["sku"]["options"]
+        assert tier_skus <= {choice.split()[0] for choice in sku_choices}
+        resolver = next(step for step in workflow["jobs"]["resolve-skus"]["steps"] if step["id"] == "resolve")
+        scheduled_skus = re.search(r'ALL_SKUS="([^"]+)"', resolver["run"])
+        assert scheduled_skus is not None
+        assert tier_skus <= set(scheduled_skus.group(1).split(","))
 
 
 def test_architecture_and_sku_mismatches_fail_before_model_creation():

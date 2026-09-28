@@ -8,10 +8,11 @@ stands in for a model run.
 
 ## Models and CI hardware
 
-The jobs live in `tests/pipeline_reorg/models_sweep_tests.yaml`. They use the same
-enabled SKUs and per-SKU tiers as each model's existing e2e entry. A CPU regression
-checks that mapping and the matching sweep workflow selectors. Tier 1 sweeps run
-on Wednesdays and Saturdays; tier 2 sweeps run on Saturdays. Both also support
+The jobs live in `tests/pipeline_reorg/models_sweep_tests.yaml`. They follow each
+model's existing e2e hardware configurations and per-SKU tiers. Llama 8B's
+single-device jobs use the CIv2 runners `wh_n150_civ2` and `bh_p150b_civ2`.
+A CPU regression checks that mapping and the matching sweep workflow selectors.
+Tier 1 sweeps run on Wednesdays and Saturdays; tier 2 sweeps run on Saturdays. Both also support
 manual runs. The jobs remain `release_ready: false`.
 Changes to these entries still run through the PR's `Verify changed tests` gate.
 The 45/60/90-minute job limits are provisioning estimates; Gemma 26B uses
@@ -23,7 +24,7 @@ runtime plus approximately 15% allowance.
 | Backend option | Checkpoint | CI SKUs | Physical request slots |
 | --- | --- | --- | --- |
 | `galaxy-llama70b` | `meta-llama/Llama-3.3-70B-Instruct` | `wh_galaxy_perf` | 32 |
-| `llama3.1-8b` | `meta-llama/Llama-3.1-8B-Instruct` | `wh_n150`, `bh_p150`, `wh_llmbox_perf`, `bh_quietbox_2` | 32 |
+| `llama3.1-8b` | `meta-llama/Llama-3.1-8B-Instruct` | `wh_n150_civ2`, `bh_p150b_civ2`, `wh_llmbox_perf`, `bh_quietbox_2` | 32 |
 | `gemma-4-26b-a4b` | `google/gemma-4-26B-A4B-it` | `wh_llmbox_perf`, `bh_quietbox_2` | 32 |
 | `qwen3.6-27b` | `Qwen/Qwen3.6-27B` | `bh_quietbox_2` | 32 |
 | `qwen3.6-35b-a3b` | `Qwen/Qwen3.6-35B-A3B` | `bh_quietbox_2` | 32 |
@@ -45,13 +46,16 @@ measured accelerator usage; tier 3 receives no additional jobs or budget.
 
 | Models budget bucket | SKU | Prior minutes | New job contributions (minutes) | Total minutes |
 | --- | --- | ---: | --- | ---: |
-| `sweep_tier1` | `wh_n150` | 30 | Llama 8B: 45 | 75 |
-| `sweep_tier1` | `bh_p150` | 30 | Llama 8B: 45 | 75 |
+| `sweep_tier1` | `wh_n150_civ2` | 0 | Llama 8B: 45 | 45 |
+| `sweep_tier1` | `bh_p150b_civ2` | 0 | Llama 8B: 45 | 45 |
 | `sweep_tier1` | `wh_galaxy_perf` | 55 | Llama 70B: 60; GPT-OSS: 90 | 205 |
 | `sweep_tier1` | `bh_quietbox_2` | 0 | Gemma 26B: 135; Qwen 27B: 90; Qwen 35B: 90; GPT-OSS: 90 | 405 |
 | `sweep_tier1` | `bh_galaxy` | 0 | GPT-OSS: 90 | 90 |
 | `sweep_tier2` | `wh_llmbox_perf` | 60 | Llama 8B: 45; Gemma 26B: 120 | 225 |
 | `sweep_tier2` | `bh_quietbox_2` | 30 | Llama 8B: 45 | 75 |
+
+The original `wh_n150` and `bh_p150` tier-1 sweep buckets retain 30 minutes each
+for their other jobs. Llama 8B's 45-minute allocations move to the CIv2 buckets.
 
 Available local measurements (2026-09-22) are 283.5 seconds for Llama 8B's
 full eager/traced sweep on a one-chip Wormhole Galaxy submesh, and approximately
@@ -111,8 +115,10 @@ python -m pytest --confcutdir=tests/model_behavior tests/model_behavior \
   --junitxml=generated/test_reports/model_behavior/results.xml
 ```
 
-The SKU is inferred only when the architecture and total device count match a
-supported CI configuration. An explicit `--model-behavior-sku=wh_n150` or
+The hardware profile is inferred only when the architecture and total device
+count match a supported configuration. The CIv2 runner names map to the existing
+`wh_n150` and `bh_p150` hardware profiles through this inference.
+An explicit `--model-behavior-sku=wh_n150` or
 `--model-behavior-sku=wh_llmbox_perf` allows a supported smaller configuration
 on a Wormhole Galaxy for local testing. This does not add a Galaxy CI leg for
 that model, and a submesh run does not certify a different physical machine.
