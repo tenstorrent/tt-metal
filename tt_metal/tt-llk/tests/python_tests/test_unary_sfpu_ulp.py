@@ -31,7 +31,6 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -60,10 +59,10 @@ from helpers.test_variant_parameters import (
 )
 from helpers.ulp import ulp_distance, ulp_stats
 from helpers.ulp_sweep import (
-    SWEEP_FORMATS,
     measurable_mask,
     nonfinite_failures,
     stimuli_format_for,
+    sweep_cells,
     sweep_spec,
 )
 from helpers.utils import passed_test
@@ -165,13 +164,16 @@ def _sweep_ops():
 
 
 @pytest.mark.parametrize(
-    "dest_acc", list(DestAccumulation), ids=lambda d: f"dest_acc:{d.name}"
+    "in_fmt, out_fmt, approx_mode, dest_acc",
+    [
+        pytest.param(
+            *cell,
+            id=f"in:{cell[0].name}-out:{cell[1].name}-approx:{cell[2].name}"
+            f"-dest_acc:{cell[3].name}",
+        )
+        for cell in sweep_cells()
+    ],
 )
-@pytest.mark.parametrize(
-    "approx_mode", list(ApproximationMode), ids=lambda a: f"approx:{a.name}"
-)
-@pytest.mark.parametrize("out_fmt", SWEEP_FORMATS, ids=lambda f: f"out:{f.name}")
-@pytest.mark.parametrize("in_fmt", SWEEP_FORMATS, ids=lambda f: f"in:{f.name}")
 @pytest.mark.parametrize("mathop", _sweep_ops(), ids=lambda op: op.name)
 def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     """Every non-special value of the input format, against the op's declared budget."""
@@ -204,30 +206,37 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
     overflowed = nonfinite_failures(mathop, src, golden, result, in_fmt, out_fmt)
     stats = ulp_stats(ulp_distance(golden, result), mask)
     lanes = int(mask.sum())
+    key = (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name)
 
     # Before the emit return: an empty mask reports `max: 0` and would be recorded as
     # bit-exact. A gate fails, since an unmeasurable budget is a gate not running; an
-    # emit run skips, since "not measurable" is an answer and a failure blocks the write.
+    # emit run records the reason as the cell's verdict, so the op's grid stays whole.
     if lanes == 0:
-        unmeasurable = "no lane a step count can describe"
+        reason = "no lane a step count can describe"
+        unmeasurable = reason
     elif overflowed.any():
+        named = "; ".join(
+            f"x={float(src[i]):g}: {float(golden[i]):g} -> {float(result[i]):g}"
+            for i in overflowed.nonzero().flatten()[:4].tolist()
+        )
+        reason = (
+            f"{int(overflowed.sum())} lane(s) non-finite against a finite golden "
+            f"({named})"
+        )
         unmeasurable = (
-            f"{int(overflowed.sum())} lane(s) disagree about being non-finite. No "
-            "budget buys an overflow, and a step count cannot describe one."
+            f"{reason}. No budget buys an overflow, and a step count cannot describe "
+            "one."
         )
     else:
         unmeasurable = None
     if unmeasurable:
-        if ulp_sweep.EMIT:
-            pytest.skip(f"{cell}: not measurable -- {unmeasurable}")
-        raise AssertionError(f"{cell}: {unmeasurable}")
+        if not ulp_sweep.EMIT:
+            raise AssertionError(f"{cell}: {unmeasurable}")
+        ulp_sweep.record_unmeasurable(mathop.name, key, reason)
+        return
 
     if ulp_sweep.EMIT:
-        ulp_sweep.record(
-            mathop.name,
-            (in_fmt.name, out_fmt.name, approx_mode.name, dest_acc.name),
-            int(stats["max"]),
-        )
+        ulp_sweep.record(mathop.name, key, int(stats["max"]))
         return
 
     # The contract's own verdict rather than `stats["max"]`, so a `near_zero_atol` floor

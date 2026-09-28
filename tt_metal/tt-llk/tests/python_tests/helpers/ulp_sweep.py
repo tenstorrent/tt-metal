@@ -45,6 +45,30 @@ _OP_KEY = re.compile(r"^([A-Za-z_]\w*):")
 _INF = float("inf")
 
 
+def sweep_cells() -> List[Tuple[DataFormat, DataFormat, object, object]]:
+    """Every ``(input, output, approx_mode, dest_acc)`` cell the sweep runs.
+
+    Less the cells ``TestConfig`` would silently run as another: on Wormhole and
+    Blackhole an exponent-B input packed to Float16 needs a 32-bit Dest, so a
+    ``dest_acc=No`` request runs the ``Yes`` kernel. Measuring it under ``No`` would
+    judge the hardware against a golden modelling a 16-bit Dest, and record the result
+    under a key that kernel never ran with.
+    """
+    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+    from helpers.data_format_inference import is_format_combination_outlier
+    from helpers.llk_params import ApproximationMode, DestAccumulation
+
+    promotes = get_chip_architecture() != ChipArchitecture.QUASAR
+    return [
+        (in_fmt, out_fmt, approx, dest)
+        for in_fmt in SWEEP_FORMATS
+        for out_fmt in SWEEP_FORMATS
+        for approx in ApproximationMode
+        for dest in DestAccumulation
+        if not (promotes and is_format_combination_outlier(in_fmt, out_fmt, dest))
+    ]
+
+
 def stimuli_format_for(fmt: DataFormat) -> DataFormat:
     """The format whose values the sweep enumerates in order to drive *fmt*."""
     return _STIMULI_FORMAT.get(fmt, fmt)
@@ -161,33 +185,41 @@ def measurable_mask(
     )
 
 
-def _within_safe_domain(
-    op, src: torch.Tensor, input_format: DataFormat
-) -> torch.Tensor:
-    """Lanes whose input is inside the domain ``sfpu_domains`` registers for *op*.
+#: The magnitude past which an op's argument reduction stops claiming a finite answer.
+#: Only ops whose kernel reduces its argument belong here; anywhere else a non-finite
+#: answer against a finite golden is a failure over the whole format. Sin and Cos give
+#: up far outside [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1 -- and
+#: pi is the widest bound measured so far, so it is the claim until one is wider.
+_CLAIM_LIMIT: Dict = {}
 
-    The sweep deliberately runs outside it -- that is the whole point, and the budget is
-    measured over everything. This is used only to judge *non-finite* answers, where the
-    distinction matters: outside the registered domain an op is not claiming anything,
-    and ``sin(2.6e28)`` returning ``inf`` against a golden of ``-1`` is an argument
-    reduction giving up, not a regression.
+
+def _claim_limits() -> Dict:
+    from helpers.llk_params import MathOperation
+
+    if not _CLAIM_LIMIT:
+        _CLAIM_LIMIT.update({MathOperation.Sin: math.pi, MathOperation.Cos: math.pi})
+    return _CLAIM_LIMIT
+
+
+def _claimed(op, src: torch.Tensor) -> torch.Tensor:
+    """Lanes where *op* claims a finite, accurate answer: the whole format, less the
+    undefined ranges ``sfpu_domains`` registers and any ``_CLAIM_LIMIT``.
+
+    Deliberately not the functional driver's sampling window, which is where a few
+    thousand points are drawn, not where the op stops being defined: Abs is sampled on
+    (-10, 10) and defined everywhere.
     """
-    from helpers.sfpu_domains import exclude_undefined, for_op
+    from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
 
-    spec = exclude_undefined(op, for_op(op, input_format).spec_A)
-    magnitude = src.detach().to(torch.float32)
-    inside = torch.ones_like(magnitude, dtype=torch.bool)
-    if spec.low is not None:
-        inside &= magnitude >= spec.low
-    if spec.high is not None:
-        inside &= magnitude <= spec.high
-    intervals = getattr(spec, "intervals", None)
-    if intervals:
-        covered = torch.zeros_like(inside)
-        for low, high in intervals:
-            covered |= (magnitude >= low) & (magnitude <= high)
-        inside &= covered
-    return inside
+    value = src.detach().to(torch.float32)
+    claimed = torch.ones_like(value, dtype=torch.bool)
+    for low, high in _SFPU_UNDEFINED_RANGES.get(op, {}).get(Operand.A, ()):
+        # Open, like the holes `exclude_intervals` cuts: the endpoints stay defined.
+        claimed &= ~((value > low) & (value < high))
+    limit = _claim_limits().get(op)
+    if limit is not None:
+        claimed &= value.abs() <= limit
+    return claimed
 
 
 def nonfinite_failures(
@@ -243,7 +275,7 @@ def nonfinite_failures(
         nonfinite_mismatches(golden, result)
         & normal_input
         & in_range
-        & _within_safe_domain(op, src, input_format)
+        & _claimed(op, src)
         & ~padding_lanes(src, input_format)
     )
 
@@ -273,7 +305,19 @@ def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
     ran last, which is the polarity that can hide error; ``max`` is the one that cannot.
     """
     cells = MEASURED.setdefault(op_name, {})
+    if isinstance(cells.get(key), str):
+        return  # already unmeasurable; a reading elsewhere does not rescue it
     cells[key] = max(cells.get(key, 0), max_ulp)
+
+
+def record_unmeasurable(op_name: str, key: Tuple[str, str, str, str], why: str) -> None:
+    """Record that the cell *key* names could not be measured, and why.
+
+    Written into the table as a tolerance row naming the reason, rather than left out:
+    a hole in an op's grid would let ``write_table`` drop the cell's old row with
+    nothing to replace it, and ``_collapse`` could stretch a neighbour's budget over it.
+    """
+    MEASURED.setdefault(op_name, {})[key] = why
 
 
 def export_measured() -> List[list]:
@@ -287,8 +331,33 @@ def export_measured() -> List[list]:
 
 def merge_measured(rows) -> None:
     """Fold a worker's :func:`export_measured` into this process, worst lane winning."""
-    for op, key, max_ulp in rows:
-        record(op, tuple(key), max_ulp)
+    for op, key, value in rows:
+        if isinstance(value, str):
+            record_unmeasurable(op, tuple(key), value)
+        else:
+            record(op, tuple(key), value)
+
+
+def _incomplete_grids() -> List[str]:
+    """Each touched ``(op, in, out)`` missing a cell :func:`sweep_cells` runs.
+
+    ``write_table`` replaces every row of a touched ``(in, out)``, so a run narrowed
+    within one -- ``-k``, ``--maxfail``, an interrupt -- would drop the rows of the
+    cells it never reached.
+    """
+    expected: Dict[Tuple[str, str], Set[Tuple[str, str, str, str]]] = {}
+    for in_fmt, out_fmt, approx, dest in sweep_cells():
+        cell = (in_fmt.name, out_fmt.name, approx.name, dest.name)
+        expected.setdefault(cell[:2], set()).add(cell)
+    gaps = []
+    for op, cells in sorted(MEASURED.items()):
+        for pair in sorted({key[:2] for key in cells}):
+            missing = expected.get(pair, set()) - set(cells)
+            if missing:
+                gaps.append(
+                    f"{op} {pair[0]}->{pair[1]}: {len(missing)} cell(s) unmeasured"
+                )
+    return gaps
 
 
 def finish_emit(arch, testsfailed: int, path=None) -> str:
@@ -313,13 +382,27 @@ def finish_emit(arch, testsfailed: int, path=None) -> str:
             f"saw {testsfailed} failure(s), so the session measured a subset. Nothing "
             "written -- emit from a clean run."
         )
+    gaps = _incomplete_grids()
+    if gaps:
+        raise RuntimeError(
+            "measured only part of an op's grid, and a write would drop the rows of "
+            "the rest. Nothing written -- emit whole (in, out) grids:\n  "
+            + "\n  ".join(gaps)
+        )
     path = path or _TABLE_PATH
     suffix = (
         f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
         f"{arch.value}, {date.today().isoformat()}"
     )
-    n = write_table(path, suffix)
-    return f"--ulp-emit: rewrote {n} op block(s) in {path.name}"
+    n, kept = write_table(path, suffix)
+    message = f"--ulp-emit: rewrote {n} op block(s) in {path.name}"
+    if kept:
+        raise RuntimeError(
+            f"rewrote {n} op block(s) in {path.name}, but kept {', '.join(kept)} "
+            "verbatim: a row this sweep covers carries a field it cannot regenerate "
+            f"(beyond {sorted(_RENDERABLE_FIELDS)}). Settle those cells by hand."
+        )
+    return message
 
 
 def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
@@ -358,8 +441,16 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
 
 
 def _decide(cells: Dict[Tuple[str, str, str, str], int]) -> Dict[Tuple, Tuple]:
-    """Each measured cell as ``(verdict, measured)``, verdict decided per output format."""
-    return {key: (_verdict(v, key[1]), v) for key, v in cells.items()}
+    """Each measured cell as ``(verdict, measured)``, verdict decided per output format;
+    an unmeasurable cell as ``(("unmeasurable", why), None)``."""
+    return {
+        key: (
+            (("unmeasurable", v), None)
+            if isinstance(v, str)
+            else (_verdict(v, key[1]), v)
+        )
+        for key, v in cells.items()
+    }
 
 
 def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
@@ -426,13 +517,13 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
             if k in row
         )
         decided = (
-            "metric: tolerance"
-            if metric in ("tolerance", "block")
-            else f"max_ulp: {value}"
+            "max_ulp: {}".format(value) if metric == "ulp" else "metric: tolerance"
         )
         pairs = f"{body}, {decided}" if body else decided
         note = f"max {row['measured']} ULP"
-        if metric == "tolerance":
+        if metric == "unmeasurable":
+            note = f"not measurable: {value}"
+        elif metric == "tolerance":
             note += ", past this output's usable ceiling, so tolerance"
         elif metric == "block":
             note += ", but a sorted sweep flatters a block format, so tolerance"
@@ -494,8 +585,11 @@ def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
     return _covered(line, emitted_cells)
 
 
-def write_table(path, suffix: str) -> int:
+def write_table(path, suffix: str) -> Tuple[int, List[str]]:
     """Replace every swept op's block in the YAML with what the sweep measured.
+
+    Returns how many blocks were rewritten, and the ops kept verbatim because a row the
+    sweep covers carries a field it cannot regenerate (a ``near_zero_atol`` floor).
 
     Line-oriented on purpose. The table's comments *are* its provenance, and a load and
     re-dump through PyYAML would drop every one of them, including for the ops this
@@ -510,7 +604,7 @@ def write_table(path, suffix: str) -> int:
 
     path = _pathlib.Path(path)
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    out, i, written = [], 0, set()
+    out, i, written, kept_verbatim = [], 0, set(), []
     while i < len(lines):
         line = lines[i]
         # A top-level key by shape, not by trailing colon: an op whose key line carries a
@@ -524,9 +618,8 @@ def write_table(path, suffix: str) -> int:
             j = i + 1
             while j < len(lines) and (not lines[j].strip() or lines[j][0].isspace()):
                 j += 1
-            trailing = []
+            # The blank lines after the block are left for the loop to copy through.
             while j - 1 > i and not lines[j - 1].strip():
-                trailing.insert(0, lines[j - 1])
                 j -= 1
             emitted_cells = {(k[0], k[1]) for k in MEASURED[name]}
             rows = [l for l in lines[i + 1 : j] if l.strip().startswith("- ")]
@@ -540,16 +633,13 @@ def write_table(path, suffix: str) -> int:
             if unrenderable:
                 # Emitting over it would drop the floor; keeping it as well would give
                 # the cell two equally specific keys, which `_load_table` refuses. So
-                # neither, loudly, here: the row is a judgement a measurement cannot
-                # re-derive, and the cell has to be settled by hand.
-                raise ValueError(
-                    f"{path.name}: {name} has {len(unrenderable)} row(s) this sweep "
-                    "covers but cannot regenerate -- they carry a field beyond "
-                    f"{sorted(_RENDERABLE_FIELDS)}:\n"
-                    + "".join(unrenderable)
-                    + "Settle the cell by hand, or drop the extra field, before "
-                    "emitting."
-                )
+                # the op's block stays as it is, and the caller is told: the row is a
+                # judgement a measurement cannot re-derive. Every other op is written.
+                out.extend(lines[i:j])
+                kept_verbatim.append(name)
+                written.add(name)
+                i = j
+                continue
             kept = [l for l in rows if not _replaceable(l, emitted_cells)]
             out.extend(_render(line, _collapse(_decide(MEASURED[name])), suffix))
             # Rows this run did not supersede -- a format it does not reach, an
@@ -557,7 +647,6 @@ def write_table(path, suffix: str) -> int:
             # measurement of a different run and stay as they are. Replacing a whole op
             # block deleted them.
             out.extend(kept)
-            out.extend(trailing)
             written.add(name)
             i = j
             continue
@@ -575,4 +664,4 @@ def write_table(path, suffix: str) -> int:
     # and the last block's leave the file ending in several. `end-of-file-fixer` then
     # rewrites the table on every commit.
     path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
-    return len(written)
+    return len(written) - len(kept_verbatim), kept_verbatim

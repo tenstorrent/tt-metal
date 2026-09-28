@@ -27,8 +27,8 @@ from helpers.ulp_sweep import (
     write_table,
 )
 
-#: An op whose registered domain is wide, so the non-finite tests below turn on the
-#: exclusion they mean to test rather than on the domain.
+#: An op defined everywhere, so the non-finite tests below turn on the exclusion they
+#: mean to test rather than on a domain.
 _OP = MathOperation.Abs
 
 #: One op block with a row of each kind write_table has to tell apart.
@@ -42,9 +42,9 @@ Log1p:
 """
 
 
-def _refuses(match):
+def _refuses(match, kind=ValueError):
     """The suite's ``expect_error`` fixture needs a device; these are host-only tests."""
-    return pytest.raises(ValueError, match=match)  # allow-pytest.raises: host-only test
+    return pytest.raises(kind, match=match)  # allow-pytest.raises: host-only test
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
     or a driver skip must leave every cell it did not measure alone rather than render a
     whole op block from a partial session."""
     record("Gelu", ("Float16", "Float16", "No", "No"), 5)
-    assert write_table(table, "today") == 1
+    assert write_table(table, "today") == (1, [])
 
     rows = _rows(table)
     assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
@@ -98,9 +98,8 @@ def test_a_row_carrying_a_floor_is_refused_rather_than_regenerated(table):
         encoding="utf-8",
     )
     record("Gelu", ("Float16", "Float16", "No", "No"), 5)
-    with _refuses("cannot regenerate"):
-        write_table(table, "today")
-    assert "near_zero_atol" in table.read_text()  # and nothing was written
+    assert write_table(table, "today") == (0, ["Gelu"])
+    assert "near_zero_atol: 5.59e-07}  # floor" in table.read_text()  # kept verbatim
 
 
 def test_a_measurement_with_nowhere_to_go_is_refused(table):
@@ -177,22 +176,18 @@ def test_a_flushed_subnormal_input_is_not_a_nonfinite_failure():
 def test_a_golden_past_the_output_range_is_not_a_nonfinite_failure():
     """A full-range sweep of a bf16 input reaches magnitudes a Float16 output cannot
     hold, and `relu_min` passes most of them straight through -- 14,334 lanes of it.
-    Saturating there is the store doing what it must, not the kernel being wrong."""
-    src = torch.tensor([1e5], dtype=torch.bfloat16)
+    Saturating there is the store doing what it must, not the kernel being wrong.
+
+    The input stays small and only the golden is large, so nothing but the output-range
+    clause can excuse the lane: the same golden into a Float16_b output fails."""
+    src = torch.tensor([5.0], dtype=torch.bfloat16)
     golden = torch.tensor([1e5], dtype=torch.bfloat16)
     result = torch.tensor([float("nan")], dtype=torch.bfloat16)
+    fmt = DataFormat.Float16_b
     assert not nonfinite_failures(
-        _OP, src, golden, result, DataFormat.Float16_b, DataFormat.Float16
+        _OP, src, golden, result, fmt, DataFormat.Float16
     ).any()
-    # ...but a golden the output can hold, from an input the op is defined at, is.
-    assert nonfinite_failures(
-        _OP,
-        torch.tensor([1.0], dtype=torch.bfloat16),
-        torch.tensor([1.0], dtype=torch.bfloat16),
-        result,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-    ).any()
+    assert nonfinite_failures(_OP, src, golden, result, fmt, fmt).any()
 
 
 def test_the_sweeps_own_zero_padding_is_not_data():
@@ -223,11 +218,9 @@ def test_the_sweeps_own_zero_padding_is_not_data():
     ].any()
 
 
-def test_an_input_outside_the_ops_domain_is_not_a_nonfinite_failure():
-    """The sweep runs the whole format, far outside what an op registers. `Sin` and
-    `Cos` are registered over [-pi, pi] and disagree on ~21,000 bf16 lanes past it --
-    an argument reduction giving up, not a regression, and the case
-    `measurable_mask`'s own docstring cites. The budget is still measured everywhere;
+def test_an_input_past_a_claim_limit_is_not_a_nonfinite_failure():
+    """`Sin` and `Cos` disagree on ~21,000 bf16 lanes past [-pi, pi] -- an argument
+    reduction giving up, not a regression. The budget is still measured everywhere;
     only the non-finite answer needs the op to have been claiming something."""
     fmt = DataFormat.Float16_b
     far = torch.tensor([2.6e28], dtype=torch.bfloat16)
@@ -280,13 +273,103 @@ def test_xdist_workers_measurements_merge_worst_lane_first(table):
 def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, failed, refusal):
     record("Gelu", ("Float16", "Float16", "No", "No"), 5)
     before = table.read_text()
-    with pytest.raises(RuntimeError, match=refusal):  # allow-pytest.raises: host-only
+    with _refuses(refusal, RuntimeError):
         finish_emit(arch, failed, table)
     assert table.read_text() == before
 
 
 def test_emit_writes_on_a_clean_wormhole_session(table):
-    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    for approx in ("No", "Yes"):
+        for dest in ("No", "Yes"):
+            record("Gelu", ("Float16", "Float16", approx, dest), 5)
     message = finish_emit(ChipArchitecture.WORMHOLE, 0, table)
     assert message == "--ulp-emit: rewrote 1 op block(s) in budget.yaml"
     assert "{in: Float16, out: Float16, max_ulp: 6}" in _rows(table)[0]
+
+
+def test_the_claim_is_the_whole_format_not_the_drivers_sampling_window():
+    """Abs is sampled on (-10, 10) by the functional driver and defined everywhere, so a
+    hardware inf at 1e20 against a finite golden is a failure, not an excused lane."""
+    src = torch.tensor([1e20], dtype=torch.bfloat16)
+    result = torch.tensor([float("inf")], dtype=torch.bfloat16)
+    fmt = DataFormat.Float16_b
+    assert nonfinite_failures(_OP, src, src.clone(), result, fmt, fmt).any()
+
+
+@pytest.mark.parametrize(
+    "fmt, inputs",
+    [(DataFormat.Float16_b, [-2.0, 0.5, 5.0]), (DataFormat.Bfp8_b, [-50.0, 50.0])],
+    ids=lambda v: getattr(v, "name", None) or "inputs",
+)
+def test_an_interval_domain_is_not_clipped_to_the_specs_default_bounds(fmt, inputs):
+    """Reciprocal registers its domain as ``intervals``; ANDing the spec's default
+    [0, 1] in as well shrank it to [0.1, 1] -- and to nothing for a Bfp8_b input -- so a
+    hardware inf on most of the domain was neither counted nor reported."""
+    src = torch.tensor(inputs, dtype=torch.bfloat16)
+    golden = 1.0 / src
+    result = torch.full_like(src, float("inf"))
+    op = MathOperation.Reciprocal
+    assert nonfinite_failures(op, src, golden, result, fmt, DataFormat.Float16_b).all()
+    # Its undefined hole around zero still excuses a lane.
+    zero = torch.tensor([0.0], dtype=torch.bfloat16)
+    one = torch.tensor([1.0], dtype=torch.bfloat16)
+    assert not nonfinite_failures(op, zero, one, result[:1], fmt, fmt).any()
+
+
+def test_an_unmeasurable_cell_is_written_as_its_own_verdict(table):
+    """Left out, the cell's old row is dropped with nothing replacing it; recorded, it
+    becomes a tolerance row that says why."""
+    from helpers.ulp_sweep import record_unmeasurable
+
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    record_unmeasurable(
+        "Gelu", ("Float16", "Float16", "Yes", "No"), "no measurable lane"
+    )
+    write_table(table, "today")
+    rows = _rows(table)
+    assert any("max_ulp: 6" in r and 'approx: "No"' in r for r in rows)
+    assert any(
+        'approx: "Yes"' in r
+        and "metric: tolerance" in r
+        and "not measurable: no measurable lane" in r
+        for r in rows
+    )
+
+
+def test_emit_refuses_a_partly_measured_grid(table):
+    """`write_table` replaces every row of a touched (in, out); a run narrowed inside
+    one would drop the rows of the cells it never reached."""
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    before = table.read_text()
+    with _refuses("Gelu Float16->Float16: 3 cell", RuntimeError):
+        finish_emit(ChipArchitecture.WORMHOLE, 0, table)
+    assert table.read_text() == before
+
+
+def test_an_op_with_an_unregenerable_row_is_kept_while_the_rest_are_written(tmp_path):
+    """A floor row the sweep covers cannot be re-derived from a measurement. Its op
+    keeps its block verbatim, every other op is written, and the caller is told."""
+    path = tmp_path / "budget.yaml"
+    path.write_text(
+        "Erfinv:\n"
+        "  - {in: Float16, out: Float16, max_ulp: 2, near_zero_atol: 1.0e-07}  # floor\n"
+        "\n"
+        "Gelu:\n"
+        "  - {in: Float16, out: Float16, max_ulp: 7}  # superseded\n",
+        encoding="utf-8",
+    )
+    MEASURED.clear()
+    record("Erfinv", ("Float16", "Float16", "No", "No"), 5)
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    written, kept = write_table(path, "today")
+    MEASURED.clear()
+    text = path.read_text()
+    assert (written, kept) == (1, ["Erfinv"])
+    assert "near_zero_atol: 1.0e-07}  # floor" in text
+    assert "max_ulp: 7" not in text and "max_ulp: 6" in text
+
+
+def test_a_rewritten_block_keeps_one_blank_line_before_the_next(table):
+    record("Gelu", ("Float16", "Float16", "No", "No"), 5)
+    write_table(table, "today")
+    assert "\n\n\n" not in table.read_text()

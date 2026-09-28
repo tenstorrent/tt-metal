@@ -527,9 +527,14 @@ def test_arch_must_be_passed_explicitly():
             "repeats BudgetKey",
         ),
         ("Nope:\n  - {max_ulp: 1}\n", "'Nope' is not a MathOperation"),
-        ("Abs:\n  - {max_ulp: 1, budget: 2}\n", "unknown field"),
-        ("Abs:\n  - {out: Float17, max_ulp: 1}\n", "not a DataFormat"),
-        ("Abs:\n", "has no rows"),
+        # Each failure names the op it came from.
+        ("Abs:\n  - {max_ulp: 1, budget: 2}\n", "Abs: unknown field"),
+        (
+            "Abs:\n  - {out: Float17, max_ulp: 1}\n",
+            "Abs: 'Float17' is not a DataFormat",
+        ),
+        ("Abs:\n  - {metric: pcc, max_ulp: 1}\n", "Abs: 'pcc' is not a Metric"),
+        ("Abs:\n", "Abs has no rows"),
         # The contract invariants still come from AccuracyContract.
         (
             "Abs:\n  - {max_ulp: 1, atol: 0.5}\n",
@@ -547,6 +552,7 @@ def test_arch_must_be_passed_explicitly():
         "unknown-op",
         "unknown-field",
         "unknown-format",
+        "unknown-metric",
         "no-rows",
         "bad-contract",
         "approx-1",
@@ -696,6 +702,62 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
         )
 
 
+#: Swept cells of an exact-by-construction op that the table holds on the tolerance
+#: metric, with what was measured there. Each is a real deviation on an op that should
+#: be exact, and none has a cause established yet; the test below keeps the list from
+#: growing unnoticed, and fails when an entry is no longer needed.
+_EXACT_OP_DEMOTIONS = {
+    **{
+        (op, in_fmt, DataFormat.Float16, DestAccumulation.Yes): "512 ULP measured"
+        for op in (MathOperation.Abs, MathOperation.Neg, MathOperation.Identity)
+        for in_fmt in (DataFormat.Float16_b, DataFormat.Bfp8_b)
+    },
+    (
+        MathOperation.Floor,
+        DataFormat.Bfp8_b,
+        DataFormat.Float16,
+        DestAccumulation.Yes,
+    ): "15360 ULP measured",
+    **{
+        (MathOperation.Floor, DataFormat.Bfp8_b, DataFormat.Float16_b, dest): (
+            "16129 ULP measured"
+        )
+        for dest in DestAccumulation
+    },
+}
+
+
+@pytest.mark.parametrize("op", EXACT_BY_CONSTRUCTION, ids=lambda op: op.name)
+def test_every_swept_cell_of_an_exact_op_is_gated_or_waived(op):
+    """`test_an_exact_op_never_carries_a_wide_budget` reads only ULP rows, so a cell the
+    emitter demoted to tolerance is invisible to it -- and the sweep does not gate
+    tolerance cells. Every swept, non-block cell of these ops must resolve to a step
+    budget, or be listed above with its measurement."""
+    from helpers.ulp_sweep import sweep_cells
+
+    demoted = set()
+    for in_fmt, out_fmt, approx, dest in sweep_cells():
+        if out_fmt in _ULP_PROXY_DTYPES:
+            continue  # a block output is never enrolled from this sweep
+        contract = accuracy_contract(
+            op,
+            output_format=out_fmt,
+            input_format=in_fmt,
+            approx_mode=approx,
+            dest_acc=dest,
+            arch=MEASURED_ARCH,
+        )
+        if contract.metric is not Metric.ULP:
+            demoted.add((op, in_fmt, out_fmt, dest))
+    waived = {cell for cell in _EXACT_OP_DEMOTIONS if cell[0] is op}
+    assert demoted <= waived, sorted(
+        f"{i.name}->{o.name} dest={d.name}" for _, i, o, d in demoted - waived
+    )
+    assert waived <= demoted, "stale waiver(s): " + ", ".join(
+        sorted(f"{i.name}->{o.name} dest={d.name}" for _, i, o, d in waived - demoted)
+    )
+
+
 def test_no_budget_exceeds_its_formats_usable_ceiling():
     """Past ``usable_budget_ceiling`` a step budget is looser than the tolerance it
     replaces -- and it is the whole gate, since the ULP arm of passed_test skips
@@ -746,9 +808,10 @@ def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format(
     spec = exclude_undefined(
         op, for_op_pipeline(op, input_format, DataFormat.Bfp8_b).spec_A
     )
-    assert spec.low is not None and spec.high is not None, op.name
+    # The generator draws from `intervals` when set, and ignores low/high then.
+    bounds = spec.intervals or [(spec.low, spec.high)]
     # ceil: the result rounds outward by up to one integer.
-    reachable = math.ceil(max(abs(spec.low), abs(spec.high)))
+    reachable = math.ceil(max(abs(v) for pair in bounds for v in pair))
     assert reachable < BFP8_B_EXACT_INTEGER_DOMAIN, (
         f"{op.name} from {input_format.name} is swept over [{spec.low}, {spec.high}], "
         f"whose results reach {reachable} and so whose block maxima can reach "

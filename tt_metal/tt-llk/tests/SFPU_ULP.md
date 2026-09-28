@@ -52,7 +52,14 @@ and **128 ULP** over every bfloat16 value there is.
 A budget keyed on a format the sweep does not drive is declared but never measured, so
 it holds only as far as whatever sampled it. `Float32` is the one that bites: it has
 2^32 values and one device run holds 2^16, so it cannot be enumerated the way the
-16-bit formats are.
+16-bit formats are. **No gate reads a `Float32` row yet** -- the sweep does not drive
+it, and the functional drivers take only the tolerance arm of a contract -- so those
+rows are a record of a sampled measurement until #57520 sweeps a strided `Float32`
+input.
+
+On Wormhole and Blackhole an exponent-B input (`Float16_b`, `Bfp8_b`) packed to `Float16`
+needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only: asked for
+`No`, the harness would run the `Yes` kernel anyway.
 
 The domain is deliberately **not** clipped to the op's safe range. Undefined inputs are
 swept and then masked out of the statistics, so they still reach hardware.
@@ -71,8 +78,11 @@ swept and then masked out of the statistics, so they still reach hardware.
   finite values, so the last 257 are padding rather than data.
 
 The second kind is a *failure*, not a non-question, so `nonfinite_failures` reports it
-separately — bounded to the op's registered domain, because outside it an op is not
-claiming anything.
+separately — over everywhere the op claims an answer: the whole format, less the
+undefined ranges `sfpu_domains` registers (`Log` below zero, `Reciprocal` at zero) and a
+per-op argument-reduction limit (`Sin` and `Cos` past pi). Not the functional driver's
+sampling window, which is where points are drawn rather than where an op stops being
+defined.
 
 ## Enrolling an op, step by step
 
@@ -92,37 +102,46 @@ first. Add the name and nothing else:
 
 ```yaml
 MyOp:
-  - {out: Float16_b, max_ulp: 1}  # placeholder, replaced by the emit run below
+  - {in: Float16_b, out: Float16_b, max_ulp: 1}  # placeholder, replaced by the emit run
 ```
+
+Key the placeholder on a swept `in`/`out` pair, or the emit run keeps it instead of
+replacing it.
 
 ### 3. Measure it
 
 Run the two commands under **Quick start**. The emitter rewrites your op's block with
 what the hardware reported, and preserves anything it did not measure — a `Float32` row
-from an older run, an `arch:`-keyed entry, a row carrying a `near_zero_atol` floor.
+from an older run, or an `arch:`-keyed entry. It writes only whole `(in, out)` grids: a
+run narrowed inside one (`-k` on a single approx mode, `--maxfail`, an interrupt)
+writes nothing.
 
 ### 4. Read what it wrote
 
 ```yaml
-MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23, except where a row says otherwise
-  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP
-  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
-  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
+MyOp:
+  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23
+  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, past this output's usable ceiling, so tolerance, exhaustive ...
+  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive ...
 ```
 
-Three verdicts:
+Four verdicts:
 
 - **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, floored at 1
   except where the measurement was 0.
-- **`metric: tolerance`, "budget would be N > C-step ceiling"** — past
+- **`metric: tolerance`, "past this output's usable ceiling"** — past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
   tolerance it replaces. The op keeps tolerance + PCC on that cell and the number is
   recorded so nobody re-derives it.
-- **`metric: tolerance`, "block-quantized"** — a block float output. The sweep
+- **`metric: tolerance`, "a sorted sweep flatters a block format"** — a block float
+  output. The sweep
   enumerates a format in value order, so sixteen adjacent values share a `Bfp8_b` block
   and the exponent fits all of them: the best case for quantization, not a
   representative one. `Abs` reads **393 steps** there from random mixed-magnitude blocks
   and **3** from the sorted sweep, so neither number is enrollable.
+- **`metric: tolerance`, "not measurable: …"** — the cell had no lane a step count could
+  describe, or answered inf/NaN where the op claims a finite result. No budget buys that;
+  the row says why instead of leaving a hole the next emit would paper over.
 
 ### 5. Gate on it
 
@@ -137,9 +156,9 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 
 - **No number is a guess.** The trailing comment on a row is the measurement it came
   from. A budget may only be *raised* by re-measuring and updating that comment in the
-  same change. `llk-sfpu-ulp-budget-guard` fails a pull request that raises one without
-  it; the `ulp-budget-raise-approved` label is the override, and it still reports which
-  rows it admitted without a fresh measurement.
+  same change. From #57527, `llk-sfpu-ulp-budget-guard` fails a pull request that raises
+  one without it; the `ulp-budget-raise-approved` label is the override, and it still
+  reports which rows it admitted without a fresh measurement.
 - **Most specific key wins.** A row's key fields are `in`, `out`, `approx`, `dest` and
   `arch`, all optional. Two rows matching one variant equally specifically are an
   authoring error, not a tie-break, and the loader refuses them.
@@ -148,7 +167,9 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
   itself. Re-measure before trusting any of it on Blackhole.
 - **An exact op may not carry a wide budget.** Sign-bit ops, copies, integer results,
   predicates and constant fills are the flakiness canaries: if one fails, the golden or
-  the datapath moved. `test_an_exact_op_never_carries_a_wide_budget` holds them.
+  the datapath moved. `test_an_exact_op_never_carries_a_wide_budget` holds their
+  budgets, and `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` holds the cells
+  demoted to tolerance to an explicit list, each with its measurement.
 - **`Bfp8_b` charges for block quantization.** A budget there is denominated in bfloat16
   steps, two to one `Bfp8_b` step, and does not forgive the shared exponent. Only ops
   whose result a shared exponent represents exactly are enrolled on it.
@@ -158,8 +179,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 Two ways, and they mean different things:
 
 - **No row in the table** — the op resolves to today's tolerance and the sweep skips it.
-  Fine as an interim state, but `test_every_unary_op_is_enrolled_or_excused` will fail
-  until you pick one of these two deliberately.
+  Fine as an interim state; from #57520, `test_every_unary_op_is_enrolled_or_excused`
+  fails until you pick one of these two deliberately.
 - **`sfpu_domains._UNARY_OPS_NOT_SWEPT`** — the op cannot be swept at all. Say why in a
   comment next to it.
 
@@ -169,8 +190,10 @@ If an op is exact over most of its range and catastrophic in a narrow band near 
 the measurement will be dominated by the band and the cell will demote to tolerance.
 `near_zero_atol` is the floor under the budget for exactly that: the lanes where the
 reference crosses zero, judged on absolute error instead of steps. `Gelu` and most of
-`Erfinv` are gated that way. The emitter cannot re-derive a floor, so it refuses to
-regenerate a row carrying one — you set those by hand, with the measurement beside them.
+`Erfinv` are gated that way. The emitter cannot re-derive a floor, so an op with a floor
+row on a cell the run measured keeps its whole block as it was: every other op is
+written, and the session then fails naming the ops it kept. You settle those by hand,
+with the measurement beside them.
 
 ## Gotchas
 
@@ -195,4 +218,4 @@ regenerate a row carrying one — you set those by hand, with the measurement be
 | `python_tests/helpers/ulp_sweep.py` | what the sweep feeds, what it masks, and the emitter |
 | `python_tests/helpers/sfpu_accuracy_budget.yaml` | the table |
 | `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
-| `python_tests/helpers/ulp_budget_diff.py` | the CI comparison, and the headroom report |
+| `python_tests/helpers/ulp_budget_diff.py` | the CI comparison, and the headroom report (from #57527) |
