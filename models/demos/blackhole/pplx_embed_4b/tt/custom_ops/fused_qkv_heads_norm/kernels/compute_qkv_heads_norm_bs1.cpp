@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// v3 compute of the fused head-split + RMSNorm + RoPE op (QWEN_FUSED_COMPUTE_V3=1: bs1 default, and bs8 where the QKV
-// output is in L1; other batched sizes keep compute_qkv_heads_norm.cpp). v1's math, tile for tile and in the same order
+// v3 compute of the fused head-split + RMSNorm + RoPE op (QWEN_FUSED_COMPUTE_V3=1: bs1 default, and bs8/16 with the QKV
+// output in L1; bs32 keeps compute_qkv_heads_norm.cpp). v1's math, tile for tile and in the same order
 // (so the output is bit-identical), but each phase runs once per unit over all of the unit's normalised heads (its Q
 // heads and, when the unit carries K, its K heads, which sit contiguously in the unit) instead of once per head. Every
 // phase pays its data-format reconfig, *_init and CB handshakes once per unit; at bs1 that is 9 phase set-ups for 5
