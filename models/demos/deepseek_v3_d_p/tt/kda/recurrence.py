@@ -41,6 +41,28 @@ def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim:
     )
 
 
+def carry_matmul_program_config(
+    device: ttnn.Device | ttnn.MeshDevice, batch_heads: int, key_dim: int, value_dim: int
+) -> ttnn.MatmulMultiCoreReuseProgramConfig | None:
+    """Return the batched FP32 ``a @ carry`` schedule for the distributed prefix, if it fits.
+
+    The whole key dimension stays in one block: splitting it changes FP32 accumulation, so this
+    schedule is bit-identical to the default program while splitting rows two tiles per core.
+    """
+    key_tiles, value_tiles = key_dim // ttnn.TILE_SIZE, value_dim // ttnn.TILE_SIZE
+    grid = device.compute_with_storage_grid_size()
+    if key_tiles % 2 or value_tiles % 2 or batch_heads * key_tiles // 2 > grid.x * grid.y:
+        return None
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=key_tiles,
+        out_subblock_h=2,
+        out_subblock_w=2,
+        per_core_M=2,
+        per_core_N=value_tiles,
+    )
+
+
 @dataclass(frozen=True)
 class _AffineTransform:
     """State-space affine map ``state -> a @ state + b``."""
@@ -248,6 +270,7 @@ def _distributed_prefix(
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
+    carry_program_config = carry_matmul_program_config(transform_a.device(), batch_heads, key_dim, value_dim)
     entry_states: list[ttnn.Tensor] = []
     # Apply chip transforms chronologically: O(sp_size) graph nodes, bounded by mesh size, not token count.
     for step in range(gathered.shape[0]):
@@ -274,6 +297,7 @@ def _distributed_prefix(
             carry,
             memory_config=working_memory,
             dtype=KDA_RECURRENT_STATE_DTYPE,
+            program_config=carry_program_config,
             compute_kernel_config=compute_config,
         )
         carry = ttnn.add(carry, b_for_carry, memory_config=working_memory)
