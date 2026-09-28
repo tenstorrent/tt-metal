@@ -51,7 +51,6 @@
 #include "combine_fabric2d_reader_ct_args.hpp"
 #include "combine_fabric2d_reader_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
-#include "combine_fabric2d_tail_probe.hpp"
 
 constexpr hyb_cmbf2d::ReaderCtArgs ct{};
 
@@ -172,7 +171,6 @@ hyb_cmbf2d::ControlTables read_control_tables(const Dram& dram) {
     return ctl;
 }
 
-#if TILE
 // Our end of the untilizer handshake. The group produces a fixed sequence of batches (see the group walk),
 // this stream reads the rows it wants out of them, and the two exchange only counts.
 //
@@ -215,12 +213,10 @@ struct Untilized {
         if (batch != open) {
             release_through(batch);
             volatile tt_l1_ptr uint32_t* produced = produced_by(owner(batch));
-            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::UNT, [&] {
+            invalidate_l1_cache();
+            while (*produced < batch / ct.num_untilizers + 1) {
                 invalidate_l1_cache();
-                while (*produced < batch / ct.num_untilizers + 1) {
-                    invalidate_l1_cache();
-                }
-            });
+            }
             open = batch;
         }
         const uint32_t row = (batch / ct.num_untilizers % ct.unt_ring_batches) * hyb_cmbf2d::UNT_BATCH_ROWS +
@@ -247,7 +243,6 @@ struct Untilized {
         }
     }
 };
-#endif
 
 // Everything the phases share: the ring's flow control, where the next downstream chunk goes, and how far
 // into our own region we have consumed.
@@ -263,22 +258,13 @@ struct Untilized {
 struct Reader {
     const Dram& dram;
     hyb_cmbf2d::ControlTables ctl;
-#if TILE
     Untilized untilized;
     // The group's production for the expert in progress. Rebuilt every iteration, identically on every core
     // of the group, which is what makes a batch index mean the same thing to all of them.
     hyb_cmbf2d::GroupWalk walk{ct.walks_down != 0};
-#endif
 
-    // Where page `p` of our region is read from: an untilizer's staging ring, or the buffer itself when the
-    // tokens are already rows.
-    uint64_t token_source(uint32_t p) {
-#if TILE
-        return untilized.take(walk, p);
-#else
-        return dram.in.get_noc_addr(p);
-#endif
-    }
+    // Where page `p` of our region is read from: the staging ring of the untilizer that owns its batch.
+    uint64_t token_source(uint32_t p) { return untilized.take(walk, p); }
     uint32_t published = 0;
     uint32_t claimed = 0;
     // Publishing is batched so the atomic is amortised, matching the sender's batch.
@@ -306,14 +292,12 @@ struct Reader {
         invalidate_l1_cache();
         if (claimed - *freed >= ct.num_l1_slots) {
             flush_publish();
-            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::SLOT, [&] {
-                while (true) {
-                    invalidate_l1_cache();
-                    if (claimed - *freed < ct.num_l1_slots) {
-                        break;
-                    }
+            while (true) {
+                invalidate_l1_cache();
+                if (claimed - *freed < ct.num_l1_slots) {
+                    break;
                 }
-            });
+            }
         }
         return claimed++ % ct.num_l1_slots;
     }
@@ -486,14 +470,12 @@ struct Reader {
         invalidate_l1_cache();
         if (*fwd_arrived <= consumed) {
             flush_publish();  // let the sender work while we wait on upstream
-            hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::FWD, [&] {
-                while (true) {
-                    invalidate_l1_cache();
-                    if (*fwd_arrived > consumed) {
-                        break;
-                    }
+            while (true) {
+                invalidate_l1_cache();
+                if (*fwd_arrived > consumed) {
+                    break;
                 }
-            });
+            }
         }
         uint32_t k = *fwd_arrived - consumed;
         if (k > ct.batch) {
@@ -591,7 +573,6 @@ void kernel_main() {
     // One pass per walk step, in the order the routed expert finishes its experts, fabric then local, so every
     // token of one step's expert is placed before the next step's is touched.
     for (uint32_t step = 0; step < ct.experts_per_chip; step++) {
-#if TILE
         reader.walk = hyb_cmbf2d::group_walk(
             reader.ctl,
             ct.walks_down != 0,
@@ -601,29 +582,12 @@ void kernel_main() {
             [](uint32_t k) {
                 return kernel_compile_time_args[ct.assignment_base + k * hyb_cmbf2d::ASSIGNMENT_WORDS + 1];
             });
-#endif
-#if !TILE
-        // Reading the dispatch buffer directly, so this core is the one that must not run ahead of the routed
-        // expert. On the tiled path the untilizers wait instead, and this core only reads what they staged.
-        if constexpr (ct.ready_sem != hyb_cmbf2d::NO_READY_GATE) {
-            const uint32_t local =
-                hyb_cmbf2d::local_at_step(reader.ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
-            hyb_cmbf2d::wait_for_ready(
-                ct.ready_sem,
-                hyb_cmbf2d::ready_target(reader.ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
-        }
-#endif
         reader.run_schedule(step);
-        hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::LOCAL, [&] { reader.run_local_phase(step); });
-#if TILE
+        reader.run_local_phase(step);
         reader.untilized.finish_expert(reader.walk);
-#endif
     }
     reader.end_stream();
-#if TILE
-    hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::UNT, [&] { reader.untilized.wait_for_last_bumps(); });
-#endif
-    hyb_cmbf2d::tail_probe::report();
+    reader.untilized.wait_for_last_bumps();
 
     // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
     // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last
