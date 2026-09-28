@@ -23,9 +23,8 @@ namespace tt::tt_metal::experimental {
 
 namespace {
 
-// Every field both hosts must lay out identically, rendered once so the hash they agree on
-// and the message a mismatch prints can never describe different fields.
-// Not region_bytes: each host pins its own prefix, and the bound on it is checked locally.
+// Every field both hosts must lay out identically, rendered once so the agreed hash and the
+// mismatch message cannot describe different fields. Not region_bytes: checked locally.
 std::string geometry_text(const H2HSocket::Config& cfg) {
     // Delimited rather than run together: "1" then "23" and "12" then "3" would otherwise
     // render alike, which is the one way a text encoding of a tuple stops being injective.
@@ -45,8 +44,6 @@ std::size_t geometry_fingerprint(const H2HSocket::Config& cfg) {
     return std::hash<std::string>{}(geometry_text(cfg));
 }
 
-// A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
-// fields after the guard that vouches for them.
 // One flat allocation per container, sized at create() and never grown: every queue here is
 // bounded by ring_pages, so a deque's chunk churn buys nothing and costs a pointer chase.
 template <typename T>
@@ -210,6 +207,8 @@ private:
     uint32_t cores_ = 0;
 };
 
+// A load the compiler may not hoist out of a poll loop; acquire orders the trailer's other
+// fields after the guard that vouches for them.
 uint64_t load_acquire(const volatile uint64_t* p) {
     return std::atomic_ref<uint64_t>(const_cast<uint64_t&>(*p)).load(std::memory_order_acquire);
 }
@@ -280,10 +279,8 @@ struct H2HSocket::Impl {
     std::vector<uint64_t> ctrl_pending;
     std::vector<std::chrono::steady_clock::time_point> first_ctrl;
 
-    // put -> credit, collected here because nothing above this class can see either end:
-    // submit() only queues, and the credit word is read by credit_seen() alone.
-    // One stamp per live frame, indexed exactly as the RX slot is, so the ring that bounds
-    // frames in flight bounds this too.
+    // put -> credit: nothing above this class sees both ends. One stamp per live frame,
+    // indexed as the RX slot is, so the ring bounding frames in flight bounds this too.
     std::vector<std::chrono::steady_clock::time_point> put_at;
     std::vector<uint64_t> credit_closed;  // sequences already turned into samples
     std::vector<uint64_t> put_to_credit_ns;
@@ -332,9 +329,8 @@ struct H2HSocket::Impl {
     // Bumped only AFTER a flush returns, so epoch < flush_epoch[h] means that put's bytes
     // are on the peer. Nothing else can say so once flushes are withheld.
     std::vector<uint64_t> flush_epoch;
-    // The guard array is contiguous on the TARGET, but the sources are page tails at stride
-    // page_bytes. Gathered here so one put arms a run; indexed by (dest_core, slot), which
-    // is unique while that slot is outstanding, and an Rput reads its origin after returning.
+    // The guard array is contiguous on the TARGET but the sources are page tails at stride
+    // page_bytes. Gathered here so one put arms a run; indexed by (dest_core, slot).
     std::vector<uint64_t> guard_stage;
 
     void mark_pending(uint32_t host, uint64_t bytes) {
@@ -419,18 +415,20 @@ struct H2HSocket::Impl {
         const auto* w = reinterpret_cast<const volatile uint64_t*>(cfg.region_base + credit_offset(core, host));
         return load_acquire(w);
     }
+    // TWO laps, not one: the send gate re-reads credit_seen() and can post over a stamp this
+    // pass has not sampled. The gate bounds credit to one ring per pass, so two is enough.
+    static constexpr uint32_t kStampLaps = 2;
     std::chrono::steady_clock::time_point& put_at_of(uint32_t core, uint32_t host, uint64_t seq) {
+        const size_t span = static_cast<size_t>(cfg.ring_pages) * kStampLaps;
         const size_t pair = static_cast<size_t>(core) * kMaxCreditPeers + host;
-        return put_at[pair * cfg.ring_pages + static_cast<size_t>(seq % cfg.ring_pages)];
+        return put_at[pair * span + static_cast<size_t>(seq % span)];
     }
     uint64_t& credit_closed_at(uint32_t core, uint32_t host) {
         return credit_closed[static_cast<size_t>(core) * kMaxCreditPeers + host];
     }
 
-    // Turns every newly credited sequence into a sample. MUST run before this pass starts
-    // any send: a stamp lives until posted laps it by ring_pages, and the gate only permits
-    // that lap once the frame it would overwrite has been credited -- that is, once this
-    // has already read it.
+    // Turns every newly credited sequence into a sample. One clock read per pass, so a late
+    // credit is charged the whole inter-pass gap -- ~95 us at 8 cores, ~291 us at 64.
     void harvest_credits() {
         if (!cfg.collect_timing) {
             return;
@@ -459,9 +457,8 @@ struct H2HSocket::Impl {
         return load_acquire(w);
     }
 
-    // The compact array, not the page tail. The device still writes a guard into the trailer
-    // and it rides along in the payload put, but nothing reads it: a run of K slots is armed
-    // by one contiguous put here, and the harvest scans K adjacent words instead of K pages.
+    // The compact array, not the page tail: the device still writes a trailer guard but
+    // nothing reads it. One put arms a run of K slots; the harvest scans K adjacent words.
     volatile uint64_t* rx_guard(uint32_t core, uint32_t slot) const {
         return reinterpret_cast<volatile uint64_t*>(cfg.region_base + guard_offset(core, slot));
     }
@@ -609,7 +606,7 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     im.watermark = std::min<uint64_t>(Impl::watermark_bytes(), std::max<uint64_t>(in_flight_cap / 4, 1));
     if (cfg.collect_timing) {
         // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
-        im.put_at.assign(per_peer * cfg.ring_pages, std::chrono::steady_clock::time_point{});
+        im.put_at.assign(per_peer * cfg.ring_pages * Impl::kStampLaps, std::chrono::steady_clock::time_point{});
         im.credit_closed.assign(per_peer, 0);
     }
     return s;
@@ -751,9 +748,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         }
 
         const uint32_t slot = static_cast<uint32_t>(im.posted_at(dest_core, host) % im.cfg.ring_pages);
-        // How many queued frames form ONE contiguous transfer. Slots are adjacent at both
-        // ends, so a run that shares a destination, advances by one slot and one source page,
-        // and neither wraps nor outruns the credit gate, is a single put of run x page_bytes.
+        // How many queued frames form ONE contiguous transfer: same destination, next slot,
+        // next source page, no wrap, within the credit gate -- one put of run x page_bytes.
         const uint64_t credit_room = im.cfg.ring_pages - (im.posted_at(dest_core, host) - im.credit_seen(dest_core, host));
         uint32_t run = 1;
         while (run < im.tx_queue.size(c) && run < credit_room && slot + run < im.cfg.ring_pages) {
@@ -772,9 +768,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         f.slot = slot;
         f.count = run;
         f.src_off = t.page_offset;
-        // The WHOLE page, trailer included: the guard the device armed in that trailer is
-        // now inert, because the peer polls the compact array instead. The ordering hazard
-        // that split this put is handled by arming the array entries in a later pass.
+        // The WHOLE page, trailer included: that guard is now inert, the peer polls the
+        // compact array. The ordering hazard that split this put is handled a pass later.
         if (const std::string e = im.win->put(
                 im.cfg.region_base + t.page_offset,
                 static_cast<uint64_t>(run) * t.page_bytes,
@@ -817,10 +812,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         return progress;
     }
 
-    // After the starts and before the next pass's retire loop: that gap is what makes an
-    // acked frame mean "in the peer's window" rather than "handed to MPI" -- see tt_uva_quiet().
-    // Conditional: poll() is the spin loop, so an unconditional clock read would tax every
-    // pass of a run that asked for none, and the split says which half of a pass to go after.
+    // After the starts, before the next pass's retire: that gap is what makes an acked frame
+    // mean "in the peer's window" -- see tt_uva_quiet(). Conditional: poll() is the spin loop.
     const auto flush_t0 =
         im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     // Before the flush, so counters noted this pass ride the flush already happening.

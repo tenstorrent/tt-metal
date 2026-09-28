@@ -43,11 +43,8 @@ const int kDeviceId = leg_device_id();
 // 14336 is the size the standard names; 16384 is the control it has always been measured at.
 const std::vector<int64_t> kPageSizes = {4096, 14336, 16384, 65536, 262144};
 const std::vector<int64_t> kCores = {1, 2, 4, 8, 16, 32, 64};
-// Was never an arg: the socket defaulted to kNumAliasRingSlots == 1, so a volume run paid a
-// full host-to-host credit round trip per frame. ring_pages x page must fit one arena.
-// Runs break at a ring wrap, so depth bounds how many frames one put can carry. The guard
-// array holds kMaxRingSlots per core, and ring x page must still fit the arena.
-// 95 is the arena bound at a 16 KiB payload (1536 KiB / 16448); 128 only fits smaller pages.
+// Was never an arg: at one slot a volume run paid a credit round trip per frame, and a run
+// breaks at a ring wrap. 95 is the arena bound at 16 KiB (1536 KiB / 16448); 128 fits less.
 const std::vector<int64_t> kRingPages = {1, 4, 8, 16, 32, 64, 95, 128};
 const std::vector<int64_t> kVolumeMiB = {1024, 4096, 20480};
 const std::vector<int64_t> kPctSteady = {0, 10, 25};
@@ -87,6 +84,10 @@ void init_counters(benchmark::State& state) {
     state.counters["credit_puts_per_frame"] = 0;
     state.counters["done_puts_per_frame"] = 0;
     state.counters["msgs_per_frame"] = 0;
+    // device issue -> the peer's credit for that frame. NOT an end-to-end latency: the
+    // credit is emitted after the far device drained, so this also carries the return trip.
+    state.counters["put_to_credit_rtt_p50_us"] = 0;
+    state.counters["put_to_credit_rtt_avg_us"] = 0;
     // The receiver's half. starved_credit_pct says the sender waits on it, so where ITS
     // time goes is the other half of the chain and was previously invisible.
     state.counters["rx_h2h_flush_pct"] = 0;
@@ -486,6 +487,10 @@ BENCHMARK_DEFINE_F(D2H2H2DFixture, Volume)(benchmark::State& state) {
         state.counters["done_puts_per_frame"] = rx.done_puts_per_frame;
         state.counters["msgs_per_frame"] =
             tx.puts_per_frame + rx.credit_puts_per_frame + rx.done_puts_per_frame;
+        // h2d_publish_drained is NOT added: consumed() runs from the H2D drain loop, so the
+        // drain is already inside put_to_credit. An upper bound -- it carries the credit back.
+        state.counters["put_to_credit_rtt_p50_us"] = tx.d2h_issue.p50_us + tx.h2h_put_credit.p50_us;
+        state.counters["put_to_credit_rtt_avg_us"] = tx.d2h_issue.avg_us + tx.h2h_put_credit.avg_us;
         state.counters["rx_h2h_flush_pct"] = rx.h2h_flush_pct;
         state.counters["rx_h2h_poll_pct"] = rx.h2h_poll_pct;
         state.counters["rx_h2d_drain_pct"] = rx.h2d_drain_pct;
