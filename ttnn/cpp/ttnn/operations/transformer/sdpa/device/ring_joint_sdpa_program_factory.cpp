@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_builder.hpp"
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/sliding_window_geometry.hpp"
@@ -867,9 +868,7 @@ void apply_ring_joint_scalar_runtime_args(
 
 }  // namespace
 
-namespace ttnn::prim {
-
-namespace {
+namespace ttnn::prim::ring_joint_sdpa {
 
 // Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
@@ -877,11 +876,12 @@ namespace {
 // sdpa factories that share the same helper signature.
 // Descriptor construction must keep host/runtime argument layouts together.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+    ComputeVariant& variant) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
         "build_ring_joint_sdpa_program_descriptor requires mesh_dispatch_coordinate");
@@ -1209,6 +1209,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet core_grid_set(core_grid);
+    variant.configure(args, tensor_args, desc, core_grid_set, Sq_chunk_t, Sk_chunk_t, DHt);
+    const std::optional<uint32_t> fixed_subblock_h = variant.fixed_subblock_h(fp32_dest_acc_en);
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     // Init fused op signaler — descriptor-pattern equivalent of
@@ -1316,9 +1318,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+    if (fixed_subblock_h) {
+        qk_out_subblock_h = *fixed_subblock_h;
+        qk_out_subblock_w = variant.fixed_subblock_w(Sk_chunk_t);
+    }
 
+    // A fixed compute schedule ends an odd Q chunk with a partial row group.
     TT_FATAL(
-        Sq_chunk_t % qk_out_subblock_h == 0,
+        fixed_subblock_h || Sq_chunk_t % qk_out_subblock_h == 0,
         "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
         Sq_chunk_t,
         qk_out_subblock_h);
@@ -1329,7 +1336,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    const bool use_streaming_compute = variant.resident_ring_state() || !fp32_dest_acc_en;
     TT_FATAL(
         !kv_pad_rotation_enabled || use_streaming_compute,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
@@ -1365,14 +1372,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         dst_size,
         /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
         /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
+    if (fixed_subblock_h) {
+        out_out_subblock_h = *fixed_subblock_h;
+        out_out_subblock_w = variant.fixed_subblock_w(vDHt);
+    }
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
     // reused before the matching grouped write has safely landed.
-    const uint32_t writer_out_row_group_h =
+    uint32_t writer_out_row_group_h =
         use_streaming_compute
             ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
             : out_out_subblock_h;
+    if (fixed_subblock_h && Sq_chunk_t % writer_out_row_group_h != 0) {
+        // The writer drains contiguous row groups from cb_out's read pointer; with an odd Q tile count a
+        // fixed-schedule Q block ends at a single-row offset, so the next block's 2-row groups would straddle
+        // the CB wrap. Drain one row (vDHt tiles) at a time.
+        writer_out_row_group_h = 1;
+    }
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -1825,7 +1842,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
     log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
 
-    uint32_t next_cb_index = 0;
+    uint32_t next_cb_index = variant.first_dataflow_cb_index();
     const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
         const uint32_t cb_index = next_cb_index++;
         desc.cbs.push_back(CBDescriptor{
@@ -1839,13 +1856,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         });
         return cb_index;
     };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+    // Roles the compute variant places at fixed indices (already in desc.cbs) are not allocated here.
+    const auto allocate_tile_cb = [&](uint32_t num_tiles,
+                                      uint32_t tile_size,
+                                      tt::DataFormat data_format,
+                                      std::optional<ComputeCb> role = std::nullopt) -> uint32_t {
+        if (role) {
+            if (const auto fixed = variant.fixed_cb_index(*role)) {
+                return *fixed;
+            }
+        }
         return allocate_cb(tile_size, num_tiles, data_format);
     };
 
-    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df, ComputeCb::Q);
+    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df, ComputeCb::K);
+    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df, ComputeCb::V);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
@@ -1865,24 +1891,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }();
 
     const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_identity_scale_in =
+        allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, ComputeCb::ReduceScaler);
+    const uint32_t cb_col_identity =
+        allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df, ComputeCb::ColumnIdentity);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df, ComputeCb::QkIm);
+    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, ComputeCb::OutImA);
+    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df, ComputeCb::OutImB);
+    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, ComputeCb::MaxA);
+    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, ComputeCb::MaxB);
+    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, ComputeCb::SumA);
+    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df, ComputeCb::SumB);
+    const uint32_t cb_exp_max_diff =
+        allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df, ComputeCb::ExpMaxDiff);
 
-    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df, ComputeCb::Out);
 
     // Sliding folds every local/halo K/V range into one final pass per Q, so it never saves
     // or restores accumulators through DRAM. Keep valid, format-compatible CB indices in the
     // compile-time ABI without reserving separate L1 storage for those unreachable paths.
-    const bool needs_dram_accumulator_staging = !has_sliding_window;
+    // A resident ring state never saves or restores accumulators through the LSE staging path either.
+    const bool needs_dram_accumulator_staging = !has_sliding_window && !variant.resident_ring_state();
     const uint32_t cb_stats_in =
         needs_dram_accumulator_staging ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
     const uint32_t cb_prev_out =
@@ -1892,7 +1922,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
+    const uint32_t cb_recip_scratch =
+        use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df, ComputeCb::RecipScratch) : inactive_cb;
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     // cb_sum_out = compute pushes sum for writer to save to DRAM.
@@ -1915,6 +1946,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    variant.finalize_cbs(desc, input_tensor_q.device(), cb_q_in, Sq_chunk_t * DHt * q_tile_size);
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -1927,6 +1959,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
         writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
+    variant.append_writer_compile_time_args(writer_compile_time_args, output_tensors);
     auto compute_cb_compile_time_args = cb_compile_time_args;
     compute_cb_compile_time_args.push_back(cb_attention_sink);
     compute_compile_time_args.insert(
@@ -2482,6 +2515,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // scheduled Q head only on final normalization, so sinks need no ownership handoff.
         // Balanced rotation requires whole low/high pairs; odd chunk layouts stay static.
         use_streaming_compute && (!args.is_balanced || enable_zigzag_balancing) &&
+        // A resident ring state keeps each Q chunk's (m, l, O) in L1 on its owning core; it never migrates.
+        !variant.resident_ring_state() &&
         // Every core needs a complete unit to supply indices for padded reader slots.
         rotated_base_chunks >= 1;
 
@@ -2818,14 +2853,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
+    variant.append_defines(kernel_defines);
+    const KernelSources kernel_sources = variant.kernel_sources();
 
     // Build kernel descriptors locally so we can append per-core runtime args
     // before pushing them into desc.kernels at the end. KernelDescriptor creation
     // is deferred (just like the original CreateKernel calls were) until after chain
     // construction, since the mcast_enabled compile-time arg is patched above.
     KernelDescriptor reader_kernel{};
-    reader_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp";
+    reader_kernel.kernel_source = kernel_sources.reader;
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = core_grid_set;
     // The kernels read rotated_max_slots as their final compile-time arg, so nothing may be
@@ -2882,13 +2918,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     KernelDescriptor writer_kernel{};
-    writer_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp";
+    writer_kernel.kernel_source = kernel_sources.writer;
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = core_grid_set;
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
+    variant.append_writer_common_runtime_args(writer_kernel, output_tensors);
     if (kv_pad_from_metadata || has_logical_length_tensor) {
         KernelDescriptor::RTArgList writer_common_args;
         if (kv_pad_from_metadata) {
@@ -2901,8 +2937,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     KernelDescriptor compute_kernel{};
-    compute_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp";
+    compute_kernel.kernel_source = kernel_sources.compute;
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = core_grid_set;
     compute_kernel.compile_time_args = compute_compile_time_args;
@@ -2912,6 +2947,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = math_approx_mode,
     };
+    if (auto config = variant.compute_config()) {
+        compute_kernel.config = std::move(*config);
+    }
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -3383,6 +3421,49 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     return desc;
 }
 
+tt::tt_metal::WorkloadDescriptor build_workload_descriptor(
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    RingJointSDPAResult& output_tensors,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    ComputeVariant& variant) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_program_descriptor(args, tensor_args, output_tensors, coord, variant);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
+}
+
+void apply_scalar_runtime_args(
+    tt::tt_metal::Program& program,
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    const ttnn::MeshCoordinate& coord) {
+    apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+}
+
+}  // namespace ttnn::prim::ring_joint_sdpa
+
+namespace ttnn::prim {
+
+namespace {
+
+// Legacy ring joint compute (precision unset or FAST): host-chosen subblocks, LSE / deferred-normalization
+// accumulator staging, CBs allocated from index 0.
+class LegacyRingJointCompute final : public ring_joint_sdpa::ComputeVariant {
+public:
+    ring_joint_sdpa::KernelSources kernel_sources() const override {
+        return {
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
+            "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
+        };
+    }
+};
+
 }  // namespace
 
 // Ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
@@ -3396,14 +3477,8 @@ tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_de
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::WorkloadDescriptor wd;
-    const auto coords = tensor_coords.coords();
-    wd.programs.reserve(coords.size());
-    for (const auto& coord : coords) {
-        auto desc = build_ring_joint_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
-        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
-    }
-    return wd;
+    LegacyRingJointCompute variant;
+    return ring_joint_sdpa::build_workload_descriptor(args, tensor_args, output_tensors, tensor_coords, variant);
 }
 
 RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorkloadFactory::create_mesh_workload(
@@ -3428,7 +3503,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+        ring_joint_sdpa::apply_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }
 
