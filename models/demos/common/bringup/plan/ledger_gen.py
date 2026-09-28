@@ -119,6 +119,18 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         },
         paths=ref_paths,
     )
+    if trim_checkpoint.applies(spec):
+        # F47 (before R.3, so it runs as soon as R.2 passes): a layer subset needs the whole checkpoint only for the HF sanity; once it and the parity passed, the
+        # layers no later step reads are removed (bringup_trim.json keeps the full tensor map and the sanity metrics).
+        k = trim_checkpoint.keep_layers(spec)
+        add(
+            "R.4",
+            f"Trim the checkpoint to layers 0-{k - 1} (the whole model was needed only for the HF sanity)",
+            "intake",
+            ["R.2"],
+            f"{PY}.intake.trim_checkpoint",
+            {"trim_done": "== 1", "trim_verify_errors": "== 0", "trim_freed_gb": ">= 0"},
+        )
     add(
         "R.3",
         f"Reference chunked == one-shot ({first['seq']} in {first['chunk']}) and block graphs replay exactly",
@@ -134,18 +146,6 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         },
         paths=ref_paths,
     )
-    if trim_checkpoint.applies(spec):
-        # F47: a layer subset needs the whole checkpoint only for the HF sanity; once it and the parity passed, the
-        # layers no later step reads are removed (bringup_trim.json keeps the full tensor map and the sanity metrics).
-        k = trim_checkpoint.keep_layers(spec)
-        add(
-            "R.4",
-            f"Trim the checkpoint to layers 0-{k - 1} (the whole model was needed only for the HF sanity)",
-            "intake",
-            ["R.2"],
-            f"{PY}.intake.trim_checkpoint",
-            {"trim_done": "== 1", "trim_verify_errors": "== 0", "trim_freed_gb": ">= 0"},
-        )
     prev = "R.3"
     golden_task = {}
     for r in ladder:
