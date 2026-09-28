@@ -290,8 +290,8 @@ references in `tests/e2e/reference_outputs/` are regenerated on CPU with
 
 ## CI
 
-Tier 2 on WH N150 and BH P150, one leg per size: model identifiers `qwen3-tts-1.7b-base` and
-`qwen3-tts-0.6b-base`, with `HF_MODEL` set to the canonical HF name. Dispatch a single run from
+Tier 2 on WH N150 and BH P150, one leg per size: model identifiers `qwen3-tts-1.7b` and
+`qwen3-tts-0.6b`, with `HF_MODEL` set to the canonical HF name. Dispatch a single run from
 [`all-model-tests`](https://github.com/tenstorrent/tt-metal/actions/workflows/all-model-tests.yaml)
 with tier 2 and that identifier.
 

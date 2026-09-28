@@ -925,7 +925,7 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
-  model: qwen3-tts-1.7b-base
+  model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
     wh_n150:
@@ -947,7 +947,7 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
-  model: qwen3-tts-0.6b-base
+  model: qwen3-tts-0.6b
   model_family: Qwen3-TTS
   skus:
     wh_n150:
