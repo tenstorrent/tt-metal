@@ -38,9 +38,11 @@
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
+namespace sched = ttnn::ccl::schedule;  // the neighbour-first ring slice walk
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -225,7 +227,10 @@ void kernel_main() {
                     effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
                 const auto steps_advance = decompose_tile_advance(
                     effective_advance_by_tiles, effective_subchunk_size, effective_chunk_width_in_tiles);
-                int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+                // Per-chunk: the ring walk restarts at the nearest neighbour's slice (the shared
+                // neighbour-first cursor, same walk as the writer and compute kernel).
+                auto slice_cursor = sched::RingSliceCursor::starting_at(
+                    sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
 
 #ifdef FUSE_MM_OP_SIGNALER
                 // Wait for matmul to finish writing the output blocks for this chunk.
@@ -242,7 +247,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
                     CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
-                    const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
+                    const uint32_t actual_slice_idx = slice_cursor.wrap();
 #ifdef FUSE_RS_ADDCMUL
                     // At the final ring step the local chip's slice is written to DRAM by the writer.
                     // This is where we fuse the addcmul: load a and b tiles in parallel with input/intermediate.
@@ -432,7 +437,7 @@ void kernel_main() {
                         }
                     }
                     // Move to the next slice
-                    slice_idx += direction ? -1 : 1;
+                    slice_cursor.advance();
                 }
             }
 #ifdef FUSE_MM_OP_SIGNALER
