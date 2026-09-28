@@ -10,8 +10,15 @@ the process found every buffer of 32 chips full (all 11,520 sites, 32 chips x 72
 once each), and every marker recorded before it was gone before the forward began.
 
 So the tool loads this module into the profiled pytest (make_run_profiled adds `-p <this module>`)
-and it wraps every ttnn FastOperation for the whole session, at the cadence the profiling run
-carries. No model or test is edited. The device is learned from the ops themselves, by shape, the
+and it wraps every ttnn FastOperation for the whole session. No model or test is edited.
+
+TWO CADENCES, because a read is not free. Reading all 32 chips every TT_PERF_FLUSH_EVERY (4) ops from
+the first op spent 353 reader threads' worth of CPU and 40+ minutes before the model had even
+finished loading (2026-09-28, the same Galaxy). The session only has to keep the buffer from filling,
+and its size is known: TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs per core. So the session
+reads every capacity_cadence() ops; the measured regions -- the per-stage pass here, the test's own
+wrapper around its forward -- keep the fine cadence, and their reads reset the session's count. A
+buffer the heal grows (probes.choose_marker_drop_remedy) widens the session interval with it. The device is learned from the ops themselves, by shape, the
 way stage_marks finds the pipeline. Outside a profiling run it does nothing.
 """
 
@@ -66,20 +73,52 @@ def cadence() -> int:
         return 0
 
 
+# An op dispatches at least one program per chip; composites dispatch several. The session interval
+# assumes at most this many on average, so a full interval fills a quarter of what the buffer holds.
+_PROGRAMS_PER_OP_HEADROOM = 4
+
+
+def capacity_cadence() -> int:
+    """Ops between session reads: the buffer's program capacity over the per-op headroom."""
+    try:
+        from .probes import _DEFAULT_SUPPORT_COUNT, _SUPPORT_COUNT_ENV
+
+        support = int(os.environ.get(_SUPPORT_COUNT_ENV) or _DEFAULT_SUPPORT_COUNT)
+    except Exception:  # noqa: BLE001
+        return 0
+    return max(1, support // _PROGRAMS_PER_OP_HEADROOM)
+
+
+class FastOperation:
+    """A drained ttnn op that is still found BY TYPE NAME. Every wrapper around ttnn ops -- this
+    module's nested drains, and the op wrapper in every generated perf test -- selects ops by
+    type(op).__name__ == "FastOperation"; a plain function in their place would make each later
+    wrapper wrap nothing, and the test's forward would silently lose its drain. Attributes are the
+    original op's."""
+
+    def __init__(self, op, call):
+        self._tt_op, self._tt_call = op, call
+
+    def __call__(self, *a, **k):
+        return self._tt_call(*a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._tt_op, name)
+
+
 class ProfilerDrain:
     """Wrap every FastOperation ttnn exposes so the profiler is read every cadence() ops.
 
-    One instance at a time wraps: a drain opened while another is wrapping (the per-stage pass inside
-    the session-wide one) only adds its explicit read() calls. `final_read` reads once on exit, which
-    a pass that holds an open device wants and a session ending after the device closed does not."""
+    Drains nest: one opened inside another (the per-stage pass inside the session) wraps on top, and
+    every read -- by any of them, or by the test's own wrapper -- resets every open drain's count, so
+    an interval already read is never read again. `final_read` reads once on exit, which a pass that
+    holds an open device wants and a session ending after the device closed does not."""
 
-    _wrapping = False
-
-    def __init__(self, ttnn, device=None, final_read=True):
+    def __init__(self, ttnn, device=None, final_read=True, every=None):
         self._ttnn, self._device, self._final = ttnn, device, final_read
         self._read_fn = getattr(ttnn, "ReadDeviceProfiler", None)  # before anything is wrapped
         self._on = profiling() and callable(self._read_fn)
-        self._every = cadence()
+        self._every = cadence() if every is None else max(0, int(every))
         self._orig: list = []
         self._reading = False
         self._count = 0  # ops since the drain opened, across every op it wrapped
@@ -120,7 +159,7 @@ class ProfilerDrain:
         return read
 
     def __enter__(self):
-        if not (self._on and self._every) or ProfilerDrain._wrapping:
+        if not (self._on and self._every):
             return self
         mods = [self._ttnn] + [
             v
@@ -132,11 +171,10 @@ class ProfilerDrain:
                 op = getattr(mod, n, None)
                 if type(op).__name__ == "FastOperation":
                     self._orig.append((mod, n, op))
-                    setattr(mod, n, self._wrap(op))
+                    setattr(mod, n, FastOperation(op, self._wrap(op)))
         if self._orig and callable(self._read_fn):
             self._orig.append((self._ttnn, "ReadDeviceProfiler", self._read_fn))
             self._ttnn.ReadDeviceProfiler = self._watch_reads(self._read_fn)
-        ProfilerDrain._wrapping = bool(self._orig)
         return self
 
     def __exit__(self, *exc):
@@ -144,7 +182,6 @@ class ProfilerDrain:
             for mod, n, op in reversed(self._orig):
                 setattr(mod, n, op)
             self._orig = []
-            ProfilerDrain._wrapping = False
         if self._final:
             self.read()
         return False
@@ -156,13 +193,13 @@ _session = None
 
 def pytest_configure(config):
     global _session
-    if not (profiling() and cadence()):
+    if not profiling():
         return
     try:
         import ttnn
     except Exception:  # noqa: BLE001 -- no ttnn, nothing to drain
         return
-    _session = ProfilerDrain(ttnn, final_read=False).__enter__()
+    _session = ProfilerDrain(ttnn, final_read=False, every=capacity_cadence()).__enter__()
 
 
 def pytest_unconfigure(config):

@@ -117,8 +117,8 @@ def mark_stages(adapter, device) -> int:
         no_marks("the pipeline declares no stages after setup")
         return 0
     n = 0
-    # The session-wide drain (profiler_drain, loaded into the profiled pytest) already reads every
-    # few ops; this adds a read after each stage, and wraps ops itself only when nothing else does.
+    # The session-wide drain (profiler_drain, loaded into the profiled pytest) reads at the buffer's
+    # capacity; the measured pass reads at the run's fine cadence and after each stage.
     with ProfilerDrain(ttnn, device) as drain:
         for st in stages:
             name = str(getattr(st, "name", "") or "").strip()

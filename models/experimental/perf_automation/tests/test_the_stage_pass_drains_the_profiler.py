@@ -132,7 +132,22 @@ class _Tensor:
         return self._dev
 
 
-def test_the_session_drain_learns_the_device_from_the_ops_and_reads_from_the_first(profiling, monkeypatch):
+@pytest.fixture
+def small_buffer(monkeypatch):
+    # a buffer of 8 programs: the session reads every 8 // 4 = 2 ops
+    monkeypatch.setenv(probes._SUPPORT_COUNT_ENV, "8")
+
+
+def test_the_session_interval_is_the_buffers_capacity(monkeypatch):
+    monkeypatch.delenv(probes._SUPPORT_COUNT_ENV, raising=False)
+    assert pd.capacity_cadence() == probes._DEFAULT_SUPPORT_COUNT // pd._PROGRAMS_PER_OP_HEADROOM
+    monkeypatch.setenv(probes._SUPPORT_COUNT_ENV, "8000")  # what one heal grows it to
+    assert pd.capacity_cadence() == 8000 // pd._PROGRAMS_PER_OP_HEADROOM
+
+
+def test_the_session_drain_learns_the_device_from_the_ops_and_reads_from_the_first(
+    profiling, small_buffer, monkeypatch
+):
     calls, mesh = [], _Mesh()
     t = _fake_ttnn(calls)
     t.from_torch = FastOperation(calls)
@@ -156,15 +171,29 @@ def test_a_device_is_found_on_a_returned_tensor():
     assert pd._device_of((_Tensor(None),), {}, "r") is None
 
 
-def test_the_stage_pass_does_not_wrap_twice_under_the_session(profiling, monkeypatch):
-    calls = []
+def test_inside_the_session_the_stage_pass_reads_finer_and_nothing_is_read_twice(profiling, monkeypatch):
+    monkeypatch.setenv(probes._SUPPORT_COUNT_ENV, "40")  # session every 10 ops
+    calls, mesh, reads = [], _Mesh(), []
     t = _fake_ttnn(calls)
+    t.ReadDeviceProfiler = lambda dev: reads.append("read")
     monkeypatch.setitem(sys.modules, "ttnn", t)
     pd.pytest_configure(None)
     try:
-        wrapped = t.add
-        with pd.ProfilerDrain(t, object()) as inner:
-            assert t.add is wrapped and not inner._orig
+        t.add(_Tensor(mesh))
+        session_add = t.add
+        with pd.ProfilerDrain(t, mesh, final_read=False):  # the stage pass: every 2 ops
+            assert t.add is not session_add, "the pass wraps on top of the session"
+            for _ in range(12):
+                t.add()
+        assert t.add is session_add, "leaving the pass puts the session's wrappers back"
+        # due reads land before the next op: before ops 3, 5, 7, 9 and 11 of the pass
+        assert len(reads) == 5, "the pass's cadence, and the session never repeated one of its reads"
+        # the session counted the pass's last 2 ops since its last read: 8 more reach 10, not yet read
+        for _ in range(8):
+            t.add()
+        assert len(reads) == 5, "back at the session's interval"
+        t.add()
+        assert len(reads) == 6, "read before the op that follows a full interval"
     finally:
         pd.pytest_unconfigure(None)
 
@@ -220,7 +249,7 @@ def test_make_run_profiled_passes_it(tmp_path, monkeypatch):
     assert seen and seen[0][seen[0].index("-p", 7) + 1] == "x.profiler_drain"
 
 
-def test_a_read_by_the_tests_own_wrapper_is_not_repeated(profiling, monkeypatch):
+def test_a_read_by_the_tests_own_wrapper_is_not_repeated(profiling, small_buffer, monkeypatch):
     calls, mesh = [], _Mesh()
     t = _fake_ttnn(calls)
     reads = []
@@ -237,3 +266,19 @@ def test_a_read_by_the_tests_own_wrapper_is_not_repeated(profiling, monkeypatch)
         pd.pytest_unconfigure(None)
     assert len(reads) == 3, "only the test's reads: the session drain found each interval already read"
     assert t.ReadDeviceProfiler is not None and not isinstance(t.ReadDeviceProfiler, FastOperation)
+
+
+def test_the_generated_tests_own_wrapper_still_finds_every_op(profiling, monkeypatch):
+    """The generated test selects ops by type(op).__name__ == "FastOperation" (perf_test_gen); under
+    the session drain it must still find all of them, or its forward loses its drain."""
+    calls = []
+    t = _fake_ttnn(calls)
+    monkeypatch.setitem(sys.modules, "ttnn", t)
+    before = sorted(n for n in dir(t) if type(getattr(t, n)).__name__ == "FastOperation")
+    pd.pytest_configure(None)
+    try:
+        after = sorted(n for n in dir(t) if type(getattr(t, n)).__name__ == "FastOperation")
+        assert after == before == ["add"]
+        assert t.add() == "r" and calls == ["op"]
+    finally:
+        pd.pytest_unconfigure(None)
