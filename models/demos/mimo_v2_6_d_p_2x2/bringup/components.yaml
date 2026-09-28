@@ -1,0 +1,239 @@
+# MiMo-V2.6-Flash-RL (layers 0-5) on the 2x2 mesh (FABRIC_2D): every block step mapped to TTNN. Plan and reasoning in
+# plan.md. Starts from the 1x4 prior's final modules (models/demos/mimo_v2_6_d_p/tt, after its perf steps), which
+# already use the bring-up forks (rms_norm, sdpa, unified_routed_expert_ffn, dispatch/combine/offset_cumsum).
+# What changes for 2x2: (1) every CCL that was all_reduce(cluster_axis=1) over 1x4 becomes all_reduce(cluster_axis=None)
+# (axis 1 then axis 0) on the flattened TP=4 layout; (2) the routed experts use the DeepSeek dispatch along mesh axis 0
+# (2 chips per group, fabric) instead of a 1-chip local dispatch; (3) the lm_head logits gather runs over both axes.
+# Mesh chip index for TP: d = 2*row + col (ttnn.ShardTensorToMesh over the 2x2 mesh, row-major).
+components:
+- block_type: full_dense
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: 'input_layernorm, w * rms(x) (plain w), fp32 normalization. Unchanged from 1x4: replicated, no CCL. For layers > 0 the
+    previous block''s mlp/ffn residual add is fused in (return_residual_sum=True, MIMO_FUSE_RESIDUAL_NORM).'
+- block_type: full_dense
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttnn.linear Q (per chip [4096, 16 x 192], bf16, HiFi4) + ttnn.linear KV ([4096, 192 + 128]) -> ttnn.experimental.nlp_create_q_heads_split
+    (Q 64|128 RoPE split; K 192 | V 128) -> partial RoPE on dims 0-63 (ttnn.experimental.rotary_embedding, theta 1e7, cos/sin [1, 1, max_seq,
+    64] sliced on device) + ttnn.concat -> ttnn.experimental.paged_fill_cache K (192) and V (128) (identity page table) -> ttnn.bringup.scaled_dot_product_attention
+    (chunk 0, is_causal) / ttnn.bringup.chunked_scaled_dot_product_attention (later chunks, keyword args, fp32-exact scale 192^-0.5), V 128 ->
+    ttnn.experimental.nlp_concat_heads -> ttnn.linear o_proj (row-parallel, K 2048 per chip) -> ttnn.all_reduce (cluster_axis=None: axis 1 then
+    axis 0)'
+  reuse: models/demos/mimo_v2_6_d_p/tt/attention.py:TtFullAttention + TtKVCacheFull (SDPA_PRESETS "A" q512/k128), models/demos/gemma4_a4b_d_p/tt/attention.py:TtGlobalAttention
+  searched:
+  - 'repo_map: Chunked causal attention, GQA with fewer KV heads than chips, SDPA program config, Collectives on 1xN'
+  - 'ttnn/ttnn/bringup/INDEX.md: sdpa fork takes a V narrower than K for plain and chunked SDPA (MIMO_V_PAD=1 keeps the padded path)'
+  - 'ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp: cluster_axis=None on a non-line mesh runs all_reduce on axis 1 then axis 0'
+  - 'known_issues: SDPA needs V head dim == QK head dim, Chunked SDPA rejects a scale fp32 cannot hold, Streaming SDPA q512/k128 at head_dim 192'
+  notes: 'Changed for 2x2: only the o_proj reduce (cluster_axis 1 -> None, two 2-chip stages instead of one 4-chip line) and the weight mappers
+    (ShardTensorToMesh over the 2x2 mesh, so chip d = 2*row + col holds TP rank d: Q heads 16d..16d+15, KV head d). Carries over: the per-rank
+    qkv slab as stored (dequantize each rank slab on its own scale rows), value scale folded into the V rows, V 128 end to end, full-length paged-shaped
+    cache, no sink, SDPA preset A. Why TP=4 over the whole mesh rather than TP=2 x SP=2: 4 KV heads map one per chip with no duplication, the checkpoint
+    is already split by 4 TP ranks, and SP on causal chunked prefill would need a KV all_gather or ring SDPA per layer.'
+- block_type: full_dense
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the next norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, replicated [S, 4096]; no CCL. Unchanged from 1x4.
+- block_type: full_dense
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: post_attention_layernorm, w * rms(x). Unchanged from 1x4 (replicated, no CCL); the attn residual add is fused in (return_residual_sum).
+- block_type: full_dense
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear gate (silu fused) / up (column-parallel, 4096 per chip, HiFi4 + fp32 acc) -> ttnn.mul -> ttnn.linear down (row-parallel)
+    -> ttnn.all_reduce (cluster_axis=None)
+  reuse: models/demos/mimo_v2_6_d_p/tt/mlp.py:TtDenseMLP
+  searched:
+  - 'repo_map: MoE tensor parallel (shared_mlp.py), Collectives on 1xN'
+  - grep TtDenseMLP models/demos/mimo_v2_6_d_p/tt/mlp.py
+  - 'known_issues: HiFi2 matmul shrinks output norms'
+  notes: 'Layer 0 only. Changed for 2x2: the reduce (cluster_axis 1 -> None) and the mappers (chip d holds intermediate columns 4096d..4096d+4095).
+    Carries over: 16384 / 4 = 4096 per chip, fp8 x 128x128 block scale dequantized to bf16, HiFi4 + fp32 acc.'
+- block_type: full_dense
+  step: mlp_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the next block's attn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: out = h_mid + mlp_out, replicated [S, 4096]; no CCL. Unchanged from 1x4.
+- block_type: sliding_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: input_layernorm, w * rms(x). Unchanged from 1x4; previous block's residual add fused in (return_residual_sum).
+- block_type: sliding_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: 'ttnn.linear Q ([4096, 16 x 192], scale fold for the power-of-two SDPA scale) + ttnn.linear KV ([4096, 2 x (192 + 128)]) -> ttnn.experimental.nlp_create_q_heads_split
+    -> partial RoPE dims 0-63 (theta 1e4) -> ttnn.fill_cache / paged_fill_cache K and V (update_idx=start) -> ttnn.slice previous 128 K/V rows
+    from the cache + ttnn.concat (q_pad, chunk) -> ttnn.bringup.scaled_dot_product_attention(is_causal, sliding_window_size=128, attention_sink
+    [1, 16, 1, 1] pre-divided by 2^-4, scale 2^-4, V 128, preset S: HiFi4, fp32 dest off, exact exp) -> ttnn.slice -> ttnn.experimental.nlp_concat_heads
+    -> ttnn.linear o_proj (row-parallel) -> ttnn.all_reduce (cluster_axis=None)'
+  reuse: models/demos/mimo_v2_6_d_p/tt/attention.py:TtSlidingAttention + TtKVCacheSliding, models/demos/gpt_oss_d_p/tt/attention (sinks, window
+    128)
+  searched:
+  - 'repo_map: Sliding-window + global attention, Chunked causal attention, Collectives on 1xN'
+  - 'ttnn/ttnn/bringup/sdpa/CHANGELOG.md: narrow V for scaled_dot_product_attention (sliding_window_size and attention_sink still taken)'
+  - 'known_issues: SDPA attention sink is folded with a bf16-truncated scale, Sliding-window SDPA with sinks (preset S)'
+  notes: 'Changed for 2x2: the o_proj reduce (cluster_axis None) and the mappers (chip d = 2*row + col holds Q heads 16d..16d+15, KV heads 2d,
+    2d+1, sink values 16d..16d+15). Carries over: rank slab as stored (3712 rows, V unpadded), true scale folded into Q rows
+    with SDPA scale 2^-4 and the sink pre-divided (exact in bf16), window i - 128 < j <= i read back from the full-length cache, value scale in
+    the V rows, preset S.'
+- block_type: sliding_moe
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into ffn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, replicated [S, 4096]; no CCL. Unchanged from 1x4.
+- block_type: sliding_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: post_attention_layernorm, w * rms(x). Unchanged from 1x4 (replicated, no CCL).
+- block_type: sliding_moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 weight [4096 -> 256], HiFi4 + fp32 acc, fp32 out) -> ttnn.sigmoid -> ttnn.add (fp32 e_score_correction_bias [1, 256])
+    -> ttnn.topk (8) -> ttnn.gather (unbiased sigmoid) / ttnn.sum / ttnn.div -> idx/weights [S, 8]; dense [S, 256] via ttnn.scatter (bf16) only
+    for the boundary
+  reuse: models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (mode fp32), models/demos/deepseek_v3_d_p/tt/moe/tt_moe_gate_prefill.py
+  searched:
+  - 'repo_map: Sigmoid + correction-bias (noaux_tc) router on device, noaux_tc router with a large correction bias'
+  - 'known_issues: A large correction bias makes noaux_tc top-k selection precision-bound, moe_grouped_topk selects on TF32 keys'
+  notes: 'Unchanged from 1x4: replicated, every chip routes all S tokens, no CCL, component boundary [S, 256] unchanged. On 2x2 the experts step
+    only needs the router output for its own row half (mesh_partition inside the experts module), so a later perf step may partition the router
+    input by row first (S/2 rows per chip) and skip the dense boundary in the all-device model. route_scale 1.0.'
+- block_type: sliding_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.mesh_partition (x, idx, wts along the sequence, cluster_axis=0 -> S/2 rows per mesh row) -> ttnn.experimental.deepseek_prefill.masked_bincount
+    -> ttnn.bringup.offset_cumsum (cluster_axis=0, 2 devices, histograms all_gathered) -> ttnn.bringup.dispatch (dispatch_group_size 2, cluster_axis=0,
+    fabric, Topology.Linear) -> ttnn.bringup.unified_routed_expert_moe (Silu, bfp8 weights, bf16 ROW_MAJOR x, high_precision=True, HiFi4 + fp32
+    dest) -> ttnn.bringup.combine (cluster_axis=0, fabric) -> TtReduceModule fused weighted top-k sum -> ttnn.all_reduce (cluster_axis=1, sum of
+    the two dispatch groups) -> ttnn.all_gather (cluster_axis=0, dim -2) -> experts_out [S, 4096] replicated
+  reuse: models/demos/mimo_v2_6_d_p/tt/experts.py:TtExperts (mode unified), models/demos/deepseek_v3_d_p/tt/moe (tt_dispatch.py, tt_combine.py,
+    tt_reduce.py, init_helpers.py:ExpertMapping for 2D meshes)
+  searched:
+  - 'repo_map: MoE expert parallel (EP), Fused routed experts at a chosen fidelity with bf16 activations'
+  - 'deepseek_v3_d_p/tt/moe/README.md: 2D mesh, each column is a dispatch group, dispatch along rows (SP axis), x sharded on the SP axis and replicated
+    on the EP axis'
+  - 'deepseek_v3_d_p/tests/conftest.py: mesh (2, 2) is run with FABRIC_2D'
+  - 'ttnn/ttnn/bringup/dispatch|combine|offset_cumsum CHANGELOG.md: the fork change applies only to a 1-device axis; with 2 devices on the axis
+    the forks behave as the source ops (fabric on)'
+  - 'grep mesh_partition ttnn/cpp/ttnn/operations/ccl/mesh_partition: local split of a replicated tensor along cluster_axis, no transfer'
+  - 'known_issues: unified_routed_expert_moe works in place, Expert counts are global, The fused routed-expert kernel accumulates K-blocks in bf16
+    L1 partials, bfp8 expert activations fail on a layer with outlier channels'
+  notes: 'Changed for 2x2: the 1x4 prior dispatched locally (a 1-chip dispatch group along its size-1 axis 0). A 2x2 mesh has no size-1 axis,
+    so the plan uses the layout the DeepSeek op was designed for: dispatch axis 0 (DGS 2), 2 dispatch groups (columns), experts_per_chip 64, chip
+    (r, c) holds experts 128c + 64r .. +63 (ExpertMapping col-major: device_idx = 2c + r). expert_dispatch_table (2, 257) sharded over columns,
+    replicated over rows; global expert idx table (2, 2, 64) via get_ep_mesh_mapper; counts/offsets [1, 256] global per chip. Each chip dispatches
+    its S/2 row half (chunk 5120 -> 2560, 2048 -> 1024, 8192 -> 4096, all tile aligned); max_dispatched_tokens_per_expert = 2 x S/2 = S, buffer
+    capacity factor 8 (worst case). After combine + reduce, chip (r, c) holds its row half summed over group c''s 128 experts: all_reduce over axis
+    1 adds the other group, all_gather over axis 0 restores [S, 4096] replicated (component boundary unchanged). Alternative (TtReduceModule with
+    cluster_axis=1: reduce_scatter [S/2, 2048] then all_gather on both axes) is equivalent; implement picks. Carries over: bfp8 experts from mxfp4
+    x e8m0 dequantized on the host at load and cached, high_precision unified kernel at HiFi4 (layer 5 outlier channels need bf16 x). Fallback if
+    the fabric dispatch misbehaves on this box: a local 1-chip dispatch group on a 2x2 mesh needs a new option in the dispatch/combine/offset_cumsum
+    forks (dispatch_group_size 1 without fabric on a 2-device axis, default off), then EP=4 with one all_reduce(cluster_axis=None) as on 1x4.'
+- block_type: sliding_moe
+  step: ffn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the next block's attn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: out = h_mid + experts_out, replicated [S, 4096]; no CCL. Unchanged from 1x4.
+- block_type: full_moe
+  step: attn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: input_layernorm, w * rms(x). Unchanged from 1x4; previous block's residual add fused in (return_residual_sum).
+- block_type: full_moe
+  step: attention
+  tag: COMPOSED
+  ttnn: 'as full_dense attention: ttnn.linear Q + KV -> ttnn.experimental.nlp_create_q_heads_split -> partial RoPE (theta 1e7) -> ttnn.experimental.paged_fill_cache
+    K 192 / V 128 -> ttnn.bringup.scaled_dot_product_attention / ttnn.bringup.chunked_scaled_dot_product_attention -> ttnn.experimental.nlp_concat_heads
+    -> ttnn.linear o_proj (row-parallel) -> ttnn.all_reduce (cluster_axis=None)'
+  reuse: models/demos/mimo_v2_6_d_p/tt/attention.py:TtFullAttention + TtKVCacheFull
+  searched:
+  - 'repo_map: Chunked causal attention, GQA with fewer KV heads than chips, SDPA program config'
+  - 'ttnn/ttnn/bringup/INDEX.md: sdpa fork (narrow V)'
+  - 'ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp: cluster_axis=None on a 2x2 mesh = axis 1 then axis 0'
+  notes: Same module as full_dense attention (4 KV heads, one per chip d = 2*row + col, theta 1e7, no sink). Changed for 2x2 only in the reduce
+    axis and the mappers.
+- block_type: full_moe
+  step: attn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into ffn_norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: h_mid = in + attn_out, replicated [S, 4096]; no CCL. Unchanged from 1x4.
+- block_type: full_moe
+  step: ffn_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], weight w, eps 1e-6, HiFi4 + fp32 acc)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: post_attention_layernorm (w up to 8.75 on layer 5, outlier channels downstream). Unchanged from 1x4.
+- block_type: full_moe
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 weight [4096 -> 256], HiFi4 + fp32 acc, fp32 out) -> ttnn.sigmoid -> ttnn.add (fp32 bias) -> ttnn.topk (8) -> ttnn.gather
+    / ttnn.sum / ttnn.div -> idx/weights [S, 8]; dense [S, 256] via ttnn.scatter (bf16) only for the boundary
+  reuse: models/demos/mimo_v2_6_d_p/tt/router.py:TtRouter (mode fp32)
+  searched:
+  - 'repo_map: noaux_tc router with a large correction bias'
+  - 'known_issues: moe_grouped_topk selects on TF32 keys, Router mutations score differently per layer'
+  notes: Same module as the sliding_moe router. Unchanged from 1x4 (replicated, no CCL).
+- block_type: full_moe
+  step: experts
+  tag: COMPOSED
+  ttnn: 'as sliding_moe experts: ttnn.mesh_partition (cluster_axis=0) -> masked_bincount -> ttnn.bringup.offset_cumsum -> ttnn.bringup.dispatch
+    (DGS 2, cluster_axis=0, fabric) -> ttnn.bringup.unified_routed_expert_moe (Silu, high_precision=True, HiFi4 + fp32 dest, bf16 x) -> ttnn.bringup.combine
+    -> TtReduceModule weighted sum -> ttnn.all_reduce (cluster_axis=1) -> ttnn.all_gather (cluster_axis=0)'
+  reuse: models/demos/mimo_v2_6_d_p/tt/experts.py:TtExperts (mode unified), models/demos/deepseek_v3_d_p/tt/moe
+  searched:
+  - 'repo_map: MoE expert parallel (EP)'
+  - 'deepseek_v3_d_p/tt/moe/README.md: 2D mesh dispatch groups'
+  - 'known_issues: bfp8 expert activations fail on a layer with outlier channels, The fused routed-expert kernel accumulates K-blocks in bf16 L1
+    partials'
+  notes: Same module as the sliding_moe experts (layer 5 has the outlier-channel MoE input, so x stays bf16 and the kernel runs high_precision
+    at HiFi4).
+- block_type: full_moe
+  step: ffn_residual
+  tag: NATIVE
+  ttnn: ttnn.add (or fused into the final norm, ttnn.bringup.rms_norm return_residual_sum)
+  reuse: models/demos/mimo_v2_6_d_p/tt/residual.py
+  notes: out = h_mid + experts_out, replicated [S, 4096]; no CCL. Unchanged from 1x4.
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.to_layout(TILE) -> ttnn.minimum(ids, 152575) (uint32, exact) -> ttnn.to_layout(ROW_MAJOR) -> ttnn.embedding (replicated [152576,
+    4096] bf16)
+  reuse: models/demos/mimo_v2_6_d_p/tt/model.py:TtEmbedding, models/demos/mimo_v2_6_d_p/tt/runners/adapter.py:_clamp_ids
+  searched:
+  - 'repo_map: All-device model'
+  - 'known_issues: Masking the engine''s pad id when the vocab is not a power of two'
+  notes: Unchanged from 1x4 (replicated table, ids replicated to all 4 chips, no CCL).
+- block_type: model
+  step: final_norm
+  tag: NATIVE
+  ttnn: ttnn.bringup.rms_norm (replicated [S, 4096], model.norm.weight, eps 1e-6)
+  reuse: models/demos/mimo_v2_6_d_p/tt/rms_norm.py:TtRMSNorm
+  notes: Only after layer 5 in this subset bring-up. Unchanged from 1x4.
+- block_type: model
+  step: lm_head
+  tag: COMPOSED
+  ttnn: ttnn.slice (last tokens) -> ttnn.linear (vocab-sharded lm_head, 38144 rows per chip, chip d = 2*row + col holds rows 38144d..) -> ttnn.all_gather
+    (cluster_axis=1, dim -1) -> ttnn.all_gather (cluster_axis=0, dim -1)
+  reuse: models/demos/mimo_v2_6_d_p/tt/model.py, models/demos/deepseek_v3_d_p/tt/tt_lm_head.py
+  searched:
+  - 'repo_map: All-device model, Collectives on 1xN'
+  - ls models/demos/deepseek_v3_d_p/tt (tt_lm_head.py)
+  notes: 'Changed for 2x2: the logits gather runs on both axes (col-major order within a row: gather axis 1 first gives rows [2r, 2r+1], then axis
+    0 gives [0, 1, 2, 3]); or a host concat with ConcatMesh2dToTensor in the harness read-back. 152576 / 4 = 38144 = 1192 tiles per chip.'
