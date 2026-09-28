@@ -1,18 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 prefill on device against the fp32 reference.
-
-  * wiring    -- one layer, which is where a rotation-convention error shows.
-  * prefill   -- all 15 fixture prompts, pooled and last-position, each paired with a
-    worst-sample bound because a correlation alone can hide one far-off element.
-  * KV cache  -- every cached K and V entry, all 26 layers, at four prompt lengths.
-
-Decode is test_backbone_decode_pcc.py. Prefill across every padded shape is test_prefill_shapes.py.
+"""The backbone prefill on device against the fp32 reference: one-layer wiring, all 15 fixture
+prompts
+(pooled and last position, each with a worst-sample bound), and every KV-cache entry.
+Decode is test_backbone_decode_pcc.py; every padded shape is test_prefill_shapes.py.
+see VOXTRAL_TTS_BACKBONE.md [gpt-50]
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py
-    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py -k case0
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py [-k case0]
 """
 
 import pytest
@@ -20,9 +16,8 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-# Every test in this file opens a device (the one-layer wiring test included -- it was the
-# 20 s outlier in the supposedly host-only subset). Module-level, so the mark cannot be
-# forgotten on a new test.
+# Every test here opens a device, the one-layer wiring test included. Module-level, so a new
+# test cannot miss the mark.
 pytestmark = pytest.mark.slow
 
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
@@ -48,11 +43,11 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
+# Gate constants; their measured bands: see VOXTRAL_TTS_BACKBONE.md [gpt-50]
 PCC_PREFILL = 0.999
 CACHE_CASES = (0, 2, 3, 12)         # P = 100..357
 CACHE_PCC = 0.998
-# The per-position minimum is printed, not asserted: a single position's PCC is far noisier than
-# the pooled or last-position figure. What is gated is the worst-sample bound on the last position.
+# The per-position minimum is printed, not asserted; the last position's worst sample is gated.
 MAX_WORST_SAMPLE_PCT = 5.0
 MAX_POOLED_WORST_SAMPLE_PCT = 8.0   # largest single-element error over all positions
 

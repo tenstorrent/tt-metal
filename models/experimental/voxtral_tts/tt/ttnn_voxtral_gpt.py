@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Voxtral-TTS Block 1: the 3.4B autoregressive backbone, on TTNN.
+"""Voxtral-TTS the backbone: the 3.4B autoregressive backbone, on TTNN.
 
-See NOTES.md [gpt-01].
+prefill() runs the whole prompt and fills the KV cache; step() decodes one frame against it.
+Mirrors reference/voxtral_backbone_ref._layer op-for-op. Tests: tests/pcc/test_backbone_*_pcc.py.
+Design notes: see VOXTRAL_TTS_BACKBONE.md [gpt-01].
 """
 
 
@@ -27,7 +29,7 @@ SCALE = HEAD_DIM**-0.5
 Q_WIDTH = N_HEADS * HEAD_DIM          # 4096, deliberately != DIM
 TILE = 32
 
-# NOTES.md [gpt-02] -- Prefill pads its sequence to this...
+# Prefill pads its sequence to a multiple of this. see VOXTRAL_TTS_BACKBONE.md [gpt-02]
 PREFILL_MULTIPLE = 128
 COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
@@ -35,16 +37,14 @@ COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
 )
 DTYPE = ttnn.bfloat16
 
-# NOTES.md [gpt-03] -- DECODE'S INTERMEDIATES LIVE IN L1, not DRAM -- the same...
+# Decode keeps its intermediates in L1. see VOXTRAL_TTS_BACKBONE.md [gpt-03]
 _L1 = ttnn.L1_MEMORY_CONFIG
 
-# The decode RMSNorm IS width-sharded -- see _NORM_SHARD below and NOTES.md [gpt-28]. [gpt-04] is
-# the superseded N150-vs-p150 record and describes the opposite; read [gpt-28] first.
-
-# NOTES.md [gpt-05] -- Decode runs in ttnn's DECODE-NATIVE head layout, [1...
+# Memory configs for ttnn's decode-native head layout, [1, batch, heads, head_dim].
+# see VOXTRAL_TTS_BACKBONE.md [gpt-05]
 _QKV_WIDTH = (N_HEADS + 2 * N_KV_HEADS) * HEAD_DIM      # 6144, one fused projection
-# One number used twice. On Blackhole FEWER cores is faster -- 1 beats 8 by 0.46 ms/step, and
-# the grid provably never reaches the consumers (they always emit 1 core, (32,128)). [gpt-05].
+# Sets both the shard width and the grid, so the two cannot disagree.
+# see VOXTRAL_TTS_STATUS.md §6.44
 _QKV_GRID_X = 1
 _QKV_SHARD = ttnn.create_sharded_memory_config(
     (TILE, _QKV_WIDTH // _QKV_GRID_X), core_grid=ttnn.CoreGrid(y=1, x=_QKV_GRID_X),
@@ -55,32 +55,24 @@ _QKV_SHARD = ttnn.create_sharded_memory_config(
 _ROPE_SHARD = ttnn.create_sharded_memory_config(
     (TILE, HEAD_DIM), core_grid=ttnn.CoreGrid(y=1, x=1), strategy=ttnn.ShardStrategy.HEIGHT,
     orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True)
-# NOTES.md [gpt-19] -- _V_SHARD is GONE. It existed only to let paged_fused_update_cache accept
-# K and V, and on Blackhole that fused write is 0.687 ms/step SLOWER than two plain writes. Its
-# silent failure mode (RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38 from
-# uninitialised L1) goes with it. STATUS.md 6.44.
-
-# NOTES.md [gpt-20] -- wo has NO program config on Blackhole. 6.25 hand-tuned one for the N150
-# (+0.196 ms/frame); here it is worth nothing measurable and is deleted. Removing it is bit-exact,
-# so the only question was speed, and no instrument could find any. STATUS.md 6.43.
-
-# NOTES.md [gpt-21] -- k=512 on an 8x2 grid, 1.63x. THE FASTER ONES ARE NOT SAFE -- position sweep...
+# sdpa_decode program config; a config ships only if exact at every position.
+# see VOXTRAL_TTS_BACKBONE.md [gpt-21]
 _SDPA_PRG = ttnn.SDPAProgramConfig(
     q_chunk_size=TILE, k_chunk_size=512,
     compute_with_storage_grid_size=ttnn.CoreCoord(8, 2))
 
-# NOTES.md [gpt-26] -- DECODE matmul program configs, -4.24 ms/frame. DECODE ONLY: per_core_M=1
-# and fuse_batch=True assume one tile of rows, which prefill violates, so _mlp takes them as an
-# argument rather than reading module scope. activation="silu" never fused; fused_activation does.
-_MM_GRID = (11, 7)                    # fits 11x10 and 13x10; 12x6's per_core_N, bit-exact. [gpt-29]
+# Decode matmul program configs. DECODE ONLY: per_core_M=1 and fuse_batch=True assume one tile of
+# rows, so _mlp takes them as an argument. SiLU fuses via fused_activation, not activation="silu".
+# see VOXTRAL_TTS_BACKBONE.md [gpt-26]
+_MM_GRID = (11, 7)                    # fits 11x10 and 13x10. see VOXTRAL_TTS_BACKBONE.md [gpt-29]
 
 
 def _mm1d(in0_block_w, per_core_n, activation=None):
     """1D multicast: split N across the grid, broadcast in0. The batch-1 decode shape."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=_MM_GRID, in0_block_w=in0_block_w, out_subblock_h=1,
-        # largest legal width -- NOTES.md [gpt-26]. osh*osw <= 4 and per_core_N % osw == 0,
-        # both TT_FATAL. 3 belongs here; omitting it silently dropped wqkv to 1.
+        # largest legal width: osh*osw <= 4 and per_core_N % osw == 0, both TT_FATAL.
+        # see VOXTRAL_TTS_STATUS.md §6.61
         out_subblock_w=next(s for s in (4, 3, 2, 1) if per_core_n % s == 0),
         per_core_M=1, per_core_N=per_core_n, fuse_batch=True,
         fused_activation=activation, mcast_in0=True)
@@ -99,10 +91,9 @@ def _pc(prg, key):
     """program_config kwarg for `key`, or nothing at all when prg is empty (the prefill path)."""
     return {"program_config": prg[key]} if prg else {}
 
-# NOTES.md [gpt-28] -- the decode RMSNorm is width-sharded again, +5.399 ms/frame. 6.39/6.40
-# rejected this at +4.4 ms WORSE, but that cost was the RESHARD DISPATCH, which 6.65 traced away.
-# DECODE ONLY: the shard spec fixes the height at one tile, so prefill fails outright.
-_NORM_GRID = (8, 4)                   # 32 cores x block_w 3 == 96 tiles; the grid barely matters
+# Width-sharded decode RMSNorm. DECODE ONLY: the shard spec fixes the height at one tile.
+# see VOXTRAL_TTS_BACKBONE.md [gpt-28]
+_NORM_GRID = (8, 4)                   # 32 cores x block_w 3 == 96 tiles
 _NORM_SHARD = ttnn.create_sharded_memory_config(
     (TILE, DIM // (_NORM_GRID[0] * _NORM_GRID[1])),
     core_grid=ttnn.CoreGrid(y=_NORM_GRID[1], x=_NORM_GRID[0]),
@@ -114,8 +105,8 @@ _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
 
 
 def check_device_grid(device):
-    """Raise, naming the constant, if any hardcoded core grid does not fit this device. Without
-    it a smaller card fails deep inside the first matmul with a bare TT_FATAL. NOTES.md [gpt-29]."""
+    """Raise, naming the constant, if any hardcoded core grid does not fit this device.
+    see VOXTRAL_TTS_BACKBONE.md [gpt-29]"""
     g = device.compute_with_storage_grid_size()
     need = {"_MM_GRID": _MM_GRID, "_NORM_GRID": _NORM_GRID,
             "_SDPA_PRG": (_SDPA_PRG.compute_with_storage_grid_size.x,
@@ -136,8 +127,8 @@ def sharded_norm(x, gamma, eps, mc):
     return ttnn.to_memory_config(r, mc)
 
 
-# NOTES.md [gpt-06] -- WEIGHT PRECISION -- load-bearing for CORRECTNESS, not...
-WEIGHT_DTYPE = ttnn.bfloat16          # w2 -- bf16 for ACCURACY (6.16), not for the hang (6.13)
+# Weight precision decides accuracy as well as speed. see VOXTRAL_TTS_BACKBONE.md [gpt-06]
+WEIGHT_DTYPE = ttnn.bfloat16          # w2, kept bf16 for accuracy
 FF_WEIGHT_DTYPE = ttnn.bfloat8_b      # FF1 and FF3
 ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
 
@@ -145,7 +136,7 @@ ATTN_WEIGHT_DTYPE = ttnn.bfloat8_b    # wqkv and wo
 def interleaved_to_halfsplit(t, n_heads):
     """Mistral-native (interleaved-pair) q/k weight -> half-split layout, so `rotate_half` applies.
 
-    See NOTES.md [gpt-07].
+    See VOXTRAL_TTS_BACKBONE.md [gpt-07].
     """
     d1, d2 = t.shape
     return t.view(n_heads, d1 // n_heads // 2, 2, d2).transpose(1, 2).reshape(d1, d2)
@@ -154,7 +145,7 @@ def interleaved_to_halfsplit(t, n_heads):
 def rope_tables(seq_len, offset=0, head_dim=HEAD_DIM, theta=ROPE_THETA):
     """-> (cos, sin) torch [seq_len, head_dim], each half duplicated for the half-split form.
 
-    See NOTES.md [gpt-08].
+    See VOXTRAL_TTS_BACKBONE.md [gpt-08].
     """
     inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float64) / head_dim))
     ang = torch.outer(torch.arange(offset, offset + seq_len, dtype=torch.float64), inv)
@@ -163,16 +154,13 @@ def rope_tables(seq_len, offset=0, head_dim=HEAD_DIM, theta=ROPE_THETA):
 
 
 class TtVoxtralGPT:
-    """Block 1 on device. prefill(embeds) -> hidden; step(embed) -> hidden, sharing a KV cache."""
+    """The backbone on device. prefill(embeds) -> hidden; step(embed) -> hidden, sharing a KV
+    cache."""
 
     def __init__(self, device, ckpt_path=DEFAULT_CKPT, n_layers=N_LAYERS, state=None,
                  max_seq_len=2048):
-        """`state` takes an already-loaded `load_backbone_state` dict. Pass it when the caller
-        also needs the fp32 reference weights: that dict is ~13 GB, and loading it twice is the
-        difference between comfortable and swapping.
-
-        See NOTES.md [gpt-09].
-        """
+        """`state` takes an already-loaded `load_backbone_state` dict so the fp32 weights load once;
+        `max_seq_len=0` skips the KV cache. see VOXTRAL_TTS_BACKBONE.md [gpt-09]"""
         check_device_grid(device)
         self.device = device
         self.dtype = DTYPE
@@ -198,7 +186,7 @@ class TtVoxtralGPT:
             self.layers.append({
                 "an": vec(w[p + "attention_norm"]),
                 "fn": vec(w[p + "ffn_norm"]),
-                # NOTES.md [gpt-10] -- q, k and v fused into ONE weight: one matmul and one...
+                # q, k and v fused into one weight. see VOXTRAL_TTS_BACKBONE.md [gpt-10]
                 "wqkv": lin(torch.cat([wq, wk, w[p + "attention.wv"]], dim=0), attnd),
                 "wo": lin(w[p + "attention.wo"], attnd),
                 "w1": lin(w[p + "feed_forward.w1"], ffd),
@@ -231,7 +219,7 @@ class TtVoxtralGPT:
     def _rope(self, x, cos, sin):
         """Half-split RoPE on [1, heads, S, head_dim]: x*cos + rotate_half(x)*sin.
 
-        See NOTES.md [gpt-11].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-11].
         """
         return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False,
                                                      compute_kernel_config=COMPUTE_CONFIG)
@@ -239,13 +227,13 @@ class TtVoxtralGPT:
     def _norm(self, x, gamma):
         """RMSNorm.
 
-        See NOTES.md [gpt-12].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-12].
         """
         return sharded_norm(x, gamma, NORM_EPS, _L1)
 
     # ----------------------------------------------------------------------------
     # PREFILL PATH -- whole prompt at once, fills the KV cache
-    # Runs once per utterance (~1 s), so it is not where the frame budget goes.
+    # Runs once per utterance, not once per frame.
     # ----------------------------------------------------------------------------
     def _qkv(self, x, w, S, cos, sin):
         """Pre-norm + fused QKV + RoPE. -> (q,k,v) as [1, heads, S, head_dim], v un-rotated."""
@@ -260,7 +248,7 @@ class TtVoxtralGPT:
     def _attend(self, qh, kh, vh, S, mask):
         """PREFILL attention: [1,32,S,128] x [1,8,S,128] -> merged [1,S,4096], `mask` additive.
 
-        See NOTES.md [gpt-13].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-13].
         """
         rep = N_HEADS // N_KV_HEADS
         kr, vr = ttnn.repeat_interleave(kh, rep, dim=1), ttnn.repeat_interleave(vh, rep, dim=1)
@@ -272,25 +260,21 @@ class TtVoxtralGPT:
         return ttnn.reshape(ttnn.experimental.nlp_concat_heads(a), [1, S, Q_WIDTH])
 
     def _mlp(self, x, h, w, mc, prg=None):
-        """Residual + SwiGLU over an ALREADY-NORMED `h`. Shared by prefill and decode.
-
-        `prg` is DECODE_PRG on decode, None on prefill. See NOTES.md [gpt-14], [gpt-26], [gpt-27].
-        """
+        """Residual + SwiGLU over an already-normed `h`; `prg` is DECODE_PRG on decode, None on
+        prefill. see VOXTRAL_TTS_BACKBONE.md [gpt-14], [gpt-26], [gpt-27]"""
         prg = prg or {}
-        # NOTES.md [gpt-22] -- w1 and w3 stay SEPARATE -- fusing them is 4x SLOWER, and why...
-        # NOTES.md [gpt-26] -- silu rides in the program config, NOT activation="silu", which is
-        # not fused. With no config (prefill) fall back to the kwarg.
+        # w1 and w3 stay separate matmuls. see VOXTRAL_TTS_BACKBONE.md [gpt-22]
+        # silu rides in the program config, not activation="silu", which is not fused. With no
+        # config (prefill) fall back to the kwarg. see VOXTRAL_TTS_BACKBONE.md [gpt-26]
         g = (ttnn.linear(h, w["w1"], program_config=prg["w1"],
                          compute_kernel_config=COMPUTE_CONFIG, memory_config=mc) if prg else
              ttnn.linear(h, w["w1"], activation="silu", compute_kernel_config=COMPUTE_CONFIG,
                          memory_config=mc))
-        # NOTES.md [gpt-25] -- IN PLACE. g and x are both dead immediately after, and on Blackhole
-        # the allocation is ~12 us of a ~65 us op. Worth 0.929 ms/step with the two adds, and
-        # bit-identical. 6.37 measured this at +0.001 ms on the N150. STATUS.md 6.47.
+        # In place: g and x are both dead immediately after. see VOXTRAL_TTS_BACKBONE.md [gpt-25]
         u = ttnn.multiply_(g, ttnn.linear(h, w["w3"], compute_kernel_config=COMPUTE_CONFIG,
                                           memory_config=mc, **_pc(prg, "w3")))
-        # NOTES.md [gpt-27] -- residual as BIAS. `prg` non-empty means decode, i.e. one row; a
-        # bias broadcasts over rows and would be silently WRONG for prefill's many.
+        # Residual as the matmul bias on decode (one row) only; a bias broadcasts over rows, so
+        # prefill keeps the add. see VOXTRAL_TTS_BACKBONE.md [gpt-27]
         if prg:
             return ttnn.linear(u, w["w2"], bias=ttnn.reshape(x, [1, DIM]),
                                program_config=prg["w2"], compute_kernel_config=COMPUTE_CONFIG,
@@ -301,7 +285,7 @@ class TtVoxtralGPT:
     def _layer(self, x, w, S, cos, sin, mask, cache=None):
         """x [1,S,3072] -> same. Pre-norm GQA with RoPE + causal mask, then SwiGLU.
 
-        See NOTES.md [gpt-15].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-15].
         """
         qh, kh, vh = self._qkv(x, w, S, cos, sin)
         if cache is not None:
@@ -317,7 +301,7 @@ class TtVoxtralGPT:
     def _layer_step(self, x, w, cos, sin, cache, pos_t):
         """One decode position. x [1,1,3072] -> same, against `cache` written up to `pos_t`.
 
-        See NOTES.md [gpt-16].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-16].
         """
         qkv = ttnn.linear(self._norm(x, w["an"]), w["wqkv"], program_config=DECODE_PRG["wqkv"],
                           compute_kernel_config=COMPUTE_CONFIG)
@@ -326,19 +310,21 @@ class TtVoxtralGPT:
             qkv, num_heads=N_HEADS, num_kv_heads=N_KV_HEADS)
         qh = ttnn.experimental.rotary_embedding_hf(qh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
-        # NOTES.md [gpt-23] -- two calls, not the fused q+k rope: convention mismatch, 0.236 ms/frame...
+        # Two calls, not the fused q+k rope, which uses the interleaved convention.
+        # see VOXTRAL_TTS_BACKBONE.md [gpt-23]
         kh = ttnn.experimental.rotary_embedding_hf(kh, cos, sin, is_decode_mode=True,
                                                    compute_kernel_config=COMPUTE_CONFIG)
-        # NOTES.md [gpt-24] -- TWO writes, not the fused one: on Blackhole the fused write LOSES
-        # 0.687 ms/step and 6.20/6.22's whole V-move chain goes with it. STATUS.md 6.44.
+        # Two plain cache writes, not the fused one. see VOXTRAL_TTS_BACKBONE.md [gpt-19]
         ttnn.experimental.paged_update_cache(cache[0], kh, update_idxs_tensor=pos_t)
         ttnn.experimental.paged_update_cache(cache[1], vh, update_idxs_tensor=pos_t)
         o = ttnn.transformer.scaled_dot_product_attention_decode(
             qh, cache[0], cache[1], cur_pos_tensor=pos_t, scale=SCALE,
             compute_kernel_config=COMPUTE_CONFIG, program_config=_SDPA_PRG)
-        # NOTES.md [gpt-03b] -- no memory_config move: L1 here measures 0.999x, see [gpt-03]...
+        # No memory_config move: sdpa already emits the layout wo reads.
+        # see VOXTRAL_TTS_BACKBONE.md [gpt-03b]
         a = ttnn.reshape(o, [1, 1, Q_WIDTH])
-        # NOTES.md [gpt-27] -- residual as bias. Decode is M=1, so the residual IS a row vector.
+        # Residual as bias: decode is M=1, so the residual is a row vector.
+        # see VOXTRAL_TTS_BACKBONE.md [gpt-27]
         x = ttnn.linear(a, w["wo"], bias=ttnn.reshape(x, [1, DIM]), program_config=DECODE_PRG["wo"],
                         compute_kernel_config=COMPUTE_CONFIG, memory_config=_L1)
         return self._mlp(x, self._norm(x, w["fn"]), w, _L1, DECODE_PRG)
@@ -347,7 +333,7 @@ class TtVoxtralGPT:
     def prefill(self, embeds, apply_final_norm=True, last_only=False):
         """embeds torch [1,S,3072] -> hidden torch [1,S,3072], or [1,1,3072] if `last_only`.
 
-        See NOTES.md [gpt-17].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-17].
         """
         S = embeds.shape[1]
         Sp = (S + PREFILL_MULTIPLE - 1) // PREFILL_MULTIPLE * PREFILL_MULTIPLE
@@ -379,14 +365,14 @@ class TtVoxtralGPT:
 
     def prefill_last(self, embeds):
         """[1,P,3072] -> hidden of the LAST position [1,1,3072]. The pipeline's entry point; it is
-        all Block 2 ever sees."""
+        all the flow model ever sees."""
         return self.prefill(embeds, last_only=True)
 
     @torch.no_grad()
     def step(self, embed):
         """embed torch [1,1,3072] (one frame) -> hidden torch [1,1,3072]. Advances self.pos.
 
-        See NOTES.md [gpt-18].
+        See VOXTRAL_TTS_BACKBONE.md [gpt-18].
         """
         if not self.caches:
             raise RuntimeError("step() needs a KV cache; construct with max_seq_len > 0")
@@ -407,8 +393,3 @@ class TtVoxtralGPT:
         x = self._norm(x, self.norm)
         self.pos = pos + 1
         return ttnn.to_torch(x).float().reshape(1, 1, DIM)
-
-
-# --------------------------------------------------------------------------------
-# GATES -- each increment of this port had to pass one before the next started.
-# --------------------------------------------------------------------------------

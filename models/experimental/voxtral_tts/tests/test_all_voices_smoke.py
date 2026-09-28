@@ -74,7 +74,8 @@ def test_every_voice_has_a_sentence():
 
 @pytest.mark.parametrize("voice", all_voices())
 def test_voice_smoke(pipe, voice):
-    """Prompt assembly through Blocks 1 and 2 for one voice, prefill checked against fp32."""
+    """Prompt assembly through the backbone and flow model for one voice, prefill checked against
+    fp32."""
     embeds = corpus_embeds(first_sentence_for(voice), voice, pipe.wb)
 
     exp = bref.reference_forward(embeds, pipe.wb, n_layers=N_LAYERS)

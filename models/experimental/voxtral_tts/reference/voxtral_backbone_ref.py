@@ -1,39 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-CPU reference for the Voxtral-TTS autoregressive backbone — BLOCK 1 (3.4B, Ministral-derived).
+"""CPU reference for the Voxtral-TTS autoregressive backbone -- THE BACKBONE (3.4B,
+Ministral-derived).
 
-Self-contained (torch only) op-for-op reference for what vLLM-Omni delegates to its registered
-`MistralForCausalLM` plus the audio-token embedding it borrows from the codec module. Written
-from vllm_omni/model_executor/models/voxtral_tts/{voxtral_tts_audio_generation.py,
-voxtral_tts_audio_tokenizer.py} (see ../reference/PROVENANCE.md).
-
-BLOCK BOUNDARY (the tensor in -> out a TTNN port must match):
-
-    inputs_embeds [1, S, 3072]
-        -> 26 x { RMSNorm -> GQA causal attention (RoPE) -> RMSNorm -> SwiGLU }   layers.*
-        -> norm            (final RMSNorm)                                        norm.weight
-        = hidden_states [1, S, 3072]
-
-`hidden_states[:, -1]` is the *h* that Block 2 (flow matching) consumes per frame. Everything
-that BUILDS inputs_embeds lives on the input side of the block and is reproduced here because
-the decode loop needs it every frame:
-
-    text token      -> tok_embeddings[id]                                (a plain lookup)
-    audio frame     -> sum over 37 codebooks of embeddings[code_c + offset_c]   (embed_frame)
-
-The text LM head (tied to tok_embeddings) is only used for the text/EOS path; the semantic
-code head lives in Block 2, so it is deliberately NOT part of this block.
-
-ARCHITECTURE NOTES worth carrying into the port:
-  * n_heads*head_dim = 4096 != dim = 3072. wq is [4096, 3072] and wo is [3072, 4096]: the
-    attention interior is WIDER than the residual stream. Do not assume square.
-  * GQA 32/8 (4 query heads per KV head), interleaved repeat_kv.
-  * RoPE is Mistral-native INTERLEAVED-pair rotation, not HF half-split. See rope_cis().
-  * No biases anywhere; RMSNorm (pre-norm) throughout; SwiGLU MLP.
-  * There is no positional table and no sliding window in params.json — plain causal attention
-    over max_seq_len 65536, so context length costs KV-cache, nothing else.
+Self-contained torch, op-for-op with what vLLM-Omni runs (see VOXTRAL_TTS_PROVENANCE.md):
+inputs_embeds [1, S, 3072] -> 26 x {RMSNorm, GQA causal attention with RoPE, RMSNorm, SwiGLU}
+-> final RMSNorm -> hidden_states [1, S, 3072]. Also builds inputs_embeds (text and audio-frame
+embeddings). Block boundary and architecture notes: see VOXTRAL_TTS_BACKBONE.md [gpt-30].
 
 Run (regenerates goldens; needs the checkpoint):
     PYTHONPATH=<repo> python models/experimental/voxtral_tts/reference/voxtral_backbone_ref.py
@@ -77,10 +51,9 @@ GOLDEN_DIR = os.path.join(GOLDEN_ROOT, "backbone")
 
 
 def load_backbone_state(ckpt_path=DEFAULT_CKPT, dtype=torch.float32):
-    """The 26 transformer layers + final norm + both embedding tables.
+    """The 26 transformer layers + final norm + both embedding tables, read tensor by tensor.
 
-    ~6.9 GB in fp32 (3.4B params), so this is the one block whose loader is genuinely heavy;
-    `SafeTensors` still seeks per tensor rather than slurping the 8 GB file."""
+    See VOXTRAL_TTS_BACKBONE.md [gpt-30]."""
     st = SafeTensors(ckpt_path)
     w = {"norm": st.get("norm.weight", dtype)}
     for i in range(N_LAYERS):
@@ -103,12 +76,10 @@ def embed_text(w, token_ids):
 
 
 def embed_frame(w, codes):
-    """One audio frame's 37 codes -> [1, 1, 3072].
-
-    Upstream MultiVocabEmbeddings: each codebook occupies its own slice of ONE flat table, so
-    the code is shifted by that codebook's offset before lookup, and the 37 vectors are SUMMED
-    (`input_embedding_concat_type: sum`). `codes` are already offset by N_AUDIO_SPECIAL, i.e.
-    exactly what Block 2 emits."""
+    """One frame's 37 codes (offset by N_AUDIO_SPECIAL, as the flow model emits) -> [1, 1, 3072]:
+    each
+    codebook indexes its own slice of one flat table and the 37 vectors are summed.
+    see VOXTRAL_TTS_BACKBONE.md [gpt-30]"""
     c = torch.as_tensor(codes, dtype=torch.long).reshape(-1)
     assert c.numel() == NUM_CODEBOOKS, f"expected {NUM_CODEBOOKS} codes, got {c.numel()}"
     return w["audio_embeddings"][c + codebook_offsets()].sum(0).view(1, 1, DIM)
@@ -144,7 +115,7 @@ def _layer(x, w, p, cis, bias, cache=None):
 
 @torch.no_grad()
 def reference_forward(inputs_embeds, w, n_layers=N_LAYERS):
-    """Block 1 prefill: [1, S, 3072] -> hidden_states [1, S, 3072]. Causal, no cache.
+    """The backbone prefill: [1, S, 3072] -> hidden_states [1, S, 3072]. Causal, no cache.
 
     `n_layers` is only for tests: a shortened stack lets the wiring be checked at real widths
     without holding all 26 layers of fp32 weights in RAM."""
@@ -159,11 +130,8 @@ def reference_forward(inputs_embeds, w, n_layers=N_LAYERS):
 
 @torch.no_grad()
 def reference_prefill_then_step(inputs_embeds, w, step_embeds, n_layers=N_LAYERS):
-    """Prefill [1,P,3072], then feed `step_embeds` [1,T,3072] one position at a time through a
-    KV-cache. Returns (prefill_hidden [1,P,3072], step_hidden [1,T,3072]).
-
-    This is the shape the real decode loop has — Block 2 only ever sees the LAST position's
-    hidden state — so it is also the golden a traced TTNN decode step should be checked against."""
+    """Prefill [1,P,3072], then step `step_embeds` [1,T,3072] one position at a time through a
+    KV cache -> (prefill_hidden, step_hidden). The golden for a decode step."""
     cache = {}
     P = inputs_embeds.shape[1]
     cis = rope_cis(P, HEAD_DIM, ROPE_THETA)
@@ -183,11 +151,9 @@ def reference_prefill_then_step(inputs_embeds, w, step_embeds, n_layers=N_LAYERS
 
 
 class IncrementalBackbone:
-    """Stateful prefill + single-step decode over a KV-cache.
-
-    `reference_prefill_then_step` runs a fixed list of steps; the real generation loop has to
-    interleave Block 2 between steps, so it needs this. Deliberately shaped like a TTNN traced
-    decoder (build once -> prefill -> step per token) so the port is a drop-in at this seam."""
+    """Stateful prefill + single-step decode over a KV cache, for loops that interleave the flow
+    model
+    between steps. Shaped like the TTNN decoder: build once, prefill, then step per frame."""
 
     def __init__(self, w, n_layers=N_LAYERS):
         self.w, self.n_layers = w, n_layers
@@ -198,7 +164,8 @@ class IncrementalBackbone:
 
     @torch.no_grad()
     def prefill(self, inputs_embeds):
-        """[1, P, 3072] -> hidden of the LAST position only [1, 1, 3072] (all Block 2 ever sees)."""
+        """[1, P, 3072] -> hidden of the LAST position only [1, 1, 3072], all the flow model ever
+        sees."""
         P = inputs_embeds.shape[1]
         cis = rope_cis(P, HEAD_DIM, ROPE_THETA, offset=self.pos)
         bias = causal_bias(P, inputs_embeds.dtype)
@@ -221,7 +188,7 @@ class IncrementalBackbone:
 
 @torch.no_grad()
 def text_logits(hidden, w):
-    """Tied text head, for the EOS/text path only (Block 2 owns the semantic code head)."""
+    """Tied text head, for the EOS/text path only (flow model owns the semantic code head)."""
     return hidden @ w["tok_embeddings"].t()
 
 

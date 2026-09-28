@@ -1,36 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every on-device gate for the TTNN blocks, in one place.
+"""Every on-device gate for the TTNN blocks, in one place. Not imported by the model.
 
-These are validation harnesses, not model code, and they used to live as `main()` functions inside
-the four `tt/` modules -- which made those files harder to read for someone trying to understand
-or optimize the model. Nothing here is imported by the model; the dependency only runs this way.
+The `compare_*` primitives are shared by the PCC tests, the bringup repo's quality report
+(`--gate X --json`) and a human reading the tables. Gates run on real prompts, never random
+activations. see VOXTRAL_TTS_BRINGUP.md [gate-03], VOXTRAL_TTS_BUGS.md BUG-9
 
-ONE implementation of every on-device comparison, with three consumers:
-
-  - `tests/pcc/test_*_pcc.py` import the `compare_*` primitives and ASSERT on them (that is the
-    pass/fail suite, and it is what CI runs);
-  - the quality report (bringup repo, `voxtral_tts/tools/quality_report.py`) runs `--gate X --json`
-    in a subprocess and reads the returned metrics as JSON -- no prose scraping, and each gate
-    keeps its own device and timeout;
-  - a human runs `--gate X` for the printed tables when triaging by hand.
-
-The metric arithmetic lives in `compare_hidden` / `compare_codes_frame` so those three cannot
-drift to three different notions of the same number. Renamed from `tt_gates.py`, whose docstring
-claimed it was "not for CI" long after quality_report had made it exactly that.
-
-    python models/experimental/voxtral_tts/tests/gates.py --gate wiring
-    python models/experimental/voxtral_tts/tests/gates.py --gate prefill26   # all 15 prompts
-    python models/experimental/voxtral_tts/tests/gates.py --gate decode      # all 15 prompts
-    python models/experimental/voxtral_tts/tests/gates.py --gate decode --cases 0,2 --verbose
-    python models/experimental/voxtral_tts/tests/gates.py --gate flow
-    python models/experimental/voxtral_tts/tests/gates.py --gate codec
-    python models/experimental/voxtral_tts/tests/gates.py --gate codes      # blocks 1+2 e2e
-
-ALWAYS GATE ON REAL PROMPTS, never random activations. Random embeddings are off-manifold and
-reported PCC 0.892 where real prompts gave 0.9994 on the same weights -- STATUS.md trap #12, and
-the most expensive measurement mistake in this port. `fixture_embeds` builds the real thing.
+    python models/experimental/voxtral_tts/tests/gates.py --gate GATE [--cases 0,2] [--verbose]
+    # GATE: wiring | prefill26 | decode | flow | codec | codes (backbone and flow model end to end)
 """
 
 import argparse
@@ -87,9 +65,7 @@ def compare_codes_frame(c_ref, c_dev):
 
 def fixture_embeds(case_idx, w):
     """Fixture case -> real prompt embeds [1,P,3072], exactly as the pipeline builds them.
-
-    REAL PROMPTS ARE NOT OPTIONAL for an accuracy number (STATUS.md trap #12): random embeddings
-    are off-manifold and reported PCC 0.892 where these give 0.9994 on the same weights.
+    Real prompts are not optional for an accuracy number: see VOXTRAL_TTS_STATUS.md trap #12.
     """
     import os
 
@@ -102,7 +78,7 @@ def fixture_embeds(case_idx, w):
 
 
 def gate_wiring(dev, ref):
-    """Increment 2: ONE layer against the reference. A RoPE convention error shows up here."""
+    """ONE the backbone layer against the reference. A RoPE convention error shows up here."""
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import (
         causal_bias, pcc, rope_cis)
 
@@ -123,10 +99,8 @@ def gate_wiring(dev, ref):
 
 
 def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
-    """Increment 3: the full stack, prefill, on REAL prompts vs `reference_forward`.
-
-    Reports the LAST position separately because that is the only one Block 2 consumes; the
-    all-positions number is there to catch a bug that only touches part of the sequence.
+    """Full-stack prefill on real prompts vs `reference_forward`. The last position is reported
+    apart because it is all the flow model consumes; all-positions catches a partial-sequence bug.
     """
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
@@ -148,13 +122,12 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
         m_last = compare_hidden(el, xl)
         last_pccs.append(m_last["pcc"])
         worst = m_last["worst_pct"]
-        # Per position, because a pooled PCC over the whole prompt is dominated by whichever
-        # positions have the largest magnitude and hides which ones are actually weak.
+        # Per position: a pooled PCC is dominated by the largest-magnitude positions.
         per = [pcc(got[:, i], exp[:, i]) for i in range(P)]
         wi = min(range(P), key=lambda i: per[i])
         print(f"  {ci:>4} {case['voice']:>16} {P:>5} {pcc(got, exp):>12.6f} "
               f"{pcc(el, xl):>12.6f} {worst:>10.2f}% {per[wi]:>13.6f} (@{wi:>4}) {dt:>8.2f}s")
-    print("\n  reference for comparison, same metric on the LAST position (STATUS.md, Block 1):")
+    print("\n  reference for comparison, same metric on the LAST position (STATUS.md, backbone):")
     print("    tt_transformers, FF1_FF3 BFP8: 0.999564 at P=200, 0.999579 at P=312")
     # the MIN across cases, matching what the quality report has always recorded
     return {"prefill_pcc_last": min(last_pccs) if last_pccs else None,
@@ -162,35 +135,15 @@ def gate_prefill26(dev, ref, cases, n_layers=N_LAYERS):
 
 
 def _p90(v):
-    """The 90th percentile by nearest-rank. Deliberately not numpy's interpolating default, so a
-    recorded p90 is always an observed sample and two runs of the same config give the same value."""
+    """The 90th percentile by nearest-rank, so a recorded p90 is always an observed sample."""
     v = sorted(v)
     return v[min(len(v) - 1, int(round(0.9 * (len(v) - 1))))]
 
 
 def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS, verbose=False):
-    """Increment 4: on-device KV cache + decode steps vs `IncrementalBackbone.step()`.
-
-    TEACHER-FORCED on REAL frames (`tests/real_frames_fixture.pt`, genuine Block 1+2 output): both
-    sides advance on the SAME embedding every step, so each step is an independent measurement.
-    Feeding each its own codes instead compares two diverging trajectories and tells you nothing
-    (the same trap `ttnn_voxtral_pipeline.compare_codes` documents).
-
-    HOW TO READ THE OUTPUT, because this gate was misread twice (STATUS.md 6.15):
-
-    Its PROMPT-TO-PROMPT SPREAD is 0.45 pp on mean worst-sample and 0.96 pp on p90 -- LARGER than
-    any change ever gated with it, w2's BFP8 drop (0.10 pp) included. So:
-      - It resolves PAIRED A/B: same prompts, same session, one thing changed. It is deterministic,
-        and a repeat run reproduces bit-identically, so a difference there is real at 0.01 pp.
-      - It does NOT support absolute levels, comparison against a number recorded in another
-        session, or generalising an effect measured on one prompt pair to other prompts.
-    That is why the summary prints the case list and the per-case spread next to every aggregate:
-    an aggregate here is meaningless without knowing which prompts produced it. STATUS.md 6.8
-    reported a 2-prompt pair to 0.01 pp WITHOUT recording which two, and its levels can no longer
-    be reproduced by any pair of the 15.
-
-    Per-step rows are off by default (--verbose) -- they are for debugging a specific step, and
-    printing 330 of them buries the summary that should actually be read.
+    """On-device KV cache + decode steps vs `IncrementalBackbone.step()`, teacher-forced on real
+    frames. Valid only as a paired same-session A/B, hence the case list and spread in the summary.
+    see VOXTRAL_TTS_STATUS.md §6.15 and VOXTRAL_TTS_BRINGUP.md [gate-01]
     """
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import pcc
 
@@ -262,17 +215,8 @@ def gate_decode(dev, ref, cases, n_steps=8, n_layers=N_LAYERS, verbose=False):
 
 
 def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
-    """THE test that matters: do device and reference emit the same INTEGER codes?
-
-    TEACHER-FORCED: both loops are fed the REFERENCE's codes each step. That makes every frame an
-    INDEPENDENT measurement of "given identical input, do they agree?". Feeding each loop its own
-    codes instead (which is what real generation does) is useless for attribution: after the first
-    semantic mismatch the two are generating different sequences, so later frames compare unrelated
-    trajectories rather than measuring error. Measured that way, frame 0 agreed exactly and every
-    later frame looked catastrophic -- an artefact, not a result.
-
-    Reports the semantic code (a wrong one changes the audio outright) separately from the 36
-    acoustic codes (each one of 21 FSQ levels, so off-by-one is a small perturbation).
+    """Do device and reference emit the same integer codes? Teacher-forced on the reference's codes;
+    semantic reported apart from acoustic. see VOXTRAL_TTS_BRINGUP.md [gate-02]
     """
     from models.experimental.voxtral_tts.reference import voxtral_flow_ref as fref
 
@@ -313,8 +257,7 @@ def compare_codes(pipe, embeds, n_frames=8, cfg_alpha=CFG_ALPHA, seed=0):
         h_dev = pipe.backbone.step(emb).reshape(1, 1, -1)
     print(f"  => semantic mismatches {sem_bad}, acoustic {ac_bad}/{total_ac} "
           f"({ac_bad/max(total_ac,1)*100:.1f}%)")
-    # STATUS.md 6.54 -- the count alone gets misread. |delta|=1 on a 21-level FSQ axis is the
-    # smallest difference representable, so print the distribution rather than just the count.
+    # The count alone gets misread; print the |delta| distribution. see VOXTRAL_TTS_STATUS.md §6.54
     if deltas:
         off1 = deltas.get(1, 0)
         print(f"     |delta| histogram { {k: deltas[k] for k in sorted(deltas)} }   "
@@ -325,17 +268,17 @@ def gate_codes():
     dev = open_device()
     try:
         pipe = TtVoxtralPipeline(dev)
-        # Synthetic prompt embeddings: this checks the WIRING and the code agreement without
-        # needing the tokenizer or a voice preset. The real-text path is voxtral_pipeline_ref's job
-        # on host; swapping in build_inputs_embeds() is a one-liner once this is trusted.
+        # Synthetic embeddings check wiring only; the real-prompt block below is the accuracy
+        # number. see VOXTRAL_TTS_STATUS.md §6.54
         torch.manual_seed(0)
         embeds = torch.randn(1, 128, 3072) * 0.02
         print("=== device vs reference, INTEGER codes -- SYNTHETIC embeddings ===")
         print("  NOTE (STATUS.md 6.54): random embeddings are a PESSIMISTIC proxy, the same trap")
         print("  gate_wiring warns about -- this reads ~6x worse than real text. The cause is")
-        print("  BLOCK 1, not Block 2 or FSQ: off-manifold, PCC(h_dev,h_ref) is 0.9865 against")
-        print("  0.9999 on real prompts (15.6% vs 0.7% relative), and that error reaches the")
-        print("  codes through Block 2. The fp32 reference flips NOTHING on either input.")
+        print("  BACKBONE, not the flow model or FSQ: off-manifold, PCC(h_dev,h_ref) is 0.9865")
+        print("  against 0.9999 on real prompts (15.6% vs 0.7% relative), and that error reaches")
+        print("  the codes through the flow model. The fp32 reference flips NOTHING on either")
+        print("  input.")
         print("  It is also NON-MONOTONIC in precision (6.55): bf16 FF weights make this number")
         print("  WORSE. Never rank a config on it. Judge accuracy on the real-prompt block below.")
         _synth_sem, _synth_bad, _synth_tot = compare_codes(pipe, embeds, n_frames=8)
@@ -439,8 +382,7 @@ def gate_codec():
                 out["codec_pcc_t24"] = _wav_pcc
             print(f"{tag} {'WAVEFORM':22s} PCC {_wav_pcc:.6f}  "
                   f"shapes {tuple(got_wav.shape)} vs {tuple(exp_wav.shape)}")
-            # the staged run above uses return_stages=True, which BYPASSES bucketing -- so also
-            # exercise the DEFAULT path (bucketed) that real callers get.
+            # return_stages=True bypasses bucketing, so also run the default bucketed path.
             plain = gen(codes)
             print(f"{tag} {'bucketed (default path)':22s} PCC {pcc(plain, exp_wav):.6f}  "
                   f"shape {tuple(plain.shape)}")
@@ -457,22 +399,19 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gate", required=True,
                     choices=("wiring", "prefill26", "decode", "flow", "codec", "codes"),
-                    help="wiring = one Block 1 layer (fast, catches a RoPE convention error); "
+                    help="wiring = one backbone layer (fast, catches a RoPE convention error); "
                          "prefill26 = 26 layers on real prompts (~13 GB host RAM); "
                          "decode = KV cache + steps vs IncrementalBackbone; "
-                         "flow = Block 2 vs its reference; codec = Block 3 vs its reference; "
-                         "codes = blocks 1+2 end to end, integer-code agreement")
-    # ALL 15 by default, deliberately -- NOTES.md [gate-01]. Narrow with --cases only when
-    # debugging one prompt, never when recording a number.
+                         "flow = Flow model vs its reference; codec = Codec vs its reference; "
+                         "codes = Backbone and flow model end to end, integer-code agreement")
+    # All 15 by default; narrow only to debug, never to record. see VOXTRAL_TTS_BRINGUP.md [gate-01]
     ap.add_argument("--cases", default="all",
                     help='"all" (default) or prompt_fixture.json indices, e.g. "0,2"')
     ap.add_argument("--layers", type=int, default=N_LAYERS)
     ap.add_argument("--steps", type=int, default=22, help="decode steps per case for --gate decode")
     ap.add_argument("--verbose", action="store_true",
                     help="per-step rows as well as the per-case and pooled summary")
-    # quality_report.py reads this instead of scraping the printed tables. The prose above stays
-    # for humans; the JSON line is the machine contract, so a reworded table cannot silently
-    # change a recorded metric.
+    # The machine contract quality_report.py reads. see VOXTRAL_TTS_BRINGUP.md [gate-03]
     ap.add_argument("--json", action="store_true",
                     help="also emit the gate's metrics as one JSON line prefixed GATE_JSON:")
     args = ap.parse_args()

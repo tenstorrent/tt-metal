@@ -4,11 +4,9 @@
 """Live reference builders and shared helpers for the on-device tests.
 
 The fp32 `reference/` package is the oracle; these helpers feed it the same inputs the pipeline
-would. Everything is cached at module scope because the backbone state is ~13 GB and every device
-test needs the same copy.
+would, cached at module scope so every device test shares one backbone state.
 
-Block 1 accuracy must be judged on real tokenized prompts: random embeddings are off-manifold and
-read far worse than real text on the same weights, so there is no synthetic-input builder here.
+There is deliberately no synthetic-input builder: see VOXTRAL_TTS_STATUS.md trap #12.
 """
 
 import functools
@@ -31,14 +29,13 @@ def fixture_cases():
 
 
 def case_ids():
-    """-> [0, 1, ... n-1], for parametrize. All of them: per-case accuracy varies enough that an
-    aggregate over a different subset is not comparable to a recorded one."""
+    """-> [0, 1, ... n-1], for parametrize. All of them. see VOXTRAL_TTS_BRINGUP.md [gate-01]"""
     return list(range(len(fixture_cases())))
 
 
 @functools.lru_cache(maxsize=1)
 def backbone_state():
-    """-> the fp32 backbone weights, loaded once per process (~13 GB)."""
+    """-> the fp32 backbone weights, loaded once per process."""
     from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref
 
     return bref.load_backbone_state()
@@ -56,16 +53,14 @@ def fixture_embeds(case_idx, w=None):
 
 @functools.lru_cache(maxsize=1)
 def real_frames():
-    """-> real Block 1+2 output frames [T,37], for teacher-forced decode.
-
-    Both sides must advance on the same embedding each step, or later frames compare diverging
-    trajectories rather than measuring error."""
+    """-> real the backbone and flow model output frames [T,37], for teacher-forced decode.
+    see VOXTRAL_TTS_BRINGUP.md [gate-02]"""
     return torch.load(FRAMES).long()
 
 
 def worst_sample_pct(got, exp):
-    """Max absolute deviation as a percentage of the reference's scale. Always report it next to
-    a PCC: a correlation can sit high while individual samples are badly wrong."""
+    """Max absolute deviation as a percentage of the reference's scale; report it next to a PCC,
+    which can sit high while individual samples are badly wrong."""
     return (got - exp).abs().max().item() / exp.abs().max().item() * 100
 
 
@@ -89,13 +84,13 @@ def all_voices():
     return tuple(sorted(TekkenTokenizer().voices))
 
 
-# The device caches a rotated head interleaved (pairs adjacent); the reference lays it out
-# half-split. RoPE applies the same permutation to Q, so attention is identical either way.
+# The reference caches a rotated head interleaved (pairs adjacent); the device caches it half-split.
+# RoPE applies the same permutation to Q, so attention is identical. VOXTRAL_TTS_BACKBONE.md.
 _HALF_TO_INTERLEAVED = None
 
 
 def as_device_k_layout(k_ref):
-    """Reference K (half-split head dim) -> the device's interleaved order."""
+    """Reference K (interleaved head dim) -> the device's half-split order."""
     global _HALF_TO_INTERLEAVED
     from models.experimental.voxtral_tts.reference.voxtral_common_ref import HEAD_DIM
 
@@ -114,11 +109,8 @@ def _fixture_text(reps):
 
 
 def long_prompt_embeds(S, w=None, voice="ar_male"):
-    """-> (embeds [1,S,3072], repeated: bool) from the fixture's own texts joined into one prompt.
-
-    `repeated` is True once the texts had to be repeated to reach S, so the caller can gate loosely:
-    unrelated texts run together are not one natural prompt, whatever their provenance.
-    """
+    """-> (embeds [1,S,3072], repeated) from the fixture's texts joined into one prompt. `repeated`
+    means the texts had to repeat to reach S, so the caller should gate loosely."""
     from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
 
     w = backbone_state() if w is None else w
@@ -137,11 +129,8 @@ def _long_frames_by_case():
 
 
 def real_frames_long(case_idx):
-    """-> that prompt's OWN full utterance of real frames [T,37].
-
-    Per prompt, because teacher-forcing a prompt with another utterance's frames is a mismatched
-    pair and reads worse for that reason alone. Only prompts whose natural utterance is long have an
-    entry; short ones are covered by the 64-frame fixture.
+    """-> that prompt's OWN full utterance of real frames [T,37]; another utterance's frames
+    would be a mismatched pair. see VOXTRAL_TTS_GOLDENS.md
     """
     return _long_frames_by_case()[case_idx].long()
 

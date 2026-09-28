@@ -1,21 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 decode on device against the fp32 reference.
+"""The backbone decode on device against the fp32 reference, teacher-forced on real frames.
 
-Decode advances one position per audio frame off the KV cache. Everything here is teacher-forced on
-real frames, so both sides step on the same embedding and each frame is an independent measurement.
-
-  * horizon        -- every prompt over its own recorded frames.
-  * full utterance -- a whole request, each prompt teacher-forced with its own trajectory.
-  * determinism    -- a repeat must reproduce bit-identically.
-  * cache writes   -- the entries decode appends, all 26 layers, against the reference's own cache.
-  * prompt cache   -- decode must leave the prompt's positions exactly as prefill wrote them.
-  * tile boundary  -- stepping across a multiple of the tile height starts a new cache tile.
-  * cache length   -- sdpa_decode serves only cache lengths that are a multiple of its k_chunk_size;
-    valid alternatives must decode correctly and the rest must fail loudly rather than quietly.
-  * depth          -- prefill and decode at several stack depths, so a failure localises.
-  * full cache     -- stepping past max_seq_len must raise.
+Covers the per-prompt horizon, full utterances, determinism, the cache entries decode writes, the
+prompt cache staying untouched, tile boundaries, servable and unservable cache lengths, stack depth,
+and a full cache raising. see VOXTRAL_TTS_BACKBONE.md [gpt-51]
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_decode_pcc.py
@@ -47,18 +37,16 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # 
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
 # Every teacher-forced comparison uses the prompt's OWN recorded trajectory.
+# Gate constants and why the breadth floor is lower: see VOXTRAL_TTS_BACKBONE.md [gpt-51]
 PCC_DECODE = 0.999
-# The breadth sweep is a minimum over ~700 frame comparisons across 15 prompts, and each prompt has
-# an isolated hard frame at no consistent position -- medians stay at 0.9998. So its floor sits below
-# the worst of those rather than at the level the rest of the file holds.
-PCC_DECODE_HORIZON = 0.997
+PCC_DECODE_HORIZON = 0.997         # a minimum over every frame of all 15 prompts
 CACHE_PCC = 0.998
 TILE = 32
 MAX_SEQ = 1024
 HORIZON = 64                       # frames per prompt in the breadth sweep
 DEPTHS = (1, 6, 13, 20, N_LAYERS)
-# sdpa_decode requires the cache length to be a multiple of its k_chunk_size (512), so these are
-# the cache sizes a caller may and may not ask for. The suite otherwise only ever uses 1024 and 2048.
+# sdpa_decode requires the cache length to be a multiple of its k_chunk_size (512): cache sizes
+# a caller may and may not ask for, other than the 1024 and 2048 the suite otherwise uses.
 VALID_MAX_SEQ = (512, 1536)
 REJECTED_MAX_SEQ = (256, 736, 992)
 CACHE_CASE = 0
@@ -197,11 +185,8 @@ def test_decode_at_other_valid_cache_lengths(dev, w, max_seq):
 
 @pytest.mark.parametrize("max_seq", REJECTED_MAX_SEQ, ids=lambda n: f"maxseq{n}")
 def test_a_cache_length_sdpa_cannot_serve_fails_loudly(dev, w, max_seq):
-    """A cache length sdpa_decode cannot serve must raise, not return something wrong.
-
-    The constraint is a multiple of the program config's k_chunk_size, and it is enforced inside the
-    op rather than at construction, so the failure surfaces on the first prefill or step.
-    """
+    """A cache length that is not a multiple of sdpa's k_chunk_size must raise on first use rather
+    than return something wrong (the op enforces it, not the constructor)."""
     g = TtVoxtralGPT(dev, n_layers=N_LAYERS, state=w, max_seq_len=max_seq)
     embeds, _ = fixture_embeds(CACHE_CASE, w)
     g.reset()
@@ -237,8 +222,7 @@ def test_step_refuses_a_full_cache(dev, w):
         g.step(torch.zeros(1, DIM))
 
 
-# The two longest utterances; every prompt now has a capture, but a full solve per prompt would run
-# for the better part of an hour.
+# The two longest utterances only; a full solve for every prompt is too slow for the suite.
 LONG_CASES = tuple(sorted(long_frame_cases(),
                           key=lambda c: -real_frames_long(c).shape[0])[:2])
 
@@ -246,11 +230,9 @@ LONG_CASES = tuple(sorted(long_frame_cases(),
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("ci", LONG_CASES, ids=lambda c: f"case{c}")
 def test_decode_pcc_over_a_full_utterance(gen, w, ci):
-    """A whole request's worth of frames, teacher-forced, with the trend reported by decile.
-
-    The short fixture covers the first few seconds; this walks the length a real utterance runs, so
-    any drift over that span has somewhere to show.
-    """
+    """A whole utterance, teacher-forced on its own frames, with the trend reported by decile,
+    so drift over a real request's length has somewhere to show.
+    see VOXTRAL_TTS_BACKBONE.md [gpt-51]"""
     frames = real_frames_long(ci)          # this prompt's own trajectory
     inc, P = _prefill_both(gen, w, ci)
     pcs, wss = _steps(gen, inc, w, frames.shape[0], frames=frames)
@@ -268,11 +250,8 @@ def test_decode_pcc_over_a_full_utterance(gen, w, ci):
 
 
 def test_a_mismatched_trajectory_does_not_break_decode(gen, w):
-    """Robustness only: a prompt fed another utterance's frames is not a request anyone makes.
-
-    No accuracy number is asserted -- just that the output stays finite and bounded rather than
-    diverging or producing NaN.
-    """
+    """Robustness only: a prompt fed another utterance's frames must stay finite and bounded. No
+    accuracy is asserted -- nobody sends this request."""
     inc, P = _prefill_both(gen, w, CACHE_CASE)
     other = real_frames_long(LONG_CASES[0])[:16]
     for t in range(other.shape[0]):

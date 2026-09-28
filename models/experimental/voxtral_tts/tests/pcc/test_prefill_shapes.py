@@ -1,20 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill at every padded shape, and independence from the amount of padding.
-
-Prefill quantises its sequence to a multiple of `PREFILL_MULTIPLE`, so a cache of `max_seq_len`
-rows has a fixed set of reachable shapes, each its own kernel shape and `fill_cache` work split.
-
-  * every shape   -- hidden states and all 26 layers of KV cache against fp32, plus a check that
-    every (head, position-tile) of the cache was written.
-  * no outlier    -- pooled PCC must not vary across shapes.
-  * padding       -- the same tokens at three pad amounts must land the same distance from fp32.
-  * over-long     -- a prompt that pads past `max_seq_len` must raise.
-
-Shapes beyond the longest real prompt are driven by the fixture's texts joined and repeated, so
-their bar is a collapse floor rather than an accuracy gate; real-prompt accuracy lives in
-test_backbone_prefill_pcc.py and test_all_voices_smoke.py.
+"""Prefill at every padded shape (multiples of PREFILL_MULTIPLE up to max_seq_len): hidden states
+and
+every KV-cache entry against fp32, no shape unlike its neighbours, padding-amount independence, and
+an over-long prompt raising. Long shapes use joined fixture texts, so they carry a collapse floor,
+not an accuracy gate. see VOXTRAL_TTS_BACKBONE.md [gpt-52]
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_prefill_shapes.py
@@ -47,11 +38,9 @@ MAX_SEQ = 2048
 SHAPES = tuple(range(gpt.PREFILL_MULTIPLE, MAX_SEQ + 1, gpt.PREFILL_MULTIPLE))   # 128 .. 2048
 TILE = 32
 
-# Lengths straddling a 128 boundary, all reachable from the longest fixture prompt (P=357).
-# 250,256 -> Sp 256 (6 and 0 pad rows); 257,300,352 -> Sp 384 (127, 84, 32 pad rows).
-# Pooled over ALL S positions -- the stable statistic, and it covers the whole block rather than
-# one row of it. A SINGLE position's PCC is the noisiest thing here (measured swinging 0.938..0.998
-# within one prompt), so it gets its own looser gate and is reported for diagnosis only.
+# Gates are on PCC pooled over all S positions; single positions are reported, not gated.
+# Measured bands and rationale: see VOXTRAL_TTS_BACKBONE.md [gpt-52]
+SHAPE_PCC_FLOOR = 0.99      # collapse floor, not an accuracy gate
 SHAPE_SPREAD = 0.008        # no shape may compute unlike its neighbours
 SHAPE_WORST_SAMPLE_PCT = 15.0   # PCC alone hides a single far-off element
 
@@ -145,11 +134,8 @@ def test_no_shape_computes_differently_from_its_neighbours():
 
 
 def test_padding_costs_no_accuracy(big, w):
-    """The same tokens at three pad amounts must land the same distance from fp32.
-
-    Not an equality check: a different padded length also changes the per-core matmul split, and
-    bf16 reduction is not associative. A leak would degrade monotonically with the pad count.
-    """
+    """The same tokens at three pad amounts must land the same distance from fp32 -- not equal,
+    since the padded length changes the matmul split; a leak would degrade with the pad count."""
     full, case = fixture_embeds(3, w)
     S0 = 250
     base = full[:, :S0]

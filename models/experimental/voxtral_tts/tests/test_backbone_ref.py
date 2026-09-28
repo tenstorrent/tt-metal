@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 (AR backbone) reference tests.
+"""Reference tests for the autoregressive backbone.
 
 Two tiers, mirroring what can be checked without an 8 GB non-commercial download:
   * structural + wiring — runs ALWAYS. Every weight the reference asks for must exist in the
@@ -121,10 +121,8 @@ def test_causality():
 
 
 def test_rope_is_interleaved_pairs_not_half_split():
-    """Guards the convention choice. Mistral-native RoPE rotates ADJACENT pairs (0,1),(2,3),...
-    A half-split (HF-style) implementation would rotate (0, d/2) instead, which is a silent,
-    accuracy-only failure. Here: rotating position 0 must be identity, and a pure-pair input
-    must stay inside its own pair."""
+    """Mistral-native RoPE rotates adjacent pairs (0,1),(2,3),..., not (0, d/2) as HF does; the
+    wrong one fails silently. Position 0 must be identity and a pure-pair input stay in its pair."""
     cis = rope_cis(4, HEAD_DIM, ROPE_THETA)
     x = torch.randn(1, 1, 4, HEAD_DIM)
     out = apply_rope(x, cis)

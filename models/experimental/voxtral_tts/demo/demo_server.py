@@ -72,8 +72,8 @@ def main(argv=None):
                 print(f"out={out}")
                 continue
 
-            # Each request is independent: reset so the previous utterance's KV cache cannot
-            # influence this one (see tests/test_request_path_repeatability.py).
+            # Reset so the previous utterance's KV cache cannot influence this one
+            # (tests/test_request_path_repeatability.py).
             pipe.backbone.reset()
             embeds = frontend.build_prompt_embeds(line, voice, pipe.wb)
             frames, _, _ = pipe.generate(embeds, max_frames=a.max_frames, seed=seed, verbose=False)

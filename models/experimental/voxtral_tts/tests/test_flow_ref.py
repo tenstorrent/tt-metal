@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 2 (flow-matching acoustic transformer) reference tests.
+"""Reference tests for the flow model (the flow-matching acoustic transformer).
 
 Structural + wiring tests run always (random weights at real checkpoint shapes — 390M fits in
 RAM, so the FULL block runs here, not a shortened one). Numerical tests need the checkpoint.
@@ -40,14 +40,14 @@ needs_ckpt = pytest.mark.skipif(not os.path.exists(DEFAULT_CKPT), reason=f"no ch
 
 @pytest.fixture(scope="module")
 def w():
-    """Full-size random Block 2 (~390M fp32) plus the recomputed inv_freq buffer."""
+    """Full-size random the flow model (~390M fp32) plus the recomputed inv_freq buffer."""
     s = random_state_from_manifest(PREFIX, seed=0)
     s["time_embedding.inv_freq"] = ref._inv_freq(FM_DIM, ref.FM_TIME_THETA)
     return s
 
 
 def test_reference_uses_every_checkpoint_tensor():
-    """Block 2 is small enough that the mapping should be exact in BOTH directions: no tensor
+    """The flow model is small enough that the mapping should be exact in BOTH directions: no tensor
     invented, and none of the checkpoint's 33 left unused."""
     man = {k for k in load_manifest() if k.startswith(PREFIX)}
     expect = {

@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 2 on device against the fp32 reference.
+"""The flow model on device against the fp32 reference.
 
-Block 2 emits integer codes, so the frame comparison is exact-or-not and the velocity field is the
+The flow model emits integer codes, so the frame comparison is exact-or-not and the velocity field
+is the
 only continuous quantity worth a PCC. Synthetic inputs are acceptable for the exactness checks; the
 real-hidden-state tests below drive it from the reference's own last-position hidden state, which is
-what Block 1 hands it at inference.
+what the backbone hands it at inference.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py
@@ -17,8 +18,7 @@ import pytest
 torch = pytest.importorskip("torch")
 ttnn = pytest.importorskip("ttnn")
 
-# Every test in this file opens a device. Module-level so `-m "not slow"` is genuinely
-# the host-only subset -- it used to still run 22 device tests from the two _ttnn_ files.
+# Every test in this file opens a device, so the whole module is slow (not host-only).
 pytestmark = pytest.mark.slow
 
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
@@ -41,7 +41,7 @@ from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: 
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_flow import TtVoxtralFlow  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
-PCC_VELOCITY = 0.999
+PCC_VELOCITY = 0.999    # see VOXTRAL_TTS_FLOW.md [flow-50]
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +79,7 @@ def test_semantic_code_is_exact(rig):
     assert bool((exp == got).all()), f"semantic code mismatch: ref {exp.flatten().tolist()} dev {got.flatten().tolist()}"
 
 
-MAX_FRAME_CODES_DIFF = 4    # a small number of codes may differ by one FSQ level
+MAX_FRAME_CODES_DIFF = 4    # see VOXTRAL_TTS_FLOW.md [flow-50]
 
 
 def test_full_frame_codes_close_to_reference(rig):
@@ -95,13 +95,13 @@ def test_full_frame_codes_close_to_reference(rig):
         print(f"      ref  {exp[0, :10].tolist()}")
         print(f"      got  {got[0, :10].tolist()}")
     assert n_diff <= MAX_FRAME_CODES_DIFF, (
-        f"{n_diff} of {exp.numel()} codes differ (shipped level is 2); regression in Block 2")
+        f"{n_diff} of {exp.numel()} codes differ (shipped level is 2); flow-model regression")
     assert worst <= 1, f"a code is off by {worst} FSQ levels, not one -- that is not rounding"
 
 
 # ── Real hidden states ──
-# Driven from the reference's own last-position hidden state, which isolates Block 2: Block 1's
-# device accuracy is test_backbone_prefill_pcc.py / test_backbone_decode_pcc.py's job.
+# Driven from the reference's own last-position hidden state, which isolates the flow model; the
+# backbone's device accuracy is test_backbone_prefill_pcc.py / test_backbone_decode_pcc.py's job.
 
 REAL_CASES = (0, 2, 3)
 X0_SEEDS = (0, 7)
@@ -160,9 +160,8 @@ def test_frame_codes_on_real_hidden_states(rig, wb, ci):
 
 
 # ── Internals ─────────────────────────────────────────────────────────────────────────────────
-# Block 2 is a 3-layer trunk evaluated once per Euler step, so every piece is small enough to
-# compare individually: the trunk's blocks, the velocity at each scheduled timestep, the integrated
-# result, the CFG input, and the schedule itself.
+# Each piece of the flow model against its reference: trunk layers, per-step velocity, integrated
+# result, CFG input, schedule.
 
 FM_N_LAYERS = 3
 BATCH = 1
@@ -209,11 +208,9 @@ def test_every_block_matches_reference(rig, wb):
 
 @pytest.mark.slow
 def test_velocity_matches_along_the_real_trajectory(rig, wb):
-    """The velocity field at each solver step, evaluated at the state the solver is actually in.
+    """The velocity at each solver step, at the reference trajectory's state for that step.
 
-    The state has to come from the trajectory, not be held fixed while t sweeps: at a late t the
-    true state is nearly converged, and pairing it with fresh noise asks for a combination the
-    model never sees.
+    see VOXTRAL_TTS_FLOW.md [flow-51]
     """
     gen, w, _, _ = rig
     h, _ = _real_hidden(wb, REAL_CASES[0])
@@ -238,9 +235,7 @@ def test_velocity_matches_along_the_real_trajectory(rig, wb):
 def test_the_solve_accumulates_correctly(rig, wb):
     """The integrated result after all 7 steps, compared before quantisation.
 
-    Per-step device states are not exposed -- the solve is one device graph, and asking for fewer
-    steps changes the schedule rather than truncating it -- so accumulation is checked at the end
-    while each step's evaluation is checked by the timestep test above.
+    Checked only at the end: the solve is one device graph. see VOXTRAL_TTS_FLOW.md [flow-52]
     """
     gen, w, _, _ = rig
     h, _ = _real_hidden(wb, REAL_CASES[0])

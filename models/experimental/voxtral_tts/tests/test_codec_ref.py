@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 3 (Voxtral Codec decoder) reference tests.
+"""The codec (Voxtral Codec decoder) reference tests.
 
 Structural + wiring tests run always (random weights at real checkpoint shapes; ~150M fits in
 RAM so the FULL decoder runs). Numerical tests need the checkpoint.
@@ -59,18 +59,16 @@ def w():
 # The finding that drives the port plan
 # ---------------------------------------------------------------------------------------
 def test_codec_encoder_is_absent_from_released_checkpoint():
-    """The public checkpoint ships NO encoder tensors, so waveform -> codes is impossible and
-    voice cloning from arbitrary reference audio cannot be built or validated. Only the 20
-    shipped voice_embedding presets work. If a future release adds them this test will fail —
-    which is the notification we want."""
+    """The public checkpoint ships NO encoder tensors, so voice cloning from arbitrary audio is
+    impossible. Fails if a future release adds them. see VOXTRAL_TTS_CODEC.md [codec-27]"""
     man = load_manifest()
     enc = [k for k in man if k.startswith((PREFIX + "input_proj", PREFIX + "encoder_blocks"))]
     assert enc == [], f"encoder weights appeared ({len(enc)} tensors) — Block 4 is now portable"
 
 
 def test_codec_norm_eps_is_1e_2():
-    """params.json really does say norm_eps 0.01 for the codec (vs 1e-5 elsewhere). Guard it so
-    nobody 'fixes' it into 1e-5 and silently changes every RMSNorm in the decoder."""
+    """params.json says norm_eps 0.01 for the codec (vs 1e-5 elsewhere); guards against a 'fix'
+    to 1e-5 that would silently change every RMSNorm in the decoder."""
     assert CODEC_NORM_EPS == 1e-2
 
 
@@ -169,8 +167,9 @@ def test_quantizer_decode_shapes_and_acoustic_range(w):
     assert ac.min() >= -1.0 - 1e-6 and ac.max() <= 1.0 + 1e-6, "FSQ rescale must land in [-1, 1]"
 
 
-def test_fsq_rescale_inverts_block2_quantization(w):
-    """Round-trip every one of the 21 levels: Block 2 quantizes, Block 3 must rescale back to a
+def test_fsq_rescale_inverts_flow_model_quantization(w):
+    """Round-trip every one of the 21 levels: the flow model quantizes, the codec must rescale back
+    to a
     value that re-quantizes to the same code. If these two drift the audio degrades silently."""
     lvl = ACOUSTIC_CODEBOOK_SIZE
     codes = torch.arange(lvl).view(1, 1, lvl).expand(1, NUM_CODEBOOKS - 1, lvl).contiguous()

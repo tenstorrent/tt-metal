@@ -22,12 +22,12 @@ did not survive the port; see `VOXTRAL_TTS_BRINGUP.md` in the bringup repo.
 
 All three neural blocks run on device; tokenization, prompt assembly and frame sampling run on host.
 
-| Block | Component | Where | dtype | PCC gate |
+| Stage | Component | Where | dtype | PCC gate |
 |---|---|---|---|---|
-| 0 | Tekken BPE tokenizer + voice-preset prompt assembly | host (pure torch) | fp32 | bit-exact vs `mistral_common` |
-| 1 | Autoregressive backbone (3.4B, 26 layers, DIM 3072): one-shot **prefill**, then Metal-Traced KV-cached **decode**, one hidden state per frame | device | bf16 acts; bfp8 wqkv/wo/FF1/FF3, **w2 bf16 for accuracy**; fp32 accumulation | prefill > 0.999, decode > 0.999 |
-| 2 | Flow-matching acoustic transformer (390M, 3 layers): hidden state → 37 acoustic codes, ODE in 7 Euler steps | device | bf16 acts; bfp8 weights; **semantic head fp32** | velocity > 0.999 |
-| 3 | Codec decoder: codes → waveform, once per utterance | device | fp32, bf16 inside attention only | > 0.999 |
+| tokenizer | Tekken BPE tokenizer + voice-preset prompt assembly | host (pure torch) | fp32 | bit-exact vs `mistral_common` |
+| backbone | Autoregressive backbone (3.4B, 26 layers, DIM 3072): one-shot **prefill**, then Metal-Traced KV-cached **decode**, one hidden state per frame | device | bf16 acts; bfp8 wqkv/wo/FF1/FF3, **w2 bf16 for accuracy**; fp32 accumulation | prefill > 0.999, decode > 0.999 |
+| flow model | Flow-matching acoustic transformer (390M, 3 layers): hidden state → 37 acoustic codes, ODE in 7 Euler steps | device | bf16 acts; bfp8 weights; **semantic head fp32** | velocity > 0.999 |
+| codec | Codec decoder: codes → waveform, once per utterance | device | fp32, bf16 inside attention only | > 0.999 |
 
 The frame loop is captured as a Metal Trace and replayed, so no per-frame host dispatch cost.
 `tt/ttnn_voxtral_pipeline.py` wires the blocks together. **`reference/` is a pure-fp32 PyTorch
@@ -110,9 +110,9 @@ structural half needs neither a device nor the checkpoint.
 pytest models/experimental/voxtral_tts/tests/
 
 # Per-block reference/architecture invariants (host only, no device, no checkpoint)
-pytest models/experimental/voxtral_tts/tests/test_backbone_ref.py    # Block 1 reference
-pytest models/experimental/voxtral_tts/tests/test_flow_ref.py        # Block 2 reference
-pytest models/experimental/voxtral_tts/tests/test_codec_ref.py       # Block 3 reference
+pytest models/experimental/voxtral_tts/tests/test_backbone_ref.py    # the backbone reference
+pytest models/experimental/voxtral_tts/tests/test_flow_ref.py        # the flow model reference
+pytest models/experimental/voxtral_tts/tests/test_codec_ref.py       # the codec reference
 
 # On-device PCC against the fp32 reference (needs a device + the checkpoint)
 # Naming: test_<block>_ref.py is the fp32 reference; test_<block>_pcc.py is the device.
@@ -176,9 +176,9 @@ case 0 excluded because it pays one-time program-cache compilation:
 
 | Stage | Time | Notes |
 |---|---|---|
-| Block 1 prefill | 0.07–0.68 s | one-shot, scales with prompt length |
-| Block 1 decode | ~15.9 ms/frame | traced |
-| Block 2 | ~14.2 ms/frame | traced, 7 Euler steps |
+| Backbone prefill | 0.07–0.68 s | one-shot, scales with prompt length |
+| Backbone decode | ~15.9 ms/frame | traced |
+| Flow model | ~14.2 ms/frame | traced, 7 Euler steps |
 | Codec decoder | ~3.5 ms/utterance | once per utterance, not per frame |
 | **whole frame** | **27.7 ms/frame** | vs 80 ms real time → **RTF 0.375** |
 
@@ -190,7 +190,7 @@ case 0 excluded because it pays one-time program-cache compilation:
 
 Quality at the same build: long-form **WER 0 wrong of 894 words**, MOS long-form **4.61**.
 
-One-time `warmup()` takes **~74 s** with a hot kernel cache — 16 prefill shapes (32.8 s), Block 2
+One-time `warmup()` takes **~74 s** with a hot kernel cache — 16 prefill shapes (32.8 s), the flow model
 (6.0 s), 5 codec buckets (32.6 s) and one trace capture (2.6 s) — and longer on a first-ever run
 when kernels build from scratch. It compiles **every** prefill shape and **every** codec bucket, so
 no request pays a compile at request time. `TtVoxtralPipeline.warmed` records what was compiled;

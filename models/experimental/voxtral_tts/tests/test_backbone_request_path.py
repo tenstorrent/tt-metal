@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 across a sequence of requests, not one in isolation.
+"""The backbone across a sequence of requests, not one in isolation.
 
   * several lengths through one model, unsorted, each against its own reference.
   * a short prompt after a long one, whose cache tail must stay unreachable.

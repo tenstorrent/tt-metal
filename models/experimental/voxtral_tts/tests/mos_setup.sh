@@ -1,8 +1,7 @@
 #!/bin/bash
-# DistillMOS in an ISOLATED venv, for tests/test_mos.py and tests/mos_score.py. It depends on
-# torchaudio 2.11, and installing torchaudio into the main venv breaks transformers, which takes the
-# WER scorers down with it (bringup repo BUG-6). A separate venv makes that impossible rather than
-# merely unlikely. Run once per box: /tmp does not survive a re-provisioned reservation.
+# DistillMOS in an isolated venv for tests/test_mos.py and tests/mos_score.py: its torchaudio breaks
+# transformers in the main venv (VOXTRAL_TTS_BUGS.md BUG-6). Run once per box; /tmp does not survive
+# a re-provisioned reservation. See VOXTRAL_TTS_GATES.md [mos-01].
 set -e
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/mosvenv-uvcache}"
 uv venv --python 3.10 /tmp/mosvenv 2>&1 | tail -2

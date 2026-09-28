@@ -3,32 +3,11 @@
 
 """The WER recogniser, calibrated on known audio before it is trusted to gate anything.
 
-test_wer_languages.py's metric tests prove the SCORING on typed text. They do not feed
-real audio through Whisper, so two failures this branch has actually had would pass them:
-
-  * the 30 s truncation (BUG-13) -- Whisper cuts audio at 30 s unless asked for long form, and that
-    made word-perfect long utterances score 0.245 and look like the model losing the thread;
-  * the script eraser -- a cleaner that drops Devanagari and Arabic scores blank against blank as
-    perfect. Its fix is tested on typed text, never on a transcript Whisper actually produced.
-
-So this runs the gate's own recogniser (`Asr`, whisper-large-v3) and scorer (`wer`) on audio whose
-right answer is known:
-
-  known good   fp32-reference speech that must score near zero, in English, Hindi and Arabic
-  known bad    silence and noise, which must read as collapse; and clips with the tail cut off,
-               which must show exactly the missing words
-  long form    a 39 s clip that must transcribe to its last word -- and, as a control, must NOT when
-               long form is switched off, so the branch that fixes BUG-13 is proven load-bearing
-
-The known-good clips are the fp32 CPU REFERENCE's output (make_asr_calibration_fixture.py in the
-bringup repo's voxtral_tts/tools/),
-stored as codes and decoded here by the fp32 codec: the instrument is calibrated on audio that does
-not depend on the device it will later judge. Whisper is greedy and on CPU, so every score here is
-deterministic and the bounds are set from measured values with margin, not guessed.
-
-The quality report's own scorer (whisper-base.en, its own long-form chunking) lives in the bringup
-repo's voxtral_tts/tools/ with the report, and gets the same English checks there
-(tools/test_score_quality_set.py).
+Runs the gate's own `Asr` and `wer` on fp32-reference speech that must score near zero, on silence,
+noise and cut clips that must score badly, and on a >30 s clip with long form on and (the control)
+off. The clips are codes in asr_calibration_fixture.pt, decoded here by the fp32 codec; rebuild with
+make_asr_calibration_fixture.py in the bringup repo's voxtral_tts/tools/.
+Why, and how every bound was derived: see VOXTRAL_TTS_GATES.md [asr-01] to [asr-03].
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_asr_calibration.py      # ~5 min, CPU
@@ -53,15 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(HERE, "asr_calibration_fixture.pt")
 SAMPLES_PER_FRAME = 1920
 
-# Bounds, from the measured scores of these exact clips (deterministic -- see the module docstring).
-# A known-good clip's bound is its MEASURED score plus one word of headroom -- per clip, because
-# Whisper's error rate is not language independent (the gate's ceilings are per language for the
-# same reason). Measured 2026-09-28, whisper-large-v3, greedy, CPU:
-#   en_medium 0.0000 (0 of 22)   en_long 0.0000 (0 of 115, 39.4 s)
-#   ar 0.0500 (1 of 20: ثلاث -> ثلاثة, a grammatical variant)
-#   hi 0.1111 (3 of 27: नक्शे -> नकशे drops the virama, a spelling variant; खोज -> खोच and
-#                चाहता -> चाता are recognition slips on clean fp32-reference speech -- Whisper is
-#                weakest on Hindi, and the gate's own hi/medium ceiling is 0.16)
+# Known-good bounds: each clip's measured score plus one word; see VOXTRAL_TTS_GATES.md [asr-02]
 GOOD_MAX = {"en_medium": 0.05, "en_long": 0.02, "ar": 0.10, "hi": 0.15}
 CUT_KEEP = 0.5               # keep this fraction of the audio for the cut-tail clips
 CUT_MIN = 0.25               # half the audio gone must cost at least a quarter of the words
@@ -112,9 +83,8 @@ def _noise(seconds, rms, seed=0):
 
 @pytest.mark.parametrize("key", ["en_medium", "en_long", "hi", "ar"])
 def test_fixture_has_the_clips_calibration_needs(key):
-    """Coverage asserted, not assumed: every clip the checks below rely on is present, and the long
-    one really is past Whisper's 30 s window -- a shorter "long" clip would pass the long-form test
-    without ever reaching the code it exists for."""
+    """Every clip the checks rely on is present, and the long one really exceeds Whisper's 30 s
+    window, or the long-form test would never reach the code it exists for."""
     c = _load_fixture().get(key)
     assert c is not None, f"{key} missing from {FIXTURE}; rebuild with make_asr_calibration_fixture.py"
     seconds = c["frames"].shape[0] * SAMPLES_PER_FRAME / OUTPUT_SR
@@ -136,8 +106,8 @@ def test_known_good_scores_near_zero(clips, asr, key):
 
 @pytest.mark.parametrize("key", ["hi", "ar"])
 def test_non_latin_transcript_survives_the_cleaner(clips, asr, key):
-    """The failure this guards scored blank against blank as perfect. A real transcript in the
-    target script must come out of the cleaner with its words, in that script."""
+    """A real transcript in the target script must come out of the cleaner with its words, in that
+    script, not emptied to a free zero. See VOXTRAL_TTS_GATES.md [wer-11]"""
     c, wav = clips[key]
     hyp = asr(wav, c["lang"])
     words = _words(hyp)
@@ -168,8 +138,7 @@ def test_noise_reads_as_collapse(clips, asr):
 
 @pytest.mark.parametrize("key", ["en_medium", "hi", "ar"])
 def test_cut_tail_shows_the_missing_words(clips, asr, key):
-    """Half the audio gone must cost words, and the words it costs must be the TAIL's -- which is
-    also a known-bad clip in each non-Latin script, where an eraser would score it 0."""
+    """Half the audio gone must cost words, and the words it costs must be the tail's."""
     c, wav = clips[key]
     cut = wav[: int(wav.shape[0] * CUT_KEEP)]
     whole, part = asr(wav, c["lang"]), asr(cut, c["lang"])
@@ -196,8 +165,8 @@ def test_long_clip_transcribes_to_the_end(clips, asr):
 
 
 def test_long_clip_truncates_without_long_form(clips, asr):
-    """The control: the same clip with long form OFF loses its tail. If this ever passes cleanly,
-    Whisper stopped truncating and the branch above is no longer what makes the long test pass."""
+    """The control: the same clip with long form OFF loses its tail, so the duration branch is what
+    makes the long test pass. See VOXTRAL_TTS_GATES.md [asr-03]"""
     c, wav = clips["en_long"]
     hyp = asr(wav, "en", long_form=False)
     w = wer(c["text"], hyp)
