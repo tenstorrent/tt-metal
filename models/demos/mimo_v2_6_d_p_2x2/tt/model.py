@@ -49,3 +49,16 @@ def new_kv_cache(mesh, cfg, layer: int, max_seq: int):
         raise NotImplementedError(f"layer {layer}: sliding KV cache not ported to 2x2 yet")
     _, hkv, d, dv = cfg.attn_dims(layer)
     return TtKVCacheFull(mesh, hkv, d, dv, max_seq)
+
+
+def build_mlp(mesh, loader, layer: int):
+    """TtDenseMLP (TP=4 SwiGLU over the 2x2 mesh, all_reduce over both axes); fp8 + 128x128 block scale dequantized
+    to bf16 at load."""
+    import torch
+
+    from models.demos.mimo_v2_6_d_p.reference.weights import fp8_weight
+    from models.demos.mimo_v2_6_d_p_2x2.tt.mlp import TtDenseMLP
+
+    p = f"model.layers.{layer}.mlp."
+    wg, wu, wd = (fp8_weight(loader, p + f"{n}.weight", torch.float32) for n in ("gate_proj", "up_proj", "down_proj"))
+    return TtDenseMLP(mesh, wg, wu, wd)
