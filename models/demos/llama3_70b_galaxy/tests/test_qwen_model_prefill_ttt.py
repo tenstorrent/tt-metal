@@ -12,12 +12,12 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     HostEmbedding,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.rope import get_rot_mats
+from models.ttt_compat.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
 from transformers import AutoTokenizer
 from models.common.utility_functions import (
     comp_pcc,

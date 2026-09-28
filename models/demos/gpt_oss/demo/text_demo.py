@@ -35,12 +35,12 @@ from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
+from models.ttt_compat.demo.simple_text_demo import create_tt_page_table, load_inputs
+from models.ttt_compat.tt.common import PagedAttentionConfig, get_padded_prefill_len, preprocess_inputs_prefill
 
 # Import specific utilities from tt_transformers
-from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.model_config import determine_device_name
 
 
 def create_long_context_page_table(
@@ -201,7 +201,7 @@ def prepare_gpt_oss_generator_args(
             True,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -218,7 +218,7 @@ def prepare_gpt_oss_generator_args(
             False,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -235,7 +235,7 @@ def prepare_gpt_oss_generator_args(
             False,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -252,7 +252,7 @@ def prepare_gpt_oss_generator_args(
             False,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -269,7 +269,7 @@ def prepare_gpt_oss_generator_args(
             False,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -286,7 +286,7 @@ def prepare_gpt_oss_generator_args(
             False,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -303,7 +303,7 @@ def prepare_gpt_oss_generator_args(
             False,  # run_in_ci
         ),
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
@@ -362,7 +362,7 @@ def prepare_gpt_oss_generator_args(
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
+            "models/ttt_compat/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
             1,  # data_parallel
             128,  # batch_size (32 per row, but only 1 real user per row)
             1,  # repeat_batches
@@ -399,14 +399,14 @@ def prepare_gpt_oss_generator_args(
         # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
         (
             [
-                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_1k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_2k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_4k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_8k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_16k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_32k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_64k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_128k.json",
             ],  # input_prompts: list of 8 files, one per sweep step
             1,  # data_parallel
             1,  # batch_size

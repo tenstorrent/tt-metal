@@ -242,7 +242,7 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
@@ -405,7 +405,7 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
@@ -579,7 +579,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     and verifies the second call consumes the persisted tail without error.
     """
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     hf_text_config = TestFactory.create_hf_text_config()
     layer_idx = find_layer_idx(hf_text_config, "sliding_attention")
@@ -723,7 +723,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     the post-SDPA stash (kseq < hist).
     """
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     hf_text_config = TestFactory.create_hf_text_config()
     layer_idx = find_layer_idx(hf_text_config, "sliding_attention")

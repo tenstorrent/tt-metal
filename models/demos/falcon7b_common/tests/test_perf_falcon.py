@@ -13,7 +13,7 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     run_test_FalconCausalLM_end_to_end,
 )
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,7 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     num_to_core_range_set,
@@ -34,9 +34,9 @@ from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     standardize_hf_keys,
 )
 
-# HuggingFace reference-model wrappers are shared with models/tt_transformers instead of being
+# HuggingFace reference-model wrappers are shared with models/ttt_compat instead of being
 # copied here, so a transformers version bump is fixed in one place (see Issue #42139 review).
-from models.tt_transformers.tt.model_config import (
+from models.ttt_compat.tt.model_config import (
     HfAttentionWrapper,
     HfDecoderWrapper,
     HfModelWrapper,
@@ -578,7 +578,7 @@ class TtModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
-        # HuggingFace-backed reference model infrastructure (mirrors models/tt_transformers).
+        # HuggingFace-backed reference model infrastructure (mirrors models/ttt_compat).
         # Galaxy Llama/Qwen use Meta-format state dicts, so keep the Meta<->HF permute path (use_hf_rope=False).
         self.hf_config = None  # Populated in _set_hf_params for HF checkpoints
         self.use_hf_rope = False
@@ -2396,7 +2396,7 @@ class TtModelArgs:
         return AutoModelForCausalLM
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
-        """Return the HuggingFace reference transformer, mirroring models/tt_transformers.
+        """Return the HuggingFace reference transformer, mirroring models/ttt_compat.
 
         When wrap=True, returns an HfModelWrapper exposing a Meta-style forward/load_state_dict.
         When wrap=False, returns the raw HF model (used by the submodule reference_* helpers).
@@ -3053,5 +3053,5 @@ def set_tg_attention_config(model_config, dim):
 
 
 # HuggingFace reference-model wrappers (HfAttentionWrapper / HfDecoderWrapper / HfModelWrapper)
-# are imported from models/tt_transformers at the top of this file instead of being duplicated
+# are imported from models/ttt_compat at the top of this file instead of being duplicated
 # here (see Issue #42139 review, finding #9).

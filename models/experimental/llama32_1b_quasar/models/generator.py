@@ -44,7 +44,7 @@ class Llama3Generator:
 
         This is the entry point called by vLLM's TTModelRunner.
         """
-        from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+        from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs
 
         hf_model_name = hf_config._name_or_path
         instruct = "Instruct" in hf_model_name

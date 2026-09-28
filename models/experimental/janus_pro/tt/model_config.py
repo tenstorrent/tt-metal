@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
-from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs as TTModelArgs
 
 
 class ModelArgs(TTModelArgs):
@@ -146,7 +146,7 @@ class ModelArgs(TTModelArgs):
         )
         model = model.float()
         if wrap:
-            from models.tt_transformers.tt.model_config import HfModelWrapper
+            from models.ttt_compat.tt.model_config import HfModelWrapper
 
             return HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
         return model

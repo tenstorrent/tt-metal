@@ -276,7 +276,7 @@ def get_device_name(mesh_device):
 def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> Path:
     """Disk root for ``Qwen25_72B`` ``LazyWeight`` caches in this e2e demo.
 
-    Matches ``models/tt_transformers/tt/model_config.py`` (HF checkpoint branch): if ``TT_CACHE_PATH``
+    Matches ``models/ttt_compat/tt/model_config.py`` (HF checkpoint branch): if ``TT_CACHE_PATH``
     is set, use ``<TT_CACHE_PATH>/<device_name>``; otherwise ``model_cache/<HF_MODEL>/<device_name>``.
     Persistent cache materially reduces re-run cost for 80-layer 72B weight materialization.
     """
@@ -304,7 +304,7 @@ def _load_tokenizer(hf_model_id: str):
 def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``."""
     name = ref_basename_for_hf(hf_model_id)
-    ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
+    ref_path = Path("models/ttt_compat/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
@@ -318,7 +318,7 @@ def load_reference_data(hf_model_id: str):
 
 def load_input_prompts(batch_size: int) -> list[str]:
     """Load input prompts for performance testing."""
-    prompts_path = Path("models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json")
+    prompts_path = Path("models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json")
     if not prompts_path.exists():
         return ["What is the meaning of life?"] * batch_size
 

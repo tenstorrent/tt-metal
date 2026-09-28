@@ -12,7 +12,7 @@ stay aligned. sparse_matmul output is 6D: [batch_dims..., num_experts, seq_tiles
 import math
 
 import ttnn
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 from .operations import apply_swiglu
 from .weights import ExpertWeights

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTTv2 Llama 3.2-1B-Instruct — native stack (no ``models/tt_transformers`` imports).
+TTTv2 Llama 3.2-1B-Instruct — native stack (no ``models/ttt_compat`` imports).
 
 Architecture: standard Llama 1D transformer, same topology family as Llama 3.2-3B / 3.1-8B.
   hidden=2048, layers=16, n_heads=32, n_kv_heads=8, head_dim=64,
@@ -14,7 +14,7 @@ Mesh compatibility: N150 (1×1), N300 (1×2), T3K (1×8) — 32 heads / 8 KV hea
 divide all three.
 
 TTTv1 source for precision recipes:
-  ``models/tt_transformers/tt/model_config.py :: DecodersPrecision``
+  ``models/ttt_compat/tt/model_config.py :: DecodersPrecision``
   (Llama-3 group: ``accuracy()`` lines 130-159, ``performance()`` lines 208-218)
 """
 

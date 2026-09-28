@@ -592,7 +592,7 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.common import create_tt_model
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     paged_attention_config = PagedAttentionConfig(
         block_size=page_block_size,
@@ -792,7 +792,7 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
             pass
 
     from models.demos.gemma4.tt.common import create_tt_model
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     model_path = os.getenv("HF_MODEL") or os.getenv(
         "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
@@ -945,7 +945,7 @@ def test_single_decode(mesh_device, reset_seeds, request):
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.common import create_tt_model
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     model_path = os.getenv("HF_MODEL") or os.getenv(
         "GEMMA4_MODEL_PATH", "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"

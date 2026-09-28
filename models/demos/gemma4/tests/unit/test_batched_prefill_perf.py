@@ -44,7 +44,7 @@ from models.demos.gemma4.demo.text_demo import (
 )
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import skip_gemma4_full_prefill_warmup
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
+from models.ttt_compat.tt.common import PagedAttentionConfig, get_padded_prefill_len
 
 from ..test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric
 

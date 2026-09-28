@@ -28,7 +28,7 @@ used in ``tt/pipeline.py``:
 
 **Per-region CSV summary:**
 
-    python models/tt_transformers/scripts/op_perf_results.py \\
+    python models/ttt_compat/scripts/op_perf_results.py \\
       generated/profiler/reports/*/ops_perf_results_*.csv --signpost start_patch_embed
 
 Environment overrides:

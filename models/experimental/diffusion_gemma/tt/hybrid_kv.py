@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 DEFAULT_BLOCK_SIZE = 64

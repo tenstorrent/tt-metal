@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 from .vision_attention import VisionAttention
 from .vision_distributed_layernorm import DistributedLayerNorm

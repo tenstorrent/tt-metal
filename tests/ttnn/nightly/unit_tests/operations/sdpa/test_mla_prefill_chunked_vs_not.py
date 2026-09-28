@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import (
     nearest_pow_2,
     page_table_setup,
 )
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 def run_flash_mla_prefill_chunked_vs_nonchunked(

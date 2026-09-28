@@ -24,8 +24,8 @@ from models.common.sampling import (
     scatter_sampling_params_to_slots,
 )
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
-from models.tt_transformers.tt.common import Mode, get_padded_prefill_len
-from models.tt_transformers.tt.generator import (
+from models.ttt_compat.tt.common import Mode, get_padded_prefill_len
+from models.ttt_compat.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     Generator,
     batched_prefill_padded_batch,

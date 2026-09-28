@@ -78,7 +78,7 @@ from models.experimental.diffusion_gemma.tt.traced_denoise import (
     upfront_capture_enabled,
     upfront_traced_denoise_block,
 )
-from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+from models.ttt_compat.tt.generator_vllm import HybridAttentionForCausalLM
 
 
 # Served default Gumbel source: the on-device seeded SFPU RNG (see the __init__ note).

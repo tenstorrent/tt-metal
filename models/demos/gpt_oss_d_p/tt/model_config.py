@@ -21,7 +21,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 # Bundled config.json (no network / checkpoint needed for the config path).
 DEFAULT_HF_MODEL = "models/demos/gpt_oss/configs/gpt-oss-120b"

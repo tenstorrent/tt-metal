@@ -23,7 +23,7 @@ from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 # TODO: Remove this?
 from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 

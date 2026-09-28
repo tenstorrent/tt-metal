@@ -51,7 +51,7 @@ HF_MODEL=LiquidAI/LFM2.5-VL-1.6B MESH_DEVICE=N300 \
 - Entry point: `tt/e2e_model.py` (`TtLfm25VlModel` / `Lfm25VlMultimodalGenerator`)
 - Batch size: 1
 - Early fusion at `image_token_id=396`
-- Config/params: `models/tt_transformers/model_params/LFM2.5-VL-1.6B/config.json`
+- Config/params: `models/ttt_compat/model_params/LFM2.5-VL-1.6B/config.json`
 
 ## Known limitations
 - ShortConv decode state runs on host (not in device trace). Use `batch1-notrace` for bring-up.

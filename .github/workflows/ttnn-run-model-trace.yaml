@@ -6,7 +6,7 @@ on:
       models:
         description: >-
           JSON array of models to trace (GitHub collapses multiline input, so use inline JSON).
-          Example: [{"test_path":"models/tt_transformers/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
+          Example: [{"test_path":"models/ttt_compat/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
           Keys: test_path (required), HF_MODEL (optional), extra_args (optional).
           All models share runner-label and are homogenized into one trace_run_id.
         required: true

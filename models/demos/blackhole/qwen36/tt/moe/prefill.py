@@ -13,7 +13,7 @@ while down's M is the whole chunk_len; PREFILL_CHUNK_SIZE bounds down's grid/L1.
 import torch
 
 import ttnn
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_reduce
 
 from .decode import _build_sparse_matmul_config
 from .operations import apply_swiglu

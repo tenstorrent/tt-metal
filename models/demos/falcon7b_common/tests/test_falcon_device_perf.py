@@ -14,7 +14,7 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
 )
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 
 
 @pytest.mark.parametrize(

@@ -9,7 +9,7 @@ GPT-OSS specific implementation of create_tt_model that's compatible with tt_tra
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 
 
 def create_tt_model(

@@ -46,7 +46,7 @@ def test_mlp_forward_is_zero_when_weights_are_zero(completer_and_mlp):
     forward output is elementwise zero."""
     import ttnn
 
-    from models.tt_transformers.tt.common import Mode
+    from models.ttt_compat.tt.common import Mode
 
     completer, mlp = completer_and_mlp
 

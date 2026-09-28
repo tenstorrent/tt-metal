@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen3_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
-from models.tt_transformers.tt.generator import Generator as TTTGenerator
+from models.ttt_compat.tt.generator import Generator as TTTGenerator
 
 
 class Generator(WarmupForwardMixin):

@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
-from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
+from models.ttt_compat.tt.embedding import Embedding, ScaledEmbedding
 
 
 @torch.no_grad()

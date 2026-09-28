@@ -19,7 +19,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.lfm25_vl.reference.functional import short_conv
 from models.demos.multimodal.lfm25_vl.tt.model_config import ModelArgs
 from models.demos.multimodal.lfm25_vl.tt.short_conv import TtLfm2ShortConv
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 
 @torch.no_grad()

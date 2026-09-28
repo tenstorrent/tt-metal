@@ -37,9 +37,9 @@ from safetensors.torch import load_file as safetensors_load_file
 from transformers import AutoConfig, AutoProcessor
 
 import ttnn
-from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
+from models.ttt_compat.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model_config import ModelArgs, DecodersPrecision
 
 # Import optimized vision encoder
 from models.experimental.smolvla.tt.ttnn_optimized_vit_smolvla import create_smolvla_vision_encoder
@@ -2465,8 +2465,8 @@ class SmolVLATextModel:
 
     def _init_tt_model(self):
         """Initialize the TT transformer model."""
-        from models.tt_transformers.tt.model import Transformer
-        from models.tt_transformers.tt.common import PagedAttentionConfig
+        from models.ttt_compat.tt.model import Transformer
+        from models.ttt_compat.tt.common import PagedAttentionConfig
 
         # Get SmolVLA-specific model args class and instantiate it
         SmolVLAModelArgsClass = get_SmolVLAModelArgs(self.tt_state_dict, self.config)
@@ -3666,7 +3666,7 @@ def test_smolvla_model(mesh_device, iterations):
     Test SmolVLA model on TT hardware.
 
     To run:
-        python -m pytest models/tt_transformers/tt/multimodal/smol_vla.py::test_smolvla_model -v
+        python -m pytest models/ttt_compat/tt/multimodal/smol_vla.py::test_smolvla_model -v
 
     Prerequisites:
         - SmolVLA weights downloaded (automatic from HuggingFace)
@@ -3713,7 +3713,7 @@ def test_smolvla_cpu_only(repo_id):
     Test SmolVLA model on CPU only (no TT device required).
 
     To run:
-        python -m pytest models/tt_transformers/tt/multimodal/smol_vla.py::test_smolvla_cpu_only -v
+        python -m pytest models/ttt_compat/tt/multimodal/smol_vla.py::test_smolvla_cpu_only -v
     """
     logger.info(f"Loading SmolVLA from {repo_id} (CPU only)...")
 

@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen3_vl.tt.common import nearest_multiple
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 class ModelOptimizations:

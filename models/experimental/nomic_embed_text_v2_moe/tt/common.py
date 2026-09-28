@@ -53,7 +53,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.model_config import (
     LAYOUT,
     MEMORY_CONFIG,
 )
-from models.tt_transformers.tt.rope import get_rot_mats_hf
+from models.ttt_compat.tt.rope import get_rot_mats_hf
 
 
 def to_device(

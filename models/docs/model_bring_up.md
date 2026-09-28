@@ -26,7 +26,7 @@ After setting up the environment correctly, run a demo to test the environment.
 
 ### Implementation
 
-- For transformer based models, use [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers) codebase as reference implementation.
+- For transformer based models, use [models/ttt_compat](https://github.com/tenstorrent/tt-metal/tree/main/models/ttt_compat) codebase as reference implementation.
 
 - For other models, choose the model from [/models](https://github.com/tenstorrent/tt-metal/tree/main/models) that is the most similar:
   - Most transformer based models can be run by changing the tensor dimensions of llama3 and can be added as a new model configuration to the existing codebase. For other models, make a copy of the model codebase for advanced changes.

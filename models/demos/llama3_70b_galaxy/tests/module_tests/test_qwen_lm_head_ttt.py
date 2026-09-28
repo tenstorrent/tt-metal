@@ -8,8 +8,8 @@ from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tt.model_config import ModelArgs
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,

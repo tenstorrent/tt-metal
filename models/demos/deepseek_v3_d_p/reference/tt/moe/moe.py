@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe_intermediates import MoEIntermediates
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_gate_outputs
-from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+from models.ttt_compat.tt.load_checkpoints import load_hf_state_dict_filtered
 
 
 class TorchLatentMoeProjections(nn.Module):

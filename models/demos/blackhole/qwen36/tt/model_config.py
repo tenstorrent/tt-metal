@@ -11,7 +11,7 @@ load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 import os
 from pathlib import Path
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
@@ -328,7 +328,7 @@ class Qwen36ModelArgs(ModelArgs):
         override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
         the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
         """
-        from models.tt_transformers.tt.common import Mode
+        from models.ttt_compat.tt.common import Mode
 
         if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
             return True

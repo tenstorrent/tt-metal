@@ -1037,7 +1037,7 @@ def test_full_model_parity_decode_uniform_vs_vllm(layer_set, decode_steps, mesh_
     """
     _skip_full_model_parity_if_mesh_too_small(mesh_device)
 
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _create_hf_text_config, _hf_model_state_to_tt_state
@@ -1325,7 +1325,7 @@ def test_full_model_parity_decode_with_pli(layer_set, decode_steps, mesh_device,
     """
     _skip_full_model_parity_if_mesh_too_small(mesh_device)
 
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _hf_model_state_to_tt_state
@@ -1535,7 +1535,7 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _hf_model_state_to_tt_state
@@ -1791,7 +1791,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     import torch.nn.functional as F
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     from ...tests.test_factory import num_layers_for_full_attention_group
     from ..unit.test_model import _create_hf_model, _hf_model_state_to_tt_state

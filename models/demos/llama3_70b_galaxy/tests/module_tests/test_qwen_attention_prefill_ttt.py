@@ -9,7 +9,7 @@ import ttnn
 from models.demos.llama3_70b_galaxy.reference.qwen import precompute_freqs_cis
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
@@ -17,7 +17,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.reference.qwen import Attention
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -190,7 +190,7 @@ def test_qwen_attention_inference_prefill_ttt(
     freqs_cis = torch.complex(cos, sin)
 
     # Setup freqs for reference model (tt_transformers)
-    from models.tt_transformers.tt.common import precompute_freqs as tt_precompute_freqs
+    from models.ttt_compat.tt.common import precompute_freqs as tt_precompute_freqs
 
     cos_ref, sin_ref = tt_precompute_freqs(
         model_args_ref.head_dim,

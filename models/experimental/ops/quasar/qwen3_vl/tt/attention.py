@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+from models.ttt_compat.tt.ccl import tt_all_gather, tt_all_reduce
 
 # Potential warning that we don't want to show for every layer and token
 global_padded_head_warning_shown = False

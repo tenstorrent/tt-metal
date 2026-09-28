@@ -12,7 +12,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.demos.blackhole.qwen36.tt.vision.model import VisionTransformer
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
-from models.tt_transformers.tt.load_checkpoints import (
+from models.ttt_compat.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
     standardize_hf_keys_multimodal,

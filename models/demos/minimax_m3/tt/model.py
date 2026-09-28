@@ -10,8 +10,8 @@ from models.common.sampling.generator import SamplingGenerator
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
-from models.tt_transformers.tt.common import rope_scaling_model_factory
-from models.tt_transformers.tt.rope import RotarySetup
+from models.ttt_compat.tt.common import rope_scaling_model_factory
+from models.ttt_compat.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d

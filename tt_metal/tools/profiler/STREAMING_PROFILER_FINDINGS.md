@@ -4796,7 +4796,7 @@ env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_PROFILER=1 \
     TT_METAL_PERF_DEBUG_ROLE_SPLIT=1 TT_METAL_PERF_DEBUG_RING_RECS=67108864 \
     TT_METAL_PERF_DEBUG_DRISC_ZONES=1 TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1 \
     python_env/bin/python -m pytest -s -q \
-    models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'performance and batch-1'
+    models/ttt_compat/demo/simple_text_demo.py::test_demo_text -k 'performance and batch-1'
 
 # WEDGE CHECK -- the point of the exercise. After the run that hangs, with NO profiler env at all:
 python_env/bin/python -m pytest -s -q \

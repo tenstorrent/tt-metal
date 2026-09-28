@@ -69,7 +69,7 @@ except ImportError:
 
 
 # Tracy region markers for HunyuanTtDenoiseStep.__call__. Filter CSV with:
-#   python models/tt_transformers/scripts/op_perf_results.py ops_perf_results_*.csv \
+#   python models/ttt_compat/scripts/op_perf_results.py ops_perf_results_*.csv \
 #     --signpost start_patch_embed
 # Regions: start_patch_embed … stop_patch_embed, start_scatter … stop_scatter,
 # start_backbone … stop_backbone, start_final_layer … stop_final_layer,

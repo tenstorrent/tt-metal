@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTTv2 Llama 3.3-70B-Instruct — native stack (no ``models/tt_transformers`` imports).
+TTTv2 Llama 3.3-70B-Instruct — native stack (no ``models/ttt_compat`` imports).
 
 Architecture: standard Llama 1D transformer, same topology as Llama 3.1-8B / 3.2-3B
 (no QKV bias, no Q/K norm, GPT-NeoX rotate_half RoPE with llama3 scaling).
@@ -15,7 +15,7 @@ the exact product, device count, logical mesh shape, Ring topology, and P150 DRA
 width before composing modules.
 
 TTTv1 source for precision recipes:
-  ``models/tt_transformers/tt/model_config.py :: DecodersPrecision``.
+  ``models/ttt_compat/tt/model_config.py :: DecodersPrecision``.
   ``get_base_model_name("…/Llama-3.3-70B-Instruct") == "Llama-3.3-70B"`` is NOT in the
   ``Llama-3.1-70B`` special-case list (model_config.py:119), so it resolves to the generic
   Llama-3 branch — identical recipe to Llama-3.2-3B: ``accuracy()`` BFP8 attention/KV/MLP +
