@@ -141,6 +141,12 @@ class WanTransformerBlock(Module):
             device=mesh_device,
             dtype=ttnn.float32,
         )
+        # The six rows of `scale_shift_table` as separate (1, 1, 1, D/tp) tile tensors, derived
+        # on device from the Parameter (see `_split_table`); keyed on the identity of the
+        # Parameter's data so a reload rebuilds them. Not a Parameter: the weight cache stays
+        # byte-identical to before.
+        self._table_rows: tuple[ttnn.Tensor, ...] | None = None
+        self._table_rows_src: ttnn.Tensor | None = None
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -159,6 +165,62 @@ class WanTransformerBlock(Module):
 
         if "scale_shift_table" in state:
             state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        self._table_rows = None
+        self._table_rows_src = None
+
+    def _split_table(self) -> tuple[ttnn.Tensor, ...]:
+        """The six (1, 1, 1, D/tp) fp32 tile rows of `scale_shift_table`, built once per load.
+
+        Row k of the (1, 1, 6, D/tp) tile tensor starts at a non-tile-aligned row, so this slice
+        goes through the untilize / row-major slice / re-tilize fallback -- exact fp32 data
+        movement, paid once here rather than on every step. Call it eagerly after loading
+        (`WanTransformer3DModel.prepare_modulation_constants`), never for the first time inside
+        a trace capture.
+        """
+        data = self.scale_shift_table.data
+        if self._table_rows is None or self._table_rows_src is not data:
+            width = data.shape[-1]
+            self._table_rows = tuple(ttnn.slice(data, [0, 0, k, 0], [1, 1, k + 1, width]) for k in range(6))
+            self._table_rows_src = data
+        return self._table_rows
+
+    def prepare_modulation_split(self, proj_chunks: tuple[ttnn.Tensor, ...]) -> tuple[ttnn.Tensor, ...]:
+        """`prepare_modulation` on a timestep projection that is already split six ways.
+
+        `proj_chunks` are the six (1, B, T, D/tp) tile tensors `WanTransformer3DModel.
+        split_timestep_proj` cuts from the flat (1, B, T, 6*D/tp) projection at tile-aligned
+        column offsets (T = 1 for a scalar timestep, N for the per-token layout). Each chunk is
+        added to the matching pre-split table row, so the layout never leaves TILE: no untilize,
+        no `TilizeWithValPadding` per consumer, no per-call table reshape. The two gates come out
+        of their add as bf16 directly (the add keeps its fp32 result in the fp32 destination and
+        applies the same fp32->bf16 typecast LLK `ttnn.typecast` uses, so the rounding is the
+        one `prepare_modulation` produced). `1.0 + scale` stays a separate op: folding the one
+        into the table rows would change the fp32 rounding. Returns the same six tensors as
+        `prepare_modulation`, and bit-identical ones (gate: `test_cfg_hoist_ti2v_5b.py`).
+        """
+        assert len(proj_chunks) == 6, f"expected 6 projection chunks, got {len(proj_chunks)}"
+        t_shift, t_scale, t_gate, t_c_shift, t_c_scale, t_c_gate = self._split_table()
+        p_shift, p_scale, p_gate, p_c_shift, p_c_scale, p_c_gate = proj_chunks
+
+        shift_msa_1B1D = t_shift + p_shift
+        scale_msa_1B1D = t_scale + p_scale
+        # NOTE: workaround - addcmul (fused and unfused) is less accurate with fp32 gate input
+        gate_msa_1B1D = ttnn.add(t_gate, p_gate, dtype=ttnn.bfloat16)
+        c_shift_msa_1B1D = t_c_shift + p_c_shift
+        c_scale_msa_1B1D = t_c_scale + p_c_scale
+        c_gate_msa_1B1D = ttnn.add(t_c_gate, p_c_gate, dtype=ttnn.bfloat16)
+
+        return (
+            shift_msa_1B1D,
+            1.0 + scale_msa_1B1D,
+            gate_msa_1B1D,
+            c_shift_msa_1B1D,
+            1.0 + c_scale_msa_1B1D,
+            c_gate_msa_1B1D,
+        )
 
     def prepare_modulation(self, temb_1BTD: ttnn.Tensor) -> tuple[ttnn.Tensor, ...]:
         """AdaLN modulation of this block for one timestep embedding.
@@ -419,6 +481,10 @@ class WanTransformer3DModel(Module):
             mesh_axes=[None, None, parallel_config.tensor_parallel.mesh_axis],
             dtype=ttnn.float32,
         )
+        # (shift_row, scale_row) of the norm_out table as (1, 1, 1, D/tp) tile tensors; see
+        # `_norm_out_table_rows` and `WanTransformerBlock._split_table` for the rationale.
+        self._norm_out_rows: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
+        self._norm_out_rows_src: ttnn.Tensor | None = None
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -446,6 +512,28 @@ class WanTransformer3DModel(Module):
 
         # Torch fallbacks
         self.rope.load_state_dict(torch.load(directory / f"{prefix}rope.pt"))
+        self.prepare_modulation_constants()
+
+    def load_torch_state_dict(self, state_dict, *, strict: bool = True):
+        result = super().load_torch_state_dict(state_dict, strict=strict)
+        self.prepare_modulation_constants()
+        return result
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        self._norm_out_rows = None
+        self._norm_out_rows_src = None
+
+    def prepare_modulation_constants(self) -> None:
+        """Build the per-block and norm_out split tables now, outside any trace capture.
+
+        `combined_step` consumes them through `prepare_modulation_split` /
+        `prepare_norm_out_modulation_split`; creating them lazily under capture would either
+        need a JIT compile mid-capture or record the one-off slices into the trace.
+        """
+        for block in self.blocks:
+            block._split_table()
+        self._norm_out_table_rows()
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Torch fallbacks
@@ -511,6 +599,58 @@ class WanTransformer3DModel(Module):
         shift_11BD, scale_11BD = self._apply_norm_out_modulation(temb_11BD)
         return shift_11BD, 1 + scale_11BD
 
+    def _norm_out_table_rows(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """`(shift_row, scale_row)` of the (1, 2, D/tp) norm_out table as (1, 1, 1, D/tp) tile
+        tensors, built once per load (same reasoning as `WanTransformerBlock._split_table`)."""
+        data = self.scale_shift_table.data
+        if self._norm_out_rows is None or self._norm_out_rows_src is not data:
+            width = data.shape[-1]
+            rows = tuple(ttnn.slice(data, [0, k, 0], [1, k + 1, width]) for k in range(2))
+            self._norm_out_rows = tuple(ttnn.reshape(row, (1, 1, 1, width)) for row in rows)
+            self._norm_out_rows_src = data
+        return self._norm_out_rows
+
+    def prepare_norm_out_modulation_split(self, temb_11BD):
+        """`prepare_norm_out_modulation` without the add-then-chunk layout round trip.
+
+        Two adds of `temb` against the pre-split table rows replace `table + temb` followed by
+        `ttnn.chunk` (which untilizes and re-tilizes the (1, 1, 2, D/tp) result). Elementwise
+        identical to the legacy path for both the scalar (1, 1, 1, D/tp) and the per-token
+        (1, B, N, D/tp) `temb`; for the latter it also drops the `ttnn.concat([temb, temb])`.
+        """
+        shift_row, scale_row = self._norm_out_table_rows()
+        shift_11BD = shift_row + temb_11BD
+        scale_11BD = scale_row + temb_11BD
+        return shift_11BD, 1 + scale_11BD
+
+    @staticmethod
+    def split_timestep_proj(proj_flat: ttnn.Tensor) -> tuple[ttnn.Tensor, ...]:
+        """Cut the flat (1, B, T, 6*D/tp) timestep projection into its six AdaLN groups.
+
+        Each device's `time_proj` output is laid out group-major [g0|g1|...|g5] (see
+        `WanTimeTextImageEmbedding._prepare_torch_state`), so the groups are D/tp-wide column
+        ranges. D/tp is a multiple of 32 for every supported parallelism, so these are
+        tile-aligned slices on the last dim: `ttnn.slice` stays on its tile program factory
+        (a NOC tile copy, no layout change), for T = 1 and T = N alike. Once per step, then
+        every block adds the same six chunks to its own pre-split table rows.
+        """
+        width = proj_flat.shape[-1]
+        assert width % 6 == 0, f"timestep projection width {width} is not 6 groups"
+        group = width // 6
+        assert group % 32 == 0, f"AdaLN group width {group} is not tile aligned"
+        ends = list(proj_flat.shape)
+        return tuple(
+            ttnn.slice(proj_flat, [0, 0, 0, k * group], [ends[0], ends[1], ends[2], (k + 1) * group]) for k in range(6)
+        )
+
+    def prepare_hoisted_modulation(self, temb_11BD, proj_flat):
+        """The per-block and norm_out modulation tensors `combined_step` shares between its two
+        CFG passes, from the flat timestep projection (`prepare_timestep_conditioning(...,
+        flat_proj=True)`). Split once, then six tile-aligned adds per block."""
+        chunks = self.split_timestep_proj(proj_flat)
+        block_modulations = [block.prepare_modulation_split(chunks) for block in self.blocks]
+        return block_modulations, self.prepare_norm_out_modulation_split(temb_11BD)
+
     def _apply_norm_out_modulation(self, temb_11BD):
         """Add the model-level scale/shift table to `temb` and split it into (shift, scale).
 
@@ -561,8 +701,12 @@ class WanTransformer3DModel(Module):
         row1 = ttnn.repeat(row1, ttnn.Shape([1, 1, n, 1]))
         return ttnn.lerp(row0, row1, mask)
 
-    def prepare_timestep_conditioning(self, timestep):
+    def prepare_timestep_conditioning(self, timestep, *, flat_proj: bool = False):
         """Embed the timestep, for either a scalar or a per-token schedule.
+
+        With `flat_proj=True` the scalar projection is returned as the embedder produces it,
+        (1, 1, 1, 6*D/tp), instead of unflattened to (1, 1, 6, D/tp); `combined_step` uses that
+        form with `split_timestep_proj`. The two-row and per-token layouts are flat already.
 
         Three layouts reach this, told apart by the token axis so that `combined_step`'s traced
         signature never changes:
@@ -595,6 +739,8 @@ class WanTransformer3DModel(Module):
             # Leave the projection as (1, B, N, 6*D/tp); WanTransformerBlock.forward detects the
             # wider layout and chunks on the feature axis instead of a dedicated chunk axis.
             logger.info(f"TT per-token timestep proj shape: {tt_timestep_proj_1BTD.shape}")
+            return tt_temb_11BD, tt_timestep_proj_1BTD
+        if flat_proj:
             return tt_temb_11BD, tt_timestep_proj_1BTD
         tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
@@ -852,12 +998,16 @@ class WanTransformer3DModel(Module):
         # share, so under CFG they are computed once here instead of once per pass.
         shared = {}
         if do_classifier_free_guidance:
-            temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+            # The flat projection is split at tile-aligned group boundaries once and every block
+            # adds the chunks to its pre-split table (`prepare_hoisted_modulation`); the legacy
+            # add-then-`ttnn.chunk` form stays on the inline paths as the bit-exact reference.
+            temb_11BD, proj_flat = self.prepare_timestep_conditioning(timestep, flat_proj=True)
+            block_modulations, norm_out_modulation = self.prepare_hoisted_modulation(temb_11BD, proj_flat)
             shared = {
-                "timestep_conditioning": (temb_11BD, timestep_proj_1BTD),
+                "timestep_conditioning": (temb_11BD, proj_flat),
                 "spatial_1BND": self.patch_embedding(spatial_1BNI),
-                "block_modulations": [block.prepare_modulation(timestep_proj_1BTD) for block in self.blocks],
-                "norm_out_modulation": self.prepare_norm_out_modulation(temb_11BD),
+                "block_modulations": block_modulations,
+                "norm_out_modulation": norm_out_modulation,
             }
 
         cond = self.inner_step(

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Micro-benchmark for the AdaLN six-way split at ``transformer_wan.py:209``.
+"""Micro-benchmark for the AdaLN six-way split in ``WanTransformerBlock.prepare_modulation`` (``transformer_wan.py``; since sprint 6 the traced path uses ``prepare_modulation_split`` and this split is gone from the step).
 
 An op-level profile of the untraced denoise put ``ttnn.chunk`` at ~950 us per call on a
 **4608-element** tensor (1, 1, 6, 768), 60 calls per step. A tensor that small cannot be
@@ -44,7 +44,7 @@ def _variants(x_tile, x_rm, x_flat):
         return [ttnn.slice(x_tile, [0, 0, i, 0], [1, _B, i + 1, _WIDTH], [1, 1, 1, 1]) for i in range(_CHUNKS)]
 
     def chunk_flat_dim3():
-        # The per-token branch at transformer_wan.py:206 already uses this layout: one
+        # The per-token branch of prepare_modulation already uses this layout: one
         # row of 6*768, split along the last dim, which is tile-aligned at 768 = 24 tiles.
         return ttnn.chunk(x_flat, _CHUNKS, dim=3)
 
