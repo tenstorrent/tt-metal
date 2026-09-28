@@ -366,8 +366,10 @@ MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return
 
 ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
     TT_FATAL(!programs_.empty(), "Program Configs can only be queried if a MeshWorkload is populated.");
+    // Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does.
     const bool requires_finalized_config =
-        MetalContext::instance().rtoptions().get_fast_dispatch() && !is_service_workload_.value_or(false);
+        MetalContext::instance().rtoptions().get_fast_dispatch() && !is_service_workload_.value_or(false) &&
+        MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
     TT_FATAL(
         !requires_finalized_config || is_finalized(),
         "Program Configs on a fast-dispatch MeshWorkload can only be queried after finalization.");
