@@ -140,7 +140,8 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 | `bench_heads_bs16_ablate.py [batch]` (`QWEN_FUSED_COMPUTE_V3=1`, `ABL_ROPE=DRAM`) | fused heads op: full vs compute-only / data-movement-only / read-only / write-only scratch kernel variants, DRAM and L1 input |
 | `bench_heads_bs16_kernels.py [batch] [v1 v2 v3 path.cpp …]` | heads-op compute kernels side by side: traced µs (L1 / DRAM input) + PCC / exactness vs v1 |
 | `bench_heads_bs16_phases.py [batch] [L1\|DRAM]` (`PH_MODE=unit`, `QWEN_FUSED_COMPUTE_V3=1`) | per-phase (v1) or per-unit wait/compute split of the heads compute from per-TRISC wall-clock accumulators (DPRINT), per core |
-| `bench_qkv_mm_bs16_ablate.py [batch]` | QKV `minimal_matmul` at the model's bs16 config with the in0 / in1 reads and / or the output write skipped (patches `matmul_dataflow_common_metal2.hpp` per variant, restores it; PCC shows each patch compiled in) |
+| `bench_qkv_mm_bs16_ablate.py [batch]` | QKV `minimal_matmul` at the model's config (bfp4 width-sharded weights; L1 and DRAM output) with the in0 / in1 reads and / or the output write skipped (patches `matmul_dataflow_common_metal2.hpp` per variant, restores it; PCC shows each patch compiled in) |
+| `capture_qkv_call.py [batch]` | the model's actual QKV `minimal_matmul` call: operand shapes, dtypes, memory configs (incl. shard specs), program config |
 | `l1_map_first_layer.py [batch] [n_ops]` | live L1 buffers (lowest address, total, list) after each of the first `n_ops` ops of one eager prefill, next to the CB-region start: the room a program's static CBs have |
 | `test_heads_qsplit.py`, `test_sdpa_concat_out.py` | bit-identity + timing of the fused-heads Q split and the concat-free SDPA output |
 | `parse_smi2.py <dev> <log>` | aligns tt-smi clock/power samples (`/tmp/smi_samples/*.json`) with iteration timestamps |

@@ -1083,14 +1083,30 @@ up (e2e best of 10, `ab_one.sh`, same chip): 8,8,8 DRAM 189.2 → 8,4,8 L1 189.0
 default on at bs8 (POSITIVE_RESULTS). At bs16 the clash turned out to be fragmentation (below); with the post-attention
 sum in DRAM the QKV output fits at the default blocks and it lands at bs16 too.
 
-**The QKV matmul is compute-bound, but its output write does not overlap.** `perf_tools/bench_qkv_mm_bs16_ablate.py`
-(bs16 QKV minimal_matmul at the model's config: 12×10, 8,8,8 blocks, subblock 1,8, LoFi, bfp8 in / out; variants patch
-`matmul_dataflow_common_metal2.hpp`, the header the op's Metal 2.0 kernels include; output PCC 1.000 for full and ~0 for
-every skip variant, so the patches compiled in), µs per call, L1 / DRAM input: full 667.4 / 659.2, no output write
-554.1 / 533.1, no reads 627.7 / 626.8, no in0 read 656.0 / 655.8, no in1 read 640.7 / 631.4, compute only 512.0 /
-511.8. Compute is ~78% of the call; the reads mostly overlap it (−35 µs), the output write does not (−110 to −126 µs).
-A QKV + heads fusion would still write Q/K/V (the same 53.5 MB) for SDPA, so the write stall stays; it removes the heads
-op (327 µs) and adds its compute to the matmul's, which at v3's cost is at most ~214 µs.
+**The QKV matmul is compute-bound, and its output write overlaps.** `perf_tools/bench_qkv_mm_bs16_ablate.py [batch]`
+(QKV minimal_matmul at the model's config, from `perf_tools/capture_qkv_call.py`: bfp8 in0 in L1, **bfp4 weights DRAM
+width-sharded [2560, 768] over the 8 banks**, bfp8 out, 12×10, 8,8,8 blocks, subblock 1,8, LoFi, packer L1 acc;
+variants patch `matmul_dataflow_common_metal2.hpp`, the header the op's Metal 2.0 kernels include; output PCC 1.000 for
+full and ~0 for every skip variant), µs per call:
+
+| variant | bs16, L1 out | bs16, DRAM out | bs32, DRAM out |
+|---|---|---|---|
+| full | 559.5 | 559.3 | 1123.9 |
+| no output write | 552.0 | 552.1 | 1123.0 |
+| no in0 read | 531.9 | 542.6 | 1086.7 |
+| no in1 read | 556.3 | 563.5 | 1089.9 |
+| no reads | 520.5 | 529.5 | 1041.1 |
+| compute only | 504.9 | 504.8 | 972.9 |
+
+Compute is 87-90% of the call and the output write is hidden (−1 to −7 µs). A first pass of this bench used bf8
+interleaved weights and measured 667 µs with a 110-126 µs output-write stall; that stall was an artifact of the wrong
+weights (the commit message of the bs8 landing repeats it). Fused QKV + heads estimate from these numbers: the fused
+op costs the matmul plus the heads epilogue on the same cores, and the epilogue at v3's cost on the matmul's grid (each
+core owns 22 / 43 row tiles × 5 heads at bs16 / bs32; the V heads are copies, so rows y=8-9 carry no norm work unless
+the weight columns are permuted to 4 norm + 1 V head per core) is ~205-257 µs at bs16 and ~372-465 µs at bs32. bs16
+today (QKV in L1, v3) is 559 + 214 = 773 µs, fused 764-816: nothing to gain. bs32 today (DRAM, v1) is 1124 + 594 =
+1718 µs, fused 1496-1589: −130 to −220 µs per layer (≈5-8 ms). bs32 heads op (`bench_heads_bs16_ablate.py 32`): v1
+full 594.5, compute only 572.0, data movement only 530.4; v3 compute only 388.6.
 
 **Why v3 loses with a DRAM input: the op sits at the DRAM floor, and the saturated bandwidth reaches the top grid rows
 last.** Per-unit split (`bench_heads_bs16_phases.py`, `PH_MODE=unit`): with a DRAM input, v3's mean core is faster than
