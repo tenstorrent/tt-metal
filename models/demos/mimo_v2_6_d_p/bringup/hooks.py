@@ -457,7 +457,7 @@ class MiMoDeviceModel:
         """Recorded in the profile: the active SDPA presets and the experts / router modes."""
         import os
 
-        from models.demos.mimo_v2_6_d_p.tt.attention import sdpa_settings
+        from models.demos.mimo_v2_6_d_p.tt.attention import sdpa_settings, v_pad_enabled
         from models.demos.mimo_v2_6_d_p.tt.model import EXPERTS_FIDELITY_DEFAULT, EXPERTS_MODE_DEFAULT
 
         full, sl = sdpa_settings(False), sdpa_settings(True)
@@ -469,6 +469,7 @@ class MiMoDeviceModel:
             "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", EXPERTS_MODE_DEFAULT),
             "experts_fidelity": os.environ.get("MIMO_EXPERTS_FIDELITY", EXPERTS_FIDELITY_DEFAULT),
             "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
+            "attn_v_pad": v_pad_enabled(),  # MIMO_V_PAD=1: V zero-padded to 192 (else V 128, ttnn.bringup SDPA)
         }
 
 
