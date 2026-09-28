@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <array>
+#include <functional>
 #include <optional>
 #include <random>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/quasar/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
@@ -168,9 +170,14 @@ TEST_F(ScalarLhsBinaryFixture, OmittedFastApproximateModeMatchesTensorFirstDefau
     device.disable_and_clear_program_cache();
 }
 
+using ScalarLhsCompare = std::function<Tensor(float, const Tensor&)>;
+
 // Regression: gt/lt/ne with a scalar lhs threw "Unsupported operation".
-TEST_F(ScalarLhsBinaryFixture, ScalarFirstGtLtNeCompareInOperandOrder) {
-    auto& device = *device_;
+void check_scalar_first_gt_lt_ne(
+    tt::tt_metal::distributed::MeshDevice& device,
+    const ScalarLhsCompare& gt,
+    const ScalarLhsCompare& lt,
+    const ScalarLhsCompare& ne) {
     const ttnn::Shape shape({32, 64});
     const auto tensor = ttnn::full(shape, 4.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     const auto expect = [&](const Tensor& actual, float value, const char* what) {
@@ -178,13 +185,30 @@ TEST_F(ScalarLhsBinaryFixture, ScalarFirstGtLtNeCompareInOperandOrder) {
         EXPECT_TRUE(ttnn::allclose<::bfloat16>(ttnn::from_device(expected), ttnn::from_device(actual))) << what;
     };
 
-    expect(ttnn::gt(2.0f, tensor), 0.0f, "gt(2, 4)");
-    expect(ttnn::lt(2.0f, tensor), 1.0f, "lt(2, 4)");
-    expect(ttnn::ne(2.0f, tensor), 1.0f, "ne(2, 4)");
-    expect(ttnn::gt(4.0f, tensor), 0.0f, "gt(4, 4)");
-    expect(ttnn::lt(4.0f, tensor), 0.0f, "lt(4, 4)");
-    expect(ttnn::ne(4.0f, tensor), 0.0f, "ne(4, 4)");
-    expect(ttnn::gt(8.0f, tensor), 1.0f, "gt(8, 4)");
+    expect(gt(2.0f, tensor), 0.0f, "gt(2, 4)");
+    expect(lt(2.0f, tensor), 1.0f, "lt(2, 4)");
+    expect(ne(2.0f, tensor), 1.0f, "ne(2, 4)");
+    expect(gt(4.0f, tensor), 0.0f, "gt(4, 4)");
+    expect(lt(4.0f, tensor), 0.0f, "lt(4, 4)");
+    expect(ne(4.0f, tensor), 0.0f, "ne(4, 4)");
+    expect(gt(8.0f, tensor), 1.0f, "gt(8, 4)");
+}
+
+TEST_F(ScalarLhsBinaryFixture, ScalarFirstGtLtNeCompareInOperandOrder) {
+    check_scalar_first_gt_lt_ne(
+        *device_,
+        [](float s, const Tensor& t) { return ttnn::gt(s, t); },
+        [](float s, const Tensor& t) { return ttnn::lt(s, t); },
+        [](float s, const Tensor& t) { return ttnn::ne(s, t); });
+}
+
+TEST_F(ScalarLhsBinaryFixture, QuasarScalarFirstGtLtNeCompareInOperandOrder) {
+    namespace qsr = ttnn::operations::experimental::quasar::binary;
+    check_scalar_first_gt_lt_ne(
+        *device_,
+        [](float s, const Tensor& t) { return qsr::gt(s, t); },
+        [](float s, const Tensor& t) { return qsr::lt(s, t); },
+        [](float s, const Tensor& t) { return qsr::ne(s, t); });
 }
 
 }  // namespace ttnn::operations::binary::test
