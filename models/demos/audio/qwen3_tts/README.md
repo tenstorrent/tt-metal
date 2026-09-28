@@ -319,17 +319,19 @@ On one N150:
 
 The targets stay TODO until a CI run on each SKU gives runner numbers.
 
-Timeouts are the cold-kernel-cache time plus 20%, the unit legs with the watcher on:
+Timeouts are the cold-kernel-cache time on the CI runners plus 20%, the unit legs with the
+watcher on. The runners take about 2.35x a local N150's time on Wormhole and 1.85x on Blackhole,
+measured file by file on the first CI runs, so the timeouts scale the local cold times by those:
 
-| leg | N150 cold | `wh_n150` | `bh_p150` |
+| leg | local N150 cold | `wh_n150` | `bh_p150` |
 |---|---|---|---|
-| 1.7B unit | 8.6 min | 11 | 8 |
-| 0.6B unit | 3.2 min | 4 | 3 |
-| 1.7B e2e | 2.2 min | 3 | 3 |
-| 0.6B e2e | 1.9 min | 3 | 3 |
+| 1.7B unit | 8.6 min | 25 | 20 |
+| 0.6B unit | 3.2 min | 10 | 8 |
+| 1.7B e2e | 2.1 min | 6 | 5 |
+| 0.6B e2e | 1.7 min | 5 | 4 |
 
-The Blackhole timeouts scale the N150 time by 0.74, the ratio the previous full legs measured on
-one Blackhole chip. A first run that downloads the checkpoints into the shared cache takes longer.
+The weights come from the runners' read-only `/mnt/MLPerf/huggingface` cache, which has to hold
+the Base and CustomVoice releases of both sizes at the revisions `weights.py` pins.
 
 ## Directory layout
 

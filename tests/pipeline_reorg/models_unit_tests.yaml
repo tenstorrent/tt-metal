@@ -929,10 +929,10 @@
   model_family: Qwen3-TTS
   skus:
     wh_n150:
-      timeout: 11
+      timeout: 25
       tier: 2
     bh_p150:
-      timeout: 8
+      timeout: 20
       tier: 2
   owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models
@@ -951,10 +951,10 @@
   model_family: Qwen3-TTS
   skus:
     wh_n150:
-      timeout: 4
+      timeout: 10
       tier: 2
     bh_p150:
-      timeout: 3
+      timeout: 8
       tier: 2
   owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models
