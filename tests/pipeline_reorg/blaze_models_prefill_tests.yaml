@@ -1069,7 +1069,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_block_chunked.py -k "(pro and L3-hca-topk) or (flash and L1-swa-hash)" -vvv --tb=short
     '
   test_type: v4_block_chunked
-  test_tags: [block_chunked_v4]
+  test_tags: [v4_block_chunked]
   test_group: module
   skus:
     bh_sc1:
