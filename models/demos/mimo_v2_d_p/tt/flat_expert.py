@@ -439,6 +439,12 @@ class FlatExpert:
         GU_ACC = _gu_acc(NSG)
         assert GU_ACC in ("fp32", "l1acc", "bf16"), GU_ACC
         GU_FP32 = GU_ACC == "fp32"
+        # down projection accumulation (MIMO_FL_DN_ACC): bf16 DEST (all of K = I in DEST: ties-away gain ~1.02 at K
+        # 2048) or fp32 DEST (4-tile DST: column passes of <= 4)
+        DN_ACC = os.environ.get("MIMO_FL_DN_ACC", "bf16")
+        assert DN_ACC in ("bf16", "fp32", "fp32full"), DN_ACC  # fp32full: fp32 in a full-sync DST (8 tiles)
+        DN_FP32, DN_FULL = DN_ACC.startswith("fp32"), DN_ACC == "fp32full"
+        dn_def = ([("SE_DN_FP32", "1")] if DN_FP32 else []) + ([("SE_DN_FULL_SYNC", "1")] if DN_FULL else [])
         L1ACC_GRP = int(os.environ.get("MIMO_FL_GU_L1ACC_GRP", "1"))
         # full-sync DST (MIMO_FL_GU_DST=full): one 16-tile file, 8 fp32 tiles, but math and pack no longer overlap
         GU_FULL = os.environ.get("MIMO_FL_GU_DST", "half") == "full"
@@ -1125,8 +1131,11 @@ class FlatExpert:
                             runtime_args=rd_dc_rt,
                             defines=zones
                             + dyn_def
-                            + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else []),
-                            config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                            + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else [])
+                            + dn_def,
+                            config=ttnn.ComputeConfigDescriptor(
+                                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=DN_FP32, dst_full_sync_en=DN_FULL
+                            ),
                         )
                     )
                 if plain:
@@ -1440,8 +1449,11 @@ class FlatExpert:
                         runtime_args=dc_rts[p_],
                         defines=zones
                         + dyn_def
-                        + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else []),
-                        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
+                        + ([("SE_EARLY_POP", "1")] if int(os.environ.get("MIMO_FL_EARLY_POP", "1")) else [])
+                        + dn_def,
+                        config=ttnn.ComputeConfigDescriptor(
+                            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=DN_FP32, dst_full_sync_en=DN_FULL
+                        ),
                     ),
                 ]
             OUT_FMT = (ttnn.bfloat8_b, BF8_TILE) if E2E else (ttnn.bfloat16, 2048)
@@ -1576,6 +1588,7 @@ class FlatExpert:
             DRING=DRING,
             act=ACT,
             GU_ACC=GU_ACC,
+            DN_ACC=DN_ACC,
             L1ACC_GRP=L1ACC_GRP,
             GU_FULL=GU_FULL,
             GU_RP=GU_RP,

@@ -590,3 +590,21 @@ weight sets, vs a quantized reference (bfp8 x, bfp4 W, fp32 math) and fp32. Raw:
   PCC (mean-removed) drops to 0.81-0.99 for every op while rel error stays 0.5-3.3% (unified < fused < flat); with
   positive weights and zero-mean x, a few near-cancelling rows have large per-row relative error (flat worst 11x at
   x100, unified 1.1x): small absolute errors on tiny rows.
+
+**Equal inputs** (all three ops get the row-major bf16 dispatch buffer; `expert_precision_results.tsv` now holds that
+run): unified / fused worst-case arithmetic error rises 3.5 -> 4.5% / 4.5 -> 5.0% (device bfp8 packing of x costs
+~1% over host quantization; flat always paid it), flat unchanged 6.7-7.5%. Host estimate of the remaining parts:
+h stored bfp8 ~1.1% rel, y bfp8 0.7%.
+
+**Accumulation sweep** (flat, Python builder: `MIMO_FL_GU_ACC` x `MIMO_FL_DN_ACC`; accuracy on 5 x cases with normal
+weights, `expert_precision_acc_sweep.tsv`; kernel time MiMo 64 experts real counts / 8 x 512):
+| gate/up | down | q rel | q norm | MiMo 64 | 8 x 512 |
+|---|---|---|---|---|---|
+| fp32 | bf16 (default) | 6.7-7.5% | 1.030-1.041 | 1282 us | 713 us |
+| fp32 | fp32 half-sync (4-tile DST: 2 K loops per row) | 5.5-6.0% | 1.003-1.014 | 1771 | 937 |
+| fp32 | fp32 full-sync (8 fp32 tiles, `fp32full`) | 5.5-6.0% | 1.003-1.014 | 1302 (+1.6%) | 725 (+1.7%) |
+| l1acc | bf16 | 6.8-8.4% | 1.032-1.054 | 1341 | 719 |
+| l1acc | fp32 half-sync | 5.5-6.6% | 1.006-1.028 | 1767 | 938 |
+| bf16 | bf16 / fp32 | up to 19% | up to 1.17 | fails the harness gate | |
+fp32 gate/up stays the best (more accurate than l1acc and faster); fp32 down in a full-sync DST removes the down
+bias for ~1.7% (the pack is tiny next to the K loop, so losing math/pack overlap is cheap).

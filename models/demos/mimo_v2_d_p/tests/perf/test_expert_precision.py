@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Precision stress of the routed-expert ops on the same inputs (one chip, MiMo expert shape by default):
 
-  unified   unified_routed_expert_moe (TtRoutedExpert, tiled bfp8 x: the model's unified path)
+  unified   unified_routed_expert_moe (TtRoutedExpert)
   fused     moe_fused_swiglu (TtRoutedExpert with every expert in the fused band)
-  flat      flat_routed_expert (row-major bf16 x: the model's flat path)
+  flat      flat_routed_expert (flatpy: the Python builder, with its MIMO_FL_* accumulation knobs)
+Every op gets the same row-major bf16 dispatch buffer (MIMO_PREC_X_TILED=1: unified / fused get host-tiled bfp8).
 
 Ragged counts (0, 1, 31, 33, ..., the full capacity); x distributions (scales, all positive, heavy tails, outlier
 channels, one-hot / near one-hot rows, sparse, per-row scale spread, constant rows) per weight set (normal, large,
@@ -21,7 +22,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.mimo_v2_d_p.tt.flat_expert import FlatRoutedExpert
+from models.demos.mimo_v2_d_p.tt.flat_expert import FlatExpert, FlatRoutedExpert
 
 H = int(os.environ.get("MIMO_PREC_H", "4096"))
 I = int(os.environ.get("MIMO_PREC_I", "2048"))
@@ -29,7 +30,9 @@ M = 512  # capacity per expert
 COUNTS = [512, 1, 31, 33, 0, 200, 64, 300]
 E = len(COUNTS)
 ROWS_CHECK = 96  # rows per expert in the metrics (host reference cost)
-OPS = [o for o in os.environ.get("MIMO_PREC_OPS", "unified,fused,flat").split(",") if o]
+OPS = [o for o in os.environ.get("MIMO_PREC_OPS", "unified,fused,flat").split(",") if o]  # flatpy: the Python builder
+X_TILED = int(os.environ.get("MIMO_PREC_X_TILED", "0"))  # 1: unified / fused get host-tiled bfp8 x
+TAG = os.environ.get("MIMO_PREC_TAG", "")  # a label (e.g. the builder's MIMO_FL_GU_ACC / _DN_ACC combination)
 
 
 def _x_case(name, n, h, g):
@@ -86,6 +89,7 @@ X_CASES = [
     "row_scales",
     "constant",
 ]
+X_CASES = [c for c in X_CASES if c in os.environ.get("MIMO_PREC_CASES", ",".join(X_CASES)).split(",")]
 W_SETS = {"w_normal": (0.02, False), "w_large": (0.1, False), "w_pos": (0.02, True)}
 
 
@@ -157,7 +161,7 @@ def test_expert_precision(mesh_device, device_params, wset):
                 hybrid_token_threshold=None if name == "unified" else M,
             )
         else:
-            ops[name] = FlatRoutedExpert(
+            ops[name] = (FlatExpert if name == "flatpy" else FlatRoutedExpert)(
                 mesh_device,
                 [
                     [
@@ -208,15 +212,15 @@ def test_expert_precision(mesh_device, device_params, wset):
             ]
         )
         for name, op in ops.items():
-            if name == "flat":
-                y = op(dev(x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), counts, regions)
-            else:
+            if name in ("unified", "fused") and X_TILED:  # (opt-in: the model's pre-tiled bfp8 path)
                 y = op(dev(x, ttnn.bfloat8_b, ttnn.TILE_LAYOUT), counts, regions)
+            else:  # every op the same input: the row-major bf16 dispatch buffer (each tilizes / packs x itself)
+                y = op(dev(x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), counts, regions)
             yh = ttnn.to_torch(ttnn.get_device_tensors(y)[0]).float().reshape(-1, H)
             got = torch.cat([yh[offs[e] + torch.tensor(s)] for e, s in sel.items()])
             mq, mf = _metrics(ref_q, got), _metrics(ref_f, got)
             _report(
-                f"PREC\t{wset}\t{case}\t{name}\tq_pcc {mq['pcc']:.5f}\tq_rel {mq['rel']:.4f}\tq_norm {mq['norm']:.4f}"
+                f"PREC\t{wset}\t{case}\t{name}{TAG}\tq_pcc {mq['pcc']:.5f}\tq_rel {mq['rel']:.4f}\tq_norm {mq['norm']:.4f}"
                 f"\tq_row {mq['row']:.3g}\tf_pcc {mf['pcc']:.5f}\tf_rel {mf['rel']:.4f}\tnonfinite {mq['nonfinite']}"
                 f"\t|ref| {float(ref_q.abs().max()):.3g}"
             )

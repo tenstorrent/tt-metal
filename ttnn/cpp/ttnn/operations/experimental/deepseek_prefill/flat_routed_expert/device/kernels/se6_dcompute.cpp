@@ -38,9 +38,17 @@ constexpr uint32_t hk = 8;
 constexpr uint32_t group_tiles = kt_d * mtg;
 constexpr uint32_t h_all_tiles = groups * group_tiles;
 constexpr uint32_t mt = groups * mtg;
-// PCD > 8 output columns (small-I subgrids have few down cores): column passes of <= 8 (DST), each re-running the
-// row's K loop over the same h and resident weights
-constexpr uint32_t cpw = pcd < 8 ? pcd : 8;
+// PCD > DST output columns (small-I subgrids have few down cores): column passes of <= 8 bf16 / 4 fp32 (SE_DN_FP32:
+// fp32 DEST accumulation over K, the host sets fp32_dest_acc_en) DST tiles, each re-running the row's K loop over the
+// same h and resident weights
+#if defined(SE_DN_FP32) && defined(SE_DN_FULL_SYNC)
+constexpr uint32_t dst_cols = 8;  // full-sync DST: 16 bf16 / 8 fp32 tiles (math and pack no longer overlap)
+#elif defined(SE_DN_FP32)
+constexpr uint32_t dst_cols = 4;
+#else
+constexpr uint32_t dst_cols = 8;
+#endif
+constexpr uint32_t cpw = pcd < dst_cols ? pcd : dst_cols;
 static_assert(pcd <= 16 && kt_d % kblk_d == 0 && kt_d % hk == 0 && ring >= nblk);
 
 uint32_t popped = 0;
