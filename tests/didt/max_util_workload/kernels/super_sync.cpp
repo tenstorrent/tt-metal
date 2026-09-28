@@ -25,6 +25,13 @@
 //   6: this worker's NOC0 x
 //   7: this worker's NOC0 y
 
+// Legacy Blackhole launch-alignment values preserved from the original
+// workload. Receivers subtract 9 cycles per Manhattan hop from a 220-cycle
+// delay, while the sender waits 600 cycles after issuing the multicast.
+constexpr uint32_t kReceiverDelayCyclesPerHop = 9;
+constexpr uint32_t kReceiverBaseDelayCycles = 220;
+constexpr uint32_t kSenderPostMulticastDelayCycles = 600;
+
 void kernel_main() {
     constexpr uint32_t super_sync_sender_semaphore_id = get_compile_time_arg_val(0);
     constexpr uint32_t super_sync_receiver_semaphore_id = get_compile_time_arg_val(1);
@@ -43,9 +50,9 @@ void kernel_main() {
     const uint32_t x_distance = core_x > super_sync_core_x ? core_x - super_sync_core_x : super_sync_core_x - core_x;
     const uint32_t y_distance = core_y > super_sync_core_y ? core_y - super_sync_core_y : super_sync_core_y - core_y;
     const uint32_t distance_from_super_sync_core = x_distance + y_distance;
-    const uint32_t distance_compensation = distance_from_super_sync_core * 9;
-    const uint32_t cycles_to_wait = distance_compensation < 220 ? 220 - distance_compensation : 0;
-    const uint32_t super_sync_core_wait_cycles = 600;
+    const uint32_t distance_compensation = distance_from_super_sync_core * kReceiverDelayCyclesPerHop;
+    const uint32_t cycles_to_wait =
+        distance_compensation < kReceiverBaseDelayCycles ? kReceiverBaseDelayCycles - distance_compensation : 0;
 
     const uint64_t super_sync_sender_semaphore_addr = get_semaphore(super_sync_sender_semaphore_id);
     const uint64_t super_sync_receiver_semaphore_addr = get_semaphore(super_sync_receiver_semaphore_id);
@@ -71,7 +78,7 @@ void kernel_main() {
         noc_semaphore_set(super_sync_sender_semaphore_addr_ptr, 0);
         noc_semaphore_set_multicast(
             super_sync_receiver_semaphore_addr, super_sync_receiver_semaphore_noc_addr, num_dests);
-        ckernel::wait(super_sync_core_wait_cycles);
+        ckernel::wait(kSenderPostMulticastDelayCycles);
         noc_semaphore_set(l1_super_sync_addr_ptr, 0);
     } else {
         noc_semaphore_wait(l1_super_sync_addr_ptr, 1);

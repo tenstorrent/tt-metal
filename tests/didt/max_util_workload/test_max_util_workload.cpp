@@ -11,6 +11,7 @@
 //      An optional BRISC kernel synchronizes TRISC launch across worker cores.
 //   No CB dependencies between DRAM streaming and compute.
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -48,6 +49,8 @@ using namespace std;
 using namespace tt;
 
 namespace unit_tests::didt::max_util_workload {
+
+static constexpr uint32_t kOutputSentinel = 0xFFFFFFFFu;
 
 // ---------------------------------------------------------------------------
 // Test configuration
@@ -247,14 +250,14 @@ static const std::map<uint32_t, uint32_t> kDramUtilToCyclesMap = {
 };
 // clang-format on
 
-/// Returns the key in kDramUtilToCyclesMap nearest to @p pct.
-static uint32_t nearest_dram_pct(uint32_t pct) {
-    TT_ASSERT(!kDramUtilToCyclesMap.empty(), "kDramUtilToCyclesMap must not be empty");
-    auto it = kDramUtilToCyclesMap.lower_bound(pct);
-    if (it == kDramUtilToCyclesMap.end()) {
+/// Returns the key in a percentage calibration table nearest to @p pct.
+static uint32_t nearest_calibration_pct(const std::map<uint32_t, uint32_t>& table, uint32_t pct) {
+    TT_ASSERT(!table.empty(), "Calibration table must not be empty");
+    auto it = table.lower_bound(pct);
+    if (it == table.end()) {
         return std::prev(it)->first;
     }
-    if (it == kDramUtilToCyclesMap.begin() || it->first == pct) {
+    if (it == table.begin() || it->first == pct) {
         return it->first;
     }
     auto prev = std::prev(it);
@@ -263,7 +266,9 @@ static uint32_t nearest_dram_pct(uint32_t pct) {
 
 /// Converts a requested DRAM utilization percentage to a noc_wait_cycles value
 /// by snapping to the nearest entry in kDramUtilToCyclesMap.
-static uint32_t dram_pct_to_noc_wait_cycles(uint32_t pct) { return kDramUtilToCyclesMap.at(nearest_dram_pct(pct)); }
+static uint32_t dram_pct_to_noc_wait_cycles(uint32_t pct) {
+    return kDramUtilToCyclesMap.at(nearest_calibration_pct(kDramUtilToCyclesMap, pct));
+}
 
 // ---------------------------------------------------------------------------
 // eth_noc0_coord – translates a logical ETH core to its NOC0 physical
@@ -369,7 +374,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
             static_cast<uint64_t>(eth_max_util_loops) * static_cast<uint64_t>(cfg.eth_dram_util_pct) / 100));
 
     cfg.eth_noc_wait_cycles = dram_pct_to_noc_wait_cycles(cfg.eth_dram_util_pct);
-    const uint32_t matched_dram_pct = nearest_dram_pct(cfg.eth_dram_util_pct);
+    const uint32_t matched_dram_pct = nearest_calibration_pct(kDramUtilToCyclesMap, cfg.eth_dram_util_pct);
     log_info(
         LogTest,
         "DRAM utilization: requested={}%  matched={}%  noc_wait_cycles={}",
@@ -487,6 +492,8 @@ static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg)
         cfg.num_tiles,           // 5: num_tiles (8)
         cfg.l1_super_sync_addr,  // 6: l1_super_sync_addr
         cfg.l1_fpu_timing_addr,  // 7: l1_fpu_timing_addr
+        cfg.l1_buffer2_addr,     // 8: l1_buffer2_addr
+        kOutputSentinel,         // 9: output sentinel
     };
     TensorAccessorArgs(*dram_buffer0).append_to(prefill_compile_args);
     TensorAccessorArgs(*dram_buffer1).append_to(prefill_compile_args);
@@ -534,23 +541,11 @@ static const std::map<uint32_t, uint32_t> kFpuUtilToCyclesMap = {
 };
 // clang-format on
 
-/// Returns the key in kFpuUtilToCyclesMap nearest to @p pct.
-static uint32_t nearest_fpu_pct(uint32_t pct) {
-    TT_ASSERT(!kFpuUtilToCyclesMap.empty(), "kFpuUtilToCyclesMap must not be empty");
-    auto it = kFpuUtilToCyclesMap.lower_bound(pct);
-    if (it == kFpuUtilToCyclesMap.end()) {
-        return std::prev(it)->first;
-    }
-    if (it == kFpuUtilToCyclesMap.begin() || it->first == pct) {
-        return it->first;
-    }
-    auto prev = std::prev(it);
-    return (pct - prev->first <= it->first - pct) ? prev->first : it->first;
-}
-
 /// Converts a requested FPU utilization percentage to a cycles_to_wait value
 /// by snapping to the nearest entry in kFpuUtilToCyclesMap.
-static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) { return kFpuUtilToCyclesMap.at(nearest_fpu_pct(pct)); }
+static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) {
+    return kFpuUtilToCyclesMap.at(nearest_calibration_pct(kFpuUtilToCyclesMap, pct));
+}
 
 // ---------------------------------------------------------------------------
 // Duty-cycle control map
@@ -656,7 +651,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
     // -- Compute kernel (TRISC) ---------------------------------------------
     // Uses pre-filled L1 buffers directly, no CB waits
-    const uint32_t matched_pct = nearest_fpu_pct(cfg.fpu_utilization_pct);
+    const uint32_t matched_pct = nearest_calibration_pct(kFpuUtilToCyclesMap, cfg.fpu_utilization_pct);
     const uint32_t cycles_to_wait = fpu_pct_to_cycles_to_wait(cfg.fpu_utilization_pct);
     log_info(
         LogTest,
@@ -816,6 +811,61 @@ static Program build_slow_cos_program(const MaxUtilConfig& cfg) {
 }
 
 // ---------------------------------------------------------------------------
+// validate_compute_output – verifies that PACK overwrote the complete output
+// region on a representative worker and produced finite bfloat16 values.
+// This host readback occurs after the measured device workload completes.
+// ---------------------------------------------------------------------------
+
+static bool validate_compute_output(IDevice* device, const MaxUtilConfig& cfg) {
+    const uint32_t output_size_bytes = cfg.num_tiles * tile_size_bytes(DataFormat::Float16_b);
+    const size_t expected_words = output_size_bytes / sizeof(uint32_t);
+    std::vector<uint32_t> output;
+    detail::ReadFromDeviceL1(device, cfg.grid_start, cfg.l1_buffer2_addr, output_size_bytes, output, CoreType::WORKER);
+
+    if (output.size() != expected_words) {
+        log_warning(
+            LogTest,
+            "Device {}: compute output readback returned {} words, expected {}",
+            device->id(),
+            output.size(),
+            expected_words);
+        return false;
+    }
+
+    const size_t sentinel_words = std::count(output.begin(), output.end(), kOutputSentinel);
+    size_t non_finite_values = 0;
+    bool any_nonzero = false;
+    for (uint32_t word : output) {
+        any_nonzero |= word != 0;
+        const uint32_t low_bfloat16 = word & 0xFFFFu;
+        const uint32_t high_bfloat16 = word >> 16;
+        non_finite_values += (low_bfloat16 & 0x7F80u) == 0x7F80u;
+        non_finite_values += (high_bfloat16 & 0x7F80u) == 0x7F80u;
+    }
+
+    const bool valid = sentinel_words == 0 && non_finite_values == 0 && any_nonzero;
+    if (!valid) {
+        log_warning(
+            LogTest,
+            "Device {}: compute output validation failed: sentinel_words={}, non_finite_bfloat16_values={}, "
+            "any_nonzero={}",
+            device->id(),
+            sentinel_words,
+            non_finite_values,
+            any_nonzero);
+        return false;
+    }
+
+    log_info(
+        LogTest,
+        "Device {}: compute output validation passed ({} tiles, {} finite bfloat16 values)",
+        device->id(),
+        cfg.num_tiles,
+        output.size() * 2);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // log_fpu_utilization – reads back-pressured unpack-thread timestamps from a
 // representative worker and reports useful MVMUL cycles / pipeline cycles.
 // ---------------------------------------------------------------------------
@@ -853,7 +903,8 @@ static bool log_fpu_utilization(IDevice* device, const MaxUtilConfig& cfg) {
         return true;
     }
 
-    const double matched_pct = static_cast<double>(nearest_fpu_pct(cfg.fpu_utilization_pct));
+    const uint32_t matched_fpu_pct = nearest_calibration_pct(kFpuUtilToCyclesMap, cfg.fpu_utilization_pct);
+    const double matched_pct = static_cast<double>(matched_fpu_pct);
     constexpr double tolerance_pct_points = 2.0;
     bool within_tolerance = std::abs(measured_pct - matched_pct) <= tolerance_pct_points;
     log_info(
@@ -862,7 +913,7 @@ static bool log_fpu_utilization(IDevice* device, const MaxUtilConfig& cfg) {
         "({} useful MVMUL cycles / {} elapsed cycles on worker ({},{}))",
         device->id(),
         cfg.fpu_utilization_pct,
-        nearest_fpu_pct(cfg.fpu_utilization_pct),
+        matched_fpu_pct,
         measured_pct,
         useful_cycles,
         elapsed_cycles,
@@ -1025,6 +1076,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     }
     distributed::Finish(cq);
 
+    bool valid_compute_output = validate_compute_output(device, cfg);
     bool valid_fpu_timing = log_fpu_utilization(device, cfg);
 
     // Report per-ETH-core DRAM bandwidth after the program completes.
@@ -1044,7 +1096,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         cfg.num_wl_loops,
         cfg.num_slow_wl_loops);
 
-    return valid_fpu_timing && valid_eth_timing;
+    return valid_compute_output && valid_fpu_timing && valid_eth_timing;
 }
 
 /// Runs the workload on every unit-mesh device simultaneously. Active Ethernet
@@ -1124,14 +1176,16 @@ static bool run_all_devices(
     }
 
     // Report FPU utilization and per-ETH-core DRAM bandwidth for every device.
+    bool valid_compute_output = true;
     bool valid_fpu_timing = true;
     bool valid_eth_timing = true;
     for (const auto& run : runs) {
+        valid_compute_output &= validate_compute_output(run.device, run.cfg);
         valid_fpu_timing &= log_fpu_utilization(run.device, run.cfg);
         valid_eth_timing &= log_eth_bw(run.device, run.cfg, run.eth_dram_buffer);
     }
 
-    return valid_fpu_timing && valid_eth_timing;
+    return valid_compute_output && valid_fpu_timing && valid_eth_timing;
 }
 
 // ---------------------------------------------------------------------------

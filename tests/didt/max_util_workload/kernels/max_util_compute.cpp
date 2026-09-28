@@ -5,6 +5,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h"
+#include "max_util_pack_common.hpp"
 #include <tools/profiler/kernel_profiler.hpp>
 
 // Compute kernel for max-utilization workload.
@@ -312,92 +313,6 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
 }
 #endif
 
-#ifdef TRISC_PACK
-ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer2_addr) {
-    // init
-    constexpr bool is_fp32_dest_acc_en = false;
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en>(
-        (uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b, 128 /* tile size for float16_b >> 4 */);
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-
-    addr_mod_pack_t{
-        .y_src = {.incr = 4},
-        .y_dst = {.incr = 4},
-    }
-        .set(ADDR_MOD_0);
-    addr_mod_pack_t{
-        .y_src = {.incr = 0, .clr = 1, .cr = 0},
-        .y_dst = {.incr = 0, .clr = 1, .cr = 0},
-        .z_src = {.incr = 0, .clr = 1},
-        .z_dst = {.incr = 0, .clr = 1},
-    }
-        .set(ADDR_MOD_1);
-    addr_mod_pack_t{
-        .y_src = {.incr = 0, .clr = 1, .cr = 0},
-        .y_dst = {.incr = 4, .clr = 0, .cr = 0},
-        .z_src = {.incr = 1, .clr = 0},
-    }
-        .set(ADDR_MOD_2);
-
-    const std::uint32_t MOP_INNER_LOOP = 4;              // face_r_dim >> 2;
-    const std::uint32_t MOP_OUTER_LOOP = 4 * num_tiles;  // num_faces * num_tiles;
-    ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_0,
-            p_pacr::ADDR_CNT_CTXT_0,
-            p_pacr::P_ZERO_OUTPUT_DISABLED,
-            p_pacr::ALL_INTF_ACTIVE,
-            0,
-            0,
-            0,
-            0,
-            0));
-    tmp.set_last_inner_loop_instr(TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_NORMAL_MODE,
-        ADDR_MOD_2,
-        p_pacr::ADDR_CNT_CTXT_0,
-        p_pacr::P_ZERO_OUTPUT_DISABLED,
-        p_pacr::ALL_INTF_ACTIVE,
-        0,
-        0,
-        0,
-        0,
-        0));
-    tmp.set_last_outer_loop_instr(TT_OP_PACR(
-        p_pacr::CFG_CTXT_0,
-        p_pacr::NO_ROW_PAD_ZERO,
-        p_pacr::DST_ACCESS_NORMAL_MODE,
-        ADDR_MOD_1,
-        p_pacr::ADDR_CNT_CTXT_0,
-        p_pacr::P_ZERO_OUTPUT_DISABLED,
-        p_pacr::ALL_INTF_ACTIVE,
-        0,
-        0,
-        0,
-        0,
-        1));
-    tmp.program();
-    set_dst_write_addr(0);
-    program_packer_destination(L1_ADDRESS(l1_buffer2_addr));
-
-    // compute loop
-    for (uint32_t i = 0; i < num_loops; i++) {
-        _llk_packer_wait_for_math_done_();
-        // The configured MOP already packs all num_tiles tiles in one run.
-        ckernel::ckernel_template::run();
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    }
-}
-
-#endif
-
 void kernel_main() {
     constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
     constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
@@ -419,5 +334,5 @@ void kernel_main() {
     MATH((max_util_math<cycles_to_wait>(num_loops, num_tiles)));
 
     // TRISC2: pack results to the output L1 address
-    PACK((max_util_pack(num_loops, num_tiles, l1_buffer2_addr)));
+    PACK((didt_pack_bfloat16_tiles(num_loops, num_tiles, l1_buffer2_addr)));
 }

@@ -17,6 +17,8 @@
 //   5: num_tiles                - number of tiles to read (8)
 //   6: l1_super_sync_addr       - L1 destination for super sync semaphore
 //   7: l1_fpu_timing_addr       - L1 destination for FPU timing results
+//   8: l1_buffer2_addr          - L1 output buffer to initialize
+//   9: output_sentinel          - initial value used to detect unwritten output
 
 void kernel_main() {
     constexpr uint32_t dram_buffer0_addr = get_compile_time_arg_val(0);
@@ -27,13 +29,15 @@ void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(6);
     constexpr uint32_t l1_fpu_timing_addr = get_compile_time_arg_val(7);
+    constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(8);
+    constexpr uint32_t output_sentinel = get_compile_time_arg_val(9);
     volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
 
     volatile tt_l1_ptr uint32_t* l1_fpu_timing_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_fpu_timing_addr);
 
-    constexpr auto dram0_args = TensorAccessorArgs<8>();
+    constexpr auto dram0_args = TensorAccessorArgs<10>();
     constexpr auto dram1_args = TensorAccessorArgs<dram0_args.next_compile_time_args_offset()>();
 
     const auto dram0_addr_gen = TensorAccessor(dram0_args, dram_buffer0_addr);
@@ -51,6 +55,14 @@ void kernel_main() {
         uint32_t l1_write_addr = l1_buffer1_addr + (t * tile_size_bytes);
         noc_async_read_page(t, dram1_addr_gen, l1_write_addr);
         noc_async_read_barrier();
+    }
+
+    // Initialize the output region so the host can detect any tile the PACK
+    // stage failed to overwrite. This runs before the measured workload.
+    volatile tt_l1_ptr uint32_t* l1_output_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_buffer2_addr);
+    const uint32_t output_words = num_tiles * tile_size_bytes / sizeof(uint32_t);
+    for (uint32_t i = 0; i < output_words; ++i) {
+        l1_output_addr_ptr[i] = output_sentinel;
     }
 
     *(l1_super_sync_addr_ptr) = 0;
