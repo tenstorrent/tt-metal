@@ -348,3 +348,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: pcc 0.999997, rel 0.0024, ratio [0.9991, 1.0010], coef 1.0, rel 0.0: PASS. BRINGUP_IMPL=stub: pcc 0.0: FAIL.
 - Default gate already passes (a device add is resolved for this step): pcc 0.999996, rel 0.0029, ratio [0.9993, 1.0016], coef 1.0014, experts rel 0.0114. 1 passed.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_residual.py`
+
+## S.sliding_moe.07.test.1 (test review, swap 07 ffn_residual)
+- Replaced the rendered one-liner with the 1x4 prior's reviewed swap 07 (swap 06 checks plus ffn_residual: vs golden
+  rel L2 <= 0.01 whole/first 128 rows, per-token ratio [0.98, 1.02]; vs CPU add on device inputs rel <= 0.01, ratio
+  [0.99, 1.01], worst row <= 0.02; experts coefficient [0.97, 1.03], experts-term rel <= 0.1), with this run's
+  owner-widened attention limits (rel L2 0.022, norm ratio [0.95, 1.08]), same as swap 02-06.
+- BRINGUP_IMPL=reference: pass (out rel 0.0030). BRINGUP_IMPL=stub: fails every check. Device (all 7 steps already
+  registered): pass, pcc_swap_out 0.999991, out rel 0.0044, iso rel 0.0017, experts coef 1.0014, attention rel 0.0193.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_07_ffn_residual.py`
