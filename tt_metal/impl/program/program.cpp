@@ -3084,7 +3084,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // Always-on zone: tools/tracy reports "CompileProgram" as a default child call of ops.
-    ZoneScopedN("CompileProgram");
+    TTZoneScopedDN(PROGRAM, "CompileProgram");
 
     const ContextId device_context_id = extract_context_id(device);
     // Metal 1.0 CreateProgram() always stores DEFAULT_CONTEXT_ID because no MetalEnv/device is
