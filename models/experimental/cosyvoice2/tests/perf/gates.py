@@ -47,7 +47,7 @@ GATES: dict[str, Gate] = {
         Gate("speaker_similarity", "speaker similarity > 0.60 cosine sim on a representative test set", "Stage 1",
              0.60, ABOVE),
         # Measured as the worst per-utterance RTF over the corpus's distinct utterances (scripts/corpus.py), after
-        # one warm-up call in the process; see tests/perf/test_pipeline_perf.py.
+        # warmup_buckets() (the Stage 1 protocol); see tests/perf/test_pipeline_perf.py.
         Gate("rtf_nonstreaming", "RTF < 1.0 for non-streaming, whole-utterance synthesis", "Stage 1", 1.0, BELOW),
         Gate("ttfp_ms", "Streaming inference support with time-to-first-packet < 500ms", "Stage 3", 500.0, BELOW,
              " ms"),
@@ -70,15 +70,21 @@ class Misses:
     lever: str
 
 
-# Wormhole: N150, the board every figure so far comes from (docs/VALIDATION.md). `rtf_nonstreaming` is measured
-# but not recorded yet. On distinct utterances it depends on whether each length's kernels are already compiled:
-# RTF 21-75 on a cold kernel cache, 2.0-2.9 with the kernels on disk, 0.39-0.56 for a length the process has already
-# run. No band is stable until lengths are bucketed and the buckets pre-warmed.
+# Wormhole: N150, the board every figure so far comes from (docs/VALIDATION.md).
 WORMHOLE: dict = {
+    # Stage 1 protocol, 2026-09-28: warmup_buckets() first (542 s on a warm kernel cache), then the six distinct
+    # corpus utterances. RTF 0.428-0.633 each, aggregate 0.481. Before bucketing, a distinct utterance ran at RTF
+    # 21-75 on a cold kernel cache.
+    "rtf_nonstreaming": Meets(),
     # Teacher-forced top-1 over 1,349 positions of the corpus's seven cases (tests/e2e/test_token_accuracy.py):
     # 96.37 % with the fp32-logit head (bf16 logits: 90.66 %). A bf16 PyTorch run of the same model reaches
     # 95.70 %, or 98.37 % with an fp32 head.
     "token_accuracy": Meets(),
+    # scripts/eval_wer_sim.py in the reference venv, on the bucketed Stage 1 audio (2026-09-28): corpus WER 0.68 %
+    # and WavLM-base-plus-sv SIM 95.88 (cosine x 100), the PyTorch reference 0.68 % and 95.21. Recorded, not
+    # enforced by a device test.
+    "wer": Meets(),
+    "speaker_similarity": Meets(),
 }
 EXPECTATIONS = {"wormhole": WORMHOLE}
 

@@ -6,10 +6,10 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 
 | target (#54104) | stage | status | enforced in |
 |---|---|---|---|
-| RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **measured, not met on distinct utterances** (below); verdict not recorded yet | `tests/perf/test_pipeline_perf.py` |
+| RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **met: worst 0.633, aggregate 0.481** over six distinct utterances after the bucket warm-up (542 s at start-up; below); `Meets()` recorded | `tests/perf/test_pipeline_perf.py` |
 | token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 96.37 %**, teacher-forced over 1,349 positions, with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
-| WER < 5.0 | Stage 1 | **measured: corpus WER 0.68 % for TT and for the PyTorch reference** (below) | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
-| speaker similarity > 0.60 | Stage 1 | **measured: 94.90 for TT, 95.21 for the reference** (WavLM-base-plus-sv cosine x 100; below) | same |
+| WER < 5.0 | Stage 1 | **met: corpus WER 0.68 %** on the bucketed Stage 1 audio, the same as the PyTorch reference (below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
+| speaker similarity > 0.60 | Stage 1 | **met: 95.88** on the bucketed Stage 1 audio, reference 95.21 (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
 | time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | streaming not built | — |
 
 ## How the figures are produced
@@ -30,6 +30,70 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 - **Kernel cache:** tt-metal compiles device kernels on first use and keeps the binaries on disk
   (`~/.cache/tt-metal-cache`). Their compile-time arguments include tensor shapes, so a new sequence length means
   new kernels. Every table states whether the disk cache already held that run's kernels.
+
+## Stage 1 under the protocol: distinct utterances, warmed buckets (2026-09-28)
+
+`demo/demo.py --inputs <prepare_inputs dir> --out <dir>`: the reported configuration, `--warmup buckets`, seed 1986.
+It ran in a fresh process, on the kernel cache the start-up measurement below had filled. It allocates exactly
+as those processes did, so every kernel came from disk: 11,702 of 11,702 JIT cache hits, 0 binaries compiled.
+
+**Start-up:** construction 13.4 s, then `warmup_buckets()` 541.8 s (LLM 2.5 s, flow 95.0 s, HiFT 444.3 s). Then
+each corpus utterance once; none repeats another.
+
+| utterance | audio s | tokens | flow / HiFT bucket | LLM prefill s | LLM decode s | tok/s | flow encoder s | CFM s | HiFT s | wall s | RTF |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| zero_shot_121-127105-0003 | 8.52 | 213 | 384 / 512 | 0.030 | 2.189 | 97.3 | 0.412 | 0.841 | 0.282 | 3.761 | 0.441 |
+| zero_shot_121-127105-0015 | 3.80 | 95 | 320 / 256 | 0.031 | 1.026 | 92.6 | 0.255 | 0.794 | 0.147 | 2.254 | 0.593 |
+| zero_shot_121-127105-0024 | 13.88 | 347 | 640 / 768 | 0.031 | 3.550 | 97.8 | 1.557 | 1.383 | 0.470 | 6.993 | 0.504 |
+| zero_shot_260-123286-0014 | 3.00 | 75 | 256 / 256 | 0.031 | 0.836 | 89.8 | 0.186 | 0.699 | 0.146 | 1.900 | 0.633 |
+| zero_shot_260-123440-0002 | 12.68 | 317 | 512 / 640 | 0.031 | 3.233 | 98.1 | 0.748 | 1.027 | 0.387 | 5.428 | 0.428 |
+| zero_shot_260-123440-0010 | 8.08 | 202 | 384 / 512 | 0.032 | 2.117 | 95.4 | 0.422 | 0.848 | 0.281 | 3.702 | 0.458 |
+
+Aggregate over the six: 49.96 s of audio in 24.04 s, **RTF 0.481; worst 0.633**. No conv cache evicted anything.
+The flow bucket is in tokens (prompt + generated, strictly above), the HiFT bucket in mel frames.
+
+- **`rtf_nonstreaming` is met: `Meets()` is recorded for Wormhole** and enforced by
+  `tests/perf/test_pipeline_perf.py`. It passed in its own pytest process: 0 binaries compiled, the same tokens as
+  the demo, warm-up 533.9 s, RTF 0.436–0.633 (worst 0.633, aggregate 0.484), no evictions.
+- **LLM decode is now the largest stage: 44–60 % of each request, at 90–98 tokens/s.** The CFM is 0.70–1.38 s
+  (10 Euler steps), and HiFT is 0.15–0.47 s.
+- **The cold first request, for scale:** the same demo in a fresh process, with `--warmup none` and one utterance
+  (`zero_shot_121-127105-0003`).
+  - With no warm-up its allocations differ from the warm-up's, so the conv kernels that carry DRAM addresses
+    recompiled: 706 binaries, 1,207 of 1,738 JIT cache hits.
+  - That request took 277.2 s for 8.52 s of audio, RTF 32.5. HiFT alone was 251.5 s.
+  - This is the cost `warmup_buckets()` moves to start-up. Warmed, the same utterance takes 3.76 s.
+
+**WER and SIM on the bucketed audio** (`scripts/eval_wer_sim.py`, as below; baseline the PyTorch reference run):
+
+| case | words | WER % reference | WER % TT | SIM reference | SIM TT |
+|---|---|---|---|---|---|
+| zero_shot_260-123286-0014 | 7 | 14.29 | 0.00 | 95.82 | 95.80 |
+| zero_shot_260-123440-0010 | 20 | 0.00 | 0.00 | 96.85 | 98.24 |
+| zero_shot_260-123440-0002 | 44 | 0.00 | 2.27 | 97.74 | 98.26 |
+| zero_shot_121-127105-0015 | 10 | 0.00 | 0.00 | 92.61 | 94.68 |
+| zero_shot_121-127105-0003 | 18 | 0.00 | 0.00 | 94.32 | 94.70 |
+| zero_shot_121-127105-0024 | 48 | 0.00 | 0.00 | 93.94 | 93.63 |
+| **corpus** | 147 | **0.68** | **0.68** | **95.21** | **95.88** |
+
+The tokens differ from the 09-27 run: the fp32-logit head and the LLM's shorter context (2,048) change what RAS
+samples. So these are new utterances, not the old ones re-vocoded. Bucketing's HiFT tail does not show at this
+resolution.
+
+**The HiFT tail, three pairs.** The same tokens, flow mel and sine noise, vocoded at the bucket and at the exact
+length (levels RMS in dBFS; the diff is bucketed minus exact):
+
+| case | mel frames → bucket | signal, last 0.4 s | diff, last 0.4 s (max) | diff before that (max) |
+|---|---|---|---|---|
+| zero_shot_260-123440-0010 | 404 → 512 | −52.6 | −55.2 (0.034) | −56.7 (0.016) |
+| zero_shot_121-127105-0003 | 426 → 512 | −70.3 | −69.9 (0.004) | −57.6 (0.019) |
+| zero_shot_260-123440-0002 | 634 → 640 | −37.1 | −64.2 (0.005) | bit-identical |
+
+- Where the utterance ends in near-silence, the difference sits at the silence's own level.
+- Where sound runs to the end, the difference is 27 dB below it.
+- The low-level difference through the whole utterance, 34–36 dB below the speech, is the geometry effect described
+  under "Bucketing": different kernel blockings, whose rounding the NSF source's running phase accumulates.
+- The wavs are kept for listening outside the repository.
 
 ## Stage 1 RTF on distinct utterances: first measurement (2026-09-27)
 
@@ -292,6 +356,23 @@ bank stays free. Across the warm-up's 3,060 conv-cache inserts, free DRAM never 
 The old eviction threshold was 150 MB free, so it would never have fired either. In bucketed mode the threshold is
 0, so eviction is off (`test_geometry_cache.py::test_threshold_override_zero_never_evicts`).
 
+**The L1 option doesn't fit with margin.** With config tensors in L1_SMALL, the kernels carry no DRAM address, so
+the warm-up would not need to be deterministic. The same warm-up ran with `conv_config_tensors_in_dram=False` and
+`l1_small_size` 192 KiB, set to stop once L1_SMALL passed 160 KiB per bank:
+
+| geometries warmed | L1_SMALL per bank |
+|---|---|
+| all 15 flow buckets | 34.6 KiB (1.9–3.1 KiB each) |
+| + HiFT 128 … 768 frames (6 buckets) | 172.6 KiB (18–33 KiB each, growing with length); stopped here |
+
+- **The six HiFT buckets it didn't reach are the longest.** Even at the last bucket's 33 KiB each, the set would
+  need at least 372 KiB per core; with growth proportional to length, about 540 KiB.
+- **At 2,048 frames HiFT's `ttnn.concat` needs about 960 KiB** for one circular-buffer page. That is scaled from
+  the 1,536,032 B measured at 3,200 frames, not measured itself. Of the 1,464 KiB of L1 per core (40 KiB
+  reserved), that leaves at most 465 KiB for L1_SMALL.
+- **So config tensors stay in DRAM,** and the deterministic warm-up is the design. In DRAM they add almost nothing:
+  after the 768-frame bucket, DRAM stood at 199.6 MiB per bank with them in DRAM, 198.9 MiB with them in L1.
+
 ## Speech quality: WER and speaker similarity (2026-09-27)
 
 `scripts/eval_wer_sim.py`, run in the reference venv, scored the demo's TT run from the table above and the PyTorch
@@ -334,9 +415,8 @@ tokens from the TT port (its logits differ), so its audio lengths differ too: fo
 
 ## Open
 
-- **Token accuracy** is not measured yet: teacher-forced, over full sequences with the speech prompt.
-- **Stage 1 RTF on distinct utterances is far from 1.0** while every utterance brings new geometries. At steady state
-  the same pipeline runs at 0.39–0.56. Its verdict in `gates.py` is not recorded until the measurement protocol
-  (kernel cache state, geometry bucketing and pre-warming) is settled.
-- **`tests/perf/test_pipeline_perf.py` has not been run.** No verdict is recorded yet, so it would stop at that
-  assertion; `tests/perf/test_gates.py` covers the enforcement logic on the host.
+- **Start-up is 9 minutes with the kernels on disk, 76 without** (above). Two levers, neither built:
+  - persist the conv safety checks' verdicts, which are the same geometry for geometry in every process (182 s);
+  - chunked HiFT, which leaves one or two HiFT geometries instead of twelve (HiFT is 77 % of the warm start-up).
+- **Segments are capped at 1,024 speech tokens (41 s)** by single-pass HiFT; chunked HiFT would lift the cap too.
+- **Streaming (Stages 2 and 3)** is not built.
