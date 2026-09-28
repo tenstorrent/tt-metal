@@ -96,7 +96,7 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
 }
 
 TEST(TEST_JSON_CONVERSION, TEST_UNARY_WITH_PARAM) {
-    // Regression: to_json wrote the key "param", but from_json read "params".
+    // Regression: to_json writes the key "param", but from_json read "params".
     const ttnn::operations::unary::UnaryWithParam op{ttnn::operations::unary::UnaryOpType::POWER, 2.5f};
 
     auto json_object = ttsl::json::to_json(op);
