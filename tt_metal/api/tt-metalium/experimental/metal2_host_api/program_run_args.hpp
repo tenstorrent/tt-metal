@@ -89,6 +89,9 @@ struct ProgramRunArgs {
     // For SetProgramRunArgs, a KernelRunArgs must be specified for ALL kernels in the ProgramSpec
     //  (except for kernels that have no runtime or common runtime arguments).
     // For UpdateProgramRunArgs, any kernel may be omitted (its arguments retain their prior values).
+    //
+    // Invariant:
+    // - kernel must be unique across kernel_run_args.
     Group<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////

@@ -42,6 +42,9 @@ struct SemaphoreSpec {
     SemaphoreSpecName unique_id;
 
     // Target nodes
+    //
+    // Invariant:
+    // - Must be non-empty
     Nodes target_nodes;
 
     //////////////////////////////////////////////////////////////////////////////

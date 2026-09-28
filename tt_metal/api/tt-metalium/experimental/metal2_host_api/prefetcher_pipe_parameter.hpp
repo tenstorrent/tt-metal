@@ -80,6 +80,8 @@ struct PrefetcherPipeParameter {
 
     // Geometry: the non-empty set of receiver nodes. The sender is the pipe object's, not the
     // Program's, to declare (see the ROLE note above).
+    //
+    // Invariant: Must be non-empty.
     Nodes receivers;
 
     // Size in bytes of the data ring on every participating node.
@@ -89,6 +91,10 @@ struct PrefetcherPipeParameter {
     // L1 alignment and at most ring_size. It must divide ring_size when the receiver kernel is
     // multi-threaded or a relay DFB names this pipe (the relay then has ring_size / entry_size
     // entries of this size).
+    //
+    // Invariant:
+    // - Multiples of the L1 alignment on respective device.
+    // - At most ring_size.
     uint32_t entry_size = 0;
 };
 
