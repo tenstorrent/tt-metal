@@ -221,6 +221,34 @@ int main(int argc, char* argv[]) {
 
     const PowerExperimentConfig power_cfg = resolve_power_experiment();
 
+    // Output blocking. Each core accumulates a BLOCK_M x BLOCK_N patch of output tiles in the
+    // destination registers at once, so one column slice of A and one row slice of B feed
+    // BLOCK_M*BLOCK_N multiplies. DRAM tile reads per multiply fall from 2 to
+    // (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N). 1x1 is the original tile-at-a-time behaviour.
+    uint32_t block_m = 1, block_n = 1;
+    if (const char* v = std::getenv("HIGH_POWER_BLOCK_M"); v != nullptr && *v != '\0') {
+        block_m = static_cast<uint32_t>(std::stoul(v));
+    }
+    if (const char* v = std::getenv("HIGH_POWER_BLOCK_N"); v != nullptr && *v != '\0') {
+        block_n = static_cast<uint32_t>(std::stoul(v));
+    }
+    TT_FATAL(block_m >= 1 && block_n >= 1, "HIGH_POWER_BLOCK_M/N must be >= 1");
+    // The whole block lives in the destination registers simultaneously.
+    TT_FATAL(
+        block_m * block_n <= 8,
+        "HIGH_POWER_BLOCK_M * HIGH_POWER_BLOCK_N ({}) exceeds the 8-tile destination register budget",
+        block_m * block_n);
+    TT_FATAL(Mt % block_m == 0, "Mt ({}) must be divisible by HIGH_POWER_BLOCK_M ({})", Mt, block_m);
+    TT_FATAL(Nt % block_n == 0, "Nt ({}) must be divisible by HIGH_POWER_BLOCK_N ({})", Nt, block_n);
+
+    const uint32_t blocks_per_row = Nt / block_n;
+    const uint32_t total_output_blocks = (Mt / block_m) * blocks_per_row;
+    const double reads_per_multiply = double(block_m + block_n) / double(block_m * block_n);
+    fmt::print(
+        "Output block: {}x{} tiles  |  {} blocks  |  {:.3f} DRAM tile reads per multiply "
+        "(1x1 baseline = 2.000)\n",
+        block_m, block_n, total_output_blocks, reads_per_multiply);
+
     // The writer normally issues 1 NoC write per output tile while the reader issues 2*Kt reads.
     // Amplification re-writes the same tile to the same address to load the write-side NoC path
     // symmetrically; 100% matches the reader's read volume exactly. Correctness is unaffected
@@ -294,9 +322,9 @@ int main(int argc, char* argv[]) {
 
             if (fixed_tiles_per_core > 0) {
                 TT_FATAL(
-                    fixed_tiles_per_core <= total_output_tiles,
-                    "fixed_tiles_per_core ({}) must not exceed total_output_tiles ({})",
-                    fixed_tiles_per_core, total_output_tiles);
+                    fixed_tiles_per_core <= total_output_blocks,
+                    "fixed_tiles_per_core ({}) must not exceed total_output_blocks ({})",
+                    fixed_tiles_per_core, total_output_blocks);
                 num_cores     = core_grid.x * core_grid.y;
                 all_cores     = CoreRangeSet({CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1})});
                 core_group_1  = all_cores;
@@ -304,7 +332,7 @@ int main(int argc, char* argv[]) {
                 work_per_core1 = fixed_tiles_per_core;
                 work_per_core2 = 0;
             } else {
-                auto [nc, ac, cg1, cg2, wpc1, wpc2] = split_work_to_cores(core_grid, total_output_tiles);
+                auto [nc, ac, cg1, cg2, wpc1, wpc2] = split_work_to_cores(core_grid, total_output_blocks);
                 num_cores = nc; all_cores = ac;
                 core_group_1 = cg1; core_group_2 = cg2;
                 work_per_core1 = wpc1; work_per_core2 = wpc2;
@@ -333,37 +361,43 @@ int main(int argc, char* argv[]) {
                 mesh_device.get());
 
             const auto cb_fmt = tt::DataFormat::Float16_b;
-            constexpr uint32_t num_cb_tiles = 2;
+            // Each CB must hold one whole slice (in0/in1) or one whole output block, doubled so
+            // the reader can prefetch the next step while compute works on the current one.
+            const uint32_t cb0_tiles = 2 * block_m;
+            const uint32_t cb1_tiles = 2 * block_n;
+            const uint32_t cb_out_tiles = 2 * block_m * block_n;
 
             tt_metal::CreateCircularBuffer(
                 program,
                 all_cores,
-                CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_0, cb_fmt}})
+                CircularBufferConfig(cb0_tiles * single_tile_size, {{CBIndex::c_0, cb_fmt}})
                     .set_page_size(CBIndex::c_0, single_tile_size));
 
             tt_metal::CreateCircularBuffer(
                 program,
                 all_cores,
-                CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_1, cb_fmt}})
+                CircularBufferConfig(cb1_tiles * single_tile_size, {{CBIndex::c_1, cb_fmt}})
                     .set_page_size(CBIndex::c_1, single_tile_size));
 
             tt_metal::CreateCircularBuffer(
                 program,
                 all_cores,
-                CircularBufferConfig(num_cb_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
+                CircularBufferConfig(cb_out_tiles * single_tile_size, {{CBIndex::c_16, cb_fmt}})
                     .set_page_size(CBIndex::c_16, single_tile_size));
 
-            // Passed as JIT defines rather than compile-time args so that changing POWER_CASE only
-            // triggers a kernel recompile -- the host binary never needs rebuilding.
-            std::map<std::string, std::string> reader_defines;
+            // Passed as JIT defines rather than compile-time args so that changing POWER_CASE or
+            // the block size only triggers a kernel recompile -- the host binary never needs
+            // rebuilding.
+            const std::string bm = std::to_string(block_m), bn = std::to_string(block_n);
+            std::map<std::string, std::string> reader_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_reader) {
                 reader_defines["HIGH_POWER_DISABLE_READER"] = "1";
             }
-            std::map<std::string, std::string> compute_defines;
+            std::map<std::string, std::string> compute_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_compute) {
                 compute_defines["HIGH_POWER_DISABLE_COMPUTE"] = "1";
             }
-            std::map<std::string, std::string> writer_defines;
+            std::map<std::string, std::string> writer_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
             if (power_cfg.disable_writer) {
                 writer_defines["HIGH_POWER_DISABLE_WRITER"] = "1";
             }
@@ -414,19 +448,19 @@ int main(int argc, char* argv[]) {
                         // In fixed mode each core starts at a different offset (wrapping) so
                         // cores hit different DRAM addresses and don't serialise on the same bank.
                         const uint32_t effective_offset = (fixed_tiles_per_core > 0)
-                            ? (core_linear_idx * fixed_tiles_per_core) % total_output_tiles
+                            ? (core_linear_idx * fixed_tiles_per_core) % total_output_blocks
                             : work_offset;
 
                         tt_metal::SetRuntimeArgs(
                             program, reader_id, core,
                             {src0_dram->address(), src1_dram->address(),
                              Mt, Kt, Nt,
-                             effective_offset, work_per_core, num_iterations});
+                             effective_offset, work_per_core, num_iterations, blocks_per_row});
 
                         tt_metal::SetRuntimeArgs(
                             program, writer_id, core,
                             {dst_dram->address(), work_per_core, effective_offset, num_iterations,
-                             write_repeats});
+                             write_repeats, blocks_per_row, Nt});
 
                         tt_metal::SetRuntimeArgs(
                             program, compute_id, core,
@@ -479,13 +513,31 @@ int main(int argc, char* argv[]) {
             auto t_end = std::chrono::high_resolution_clock::now();
             auto sys_end = std::chrono::system_clock::now();
 
+            // Cheap correctness signal. The workload never verifies its output, so with the
+            // blocked path this is the only way to notice a tile-indexing mistake: the inputs
+            // are seeded deterministically (mt19937(42)) and accumulation order over the shared
+            // dimension is identical for every block size, so this checksum must not depend on
+            // HIGH_POWER_BLOCK_M/N.
+            {
+                double sum = 0.0, absmax = 0.0;
+                for (const auto& v : result_vec) {
+                    const double d = static_cast<float>(v);
+                    sum += d;
+                    absmax = std::max(absmax, std::abs(d));
+                }
+                fmt::print("Output checksum: sum={:.6e} absmax={:.6e}\n", sum, absmax);
+            }
+
+
             const std::string start_time_str = format_time(sys_start);
             const std::string end_time_str = format_time(sys_end);
 
             const double elapsed_s = std::chrono::duration<double>(t_end - t_start).count();
             // In fixed mode, actual FLOPs scale with num_cores (each core does the same work).
+            // The unit of work per core is an output block of block_m * block_n tiles.
             const double run_flops = (fixed_tiles_per_core > 0)
-                ? 2.0 * fixed_tiles_per_core * num_cores * Kt * TILE_HEIGHT * TILE_WIDTH * num_iterations
+                ? 2.0 * fixed_tiles_per_core * block_m * block_n * num_cores * Kt * TILE_HEIGHT * TILE_WIDTH *
+                      num_iterations
                 : total_flops;
             const double tflops = run_flops / elapsed_s / 1e12;
             const double per_iter_ms = elapsed_s * 1000.0 / static_cast<double>(num_iterations);
