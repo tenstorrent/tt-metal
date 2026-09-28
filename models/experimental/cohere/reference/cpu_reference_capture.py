@@ -49,11 +49,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--snapshot", required=True, help="local HF snapshot dir (config.json + shards)")
     ap.add_argument("--out", required=True, help="output dir for .npz dumps")
-    ap.add_argument("--dtype", choices=["float32", "bfloat16", "float16"], default="float32",
-                    help="model compute dtype; float32 is the PCC gold reference (~140 GB RAM)")
+    ap.add_argument(
+        "--dtype",
+        choices=["float32", "bfloat16", "float16"],
+        default="float32",
+        help="model compute dtype; float32 is the PCC gold reference (~140 GB RAM)",
+    )
     ap.add_argument("--prompts-file", default=None, help="optional JSON list of prompts")
-    ap.add_argument("--max-new-tokens", type=int, default=1,
-                    help="1 = single forward step capture (prefill+first logits); >1 also decodes")
+    ap.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=1,
+        help="1 = single forward step capture (prefill+first logits); >1 also decodes",
+    )
     ap.add_argument("--layers", default="all", help="'all' or 'START-END' inclusive range (memory-saver)")
     args = ap.parse_args()
 
@@ -73,13 +81,19 @@ def main():
     print(f"[capture] loading CohereForCausalLM dtype={args.dtype} (low_cpu_mem_usage)", flush=True)
     t0 = time.time()
     model = AutoModelForCausalLM.from_pretrained(
-        args.snapshot, torch_dtype=torch_dtype, low_cpu_mem_usage=True,
-        local_files_only=True, attn_implementation="eager",
+        args.snapshot,
+        torch_dtype=torch_dtype,
+        low_cpu_mem_usage=True,
+        local_files_only=True,
+        attn_implementation="eager",
     )
     model.config.use_cache = False
     model.eval()
-    print(f"[capture] model loaded in {time.time()-t0:.1f}s; "
-          f"layers={model.config.num_hidden_layers} logit_scale={model.config.logit_scale}", flush=True)
+    print(
+        f"[capture] model loaded in {time.time()-t0:.1f}s; "
+        f"layers={model.config.num_hidden_layers} logit_scale={model.config.logit_scale}",
+        flush=True,
+    )
 
     want_all = args.layers == "all"
     if not want_all:
@@ -94,6 +108,7 @@ def main():
         def _hook(_mod, inp, out):
             hidden = out[0] if isinstance(out, tuple) else out
             save(name, hidden)
+
         return _hook
 
     hooks.append(model.model.embed_tokens.register_forward_hook(layer_hook("embed")))

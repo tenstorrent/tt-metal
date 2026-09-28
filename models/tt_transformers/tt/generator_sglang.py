@@ -201,7 +201,6 @@ class QwenForCausalLM(Generator):
         return allocate_sglang_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-
 class CohereForCausalLM(Generator):
     """Command-R / Command-A family (HF model_type "cohere") - mirrors the
     generator_vllm.py wrapper; see that class for details. Canada Quant Labs

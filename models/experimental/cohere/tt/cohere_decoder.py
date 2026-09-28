@@ -52,9 +52,9 @@ class CohereDecoderLayer(LightweightModule):
         self.prefetcher = prefetcher
         self.args = args
         self.layer_num = layer_num
-        self.dim = args.dim                      # 8192
-        self.n_heads = args.n_heads              # 64 (MHA)
-        self.n_kv_heads = args.n_kv_heads        # 64 — verified config + k_proj [8192, 8192]
+        self.dim = args.dim  # 8192
+        self.n_heads = args.n_heads  # 64 (MHA)
+        self.n_kv_heads = args.n_kv_heads  # 64 — verified config + k_proj [8192, 8192]
         self.head_dim = self.dim // self.n_heads  # 128
 
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention

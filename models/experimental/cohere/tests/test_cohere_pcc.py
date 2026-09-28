@@ -132,7 +132,9 @@ def test_cohere_layernorm_pcc(mesh_device, reset_seeds, ensure_gc):
     tt_output_torch = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape),
-    )[:1, :1].reshape(1, -1, model_args.dim)  # first replica — forward() all-gathers the normed output to full width (DistributedNorm contract)
+    )[:1, :1].reshape(
+        1, -1, model_args.dim
+    )  # first replica — forward() all-gathers the normed output to full width (DistributedNorm contract)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
     logger.info(comp_allclose(reference_output, tt_output_torch))
@@ -161,9 +163,7 @@ def test_cohere_decoder_layer_prefill_pcc(max_seq_len, mesh_device, reset_seeds,
     if seq_len < max_seq_len:  # causal mask: real positions never attend to padding
         layer_in = torch.nn.functional.pad(layer_in, (0, 0, 0, max_seq_len - seq_len))
 
-    model_args = ModelArgs(
-        mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False
-    )
+    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 

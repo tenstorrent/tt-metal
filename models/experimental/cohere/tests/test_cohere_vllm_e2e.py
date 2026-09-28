@@ -53,9 +53,7 @@ def test_cohere_vllm_e2e_decode(mesh_device):
     logger.info(f"[cohere-e2e] hf_config for {hf_model}")
     hf_config = AutoConfig.from_pretrained(hf_model)
 
-    logger.info(
-        f"[cohere-e2e] CohereForCausalLM.initialize_vllm_model batch={max_batch} max_seq={max_seq_len}"
-    )
+    logger.info(f"[cohere-e2e] CohereForCausalLM.initialize_vllm_model batch={max_batch} max_seq={max_seq_len}")
     gen = CohereForCausalLM.initialize_vllm_model(hf_config, mesh_device, max_batch, max_seq_len)
     model_args = gen.model_args[0]
     logger.info(f"[cohere-e2e] model_args.model_name={model_args.model_name} n_layers={model_args.n_layers}")

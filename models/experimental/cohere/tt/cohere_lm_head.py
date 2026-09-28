@@ -36,9 +36,7 @@ class CohereLMHead(LightweightModule):
         self.lm_head = LMHead(*lm_head_args, **lm_head_kwargs)
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None) -> ttnn.Tensor:
-        logits = self.lm_head.forward(
-            x, debug_input_torch=debug_input_torch, debug_weight_torch=debug_weight_torch
-        )
+        logits = self.lm_head.forward(x, debug_input_torch=debug_input_torch, debug_weight_torch=debug_weight_torch)
         # HF applies the scale post-linear on fp32 logits before softmax/loss.
         # TODO(PCC): dtype of the multiply (logits leave LMHead as lm_head_dtype /
         # bfloat8_b per lm_head.py) — HF scales in fp32; if PCC < 0.99, cast

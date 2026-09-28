@@ -803,7 +803,6 @@ class QwenForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
-
 class CohereForCausalLM(Generator):
     """Command-R / Command-A family (HF model_type "cohere").
 
