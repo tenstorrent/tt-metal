@@ -192,10 +192,13 @@ def _face_spec(vals: list[int]) -> StimuliSpec:
 
 
 def _run(mathop, fmt: DataFormat, vals: list[int], scalar=None, twos_complement=False):
-    """Drive one kernel over the value list; return (delivered inputs, results) as int64."""
+    """Drive one kernel over the value list; return (host inputs, results) as int64."""
     formats = InputOutputFormat(fmt, fmt)
     input_dimensions = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * _TILES]
-    dest_acc = DestAccumulation.Yes
+    # 32-bit inputs unpack straight into a 32-bit Dst. UInt16 keeps the 16-bit Dst ttnn runs
+    # it with: the kernel's DataLayout::U16 loads/stores address Dst's 16-bit view, which in
+    # 32-bit mode is not where the datacopy wrote and the packer reads.
+    dest_acc = DestAccumulation.Yes if fmt.is_32_bit() else DestAccumulation.No
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=fmt,
@@ -245,7 +248,7 @@ def _run(mathop, fmt: DataFormat, vals: list[int], scalar=None, twos_complement=
             twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=fmt.is_32_bit(),
+        unpack_to_dest=fmt.is_32_bit() and dest_acc == DestAccumulation.Yes,
     )
     res = configuration.run().result
     x = src_A.to(torch.int64).numpy()
