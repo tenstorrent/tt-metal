@@ -1360,10 +1360,10 @@ tests:
       it only in whole tiles). Stage 1 is the stock whole-tile HW pack_untilize, leaving
       32 rows padded out to a tile boundary; stage 2 is an iDMA gather that compacts each
       row to matrix_w = (ct_dim-1)*32 + last_tile_w datums, fanned out over all 8 VCs.
-      Measured against the current workaround (one NOC read per row) at 23 row widths
-      from 2 B to 512 B: the workaround is payload-blind at ~785 cyc for a 32-row block
-      at every width, iDMA is flat at 274-313, so the win is a near-constant 2.5-2.9x.
-      Every shape is checked datum for datum.
+      EngineParity runs the same shapes through the current workaround (one NOC read per
+      row) so the comparison in the directory README is like-for-like. Correctness only;
+      every shape is checked datum for datum.
+
 
   1012:
     name: "1D Matmul Test 1012 - 2x2 K=2 Subblock K Sweep"

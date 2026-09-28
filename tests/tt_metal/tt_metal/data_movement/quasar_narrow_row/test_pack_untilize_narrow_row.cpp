@@ -2,56 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Quasar narrow-row pack-untilize, end to end, via iDMA (test id 918).
+// Quasar narrow-row pack-untilize, end to end (test id 918).
 //
 // THE PROBLEM. `_llk_pack_untilize_` cannot produce an untilized row narrower than a whole
 // number of tiles on Quasar. Its output stride is face-granular and the compute API exposes
 // it only in whole tiles (api/compute/pack_untilize.h static_asserts narrow_row == false for
 // ARCH_QUASAR); Wormhole/Blackhole had a 16-byte output stride register, Quasar does not. So
 // untilizing a matrix whose width is not a multiple of 32 leaves junk at the end of every
-// row, and the current workaround is for the consumer's NOC to issue a separate read per row
-// to step over it -- one transaction per row, where one would do.
+// row, and the workaround is for the consumer's NOC to issue a separate read per row to step
+// over it -- one transaction per row, where one would do.
 //
 // WHAT THIS TEST DOES. Two stages in one program:
 //
 //   stage 1  stock whole-tile HW pack_untilize  ->  32 rows x (ct_dim*32) datums, padded
-//   stage 2  ONE iDMA transaction               ->  32 rows x matrix_w datums, dense
+//   stage 2  an iDMA gather                     ->  32 rows x matrix_w datums, dense
 //
-// with matrix_w = (ct_dim - 1) * 32 + last_tile_w. The output is the same dense narrow-row
-// matrix the RV_PACR per-face-row path builds, and the host checks it datum for datum against
-// a golden, for every shape and every engine.
+// with matrix_w = (ct_dim - 1) * 32 + last_tile_w. The output is the dense narrow-row matrix
+// the RV_PACR per-face-row path produces, and the host checks it datum for datum against a
+// golden plus a guard band, for every shape and both engines.
 //
-// WHY iDMA RATHER THAN RV_PACR. RV_PACR drives the packer by hand, one 16-datum DEST face-row
-// per op, 64 ops per tile, with the face de-interleave and the row stride computed in software
-// per op -- it works, but tt-llk measures 1439-2418 cyc/tile against 77.4 for the hardware
-// path. Here the hardware does the untilize at full speed and iDMA only moves 32 rows
-// afterwards. iDMA also addresses L1 by the BYTE where RV_PACR's output address is 16-byte
-// granular, so this path has no minimum narrow width, no spill into the next row and no
-// two-pass write ordering (see SubFaceWidths).
-//
-// THE ENGINE AXIS.
-//   1 IDMA_PER_ROW  32 transactions, addresses from the address generator, one drain, fanned
-//                   out over all 8 VCs. THE SHIPPING ENGINE and the default: correct in every
-//                   run at every width and channel count measured.
-//   2 NOC_PER_ROW   32 stateful NOC reads == the current workaround == the bar to beat.
-//   0 IDMA_SCATTER  one transaction; the hardware walks a 32-entry address list. 3% faster
-//                   and WRONG -- SCATTER_INDEX does not advance for the first 16 entries at
-//                   8 channels (see ScatterListMapping, which root-causes it). Reachable only
-//                   from that diagnostic; no correctness test selects it.
-//
-// MEASURED (emu-quasar-1x3, 32-row block, Float16_b, 23 row widths from 2 B to 512 B/row):
-// the workaround is payload-blind at 781.6-790.2 cyc (24.5 cyc/row at every width, entirely
-// issue-bound), iDMA at 8 channels is flat at 273.6-313.4 cyc, so the win is a near-constant
-// 2.5-2.9x. ALWAYS fan out: one channel is data-bound past a ~100 B knee at 15.9 B/cyc (one
-// VC) and crosses the workaround at ~347 B/row, losing at 0.70x on a 504 B row.
-//
-// Running, reporting and the layout contract: see README.md in this directory.
+// `EngineParity` runs the same shape through the iDMA gather and through the NOC-read-per-row
+// workaround and requires both to be correct, which is what makes the performance comparison
+// in README.md a like-for-like one.
 
-#include <algorithm>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <string>
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
@@ -74,101 +48,29 @@ constexpr std::uint32_t DATUM_BYTES = 2;  // Float16_b
 constexpr std::uint32_t TILE_BYTES = TILE_H * TILE_W * DATUM_BYTES;
 constexpr std::uint32_t OUT_ROWS = TILE_H;
 
-// Stage 2 is idempotent (an L1->L1 gather), so it can be repeated inside the timed zone and
-// still leave the correct answer behind: every run is a correctness test AND a steady-state
-// timing. Stage 1 cannot -- see COMPUTE_LOOP_FACTOR.
-constexpr std::uint32_t COMPACT_ITERATIONS = 16;
-// 1, and not a tuning choice: the Quasar tile-counter model consumes a tile per unpack, so
-// re-packing resident tiles without re-streaming them gives valid timing but undefined data
-// from the second iteration on. Stage 1 is therefore measured single-shot, which includes
-// pipeline fill and reads high against a steady-state number.
-constexpr std::uint32_t COMPUTE_LOOP_FACTOR = 1;
+constexpr std::uint32_t ENGINE_IDMA = 0;
+constexpr std::uint32_t ENGINE_NOC = 1;
 
-constexpr std::uint32_t ENGINE_IDMA_SCATTER = 0;
-constexpr std::uint32_t ENGINE_IDMA_PER_ROW = 1;
-constexpr std::uint32_t ENGINE_NOC_PER_ROW = 2;
-
-// All 8 iDMA backend VCs. Each carries 16 B/cycle, so this is the 128 B/cycle ceiling.
+// All 8 iDMA backend VCs. Fan out unconditionally: at 8 channels the gather is never more
+// than 0.4% behind one channel on short rows, and 3.6x ahead at 512 B/row, where a single
+// channel is data-bound at one VC's 16 B/cycle and loses to the workaround it replaces.
 constexpr std::uint32_t CHANNELS_ALL = 8;
-// Floor on a sub-split packet: below this the issue cost swamps whatever the split buys. It
-// is also what makes the split arm of ChannelSweep a no-op on short rows, since a floor at or
-// above the row size is not a split.
-constexpr std::uint32_t MIN_SPLIT_PACKET_BYTES = 64;
 
 // The reference workload: a 32 x 252 Float16_b matrix. 252 datums needs 8 tiles to cover
-// (7 x 32 = 224, + 28), so ct_dim 8 -- right at the half-sync 16-bit DEST limit for
-// pack_untilize -- with 28 datums kept from the last tile. The padded row is 256 datums
-// (512 B), the dense row 252 (504 B), so every row drops 4 datums and row r shifts back 4r.
+// (7 x 32 = 224, + 28), so ct_dim 8 -- the half-sync 16-bit DEST limit for pack_untilize --
+// keeping 28 datums of the last tile. Padded row 256 datums, dense row 252.
 constexpr std::uint32_t LAST_W_252 = 28;
-
-const char* engine_name(std::uint32_t e) {
-    switch (e) {
-        case ENGINE_IDMA_SCATTER: return "iDMA scatter-list";
-        case ENGINE_IDMA_PER_ROW: return "iDMA per-row";
-        default: return "NOC per-row";
-    }
-}
 
 constexpr CoreCoord CORE = {0, 0};
 
-// The scatter list is 32 entries x 8 B = 256 B.
-constexpr std::uint32_t LIST_SLOT_BYTES = 256;
-// Every program run in the PROCESS takes a fresh slot. The iDMA fetches a scatter list once
-// per address and later writes to that address do not take effect, so two runs sharing a list
-// address make the second silently replay the first one's list -- which looks exactly like a
-// hardware result. A process-global counter (not per-test) is what makes that impossible even
-// when the allocator hands two tests the same buffer base.
-constexpr std::uint32_t LIST_SLOTS = 128;
-std::uint32_t g_next_list_slot = 0;
-
-// Guard band after the dense output. A gather that writes past its row must not go unnoticed.
+// Guard band after the dense output: a gather that writes past its row must not go unnoticed.
 constexpr std::uint32_t GUARD_BYTES = 256;
 constexpr std::uint32_t GUARD_FILL = 0xA5A5A5A5;
-// Fills the DRAM input buffer past the tiles this run actually uses. Never read by the
-// reader, so it should never appear anywhere; distinct from GUARD_FILL to tell the two apart.
+// Fills the DRAM input past the tiles a run uses. The reader only streams ct_dim tiles, so
+// any of this reaching the output is a bug worth seeing rather than a plausible-looking zero.
 constexpr std::uint32_t SRC_PAD_FILL = 0xDEADBEEF;
 
-// The profiler CSV records timing but knows nothing about whether a run produced the right
-// answer, so a report built from it alone can present the cycle count of a wrong computation
-// as a result. (That is not hypothetical: every scatter-list 8-channel run so far has been
-// both fast and wrong.) Each run therefore appends its verdict here, in the same directory
-// and the same order as the profiler log, and the report joins the two.
-const char* RESULTS_CSV = "generated/profiler/.logs/narrow_row_results.csv";
-
-// Verdict column values. DIAGNOSTIC exists so a run that emits a profiler zone but is not a
-// measurement still gets a row: the report joins verdicts to zones BY INDEX, so a zone with no
-// row silently shifts every later pairing. It also lets the report drop the run outright,
-// which matters because a diagnostic probe runs one un-warmed iteration and may deliberately
-// drive a broken engine -- its cycles must never reach a timing table.
-constexpr int VERDICT_WRONG = 0;
-constexpr int VERDICT_PASS = 1;
-constexpr int VERDICT_DIAGNOSTIC = 2;
-
-void record_result(
-    std::uint32_t ct_dim,
-    std::uint32_t last_tile_w,
-    std::uint32_t matrix_w,
-    std::uint32_t out_row_bytes,
-    std::uint32_t pad_row_bytes,
-    std::uint32_t engine_mode,
-    std::uint32_t num_channels,
-    std::uint32_t max_packet_bytes,
-    int verdict) {
-    // Truncate once per process so a rerun cannot be joined against a previous run's verdicts.
-    static bool first = true;
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(RESULTS_CSV).parent_path(), ec);
-    std::ofstream f(RESULTS_CSV, first ? std::ios::trunc : std::ios::app);
-    if (!f) {
-        return;  // reporting aid only -- never fail a test because the log could not be written
-    }
-    if (first) {
-        f << "ct_dim,last_tile_w,matrix_w,out_row_bytes,pad_row_bytes,engine,channels,packet,passed\n";
-        first = false;
-    }
-    f << ct_dim << ',' << last_tile_w << ',' << matrix_w << ',' << out_row_bytes << ',' << pad_row_bytes << ','
-      << engine_mode << ',' << num_channels << ',' << max_packet_bytes << ',' << verdict << '\n';
-}
+const char* engine_name(std::uint32_t e) { return e == ENGINE_IDMA ? "iDMA gather" : "NOC per-row"; }
 
 bool should_skip_test() {
     const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -183,17 +85,16 @@ bool should_skip_test() {
 // a checksum. 0x4000 | (idx & 0x1FFF) keeps the bf16 exponent field in [0x80, 0xBF] -- always
 // normal, never denormal, Inf or NaN -- so the L1 -> SrcA -> DEST -> pack -> L1 round trip is
 // bit-exact. That matters: the Quasar FPU writes no denormal to DEST, so a denormal pattern
-// would come back as zero and read as a data-movement bug.
-// idx < 32 * 256 = 8192 fits 13 bits exactly at the widest shape tested (ct_dim = 8).
+// would come back as zero and read as a data-movement bug. idx < 32 * 256 = 8192 fits the 13
+// bits exactly at the widest shape tested (ct_dim 8).
 inline std::uint16_t datum_at(std::uint32_t r, std::uint32_t c, std::uint32_t pad_w) {
     return static_cast<std::uint16_t>(0x4000u | ((r * pad_w + c) & 0x1FFFu));
 }
 
 // Tilized stimulus for a ct_dim-wide tile-row, in the layout the unpacker expects: per tile,
 // four 16x16 faces in order top-left, top-right, bottom-left, bottom-right, each row-major,
-// two datums per uint32 with the even datum in the low half (pack_two_bfloat16_into_uint32).
-// Matches gold_standard_tilize; hand-rolled so this test does not depend on the llk test
-// target's translation units.
+// two datums per uint32 with the even datum in the low half. Matches gold_standard_tilize;
+// hand-rolled so this test does not depend on the llk test target's translation units.
 std::vector<std::uint32_t> make_tilized_input(std::uint32_t ct_dim) {
     const std::uint32_t pad_w = ct_dim * TILE_W;
     std::vector<std::uint16_t> tilized(ct_dim * TILE_H * TILE_W);
@@ -218,7 +119,6 @@ std::vector<std::uint32_t> make_tilized_input(std::uint32_t ct_dim) {
 struct Buffers {
     std::shared_ptr<distributed::MeshBuffer> src_dram;  // tilized input
     std::shared_ptr<distributed::MeshBuffer> out_l1;    // dense narrow-row output + guard
-    std::shared_ptr<distributed::MeshBuffer> list_l1;   // scatter lists, one slot per run
 };
 
 Buffers make_buffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t max_ct_dim) {
@@ -229,196 +129,19 @@ Buffers make_buffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device
         distributed::ReplicatedBufferConfig cfg{.size = bytes};
         return distributed::MeshBuffer::create(cfg, local, mesh_device.get());
     };
-    // Sized for the widest shape: matrix_w <= max_ct_dim * 32 datums.
     const std::uint32_t max_out_bytes = OUT_ROWS * max_ct_dim * TILE_W * DATUM_BYTES + GUARD_BYTES;
     return {
         .src_dram = mk(max_ct_dim * TILE_BYTES, BufferType::DRAM),
         .out_l1 = mk(max_out_bytes, BufferType::L1),
-        .list_l1 = mk(LIST_SLOTS * LIST_SLOT_BYTES, BufferType::L1),
     };
 }
 
 struct RunConfig {
     std::uint32_t ct_dim = 1;
     std::uint32_t last_tile_w = 32;  // datums kept from the LAST tile; matrix_w derives from it
-    // Per-row is the SHIPPING engine: correct in every run at every width and channel count.
-    // Scatter-list is 3% faster and has an open correctness bug (see ScatterListMapping), so
-    // it is never the default and no correctness test selects it.
-    std::uint32_t engine_mode = ENGINE_IDMA_PER_ROW;
-    std::uint32_t num_channels = 1;
-    // 0 => the default policy: one packet per row (max_packet_bytes = out_row_bytes). That is
-    // the RIGHT default even when fanning out, because both iDMA engines already emit one
-    // packet per row, so 32 rows always give the round-robin more packets than it has
-    // channels. Set this only to deliberately sub-split a row -- see ChannelSweep.
-    std::uint32_t max_packet_bytes = 0;
-    // How many times the compaction repeats inside the timed zone. The default gives a
-    // steady-state rate; 1 removes the per-iteration re-arm, which is what
-    // ScatterListMapping needs, so exactly one transaction's work is on screen.
-    std::uint32_t compact_iterations = COMPACT_ITERATIONS;
-    // Rows this run compacts. 0 means all OUT_ROWS. A smaller value is a diagnostic: two rows
-    // is the minimum case for two scatter entries landing on the same destination slot.
-    std::uint32_t compact_rows = 0;
-    // Instead of pass/fail, decode which SOURCE row landed in each destination row and print
-    // the mapping. Turns "scatter-list is broken" into a specific claim. Always returns true.
-    bool mapping_dump = false;
+    std::uint32_t engine_mode = ENGINE_IDMA;
+    std::uint32_t num_channels = CHANNELS_ALL;
 };
-
-// Decode where every destination row actually came from, and say what that means.
-//
-// This works only because the stimulus makes every datum name its own position: a datum is
-// 0x4000 | (r * pad_w + c), so its low 13 bits invert straight back to a (source row, source
-// column) pair. So instead of "1764 datums wrong" we can report the actual mapping the engine
-// performed, which is the difference between "scatter-list is broken" and a bug report.
-//
-// The three outcomes are diagnostic, and they point at different hardware:
-//   * a PERMUTATION with no repeats  -> entries were assigned to the wrong slots, but the
-//     destination pointer advanced the right number of times.
-//   * DUPLICATES, with the missing slots still holding the 0xA5A5 prefill -> two entries
-//     landed on the same destination and one overwrote the other. That is the shared
-//     auto-increment pointer losing a race, and it is the hypothesis this exists to test.
-//   * identity rows but a nonzero COLUMN offset -> the pointer is fine and the source address
-//     composition (SCATTER_BASE_ADDR + entry) is off.
-void dump_mapping(
-    const std::uint16_t* out, std::uint32_t rows, std::uint32_t matrix_w, std::uint32_t pad_w, const RunConfig& cfg) {
-    constexpr std::uint16_t STIMULUS_TAG = 0x4000;
-    constexpr std::uint16_t STIMULUS_MASK = 0x1FFF;
-    constexpr std::uint16_t PREFILL = 0xA5A5;
-
-    std::vector<int> src_row(rows, -1);  // -1 = never written, -2 = unrecognisable
-    std::vector<int> src_col(rows, 0);
-    std::vector<bool> contiguous(rows, true);
-
-    for (std::uint32_t r = 0; r < rows; r++) {
-        const std::uint16_t v0 = out[r * matrix_w];
-        if (v0 == PREFILL) {
-            continue;  // nothing was ever written here
-        }
-        if ((v0 & ~STIMULUS_MASK) != STIMULUS_TAG) {
-            src_row[r] = -2;
-            continue;
-        }
-        const std::uint32_t idx = v0 & STIMULUS_MASK;
-        src_row[r] = static_cast<int>(idx / pad_w);
-        src_col[r] = static_cast<int>(idx % pad_w);
-        // Did the WHOLE row come from one contiguous run, or is it stitched from pieces?
-        for (std::uint32_t c = 1; c < matrix_w; c++) {
-            const std::uint16_t want = static_cast<std::uint16_t>(STIMULUS_TAG | ((idx + c) & STIMULUS_MASK));
-            if (out[r * matrix_w + c] != want) {
-                contiguous[r] = false;
-                break;
-            }
-        }
-    }
-
-    std::uint32_t identity = 0, unwritten = 0, unrecognised = 0, fragmented = 0;
-    std::vector<int> times_used(rows, 0);
-    std::string detail;
-    for (std::uint32_t r = 0; r < rows; r++) {
-        const int sr = src_row[r];
-        if (sr == -1) {
-            unwritten++;
-        } else if (sr == -2) {
-            unrecognised++;
-        } else {
-            if (sr >= 0 && static_cast<std::uint32_t>(sr) < rows) {
-                times_used[sr]++;
-            }
-            if (sr == static_cast<int>(r) && src_col[r] == 0 && contiguous[r]) {
-                identity++;
-            }
-            if (!contiguous[r]) {
-                fragmented++;
-            }
-        }
-        // Keep the printout readable: the first 12 rows always, then anything unexpected.
-        const bool odd = !(sr == static_cast<int>(r) && src_col[r] == 0 && contiguous[r]);
-        if (r < 12 || odd) {
-            detail += "    dst[" + std::to_string(r) + "] <- ";
-            if (sr == -1) {
-                detail += "UNWRITTEN (still 0xA5A5)";
-            } else if (sr == -2) {
-                detail += "not a stimulus datum (0x" + std::to_string(out[r * matrix_w]) + ")";
-            } else {
-                detail += "src row " + std::to_string(sr) + " col " + std::to_string(src_col[r]);
-                if (!contiguous[r]) {
-                    detail += "  [row is NOT one contiguous run]";
-                }
-            }
-            detail += "\n";
-        }
-    }
-
-    std::uint32_t duplicated = 0, never_used = 0;
-    std::string collisions;
-    for (std::uint32_t r = 0; r < rows; r++) {
-        if (times_used[r] > 1) {
-            duplicated++;
-            collisions += " " + std::to_string(r) + "x" + std::to_string(times_used[r]);
-        } else if (times_used[r] == 0) {
-            never_used++;
-        }
-    }
-
-    // Duplicates alone do NOT mean the destinations collided -- that was the first reading of
-    // this output and it was wrong. Two entries overwriting one slot must leave some OTHER
-    // slot untouched, so a destination collision requires duplicates AND unwritten > 0. With
-    // every slot written exactly once, a repeated source means the SOURCE index failed to
-    // advance while the destination pointer advanced correctly, which is a different bug in a
-    // different part of the engine.
-    const char* conclusion =
-        (duplicated > 0 && unwritten > 0)
-            ? "DESTINATION COLLISIONS -- two entries wrote the same slot, and another was left untouched"
-        : duplicated > 0   ? "SOURCE REUSED -- every destination written exactly once, but the scatter index "
-                             "did not advance: the same list entry was consumed repeatedly"
-        : unwritten > 0    ? "GAPS -- some destination rows were never written"
-        : fragmented > 0   ? "FRAGMENTED -- a destination row was stitched from more than one source run"
-        : identity == rows ? "IDENTITY -- the mapping is exactly right"
-                           : "PERMUTATION/OFFSET -- every slot written once, but from the wrong place";
-
-    // The source-index sequence, run-length encoded. This is the most informative line in the
-    // dump: a stuck prefix like "0 x16, 16, 17, ..." says exactly how many entries the engine
-    // consumed before the list caught up, and 16 entries x 8 B = 128 B is a fetch-block-sized
-    // clue that per-row numbers never would have given.
-    std::string sequence;
-    for (std::uint32_t r = 0; r < rows;) {
-        std::uint32_t run = 1;
-        while (r + run < rows && src_row[r + run] == src_row[r]) {
-            run++;
-        }
-        if (!sequence.empty()) {
-            sequence += ", ";
-        }
-        sequence += src_row[r] < 0 ? std::string("?") : std::to_string(src_row[r]);
-        if (run > 1) {
-            sequence += " x" + std::to_string(run);
-        }
-        r += run;
-    }
-
-    log_info(
-        tt::LogTest,
-        "MAPPING {} rows, engine={} ch={} matrix_w={} pad_w={} iters={}\n"
-        "  verdict: {}\n"
-        "  source index sequence: {}\n"
-        "  identity {}, unwritten {}, unrecognised {}, fragmented {}, "
-        "source rows used twice or more: {}{}, source rows never used: {}\n{}",
-        rows,
-        engine_name(cfg.engine_mode),
-        cfg.num_channels,
-        matrix_w,
-        pad_w,
-        cfg.compact_iterations,
-        conclusion,
-        sequence,
-        identity,
-        unwritten,
-        unrecognised,
-        fragmented,
-        duplicated,
-        collisions,
-        never_used,
-        detail);
-}
 
 // Builds and runs the two-stage program, then checks the dense output datum for datum.
 // Returns true iff the narrow-row matrix is exactly right.
@@ -433,35 +156,21 @@ bool run_narrow_row(
     const std::uint32_t matrix_w = (ct_dim - 1) * TILE_W + cfg.last_tile_w;  // dense row, datums
     const std::uint32_t pad_row_bytes = pad_w * DATUM_BYTES;
     const std::uint32_t out_row_bytes = matrix_w * DATUM_BYTES;
-    // Rows this run actually compacts; the DFB handshake always covers the full OUT_ROWS.
-    const std::uint32_t compact_rows = cfg.compact_rows != 0 ? cfg.compact_rows : OUT_ROWS;
-    const std::uint32_t out_bytes = compact_rows * out_row_bytes;
+    const std::uint32_t out_bytes = OUT_ROWS * out_row_bytes;
 
-    const std::uint32_t src_addr = buffers.src_dram->address();
     const std::uint32_t out_addr = buffers.out_l1->address();
-    if (g_next_list_slot >= LIST_SLOTS) {
-        log_warning(tt::LogTest, "scatter-list slots exhausted ({}); wrapping may replay a stale list", LIST_SLOTS);
-        g_next_list_slot = 0;
-    }
-    const std::uint32_t list_addr = buffers.list_l1->address() + (g_next_list_slot++) * LIST_SLOT_BYTES;
 
     // The NOC engine reads this core's own L1 (loopback), so it needs PHYSICAL noc coords --
     // logical {0,0} is physical (0,1) on the 1x3 emu.
     const CoreCoord physical_core = device->worker_core_from_logical_core(CORE);
     const std::uint32_t packed_coords = ((std::uint32_t)physical_core.x << 16) | (std::uint32_t)physical_core.y;
 
-    const std::uint32_t max_packet_bytes = cfg.max_packet_bytes != 0 ? cfg.max_packet_bytes : out_row_bytes;
-
     // ---- stimulus -----------------------------------------------------------------------
     std::vector<std::uint32_t> src_vec = make_tilized_input(ct_dim);
-    // EnqueueWriteMeshBuffer takes the buffer by non-const reference, so it needs a copy of
-    // the handle rather than the const one reachable through `buffers`.
     auto src_dram = buffers.src_dram;
-    // It also asserts the source FILLS the buffer (src.size()*sizeof >= buffer->size()), and
-    // the buffer is sized for the widest shape the calling test body uses -- so a body that
-    // mixes ct_dim throws on its first narrower run unless the tail is padded. Pad with a
-    // poison value rather than zeros: the reader only streams ct_dim tiles, so any of this
-    // reaching the output is a bug worth seeing rather than a plausible-looking zero.
+    // EnqueueWriteMeshBuffer asserts the source FILLS the buffer, and the buffer is sized for
+    // the widest shape the calling test body uses -- so a body that mixes ct_dim throws on its
+    // first narrower run unless the tail is padded.
     src_vec.resize(src_dram->size() / sizeof(std::uint32_t), SRC_PAD_FILL);
     distributed::EnqueueWriteMeshBuffer(cq, src_dram, src_vec, /*blocking=*/true);
 
@@ -469,16 +178,6 @@ bool run_narrow_row(
     // are both visible rather than passing on stale data.
     std::vector<std::uint32_t> out_init((out_bytes + GUARD_BYTES) / sizeof(std::uint32_t), GUARD_FILL);
     tt_metal::detail::WriteToDeviceL1(device, CORE, out_addr, out_init);
-
-    // The scatter list: entry r is the OFFSET of padded row r. The kernel passes the pad DFB's
-    // L1 base as SCATTER_BASE_ADDR, so the hardware forms base + offset -- which means the
-    // host can build the list without knowing where the DFB landed. Entries are 8 B and the
-    // engine takes the low 32 bits (resolved empirically; the encoding is not documented).
-    std::vector<std::uint32_t> list_words(LIST_SLOT_BYTES / sizeof(std::uint32_t), 0);
-    for (std::uint32_t r = 0; r < compact_rows; r++) {
-        list_words[r * 2] = r * pad_row_bytes;  // low word of an 8 B entry; high word stays 0
-    }
-    tt_metal::detail::WriteToDeviceL1(device, CORE, list_addr, list_words);
 
     // ---- program ------------------------------------------------------------------------
     const experimental::DFBSpecName SRC_DFB{"src_dfb"};
@@ -494,9 +193,7 @@ bool run_narrow_row(
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
     // The untilized output is addressed in ROWS, not tiles: one entry per output row, TILE_H
-    // of them. Same convention the shipping pack_untilize consumers use (RM_VALUE_OUTPUT in
-    // sort_program_factory.cpp). Total L1 matches a tile-granular spec, but reserve/push counts
-    // follow the entry granularity, so it has to be stated this way.
+    // of them. Same convention the shipping pack_untilize consumers use.
     experimental::DataflowBufferSpec pad_dfb_spec{
         .unique_id = PAD_DFB,
         .entry_size = pad_row_bytes,
@@ -518,8 +215,7 @@ bool run_narrow_row(
         .source = "tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(SRC_DFB, "src"), experimental::ProducerOf(PAD_DFB, "pad")},
-        .compile_time_args =
-            {{"ct_dim", ct_dim}, {"out_rows", OUT_ROWS}, {"loop_factor", COMPUTE_LOOP_FACTOR}, {"test_id", TEST_ID}},
+        .compile_time_args = {{"ct_dim", ct_dim}, {"out_rows", OUT_ROWS}},
         .hw_config = experimental::ComputeGen2Config{},
     };
 
@@ -532,17 +228,12 @@ bool run_narrow_row(
             {
                 .runtime_arg_names =
                     {"dst_addr",
-                     "list_addr",
                      "pad_row_bytes",
                      "out_row_bytes",
                      "num_rows",
-                     "dfb_rows",
                      "engine_mode",
                      "dest_coords",
-                     "max_packet_bytes",
-                     "num_channels",
-                     "num_iterations",
-                     "test_id"},
+                     "num_channels"},
             },
         .hw_config = experimental::DataMovementGen2Config{},
     };
@@ -561,7 +252,10 @@ bool run_narrow_row(
             .kernel = READER,
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
-                {{"src_addr", src_addr}, {"src_bank_id", 0u}, {"num_tiles", ct_dim}, {"dram_page_stride", TILE_BYTES}}),
+                {{"src_addr", src_dram->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", ct_dim},
+                 {"dram_page_stride", TILE_BYTES}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -569,17 +263,12 @@ bool run_narrow_row(
             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", out_addr},
-                 {"list_addr", list_addr},
                  {"pad_row_bytes", pad_row_bytes},
                  {"out_row_bytes", out_row_bytes},
-                 {"num_rows", compact_rows},
-                 {"dfb_rows", OUT_ROWS},
+                 {"num_rows", OUT_ROWS},
                  {"engine_mode", cfg.engine_mode},
                  {"dest_coords", packed_coords},
-                 {"max_packet_bytes", max_packet_bytes},
-                 {"num_channels", cfg.num_channels},
-                 {"num_iterations", cfg.compact_iterations},
-                 {"test_id", TEST_ID}}),
+                 {"num_channels", cfg.num_channels}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -593,28 +282,11 @@ bool run_narrow_row(
     // out_bytes = 32 rows * matrix_w * 2 B is always a multiple of 64, so the read and the
     // guard band start word-aligned whatever matrix_w is. Individual ROW offsets need not be:
     // an odd matrix_w puts row r at a 2 mod 4 byte offset, which is exactly the byte-granular
-    // placement SubFaceWidths is there to probe.
+    // placement SubFaceWidths probes.
     const std::uint32_t read_bytes = out_bytes + GUARD_BYTES;
     std::vector<std::uint32_t> out_words;
     tt_metal::detail::ReadFromDeviceL1(device, CORE, out_addr, read_bytes, out_words);
     const auto* out_datums = reinterpret_cast<const std::uint16_t*>(out_words.data());
-
-    if (cfg.mapping_dump) {
-        dump_mapping(out_datums, compact_rows, matrix_w, pad_w, cfg);
-        // Still record a row, marked DIAGNOSTIC: it keeps the report's index join 1:1 with the
-        // profiler zones and tells the report to drop this run from the timing tables.
-        record_result(
-            ct_dim,
-            cfg.last_tile_w,
-            matrix_w,
-            out_row_bytes,
-            pad_row_bytes,
-            cfg.engine_mode,
-            cfg.num_channels,
-            max_packet_bytes,
-            VERDICT_DIAGNOSTIC);
-        return true;  // an instrument, not a verdict
-    }
 
     std::uint32_t bad = 0;
     std::uint32_t first_bad_r = 0, first_bad_c = 0;
@@ -635,25 +307,13 @@ bool run_narrow_row(
         }
     }
 
-    // Guard band: everything after the dense matrix must be untouched. Catches a gather that
-    // writes more per row than it should, or one that overruns the last row.
+    // Everything after the dense matrix must be untouched.
     std::uint32_t guard_bad = 0;
     for (std::uint32_t w = out_bytes / sizeof(std::uint32_t); w < out_words.size(); w++) {
         if (out_words[w] != GUARD_FILL) {
             guard_bad++;
         }
     }
-
-    record_result(
-        ct_dim,
-        cfg.last_tile_w,
-        matrix_w,
-        out_row_bytes,
-        pad_row_bytes,
-        cfg.engine_mode,
-        cfg.num_channels,
-        max_packet_bytes,
-        (bad == 0 && guard_bad == 0) ? VERDICT_PASS : VERDICT_WRONG);
 
     if (bad != 0 || guard_bad != 0) {
         log_error(
@@ -674,233 +334,22 @@ bool run_narrow_row(
             guard_bad);
         return false;
     }
-    log_info(
-        tt::LogTest,
-        "ct_dim={} last_tile_w={} matrix_w={} ({} B/row, padded {} B/row) engine={} ch={}: OK",
-        ct_dim,
-        cfg.last_tile_w,
-        matrix_w,
-        out_row_bytes,
-        pad_row_bytes,
-        engine_name(cfg.engine_mode),
-        cfg.num_channels);
     return true;
 }
 
 }  // namespace unit_tests::dm::quasar_narrow_row
 
 // =============================================================================
-// Test Suite: Quasar narrow-row pack-untilize via iDMA (HW untilize + iDMA compaction)
+// Test Suite: Quasar narrow-row pack-untilize (HW untilize + iDMA compaction)
 // =============================================================================
 
 class QuasarNarrowRowUntilize : public QuasarMeshDeviceSingleCardFixture {};
 
-// START HERE. One tile, last_tile_w = 16 -- the smallest shape that is actually narrow, and
-// the one the RV_PACR path reports 1470.4 cyc/tile for. If this fails, nothing below is
-// meaningful; run the iDMA functional examples (*QuasarIdmaOps*) to tell a broken kernel apart
-// from a broken emulator.
-TEST_F(QuasarNarrowRowUntilize, SingleTileHalfWidth) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/1);
-    EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = 1, .last_tile_w = 16}));
-}
-
-// The widths RV_PACR supports, so the two paths can be compared on equal ground: 8, 16, 24 are
-// narrow; 32 is the degenerate whole-tile case and must also come out right (matrix_w == pad_w,
-// so the gather becomes a straight copy -- a good null check on the address math).
-TEST_F(QuasarNarrowRowUntilize, WidthSweep) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/1);
-    for (std::uint32_t last_tile_w : {8u, 16u, 24u, 32u}) {
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = 1, .last_tile_w = last_tile_w}))
-            << "last_tile_w=" << last_tile_w;
-    }
-}
-
-// Multi-tile rows: full tiles 0..ct_dim-2 at 32 datums each plus a narrow last tile. This is
-// the shape a real matrix has, and it is where the gather stops being descriptor-bound -- rows
-// grow to (ct_dim-1)*64 + 32 bytes, so the per-row payload starts to dominate the per-entry
-// cost. ct_dim 8 is the half-sync 16-bit DEST limit for pack_untilize.
-TEST_F(QuasarNarrowRowUntilize, TileRowSweep) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    for (std::uint32_t ct_dim : {1u, 2u, 4u, 8u}) {
-        for (std::uint32_t last_tile_w : {8u, 16u, 32u}) {
-            EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w}))
-                << "ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
-        }
-    }
-}
-
-// Widths BELOW the RV_PACR floor. RV_PACR's output address is 16-byte granular, so for a
-// 16-bit format it cannot place rows closer than 8 datums apart (and for an 8-bit format, not
-// closer than 16) -- narrow_row = 8 is its hard minimum, and widths that are not a multiple of
-// 8 make it write a full 16-datum face-row that spills into the next output row, which it then
-// has to overwrite in a second pass. iDMA addresses L1 by the byte, so none of that applies:
-// these widths are just a smaller out_row_bytes. 1 and 3 also make out_row_bytes odd, which
-// probes byte- rather than word-granular placement.
-//
-// A failure here is a FINDING, not a broken test: it says where iDMA's placement granularity
-// actually stops, which is the number the narrow-row API can promise. The summary line at the
-// end reports that boundary directly rather than leaving it to be read out of the assertions.
-TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/2);
-    std::vector<std::uint32_t> ok_widths, bad_widths;
-    for (std::uint32_t last_tile_w : {1u, 2u, 3u, 4u, 12u, 20u}) {
-        const bool ok = run_narrow_row(devices_[0], buffers, {.ct_dim = 2, .last_tile_w = last_tile_w});
-        (ok ? ok_widths : bad_widths).push_back(last_tile_w);
-        EXPECT_TRUE(ok) << "last_tile_w=" << last_tile_w;
-    }
-    auto join = [](const std::vector<std::uint32_t>& v) {
-        std::string s;
-        for (auto x : v) {
-            s += (s.empty() ? "" : ",") + std::to_string(x);
-        }
-        return s.empty() ? std::string("none") : s;
-    };
-    log_info(
-        tt::LogTest,
-        "sub-face widths (RV_PACR cannot do any of these): placed correctly = {}; failed = {}",
-        join(ok_widths),
-        join(bad_widths));
-}
-
-// THE DECISIVE TEST: is the iDMA compaction actually better than the workaround it replaces?
-//
-// Three shapes chosen around the measured knee. The first run of this test found the
-// compaction is DESCRIPTOR-bound and flat at ~8.3 cyc/row up to ~80 B/row, then costs roughly
-// one cycle per 16-20 B (one iDMA VC). So the engines have to be compared on both sides of
-// that, because below it they are all paying for issue and above it they are paying for bytes:
-//
-//   A  ct_dim 1, w 16   ->   32 B/row   well below the knee, pure descriptor cost
-//   B  ct_dim 4, w 16   ->  224 B/row   above the knee
-//   C  ct_dim 8, w 28   ->  504 B/row   == the 32x252 matrix, ~6x past the knee
-//
-// All three engines at one channel, plus the two iDMA engines at eight channels on the shapes
-// where bytes dominate -- comparing a knowingly bandwidth-starved iDMA against the NOC would
-// understate it. The NOC path has no equivalent knob, so its single row is the whole story.
-//
-// This body only proves every engine produces the same correct output; the cycles come from
-// report_narrow_row_from_csv.py, whose "vs workaround" table groups these by shape.
-TEST_F(QuasarNarrowRowUntilize, EngineComparison) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    struct Shape {
-        std::uint32_t ct_dim;
-        std::uint32_t last_tile_w;
-        bool fan_out;  // only worth it where the row is long enough to be data-bound
-    };
-    for (const Shape& s : {Shape{1, 16, false}, Shape{4, 16, true}, Shape{8, LAST_W_252, true}}) {
-        for (std::uint32_t engine : {ENGINE_IDMA_PER_ROW, ENGINE_NOC_PER_ROW}) {
-            EXPECT_TRUE(run_narrow_row(
-                devices_[0], buffers, {.ct_dim = s.ct_dim, .last_tile_w = s.last_tile_w, .engine_mode = engine}))
-                << "engine=" << engine_name(engine) << " ct_dim=" << s.ct_dim;
-            // Fan-out is an iDMA-only knob, and only pays past the knee.
-            if (s.fan_out && engine != ENGINE_NOC_PER_ROW) {
-                EXPECT_TRUE(run_narrow_row(
-                    devices_[0],
-                    buffers,
-                    {.ct_dim = s.ct_dim,
-                     .last_tile_w = s.last_tile_w,
-                     .engine_mode = engine,
-                     .num_channels = CHANNELS_ALL}))
-                    << "engine=" << engine_name(engine) << " ct_dim=" << s.ct_dim << " ch=" << CHANNELS_ALL;
-            }
-        }
-    }
-}
-
-// Does sub-splitting a row into packets help fan-out, or just cost issue?
-//
-// Fan-out round-robins PACKETS, so it needs at least num_channels of them to distribute. The
-// first version of this test assumed that meant splitting each row into `channels` packets --
-// which is right when the whole transfer is ONE packet, and wrong here. Both iDMA engines
-// already emit one packet per ROW (the scatter list because each entry is its own transfer,
-// the per-row loop because each row is its own transaction), so with 32 rows and at most 8
-// channels there are always enough packets and the default `max_packet_bytes = out_row_bytes`
-// leaves them at their natural size.
-//
-// Sub-splitting on top of that multiplies the packet count by `channels` while the bytes stay
-// the same, and every packet still costs ~4-6 cycles to issue. Prediction: natural >= split
-// everywhere, and materially better on the long shape. This test measures that instead of
-// assuming it -- the old policy would have turned 504 B rows into 64 B packets, 256 of them.
-TEST_F(QuasarNarrowRowUntilize, ChannelSweep) {
-    using namespace unit_tests::dm::quasar_narrow_row;
-    if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    // Below the knee and well past it, so the answer is not read off a single size.
-    for (auto [ct_dim, last_tile_w] :
-         {std::pair<std::uint32_t, std::uint32_t>{1, 16}, std::pair<std::uint32_t, std::uint32_t>{8, LAST_W_252}}) {
-        const std::uint32_t row_bytes = ((ct_dim - 1) * TILE_W + last_tile_w) * DATUM_BYTES;
-
-        // Reference: one channel, natural packets.
-        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w}))
-            << "ct_dim=" << ct_dim << " ch=1";
-
-        // Fan-out over the natural one-packet-per-row granularity. Expected best.
-        EXPECT_TRUE(run_narrow_row(
-            devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .num_channels = CHANNELS_ALL}))
-            << "ct_dim=" << ct_dim << " ch=" << CHANNELS_ALL << " natural packets";
-
-        // Fan-out with each row sub-split -- exactly the old policy, reproduced so the two can
-        // be compared rather than argued about. A "split" that is not smaller than the row is
-        // no split at all, which is what rules out the short shape (32 B row, floor 64 B).
-        const std::uint32_t split = std::max(MIN_SPLIT_PACKET_BYTES, row_bytes / CHANNELS_ALL);
-        if (split < row_bytes) {
-            EXPECT_TRUE(run_narrow_row(
-                devices_[0],
-                buffers,
-                {.ct_dim = ct_dim,
-                 .last_tile_w = last_tile_w,
-                 .num_channels = CHANNELS_ALL,
-                 .max_packet_bytes = split}))
-                << "ct_dim=" << ct_dim << " ch=" << CHANNELS_ALL << " split packets of " << split << " B";
-        }
-    }
-}
-
-// THE FULL WORKAROUND COMPARISON. Everything above is either a correctness probe or a
-// three-point sample; this is the whole grid, and it is what the adoption decision should be
-// read off.
-//
-// Every (ct_dim, last_tile_w) pair is run three ways -- the workaround, and the verified iDMA
-// engine at one and at eight channels -- so each shape carries its own baseline and no
-// comparison is made across shapes. That matters because the two engines scale completely
-// differently with row length:
-//
-//   NOC per-row   measured FLAT at ~24.5 cyc/row for 32, 224 and 504 B rows. The workaround is
-//                 purely issue-bound; its payload is free. So its cost is ~785 cyc for a
-//                 32-row block at ANY width, and iDMA's advantage cannot grow with width.
-//   iDMA 1 ch     flat ~8.7 cyc/row while issue-bound, then ~14 B/cyc (one VC). It therefore
-//                 CROSSES the NOC somewhere near 350 B/row and is slower above it.
-//   iDMA 8 ch     stays under the issue floor (~9-10 cyc/row) across this whole grid, because
-//                 even a 504 B row is only 3.9 cyc of data time spread over 8 VCs.
-//
-// Both crossings are measured here rather than asserted -- the one-channel arm is run at every
-// width precisely so the point where it loses to the workaround is a data point and not an
-// extrapolation. Scatter-list is deliberately absent: it is 3% faster and does not reliably
-// produce correct output (see EngineComparison), so it has no place in an adoption grid.
-//
-// 48 runs. At ~0.8 s/run after simulator startup that is well under a minute.
-TEST_F(QuasarNarrowRowUntilize, WorkaroundSweep) {
+// The layout contract across the shapes a real matrix has: full tiles at 32 datums each plus
+// a narrow last tile. last_tile_w 32 is the degenerate whole-tile case (matrix_w == pad_w, so
+// the gather becomes a straight copy), which is a good null check on the address math.
+// ct_dim 8 is the half-sync 16-bit DEST limit for pack_untilize.
+TEST_F(QuasarNarrowRowUntilize, WidthAndTileRowSweep) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
@@ -908,131 +357,54 @@ TEST_F(QuasarNarrowRowUntilize, WorkaroundSweep) {
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
     for (std::uint32_t ct_dim : {1u, 2u, 4u, 8u}) {
         for (std::uint32_t last_tile_w : {8u, 16u, 24u, 32u}) {
-            const RunConfig base{.ct_dim = ct_dim, .last_tile_w = last_tile_w};
-            auto go = [&](RunConfig cfg, const char* what) {
-                EXPECT_TRUE(run_narrow_row(devices_[0], buffers, cfg))
-                    << what << " ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
-            };
-            RunConfig noc = base;
-            noc.engine_mode = ENGINE_NOC_PER_ROW;
-            go(noc, "workaround");
-
-            RunConfig idma1 = base;
-            idma1.engine_mode = ENGINE_IDMA_PER_ROW;
-            go(idma1, "iDMA ch1");
-
-            RunConfig idma8 = idma1;
-            idma8.num_channels = CHANNELS_ALL;
-            go(idma8, "iDMA ch8");
+            EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w}))
+                << "ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
         }
     }
 }
 
-// The regime narrow-row actually exists for: most of the tile is padding.
-//
-// At ct_dim 1 / last_tile_w 1 the padded row is 32 datums and 31 of them are junk -- 97%
-// waste, where reading the padded buffer whole and discarding the tail is not an option. At
-// the other end, a 32x252 matrix wastes 4 datums in 256 (1.6%), and there the honest question
-// is whether compaction is needed at all. This test covers the end where it is, and where the
-// rows are short enough to sit deep in iDMA's flat issue-bound region -- so it should show the
-// largest margin over the workaround anywhere in this file.
-//
-// RV_PACR cannot place any of these widths: its output address is 16-byte granular, so 8
-// datums is its hard floor for a 16-bit format.
-TEST_F(QuasarNarrowRowUntilize, NarrowExtremes) {
+// Widths BELOW the RV_PACR floor. RV_PACR's output address is 16-byte granular, so for a
+// 16-bit format it cannot place rows closer than 8 datums apart, and widths that are not a
+// multiple of 8 make it write a full 16-datum face-row that spills into the next output row
+// and has to be overwritten in a second pass. iDMA addresses L1 by the byte, so these are
+// just a smaller out_row_bytes. 1 and 3 also make out_row_bytes odd, which probes byte-
+// rather than word-granular placement.
+TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/2);
-    for (std::uint32_t ct_dim : {1u, 2u}) {
-        for (std::uint32_t last_tile_w : {1u, 2u, 4u, 8u}) {
-            for (std::uint32_t engine : {ENGINE_NOC_PER_ROW, ENGINE_IDMA_PER_ROW}) {
-                EXPECT_TRUE(run_narrow_row(
-                    devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .engine_mode = engine}))
-                    << "engine=" << engine_name(engine) << " ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
-            }
-        }
+    for (std::uint32_t last_tile_w : {1u, 2u, 3u, 4u, 12u, 20u}) {
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = 2, .last_tile_w = last_tile_w}))
+            << "last_tile_w=" << last_tile_w;
     }
 }
 
-// THE SCATTER-LIST BUG, ROOT-CAUSED. Diagnostic only -- it asserts nothing, because the
-// engine it exercises is not the one this test ships.
-//
-// FINDING (emu-quasar-1x3): at 8 channels the source index sequence is
-//
-//     0 x16, 16, 17, 18, ... 31          with unwritten = 0
-//
-// Every destination slot is written exactly ONCE, so nothing is overwritten and the
-// destination auto-increment is correct. What fails is SCATTER_INDEX: it does not advance for
-// the first 16 entries, so the first 16 destinations all receive entry 0's offset, then the
-// index jumps to 16 and tracks correctly. 16 entries x 8 B = 128 B, one list fetch block.
-//
-// The stuck prefix is not a single repeated value: within those 16, the source address
-// ALTERNATES between src row 0 col 0 and col 8, i.e. between offset +0 and +16 B. So the list
-// INDEX is stuck at 0 while the address the engine forms still moves, between two values 16 B
-// apart. That is a detail for whoever owns the overlay RTL; it rules out the simplest reading
-// ("the engine just reuses entry 0 until the fetch lands").
-//
-// Two earlier hypotheses died here, and the probes that killed them are kept below:
-//   * A DRAIN RACE (idma_acked reading zero before a one-issue multi-entry walk generates its
-//     packets, so the next iteration re-arms under a live transaction). Refuted: this runs
-//     with compact_iterations = 1, so there is no re-arm at all, and it still fails.
-//   * DESTINATION COLLISIONS. Refuted by unwritten = 0 -- two entries sharing a slot must
-//     leave another slot untouched.
-//
-// Discriminators, all measured here:
-//   * 1 channel is CORRECT; 8 channels always wrong. Slow serial consumption lets the fetch
-//     land first, which is also why 1 channel passed roughly three runs in four earlier.
-//   * COMPACTION IS IRRELEVANT -- last_tile_w = 32 gives out_row_bytes == pad_row_bytes and
-//     fails identically. This is a plain scatter-list bug, nothing to do with narrow-row.
-//   * 4 rows correct but 2 rows wrong, which does NOT fit a clean block-latency story. Treat
-//     the 128 B reading as strong but not proven.
-//
-// The CONTROL leads: the per-row engine, same shape and the same 32 transactions in flight
-// across the same VCs, prints IDENTITY at both channel counts. If it ever stops doing so the
-// decoder is broken and nothing below it means anything.
-TEST_F(QuasarNarrowRowUntilize, ScatterListMapping) {
+// The iDMA gather and the NOC-read-per-row workaround must produce identical, correct output
+// on the same shape. That is what makes the timing comparison in README.md like-for-like: the
+// baseline is not a straw man but the same operation, verified. One channel is also covered,
+// because it is the configuration that must NOT be shipped (data-bound past ~100 B/row, and
+// slower than the workaround above ~347 B/row) and it still has to be correct.
+TEST_F(QuasarNarrowRowUntilize, EngineParity) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
+    for (std::uint32_t ct_dim : {1u, 8u}) {
+        const std::uint32_t last_tile_w = ct_dim == 1 ? 16u : LAST_W_252;
+        const RunConfig base{.ct_dim = ct_dim, .last_tile_w = last_tile_w};
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, base)) << "iDMA 8ch ct_dim=" << ct_dim;
 
-    auto probe = [&](RunConfig cfg) {
-        cfg.compact_iterations = 1;
-        cfg.mapping_dump = true;
-        run_narrow_row(devices_[0], buffers, cfg);
-    };
+        RunConfig one_channel = base;
+        one_channel.num_channels = 1;
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, one_channel)) << "iDMA 1ch ct_dim=" << ct_dim;
 
-    // CONTROL. Known-good engine, same shape. Must report IDENTITY.
-    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_PER_ROW});
-    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_PER_ROW, .num_channels = CHANNELS_ALL});
-
-    // The failing configuration, at both channel counts.
-    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_SCATTER});
-    probe({.ct_dim = 8, .last_tile_w = LAST_W_252, .engine_mode = ENGINE_IDMA_SCATTER, .num_channels = CHANNELS_ALL});
-
-    // Two rows: the minimum case for two entries colliding. If the mapping is wrong here it is
-    // as small as a failure can get, and if it is right, whatever goes wrong needs depth.
-    probe(
-        {.ct_dim = 8,
-         .last_tile_w = LAST_W_252,
-         .engine_mode = ENGINE_IDMA_SCATTER,
-         .num_channels = CHANNELS_ALL,
-         .compact_rows = 2});
-    probe(
-        {.ct_dim = 8,
-         .last_tile_w = LAST_W_252,
-         .engine_mode = ENGINE_IDMA_SCATTER,
-         .num_channels = CHANNELS_ALL,
-         .compact_rows = 4});
-
-    // No compaction at all: out_row_bytes == pad_row_bytes, so the gather is a straight copy
-    // and the destination stride equals the source stride. Separates "the stride mismatch
-    // matters" from "the pointer is broken regardless of what it is stepping by".
-    probe({.ct_dim = 8, .last_tile_w = TILE_W, .engine_mode = ENGINE_IDMA_SCATTER});
-    probe({.ct_dim = 8, .last_tile_w = TILE_W, .engine_mode = ENGINE_IDMA_SCATTER, .num_channels = CHANNELS_ALL});
+        RunConfig workaround = base;
+        workaround.engine_mode = ENGINE_NOC;
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, workaround)) << "NOC ct_dim=" << ct_dim;
+    }
 }
 
 }  // namespace tt::tt_metal
