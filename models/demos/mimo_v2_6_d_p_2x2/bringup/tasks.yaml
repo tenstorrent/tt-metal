@@ -903,6 +903,13 @@ tasks:
     kind: norm
     layer: 5
     stateful: false
+  frozen:
+    at: '2026-09-28T06:44:26'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_norm.py: 8cf7dfe088b2c621a609da42359ea6563c0facd284281dc1afab8867ebd2aa5a
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_moe.01
   title: 'full_moe block with steps 1-1 on device (last: attn_norm)'
   step: implement
