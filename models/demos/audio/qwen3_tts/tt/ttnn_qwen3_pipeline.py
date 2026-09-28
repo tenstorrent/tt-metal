@@ -101,12 +101,14 @@ class HostEmbeddings:
     """The lookup tables and the small projection that the prompt is built from."""
 
     def __init__(self, dtype=torch.float32):
-        talker = checkpoint.load_prefixed("talker.", dtype=dtype, strip=True)
-        self.text_table = talker["model.text_embedding.weight"]
-        self.codec_table = talker["model.codec_embedding.weight"]
-        self.fc1 = (talker["text_projection.linear_fc1.weight"], talker["text_projection.linear_fc1.bias"])
-        self.fc2 = (talker["text_projection.linear_fc2.weight"], talker["text_projection.linear_fc2.bias"])
-        self.codec_head = talker["codec_head.weight"]
+        # Only the tensors kept here: all of `talker.` peaked at 11.5 GB of host memory at 1.7B.
+        load = lambda prefix: checkpoint.load_prefixed(f"talker.{prefix}.", dtype=dtype)
+        self.text_table = load("model.text_embedding")["weight"]
+        self.codec_table = load("model.codec_embedding")["weight"]
+        projection = load("text_projection")
+        self.fc1 = (projection["linear_fc1.weight"], projection["linear_fc1.bias"])
+        self.fc2 = (projection["linear_fc2.weight"], projection["linear_fc2.bias"])
+        self.codec_head = load("codec_head")["weight"]
         # 2048 at 1.7B, 1024 at 0.6B; a wrong width folds positions rather than failing.
         self.width = self.codec_table.shape[1]
 
