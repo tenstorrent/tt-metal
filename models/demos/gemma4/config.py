@@ -41,6 +41,7 @@ class MeshConfig:
         decode: ModeConfig,
         prefill: ModeConfig = None,
         tp_axis: int = 1,
+        weight_fracture: bool = False,
     ):
         self.mesh_shape = tuple(mesh_shape)
         self.tp_axis = tp_axis
@@ -48,6 +49,14 @@ class MeshConfig:
         self.sp_axis = self.ep_axis
 
         self.total_devices = mesh_shape[0] * mesh_shape[1]
+
+        # 2D weight fracture (galaxy one-instance): weight matrices shard one
+        # dim over BOTH mesh axes (ways = rows*cols), so the box holds a single
+        # weight copy. Partial matmul outputs are completed by an all-reduce
+        # along each axis in turn (see ccl.ccl_allreduce_fractured). Orthogonal
+        # to the MoE ep/sp fields, which keep their meanings.
+        self.weight_fracture = weight_fracture
+        self.fracture_ways = self.total_devices if weight_fracture else decode.tp
 
         self.decode = decode
         self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
@@ -79,6 +88,17 @@ class MeshConfig:
             mesh_dims = (None, tensor_dim) if self.tp_axis == 1 else (tensor_dim, None)
 
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
+
+    def fractured_mapper(self, mesh_device, axis0_dim, axis1_dim):
+        """Shard two DIFFERENT tensor dims over the two mesh axes.
+
+        The mesh mapper requires unique dims (TT_FATAL otherwise), so a weight
+        whose logical split is rows*cols chunks of ONE dim is first reshaped on
+        host to expose the row factor as its own dim (chunk k -> device
+        (k // cols, k % cols)); two weights prepared this way pair their chunks
+        chip-for-chip (gate_up N-chunk i with down K-chunk i).
+        """
+        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(axis0_dim, axis1_dim))
 
     def column_parallel(self, mesh_device):
         return self.shard_mapper(mesh_device, tensor_dim=-1)

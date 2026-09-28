@@ -310,6 +310,29 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     return result
 
 
+def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Complete partial sums under 2D weight fracture (galaxy one-instance).
+
+    With ``mesh_config.weight_fracture`` the down/output projections split
+    their K dim over BOTH mesh axes, so every chip holds a partial of the full
+    output. Summing along each mesh axis in turn completes it. Uses the sync
+    ``ttnn.all_reduce`` per axis — the correctness path; ring/async CCLs land
+    with the perf pass. Falls back to the ordinary TP all-reduce when
+    fracture is off.
+    """
+    if mesh_config is None or not getattr(mesh_config, "weight_fracture", False):
+        return ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config)
+
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    out = tensor
+    for axis in (0, 1):
+        if mesh_config.mesh_shape[axis] > 1:
+            reduced = ttnn.all_reduce(out, cluster_axis=axis, memory_config=memory_config)
+            out.deallocate(True)
+            out = reduced
+    return out
+
+
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     """All-gather across TP devices."""
     if mesh_config is None or mesh_config.tp <= 1:
