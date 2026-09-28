@@ -828,7 +828,7 @@
       timeout: 22
       tier: 1
     bh_galaxy:
-      timeout: 10
+      timeout: 15
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
