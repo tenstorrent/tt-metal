@@ -43,7 +43,7 @@ namespace active_eth_realtime_profiler_msgs {
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
-    static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
+    static_assert(MEM_AERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -106,6 +106,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
+
+    assert_kernel_config_no_overlap(mem_map_bases, mem_map_sizes, HalL1MemAddrType::UNRESERVED, "Active-eth");
 
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_STATUS_MASK)] =

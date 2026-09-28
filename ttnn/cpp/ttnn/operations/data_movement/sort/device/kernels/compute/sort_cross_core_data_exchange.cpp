@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
@@ -28,6 +29,14 @@ void kernel_main() {
     constexpr uint32_t number_of_tiles_per_core = get_arg(args::number_of_tiles_per_core);
     constexpr uint32_t number_of_cores_used = get_arg(args::number_of_cores_used);
     constexpr bool ascending = get_arg(args::ascending) == 1;
+    // Comparator-stable network (issue #33492): on exact value ties the index tiles are
+    // compare-exchanged so equal values keep their original (ascending-index) order, matching
+    // torch.sort(stable=True) in both directions.
+    // The factory pins this arg to 1 for BOTH stabilities (#54043): the raw-SFPSWAP tie
+    // decision is not consistent between the two peers of a spanning tile pair, so the
+    // unstable network could duplicate indices inside tie groups. This kernel therefore
+    // always compiles the comparator arms; a stable ordering is a valid unstable ordering.
+    constexpr bool stable = get_arg(args::stable) == 1;
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
     DataflowBuffer index_tensor_dfb(dfb::index_tensor);
@@ -79,6 +88,8 @@ void kernel_main() {
     ckernel::topk_tile_init();
     transpose_init(dfb::input_tensor);
 
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(!ascending);
+
     for (uint32_t h = 0; h < Ht; h++) {
 #ifdef IS_ROW_MAJOR
         {
@@ -96,7 +107,7 @@ void kernel_main() {
         bool dir = ascending ^ ((core_id & 1) == 1);
 
         // Read input value data
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable, tie_order>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -160,9 +171,20 @@ void kernel_main() {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<
+                                    stable,
+                                    DST_ACCUM_MODE,
+                                    /*fused=*/false,
+                                    /*rank_stamped=*/false,
+                                    tie_order>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
-                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::topk_merge<
+                                    /*idir=*/false,
+                                    stable,
+                                    DST_ACCUM_MODE,
+                                    /*fused=*/false,
+                                    /*rank_stamped=*/false,
+                                    tie_order>(/*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order
@@ -230,21 +252,38 @@ void kernel_main() {
                         }
 
                         // Process received tiles from other core
+                        //
+                        // Both cores of the pair run same merge on the same two tiles and each
+                        // keeps one half of the result, so the two runs must agree on which half is
+                        // which. topk_merge only swaps DEST[0]/DEST[1] when the values are strictly
+                        // out of order, so for tied values the halves are told apart purely by which
+                        // DEST slot each tile was loaded into.
+                        //
+                        // Ordering the slots by global tile id makes both cores build an identical DEST,
+                        // so a tie leaves each core holding a different tile. For distinct values this is
+                        // a no-op: a compare-exchange leaves min in DEST[0] and max in DEST[1] whichever
+                        // slot each operand arrived in.
+                        const bool local_tile_is_low = i < j;
+                        const uint32_t local_value_dest = local_tile_is_low ? input_dest_start : input_dest_end;
+                        const uint32_t local_index_dest = local_tile_is_low ? index_dest_start : index_dest_end;
+                        const uint32_t peer_value_dest = local_tile_is_low ? input_dest_end : input_dest_start;
+                        const uint32_t peer_index_dest = local_tile_is_low ? index_dest_end : index_dest_start;
+
                         tile_regs_acquire();
 
                         // Prepare local index tiles for sorting with new tiles
                         copy_tile_to_dst_init_with_cb_update(dfb::index_tensor_transposed, global_old_cb);
-                        copy_tile(dfb::index_tensor_transposed, tile_id, index_dest_start);
+                        copy_tile(dfb::index_tensor_transposed, tile_id, local_index_dest);
 
                         // Prepare local value tiles for sorting with new tiles
                         copy_tile_to_dst_init_with_cb_update(dfb::input_tensor_transposed, global_old_cb);
-                        copy_tile(dfb::input_tensor_transposed, tile_id, input_dest_start);
+                        copy_tile(dfb::input_tensor_transposed, tile_id, local_value_dest);
 
                         index_tensor_peer_dfb.wait_front(one_tile);
 
                         // Load new index tile for sorting
                         copy_tile_to_dst_init_with_cb_update(dfb::index_tensor_peer, global_old_cb);
-                        copy_tile(dfb::index_tensor_peer, FIRST_TILE, index_dest_end);
+                        copy_tile(dfb::index_tensor_peer, FIRST_TILE, peer_index_dest);
 
                         index_tensor_peer_dfb.pop_front(one_tile);
 
@@ -253,11 +292,17 @@ void kernel_main() {
 
                         // Load new value tile for sorting
                         copy_tile_to_dst_init_with_cb_update(dfb::value_tensor_peer, global_old_cb);
-                        copy_tile(dfb::value_tensor_peer, FIRST_TILE, input_dest_end);
+                        copy_tile(dfb::value_tensor_peer, FIRST_TILE, peer_value_dest);
 
                         value_tensor_peer_dfb.pop_front(one_tile);
 
-                        ckernel::topk_merge(0, m_iter, 32);
+                        ckernel::topk_merge<
+                            /*idir=*/false,
+                            stable,
+                            DST_ACCUM_MODE,
+                            /*fused=*/false,
+                            /*rank_stamped=*/false,
+                            tie_order>(0, m_iter, 32);
 
                         // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                         // If core must keep smallest values, then keep DEST[1] instead of DEST[0]

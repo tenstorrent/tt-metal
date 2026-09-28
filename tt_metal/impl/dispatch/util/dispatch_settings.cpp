@@ -35,6 +35,7 @@ static_assert(
 
 DispatchSettings::DispatchSettings(
     uint32_t num_hw_cqs,
+    uint32_t num_cqs_per_core,
     const CoreType& core_type,
     bool is_galaxy_cluster,
     bool are_cqs_dram_backed,
@@ -49,7 +50,9 @@ DispatchSettings::DispatchSettings(
         case CoreType::WORKER:
             init_worker_defaults(num_hw_cqs, is_galaxy_cluster, are_cqs_dram_backed, l1_alignment);
             break;
-        case CoreType::DISPATCH: init_dispatch_defaults(num_hw_cqs, are_cqs_dram_backed, l1_alignment); break;
+        case CoreType::DISPATCH:
+            init_dispatch_defaults(num_hw_cqs, num_cqs_per_core, are_cqs_dram_backed, l1_alignment);
+            break;
         case CoreType::ETH: init_eth_defaults(num_hw_cqs, l1_alignment); break;
         default: TT_THROW("init_defaults not implemented for core type {}", enchantum::to_string(core_type));
     }
@@ -77,7 +80,8 @@ void DispatchSettings::init_worker_defaults(
         .build();
 }
 
-void DispatchSettings::init_dispatch_defaults(uint32_t num_hw_cqs, bool are_cqs_dram_backed, uint32_t l1_alignment) {
+void DispatchSettings::init_dispatch_defaults(
+    uint32_t num_hw_cqs, uint32_t num_cqs_per_core, bool are_cqs_dram_backed, uint32_t l1_alignment) {
     this->num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::DISPATCH)
         .prefetch_q_entries(
@@ -85,11 +89,9 @@ void DispatchSettings::init_dispatch_defaults(uint32_t num_hw_cqs, bool are_cqs_
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
-        // Quasar currently only has a single dispatch engine, so if there is more than one CQ, they will be placed in
-        // the same dispatch engine. The ringbuffer size of each CQ is lowered to 864 KB so that both CQs can fit in the
-        // same dispatch engine. Once support for multiple dispatch engines is added, this will need to be updated as
-        // each CQ will be placed in a separate dispatch engine.
-        .prefetch_ringbuffer_size(num_hw_cqs > 1 ? 864_KB : 1024_KB)
+        // Multiple CQs on one dispatch engine share L1, so shrink the per-CQ ringbuffer so they fit.
+        // When each CQ has its own dispatch engine, keep the full 1024 KB ringbuffer.
+        .prefetch_ringbuffer_size(num_cqs_per_core > 1 ? 864_KB : 1024_KB)
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)
@@ -137,7 +139,7 @@ uint32_t DispatchSettings::get_prefetch_q_entries(
 std::vector<std::string> DispatchSettings::get_errors() const {
     std::vector<std::string> msgs;
 
-    if (!prefetch_q_rd_ptr_size_ || !prefetch_q_pcie_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
+    if (!prefetch_q_rd_ptr_size_ || !dispatch_s_sync_sem_ || !other_ptrs_size) {
         msgs.push_back(fmt::format("configuration with_alignment() is a required\n"));
     }
 
@@ -175,7 +177,6 @@ DispatchSettings& DispatchSettings::build() {
 
 bool DispatchSettings::operator==(const DispatchSettings& other) const {
     return num_hw_cqs_ == other.num_hw_cqs_ && prefetch_q_rd_ptr_size_ == other.prefetch_q_rd_ptr_size_ &&
-           prefetch_q_pcie_rd_ptr_size_ == other.prefetch_q_pcie_rd_ptr_size_ &&
            dispatch_s_sync_sem_ == other.dispatch_s_sync_sem_ && other_ptrs_size == other.other_ptrs_size &&
            prefetch_q_entry_size_bytes_ == other.prefetch_q_entry_size_bytes_ &&
            prefetch_q_entries_ == other.prefetch_q_entries_ && prefetch_q_size_ == other.prefetch_q_size_ &&
@@ -256,8 +257,9 @@ DispatchSettings& DispatchSettings::dispatch_s_buffer_size(uint32_t val) {
 
 // Sets pointer values based on L1 alignment
 DispatchSettings& DispatchSettings::with_alignment(uint32_t l1_alignment) {
-    this->prefetch_q_rd_ptr_size_ = sizeof(prefetch_q_ptr_type);
-    this->prefetch_q_pcie_rd_ptr_size_ = l1_alignment - sizeof(prefetch_q_ptr_type);
+    // Only the first sizeof(prefetch_q_ptr_type) bytes hold the pointer; the rest pads the slot to
+    // L1 alignment so the completion queue pointers that follow stay aligned.
+    this->prefetch_q_rd_ptr_size_ = l1_alignment;
     this->dispatch_s_sync_sem_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
     this->other_ptrs_size = l1_alignment;
 

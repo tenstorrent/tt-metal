@@ -1,0 +1,234 @@
+name: "Galaxy tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      # These 4 inputs shape a dispatch only. A scheduled run ignores them and
+      # covers every suite. run-e2e-tests and run-multi-user-isolation-tests default
+      # to false: those 2 suites are 266 of the 306 machine-minutes of a full run,
+      # and "(Galaxy) unit tests" alone took 143 dispatches in 90 days.
+      run-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the Galaxy unit tests"
+      run-integration-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the Galaxy integration tests"
+      run-e2e-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Run the Galaxy e2e tests (about 166 machine-minutes; off by default on a dispatch)"
+      run-multi-user-isolation-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Run the Galaxy multi-user isolation matrix (about 100 machine-minutes; off by default on a dispatch)"
+      e2e-test-selection:
+        description: "e2e tests: one id from tests/pipeline_reorg/galaxy_e2e_tests.yaml, or all"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - galaxy-fabric-unit
+          - galaxy-fabric-2d-torus-nightly
+          - galaxy-fabric-multi-mesh-4x4-2x4s
+          - galaxy-fabric-multi-mesh-2x8-2x4s
+          - bh-galaxy-fabric-torus-stability
+          - bh-galaxy-socket-pipeline
+          - bh-galaxy-tensor-prefetcher
+      wormhole:
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        required: false
+        type: boolean
+        default: false
+      unit-model:
+        description: "Unit tests: select model to test"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - unit
+          - fabric
+          - multiprocess
+#          - prefetcher
+          - distributed-ops
+      integration-model:
+        description: "Integration tests: select model to test"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - unit
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 0 * * *" # Runs every day at 12am UTC
+
+run-name: >-
+  Galaxy tests
+  Tests[${{ github.event_name == 'schedule' && 'All'
+  || format('{0}{1}{2}{3}{4}{5}{6}',
+     inputs.run-unit-tests && 'unit' || '',
+     inputs.run-unit-tests && inputs.run-integration-tests && ',' || '',
+     inputs.run-integration-tests && 'integration' || '',
+     (inputs.run-unit-tests || inputs.run-integration-tests) && inputs.run-e2e-tests && ',' || '',
+     inputs.run-e2e-tests && 'e2e' || '',
+     (inputs.run-unit-tests || inputs.run-integration-tests || inputs.run-e2e-tests) && inputs.run-multi-user-isolation-tests && ',' || '',
+     inputs.run-multi-user-isolation-tests && 'multi-user' || '') }}]
+
+jobs:
+  # Preflight for every run. It resolves the Galaxy SKU list once, for the two
+  # SKU-dependent suites, and on a dispatch it refuses a selection that would
+  # start a build and then run nothing.
+  check-selection:
+    runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.skus.outputs.enabled-skus }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions/resolve-galaxy-skus
+          sparse-checkout-cone-mode: true
+      - id: skus
+        uses: ./.github/actions/resolve-galaxy-skus
+        with:
+          wormhole: ${{ inputs.wormhole }}
+          blackhole: ${{ inputs.blackhole }}
+          event-name: ${{ github.event_name }}
+      - name: Make sure the selection can run
+        if: ${{ github.event_name != 'schedule' }}
+        env:
+          SKUS: ${{ steps.skus.outputs.enabled-skus }}
+        run: |
+          if [[ "${{ inputs.run-unit-tests }}" != "true" \
+             && "${{ inputs.run-integration-tests }}" != "true" \
+             && "${{ inputs.run-e2e-tests }}" != "true" \
+             && "${{ inputs.run-multi-user-isolation-tests }}" != "true" ]]; then
+            echo "::error::No suite selected. Enable at least one of run-unit-tests, run-integration-tests, run-e2e-tests or run-multi-user-isolation-tests."
+            exit 1
+          fi
+          if [[ -z "$SKUS" ]] && { [[ "${{ inputs.run-e2e-tests }}" == "true" ]] || [[ "${{ inputs.run-multi-user-isolation-tests }}" == "true" ]]; }; then
+            echo "::error::run-e2e-tests and run-multi-user-isolation-tests need a Galaxy SKU. Enable wormhole or blackhole."
+            exit 1
+          fi
+
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  # The impl-based suites take the in-place wheel. The multi-user isolation
+  # matrix installs the wheel with pip, so it needs the manylinux wheel instead.
+  build-artifact:
+    needs: [check-harbor, check-selection]
+    if: ${{ !cancelled() && needs.check-selection.result != 'failure' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      build-umd-tests: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  build-artifact-wheel:
+    needs: [check-harbor, check-selection]
+    if: ${{ !cancelled() && needs.check-selection.result != 'failure' && (github.event_name == 'schedule' || inputs.run-multi-user-isolation-tests) }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  galaxy-unit-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-unit-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.unit-model || 'all' }}
+      topology: topology-6u
+
+  galaxy-integration-tests:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-integration-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.integration-model || 'all' }}
+
+  galaxy-e2e-tests:
+    needs: [check-harbor, check-selection, build-artifact]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-e2e-tests) && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: ${{ needs.check-selection.outputs.enabled-skus }}
+      test-selection: ${{ inputs.e2e-test-selection || 'all' }}
+
+
+  galaxy-multi-user-isolation-tests:
+    needs: [check-selection, build-artifact-wheel]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.run-multi-user-isolation-tests) && needs.build-artifact-wheel.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/galaxy-multi-user-isolation-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-wheel.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-wheel.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-wheel.outputs.wheel-artifact-name }}
+      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
+      enabled-skus: ${{ needs.check-selection.outputs.enabled-skus }}

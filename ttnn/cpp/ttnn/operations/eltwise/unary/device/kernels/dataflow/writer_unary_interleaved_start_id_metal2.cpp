@@ -9,6 +9,14 @@
 // The binding names below (dfb::out, tensor::dst) and the named argument set are this fork's
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
 // rather than any one op's locals, and are not renamed once a consumer exists.
+//
+// ALSO DUPLICATED BY: copy/typecast/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp
+// — a second Metal 2.0 fork of the same kernel, in a consumer's directory rather than beside the
+// original. The two are functionally identical (that one names the accessor `tensor::output`). They
+// should be consolidated onto this copy; until then a change here likely belongs there too.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

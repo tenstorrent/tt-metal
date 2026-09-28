@@ -34,22 +34,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-        }
-        else
-        {
-            if (static_cast<DataFormat>(formats.math) == DataFormat::Int32)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-            }
-        }
-
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
@@ -144,7 +128,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
 #endif
 
-    const DataFormat src_format = static_cast<DataFormat>(formats.math);
+    const DataFormat src_format     = static_cast<DataFormat>(formats.math);
+    const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
 
     {
         ZONE_SCOPED("INIT")
@@ -154,10 +139,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            if (src_format == DataFormat::Int32)
+            const bool int8_math_into_int32_dest =
+                is_fp32_dest_acc_en && (src_format == DataFormat::Int8 || src_format == DataFormat::UInt8) && sfpu_in_format == DataFormat::Int32;
+            if (int8_math_into_int32_dest)
             {
-                // Enable INT8 math only when an integer must be transferred
-                // from SrcA into the 32-bit Dest by the FPU datacopy.
+                // ALU_ACC_CTRL_INT8_math_enabled is only for Int8/UInt8 math
+                // accumulating into the Int32 Dest through the ELWADD datacopy.
                 _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(src_format, src_format);
             }
             else
@@ -235,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         APPROX_MODE,
                         SFPU_ITERATIONS,
                         TYPECAST_IN_FORMAT,
-                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, static_cast<DataFormat>(formats.sfpu_math));
+                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {

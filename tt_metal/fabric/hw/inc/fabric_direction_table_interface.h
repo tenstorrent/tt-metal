@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "hostdevcommon/fabric_common.h"
-
 namespace tt::tt_fabric {
 
 // Device-side (HW) inline implementations for direction_table_t

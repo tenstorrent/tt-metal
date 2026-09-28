@@ -265,6 +265,53 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::SNAKE_BETA, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
      {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
 
+    // TTT configurations for MAC - same kernels as LERP, different compute operation
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::SCALAR_BCAST},
+     {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for MAC
+    {{TernaryOpType::MAC, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
+
+    // TTS configurations for MAC (a * b + scalar) - reuse same kernels as WHERE/LERP TTS
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
+    // TST configurations for MAC (a * scalar + c) - reuse same kernels as WHERE/LERP TST
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::COL_BCAST},
+     {KernelName::ReaderColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::ROW_BCAST},
+     {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::OUTER_BCAST},
+     {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::SCALAR_A_BCAST},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::SCALAR_B_BCAST},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    {{TernaryOpType::MAC, TernaryVariant::TST, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
@@ -513,6 +560,12 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             defines["TERNARY_SFPU_OP_INIT"] = "snake_beta_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "snake_beta_tile<DataFormat::Float32>"
                                                                            : "snake_beta_tile<DataFormat::Float16_b>";
+            break;
+        case TernaryOpType::MAC:
+            defines["TERNARY_SFPU_OP_INIT"] = (dtype == DataType::FLOAT32) ? "mac_tile_init<DataFormat::Float32>"
+                                                                          : "mac_tile_init<DataFormat::Float16_b>";
+            defines["TERNARY_SFPU_OP_FUNC"] =
+                (dtype == DataType::FLOAT32) ? "mac_tile<DataFormat::Float32>" : "mac_tile<DataFormat::Float16_b>";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }
@@ -819,14 +872,13 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     uint32_t from_volume_except_width = 1;
     uint32_t to_volume_except_width = 1;
 
-    const int rank = std::max(from_shape.rank(), to_shape.rank());
-
-    // Accumulate all dimensions except the last
-    for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
-        from_volume_except_width *= from_dim;
-        to_volume_except_width *= to_dim;
+    // Each shape over its own rank: the two can differ in rank, and a shared left-aligned loop would
+    // fold the shorter shape's width into its height volume.
+    for (int i = 0; i < static_cast<int>(from_shape.rank()) - 1; ++i) {
+        from_volume_except_width *= from_shape[i];
+    }
+    for (int i = 0; i < static_cast<int>(to_shape.rank()) - 1; ++i) {
+        to_volume_except_width *= to_shape[i];
     }
 
     // Get width dimensions

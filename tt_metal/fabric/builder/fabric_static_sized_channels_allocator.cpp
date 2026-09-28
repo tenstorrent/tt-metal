@@ -709,8 +709,12 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         TT_FATAL(allocated_slots <= slot_capacity, "Fabric channel allocation exceeds its slot capacity");
         const size_t spare_slots = slot_capacity - allocated_slots;
         const uint32_t worker_channel = get_worker_connected_sender_channel();
-        num_sender_buffer_slots_per_vc[0][worker_channel] += spare_slots;
-        num_remote_sender_buffer_slots_per_vc[0][worker_channel] += spare_slots;
+
+        const size_t requested_worker_slots = num_sender_buffer_slots_per_vc[0][worker_channel] + spare_slots;
+        const size_t worker_slots = std::min(requested_worker_slots, MAX_CHANNEL_BUFFER_SLOTS);
+
+        num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
     }
 }
 

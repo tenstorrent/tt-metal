@@ -230,7 +230,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
                      "num_sticks",
                      "stick_size",
                  }},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -244,7 +244,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemRmFa
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "s0"}},
         .runtime_arg_schema = {.runtime_arg_names = {"output_stick_size", "start_id", "num_sticks"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Work unit (placement) ----

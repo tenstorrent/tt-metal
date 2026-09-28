@@ -22,24 +22,41 @@
 //
 // Per output tile:
 //   dst[0]  = in0 * in1                                                 (FPU mul)
-//   if idx > 0: dst[0] += prior partial loaded from out_cb              (FPU add via DST reuse)
-//   pack dst[0] -> out_cb
+//   if idx > 0: dst[0] += prior partial loaded from scratch_cb          (FPU add via DST reuse)
+//   pack dst[0] -> out_cb on the last tap, else scratch_cb
 //
-// `idx` is the kernel-tap block index (0 .. filter_h*filter_w-1). The very first call (idx == 0)
-// initializes out_cb with the tap-0 product; subsequent calls accumulate via the DST_TO_SRCB
-// dest-reuse pattern, which keeps the running partial in DST and only pulls the prior partial
-// from L1. This gives a single pack per output tile (to out_cb) and avoids the pack-format flips
-// that corrupt block-float (BFLOAT8_B/BFLOAT4_B) outputs in the round-tripped variant — while
-// still using FPU (not SFPU) for the add.
+// `idx` is the PER-HEIGHT-BLOCK kernel-tap index (0 .. num_taps-1, num_taps == filter_h*filter_w).
+// The very first tap (idx == 0) initializes the partial with the tap-0 product; subsequent taps
+// accumulate via the DST_TO_SRCB dest-reuse pattern, which keeps the running partial in DST and
+// only pulls the prior partial from L1. This gives a single pack per output tile and avoids the
+// pack-format flips that corrupt block-float (BFLOAT8_B/BFLOAT4_B) outputs in the round-tripped
+// variant — while still using FPU (not SFPU) for the add.
+//
+// The partial lives in scratch_cb; only the last tap (idx == num_taps-1) packs into out_cb. For a
+// single height block the host aliases scratch_cb == out_cb (in-place accumulate, no extra buffer).
+// For in0_num_blocks_h > 1 the host binds a DEDICATED scratch (MATMUL_PARTIALS): out_cb is the
+// persistent sharded output whose earlier height blocks are never popped, so it cannot double as
+// the read-back scratch — block N would otherwise read back block N-1's already-written output
+// (issue #51270, items 4/5).
 //
 // srcB (cfg92) tile descriptor: must match in1 for the mul, and is repopulated from DST for the
 // dest-reuse add. We force srcB back to in1's format every iteration so block-float weights are
 // decoded correctly.
 inline void mul_and_accumulate_block(
-    DataflowBuffer in0_cb, DataflowBuffer in1_cb, DataflowBuffer out_cb, uint32_t block_num_tiles, uint32_t idx) {
+    DataflowBuffer in0_cb,
+    DataflowBuffer in1_cb,
+    DataflowBuffer scratch_cb,
+    DataflowBuffer out_cb,
+    uint32_t block_num_tiles,
+    uint32_t idx,
+    uint32_t num_taps) {
     const uint32_t in0_cb_id = in0_cb.get_id();
     const uint32_t in1_cb_id = in1_cb.get_id();
-    const uint32_t out_cb_id = out_cb.get_id();
+    const uint32_t scratch_cb_id = scratch_cb.get_id();
+    // Last tap writes the finished output to out_cb; earlier taps write the partial to scratch_cb.
+    const bool is_last_tap = (idx + 1 == num_taps);
+    DataflowBuffer dst_cb = is_last_tap ? out_cb : scratch_cb;
+    const uint32_t dst_cb_id = dst_cb.get_id();
 
     for (uint32_t i = 0; i < block_num_tiles; i++) {
         in1_cb.wait_front(1);
@@ -52,24 +69,24 @@ inline void mul_and_accumulate_block(
         mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
 
         if (idx != 0) {
-            // dest-reuse add: dst[0] += out_cb. srcA gets out_cb (cfg52 must match out_cb fmt);
-            // srcB is filled from dst[0] by the dest-reuse path.
-            reconfig_data_format_srca(out_cb_id);
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(out_cb_id);
-            out_cb.wait_front(1);
-            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                out_cb_id, 0, 0);
-            out_cb.pop_front(1);
+            // dest-reuse add: dst[0] += scratch_cb (the prior tap's partial). srcA gets scratch_cb
+            // (cfg52 must match its format); srcB is filled from dst[0] by the dest-reuse path.
+            reconfig_data_format_srca(scratch_cb_id);
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(scratch_cb_id);
+            scratch_cb.wait_front(1);
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(scratch_cb_id, 0, 0);
+            scratch_cb.pop_front(1);
 
             // Restore srcA to in0's format for the next iteration's mul unpack.
             reconfig_data_format_srca(in0_cb_id);
         }
         tile_regs_commit();
 
-        out_cb.reserve_back(1);
+        // scratch_cb and out_cb share the output data format, so packing to either needs no pack reconfig.
+        dst_cb.reserve_back(1);
         tile_regs_wait();
-        pack_tile(0, out_cb_id);
-        out_cb.push_back(1);
+        pack_tile(0, dst_cb_id);
+        dst_cb.push_back(1);
         tile_regs_release();
 
         in0_cb.pop_front(1);
@@ -132,6 +149,9 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = dfb::out;
     constexpr uint32_t kernel_width = get_arg(args::kernel_width);
     constexpr bool coalesce_kw_reads = get_arg(args::coalesce_kw_reads) == 1;
+    // Multi-height-block non-coalesced accumulation uses a DEDICATED read-back scratch (MATMUL_PARTIALS)
+    // instead of aliasing out_cb; false for the single-block case, where scratch == out_cb (in-place).
+    constexpr bool use_partials_scratch = get_arg(args::use_partials_scratch) == 1;
 
     DataflowBuffer cb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer cb_in1(in1_cb_id);
@@ -153,9 +173,23 @@ void kernel_main() {
             if constexpr (coalesce_kw_reads) {
                 mul_and_accumulate_coalesced_block<in0_block_w, kernel_width, in0_block_num_tiles>(
                     cb_tilized_in0, cb_in1, cb_out);
+            } else if constexpr (use_partials_scratch) {
+                // Multi height block: accumulate kernel-tap in0_block_w_i of in0_num_blocks_w through a
+                // dedicated MATMUL_PARTIALS scratch, writing only the final tap to out_cb. idx is the
+                // PER-HEIGHT-BLOCK tap index (in0_block_w_i), so it restarts at 0 each height block.
+                //
+                // dfb::matmul_partials is emitted only when the host adds the matmul_partials binding
+                // (multi-block path). Resolve it via get_token_if_present<> so the single-block/coalesced
+                // kernel variants — where the token is absent — still name-lookup and compile: the
+                // deref is only ever reached (codegen'd) in this taken branch, which implies the binding.
+                DataflowBuffer cb_scratch(*dfb::get_token_if_present<"matmul_partials">());
+                mul_and_accumulate_block(
+                    cb_tilized_in0, cb_in1, cb_scratch, cb_out, in0_block_num_tiles, in0_block_w_i, in0_num_blocks_w);
             } else {
-                const uint32_t idx = in0_block_h_i * in0_num_blocks_w + in0_block_w_i;
-                mul_and_accumulate_block(cb_tilized_in0, cb_in1, cb_out, in0_block_num_tiles, idx);
+                // Single height block: scratch == out_cb (in-place accumulate, no extra buffer). idx ==
+                // in0_block_w_i (in0_block_h_i is always 0 here).
+                mul_and_accumulate_block(
+                    cb_tilized_in0, cb_in1, cb_out, cb_out, in0_block_num_tiles, in0_block_w_i, in0_num_blocks_w);
             }
         }
     }

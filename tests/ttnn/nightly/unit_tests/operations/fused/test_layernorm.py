@@ -12,7 +12,15 @@ import ttnn
 
 from models.common.utility_functions import torch2tt_tensor, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm, ttnn_rms_norm
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_layer_norm,
+    ttnn_rms_norm,
+    MIX_PRECISION_TEST_IDS,
+    MIX_PRECISION_TEST_ID_NAMES,
+)
+
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -210,11 +218,6 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
     ],
 )
 @pytest.mark.parametrize(
-    "gamma_dtype",
-    (ttnn.bfloat16, ttnn.float32),
-    ids=["BFLOAT16", "FLOAT32"],
-)
-@pytest.mark.parametrize(
     "in_dtype",
     (
         ttnn.float32,
@@ -223,24 +226,8 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
     ),
     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
-@pytest.mark.parametrize(
-    "test_id",
-    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-    ids=[
-        "add_LN",
-        "add_LN_G",
-        "add_LN_GB",
-        "add_RMSN",
-        "add_RMSN_G",
-        "add_RMSN_GB",
-        "LN",
-        "LN_G",
-        "LN_GB",
-        "RMSN",
-        "RMSN_G",
-        "RMSN_GB",
-    ],
-)
+# gamma_dtype is fused into test_id -- see MIX_PRECISION_TEST_IDS.
+@pytest.mark.parametrize("test_id, gamma_dtype", MIX_PRECISION_TEST_IDS, ids=MIX_PRECISION_TEST_ID_NAMES)
 def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(0)
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
@@ -445,4 +432,34 @@ def test_layernorm_interleaved_all_config(device, dtype, use_welford, input_layo
         rtol=rtol,
         atol=atol,
         frobenius_threshold=frobenius_threshold,
+    )
+
+
+# RM input + TILE residual used to hang the small interleaved kernel.
+# Default compute config, legacy (non-Welford) path.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+def test_layernorm_interleaved_row_major_residual(device, dtype):
+    torch.manual_seed(1234)
+    shape = (1, 1, 32, 1024)
+    K = shape[-1]
+    x = torch.rand(shape, dtype=torch.float32) * 2 - 0.95
+    r = torch.rand(shape, dtype=torch.float32) * 2 - 0.8
+    ref = torch.nn.functional.layer_norm(x + r, (K,), eps=1e-2)
+
+    xt = ttnn.from_torch(
+        x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    rt = ttnn.from_torch(r, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cfg = ttnn.LayerNormDefaultProgramConfig(use_welford=False)
+
+    out = ttnn.layer_norm(xt, residual_input_tensor=rt, epsilon=1e-2, program_config=cfg)
+    ot = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    assert_numeric_metrics(
+        ref,
+        ot,
+        pcc_threshold=0.999,
+        rtol=0.006,
+        atol=0.019,
+        frobenius_threshold=0.004,
     )

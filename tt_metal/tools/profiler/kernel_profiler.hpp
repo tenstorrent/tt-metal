@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include <climits>
+#if defined(PROFILE_STREAMING)
+#include "tools/profiler/kernel_profiler_streaming.hpp"
+#else
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
@@ -15,7 +16,7 @@
 #include "ckernel.h"
 #endif
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/hw_thread.h"
 
@@ -978,6 +979,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
@@ -1138,4 +1140,13 @@ __attribute__((noinline)) void trace_only_init() {
 #define StopPerfCounters()
 #define RecordPerfCounters()
 
+#define SYNC_WAIT(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
+
+#endif
+#endif
+
+#ifndef DeviceZoneScopedNIf
+#define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
 #endif

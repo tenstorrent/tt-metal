@@ -340,6 +340,9 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
+//   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
+// unsafe = true drops both guards and preserves none of this.
 template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i, e;
@@ -377,21 +380,17 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
         y *= std::numeric_limits<float>::infinity();
 
         e = sfpi::exexp(r, sfpi::ExponentMode::Biased) + i;
-        // if e < 255
-        v_block {
-            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-
+        v_if(sfpi::nearby(e < 255)) {
             // y = 2**i * r
             y = sfpi::setexp(r, e);
 
-            // if e < 1
-            v_if(e_lt_255 < -254) {
+            v_if(sfpi::nearby(e < 1)) {
                 // underflow, including subnormals
                 y = 0.0f;
             }
             v_endif;
         }
-        v_endblock;
+        v_endif;
     }
 
     return y;
@@ -722,9 +721,9 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 
 template <
     bool APPROXIMATION_MODE,
-    uint32_t scale = 0x3F800000,
-    bool CLAMP_NEGATIVE = true,
-    bool is_fp32_dest_acc_en = false>
+    uint32_t scale,
+    bool CLAMP_NEGATIVE,
+    bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
