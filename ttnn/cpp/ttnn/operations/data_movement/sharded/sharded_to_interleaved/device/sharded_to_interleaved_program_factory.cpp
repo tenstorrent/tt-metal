@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
@@ -107,6 +108,7 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     }
 
     // re-calculate end_core in the case shard grid is larger than used grid
+    CoreRangeSet used_cores = all_cores;
     if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
     } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -116,12 +118,47 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
             num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
         }
     }
-    end_core = cores[num_cores_unpadded - 1];
-
-    // Create CoreRangeSet for only the cores that will be used (fixes NOC error when grid > data)
-    CoreRangeSet used_cores = num_cores_unpadded < num_cores
-                                  ? select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation)
-                                  : all_cores;
+    if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The shard grid can be taller/wider than the data (e.g. a tilize that kept
+        // a row-major shard spec rounds each shard up to a tile row, so an 8-row grid
+        // may cover a 6-tile-row tensor). Cores beyond the data hold no pages of the
+        // interleaved output; giving them a full shard to write makes them write past
+        // the end of the destination buffer and corrupt whatever is allocated above
+        // it. Restrict the program to the sub-grid that actually holds data.
+        const uint32_t num_shards_h = div_up(num_units_height, num_units_per_shard_height);
+        const uint32_t num_shards_w = output.layout() == Layout::TILE
+                                          ? div_up(num_units_per_row, num_units_per_shard_width)
+                                          : div_up(num_units_per_row, output_unit_size);
+        const CoreRange bbox = all_cores.bounding_box();
+        const uint32_t grid_x = bbox.grid_size().x;
+        const uint32_t grid_y = bbox.grid_size().y;
+        // ROW_MAJOR orientation: shard height runs along y, width along x (matches the
+        // end_core.x / end_core.y clamps below); COL_MAJOR is the transpose.
+        const uint32_t used_x = std::min(rm_orientation ? num_shards_w : num_shards_h, grid_x);
+        const uint32_t used_y = std::min(rm_orientation ? num_shards_h : num_shards_w, grid_y);
+        used_cores = CoreRangeSet(CoreRange(
+            bbox.start_coord, CoreCoord(bbox.start_coord.x + used_x - 1, bbox.start_coord.y + used_y - 1)));
+        num_cores_unpadded = used_x * used_y;
+        if (num_cores_unpadded < num_cores) {
+            log_debug(
+                tt::LogOp,
+                "ShardedToInterleaved: block-sharded grid {}x{} exceeds data ({} x {} shards); using {}x{} cores",
+                grid_x,
+                grid_y,
+                rm_orientation ? num_shards_w : num_shards_h,
+                rm_orientation ? num_shards_h : num_shards_w,
+                used_x,
+                used_y);
+        }
+    } else if (num_cores_unpadded < num_cores) {
+        // Create CoreRangeSet for only the cores that will be used (fixes NOC error when grid > data)
+        used_cores = select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation);
+    }
+    // Cores are visited in shard order over the USED grid only; for block sharding
+    // this is the sub-rectangle above, so the row/column wrap-around bookkeeping in
+    // the per-core loop stays aligned with the data.
+    const std::vector<CoreCoord> loop_cores = corerange_to_cores(used_cores, std::nullopt, rm_orientation);
+    end_core = loop_cores[loop_cores.size() - 1];
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
@@ -207,8 +244,7 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
-        const auto& core = cores[core_idx];
+    for (const auto& core : loop_cores) {
         uint32_t shard_height = num_units_per_shard_height;
         uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
         if (input.layout() == Layout::TILE) {

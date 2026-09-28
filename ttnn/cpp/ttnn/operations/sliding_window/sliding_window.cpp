@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <string>
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <mutex>
@@ -1274,6 +1279,112 @@ std::string SlidingWindowConfig::to_string() const {
            "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
            (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") +
            (padding_mode == PaddingMode::Replicate ? "_replicate_pad" : "");
+}
+
+
+// ---------------------------------------------------------------------------
+// TT_HALO_CFG_DEBUG support
+// ---------------------------------------------------------------------------
+namespace {
+struct DebugHaloConfigEntry {
+    std::weak_ptr<Tensor> tensor;
+    std::string tag;
+    uint32_t address = 0;
+    uint64_t first_checksum = 0;
+    bool has_first = false;
+    std::vector<uint16_t> first_words;  // first 32 words at registration-time check
+};
+std::mutex& debug_halo_mutex() {
+    static std::mutex m;
+    return m;
+}
+std::vector<DebugHaloConfigEntry>& debug_halo_entries() {
+    static std::vector<DebugHaloConfigEntry> v;
+    return v;
+}
+bool debug_halo_enabled() {
+    static const bool enabled = (std::getenv("TT_HALO_CFG_DEBUG") != nullptr);
+    return enabled;
+}
+uint64_t fnv1a(const uint8_t* data, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= data[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+}  // namespace
+
+void debug_register_halo_config(const std::shared_ptr<Tensor>& config, const std::string& tag) {
+    if (!debug_halo_enabled() || !config) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(debug_halo_mutex());
+    DebugHaloConfigEntry e;
+    e.tensor = config;
+    e.tag = tag;
+    e.address = config->buffer() ? config->buffer()->address() : 0;
+    debug_halo_entries().push_back(std::move(e));
+    fprintf(
+        stderr,
+        "[HALO_CFG] registered #%zu tag=%s addr=%u size=%lu type=%d\n",
+        debug_halo_entries().size() - 1,
+        tag.c_str(),
+        e.address,
+        config->buffer() ? (unsigned long)config->buffer()->size() : 0ul,
+        config->buffer() ? static_cast<int>(config->buffer()->buffer_type()) : -1);
+}
+
+void debug_check_halo_configs(const char* when) {
+    if (!debug_halo_enabled()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(debug_halo_mutex());
+    size_t idx = 0, changed = 0, alive = 0;
+    for (auto& e : debug_halo_entries()) {
+        auto t = e.tensor.lock();
+        if (!t || !t->is_allocated()) {
+            ++idx;
+            continue;
+        }
+        ++alive;
+        Tensor host = t->cpu(/*blocking=*/true);
+        auto span = tt::tt_metal::host_buffer::get_as<uint16_t>(host);
+        uint64_t crc = fnv1a(reinterpret_cast<const uint8_t*>(span.data()), span.size() * sizeof(uint16_t));
+        if (!e.has_first) {
+            e.first_checksum = crc;
+            e.has_first = true;
+            e.first_words.assign(span.begin(), span.begin() + std::min<size_t>(32, span.size()));
+        }
+        bool diff = (crc != e.first_checksum);
+        if (diff) {
+            ++changed;
+            // Dump the first words before/after so the writer can be recognised
+            // from the data pattern (bf16 activations vs. uint16 config indices).
+            std::string before, after;
+            for (size_t w = 0; w < e.first_words.size(); ++w) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "%04x ", e.first_words[w]);
+                before += buf;
+                snprintf(buf, sizeof(buf), "%04x ", w < span.size() ? span[w] : 0);
+                after += buf;
+            }
+            fprintf(stderr, "[HALO_CFG_DIFF] #%zu tag=%s addr=%u words=%zu\n   before: %s\n   after : %s\n",
+                    idx, e.tag.c_str(), e.address, span.size(), before.c_str(), after.c_str());
+        }
+        fprintf(
+            stderr,
+            "[HALO_CFG_CHECK] when=%s #%zu tag=%s addr=%u crc=%016llx %s\n",
+            when,
+            idx,
+            e.tag.c_str(),
+            e.address,
+            (unsigned long long)crc,
+            diff ? "CHANGED" : "ok");
+        ++idx;
+    }
+    fprintf(stderr, "[HALO_CFG_CHECK] when=%s summary: %zu alive, %zu CHANGED\n", when, alive, changed);
 }
 
 }  // namespace ttnn::operations::sliding_window

@@ -10,6 +10,8 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
+#include <cstdlib>
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::operations::trace {
 
@@ -25,6 +27,11 @@ void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<Q
 }
 void execute_trace(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking) {
     ZoneScoped;
+    // TT_HALO_CFG_DEBUG=1: verify the parked halo config buffers are intact
+    // before each replay (their addresses are baked into the captured kernels).
+    if (std::getenv("TT_HALO_CFG_DEBUG")) {
+        ttnn::operations::sliding_window::debug_check_halo_configs("before_execute_trace");
+    }
     QueueId cq_id_value = cq_id.value_or(get_current_command_queue_id_for_thread());
     device->replay_mesh_trace(cq_id_value.get(), trace_id, blocking);
 }

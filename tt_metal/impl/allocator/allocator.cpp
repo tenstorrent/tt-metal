@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
@@ -110,6 +112,12 @@ void AllocatorImpl::init_one_bank_per_l1() {
     }
 }
 
+// TT_ALLOC_DEBUG=1: print every buffer allocation / deallocation (trace-replay debugging).
+static bool alloc_debug_enabled() {
+    static const bool enabled = (std::getenv("TT_ALLOC_DEBUG") != nullptr);
+    return enabled;
+}
+
 void AllocatorImpl::verify_safe_allocation() const {
     // Inform the user that its unsafe to allocate buffers when a trace is live on device.
     // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
@@ -205,6 +213,16 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     }
     allocated_buffers_.insert(buffer);
 
+    if (alloc_debug_enabled()) {
+        fprintf(
+            stderr,
+            "[ALLOC] type=%d size=%lu page=%lu addr=%lu unsafe=%d\n",
+            static_cast<int>(buffer_type),
+            (unsigned long)size,
+            (unsigned long)page_size,
+            (unsigned long)address,
+            allocations_unsafe_ ? 1 : 0);
+    }
     return address;
 }
 
@@ -212,6 +230,15 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+    if (alloc_debug_enabled()) {
+        fprintf(
+            stderr,
+            "[FREE] type=%d size=%lu addr=%lu unsafe=%d\n",
+            static_cast<int>(buffer_type),
+            (unsigned long)buffer->aligned_size(),
+            (unsigned long)address,
+            allocations_unsafe_ ? 1 : 0);
+    }
 
     // Per-core deallocation path
     if (buffer->per_core_allocation_) {

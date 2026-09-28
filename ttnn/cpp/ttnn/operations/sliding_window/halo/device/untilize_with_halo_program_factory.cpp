@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
+#include <cstdlib>
 #include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 
 #include <cstdint>
@@ -485,6 +487,20 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
     auto gather1_owner = std::make_shared<Tensor>(std::move(gather_config_device_tensor1));
     Buffer* gather1_buf = gather1_owner->buffer();
     workload_descriptor.buffers.push_back({gather1_owner, gather1_buf});
+    if (std::getenv("TT_HALO_CFG_DEBUG")) {
+        fprintf(
+            stderr,
+            "[HALO_CFG] new program: input addr=%u size=%lu type=%d, output addr=%u, configs_in_dram=%d\n",
+            input_tensor.buffer()->address(),
+            (unsigned long)input_tensor.buffer()->size(),
+            static_cast<int>(input_tensor.buffer()->buffer_type()),
+            output_tensor.buffer()->address(),
+            operation_attributes.config_tensors_in_dram ? 1 : 0);
+        sliding_window::debug_register_halo_config(pad0_owner, "pad0");
+        sliding_window::debug_register_halo_config(pad1_owner, "pad1");
+        sliding_window::debug_register_halo_config(gather0_owner, "gather0");
+        sliding_window::debug_register_halo_config(gather1_owner, "gather1");
+    }
 
     const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
         kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config);

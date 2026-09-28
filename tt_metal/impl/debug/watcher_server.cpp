@@ -122,6 +122,14 @@ void WatcherServer::Impl::attach_devices() {
     if (!rtoptions.get_watcher_enabled()) {
         return;
     }
+    // Mock/emulated clusters run no firmware, so the watcher mailbox is never
+    // initialised and the first poll throws ("invalid watcher.enable ... Read 0").
+    // Compilers that query the op model open such a device in the same process
+    // as the real one; keep the watcher for the real device only.
+    if (env_.get_cluster().is_mock_or_emulated()) {
+        log_info(LogLLRuntime, "Watcher: mock/emulated cluster, not attaching");
+        return;
+    }
 
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);

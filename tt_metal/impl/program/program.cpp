@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <sstream>
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
@@ -1771,6 +1772,19 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 (unsigned long)lowest_address.value(),
                 (unsigned long)cb_region_end,
                 kernel_names.c_str());
+            // Diagnostic: dump the L1 block table of every allocator consulted so the
+            // buffers pinning the lowest address can be identified by size/address.
+            {
+                std::vector<AllocatorImpl*> dump_allocs = physical_allocators;
+                if (dump_allocs.empty()) {
+                    dump_allocs.push_back(allocator.get());
+                }
+                for (size_t ai = 0; ai < dump_allocs.size(); ++ai) {
+                    std::ostringstream oss;
+                    dump_allocs[ai]->dump_memory_blocks(BufferType::L1, oss);
+                    fprintf(stderr, "[CB_CLASH_L1_BLOCKS] allocator=%zu\n%s\n", ai, oss.str().c_str());
+                }
+            }
             TT_THROW(
                 "Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer "
                 "allocated at {} and static circular buffer region ends at {}",

@@ -195,6 +195,13 @@ Tensor move_config_tensor_to_device(
 
 uint32_t align_buffer(uint32_t size);
 
+// Debug (TT_HALO_CFG_DEBUG=1): registry of the halo config tensors parked on
+// cached workloads, so their device contents can be re-read and checksummed
+// between trace replays (a replayed write landing on a config buffer shows up
+// as a changed checksum).
+void debug_register_halo_config(const std::shared_ptr<Tensor>& config, const std::string& tag);
+void debug_check_halo_configs(const char* when);
+
 }  // namespace ttnn::operations::sliding_window
 
 // hash and formatter template specializations for config structs
