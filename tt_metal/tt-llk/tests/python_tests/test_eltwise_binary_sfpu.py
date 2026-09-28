@@ -1994,6 +1994,19 @@ def _tt_poly_declared_selu_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_silu_bw(x):
+    def _declared_derivative(x):
+        exp = np.exp
+        return np.broadcast_to(
+            np.asarray(
+                1 / (1 + exp(-x)) * (1 + x * (1 - 1 / (1 + exp(-x)))), dtype=np.float64
+            ),
+            x.shape,
+        )
+
+    return _declared_derivative(x)
+
+
 def _tt_poly_declared_softplus_bw(x):
     def _declared_derivative(x):
         exp = np.exp
@@ -2046,6 +2059,7 @@ def _tt_poly_declared_tanhshrink_bw(x):
         ("leaky_relu_bw", False, _tt_poly_declared_leaky_relu_bw, ()),
         ("log_sigmoid_bw", False, _tt_poly_declared_log_sigmoid_bw, ()),
         ("selu_bw", False, _tt_poly_declared_selu_bw, (0.0,)),
+        ("silu_bw", False, _tt_poly_declared_silu_bw, ()),
         ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
         ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),
         ("softsign_bw", False, _tt_poly_declared_softsign_bw, ()),

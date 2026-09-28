@@ -276,6 +276,10 @@
 #include "api/compute/eltwise_unary/selu_bw_tt_poly_bf16.h"
 #endif
 
+#if TT_POLY_BACKWARD_SILU_BW_INCLUDE
+#include "api/compute/eltwise_unary/silu_bw_tt_poly_bf16.h"
+#endif
+
 #if TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE
 #include "api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h"
 #endif
