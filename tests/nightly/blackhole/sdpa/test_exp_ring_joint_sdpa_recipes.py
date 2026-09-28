@@ -159,3 +159,16 @@ def test_exp_ring_joint_sdpa_recipe_device_lengths(exp_ring_mesh, variant):
             assert all(torch.equal(a, b) for a, b in zip(per_chip(traced[0]), scalar[i])), f"logical_n={lengths[i]}"
     finally:
         ttnn.release_trace(mesh, trace)
+
+
+@pytest.mark.parametrize("variant", ["fast", "standard", "balanced", "low_precision_bfp8"])
+def test_exp_ring_joint_sdpa_recipe_op_selected_blocking(exp_ring_mesh, variant):
+    """Q chunk of 0: the op chooses it (and may narrow the SDPA grid width)."""
+    mesh, semaphores = exp_ring_mesh
+    inputs, joints, backing, logical_n, kwargs, expected, _ = exp_ring_case(mesh, variant, "two_pass")
+    kwargs.update(q_chunk=0, grid=(8, 4))
+    out = run_exp_ring(
+        mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
+    )
+    for chip in range(RING):
+        assert l2_pct(per_chip(out[0])[chip], expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
