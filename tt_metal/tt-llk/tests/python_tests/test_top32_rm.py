@@ -67,6 +67,7 @@ Not covered here, deliberately
   so covering them needs a metal-side test (same shape as B1).
 """
 
+import numpy as np
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -478,3 +479,294 @@ def test_top32_rm_pre_sorted_via_metal_wrappers(formats, row_elements):
     `_merge` through the wrapper layer in this mode as well.
     """
     test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=True)
+
+
+# --- edge-value populations: ties, signed zeros, NaN, infinities ----------------------------
+#
+# Every test above uses distinct finite values, so the order in which the network resolves an
+# exact tie, and what it does with the special values, is never observed. SFPSWAP compares
+# its operands as sign-magnitude integers -- the total order
+#   -NaN < -inf < ... < -0 < +0 < ... < +inf < +NaN
+# on the raw bits -- and, with index tracking on, moves the index lanes whenever it moves the
+# value lanes, so two bit-equal keys may or may not trade indices depending on the swap mode.
+# These tests pin both: the values must be exactly the top 32 in that total order, and every
+# returned index must point at an input whose bits equal the value returned beside it (ties
+# make the index choice non-unique, so it is checked for validity rather than against one
+# answer; bit-identity of the tie order across kernel changes is what the result hash is for).
+#
+# Subnormals are left to their own population: the 32-bit path may flush them, so that
+# population accepts either a raw or a flushed golden there. The 16-bit branch goes through
+# SrcA, which (measured on BH, independent of the sort) turns NaN into a same-signed infinity
+# and -0 / subnormals into +0 before the sort sees them; its golden is taken on that view.
+
+_F32_NAN_POS = 0x7FC00000
+_F32_NAN_NEG = 0xFFC00000
+_F32_INF_POS = 0x7F800000
+_F32_INF_NEG = 0xFF800000
+_F32_ZERO_NEG = 0x80000000
+
+
+def _sign_mag_key(bits):
+    """SFPSWAP's comparison key: sign-magnitude bits as an integer (int64 tensor)."""
+    bits = bits.to(torch.int64) & 0xFFFFFFFF
+    mag = bits & 0x7FFFFFFF
+    return torch.where(bits >= 0x80000000, -mag - 1, mag)
+
+
+def _bits_to_f32(bits):
+    return torch.from_numpy(
+        bits.to(torch.int64).numpy().astype(np.uint32).view(np.float32)
+    )
+
+
+def _f32_to_bits(values):
+    return torch.from_numpy(
+        values.to(torch.float32).numpy().view(np.uint32).astype(np.int64)
+    )
+
+
+def _edge_value_bits(num, population, generator, bf16):
+    """Raw fp32 bit patterns for `population`, all exactly representable in bf16 if `bf16`."""
+    if population == "ties_specials":
+        # A small value set so nearly every comparison is a tie, plus the specials.
+        pool = [
+            0x00000000,
+            _F32_ZERO_NEG,
+            _F32_INF_POS,
+            _F32_INF_NEG,
+            _F32_NAN_POS,
+            _F32_NAN_NEG,
+            0x3F800000,  # 1.0
+            0xBF800000,  # -1.0
+            0x40000000,  # 2.0
+            0xC0400000,  # -3.0
+            0x3F000000,  # 0.5
+        ]
+        # Weighted so the top 32 is mostly ties at 1.0 / 2.0 with a few +NaN / +inf above.
+        weights = torch.tensor([3, 3, 1, 2, 1, 2, 10, 6, 8, 6, 6], dtype=torch.float64)
+        pick = torch.multinomial(weights, num, replacement=True, generator=generator)
+        bits = torch.tensor(pool, dtype=torch.int64)[pick]
+    elif population == "random_ties":
+        # Random normals with a coarse mantissa (many exact ties), both signs, wide exponent range.
+        sign = torch.randint(0, 2, (num,), generator=generator, dtype=torch.int64) << 31
+        exp = (
+            torch.randint(100, 150, (num,), generator=generator, dtype=torch.int64)
+            << 23
+        )
+        mant = torch.randint(0, 4, (num,), generator=generator, dtype=torch.int64) << 21
+        bits = sign | exp | mant
+    elif population == "subnormal":
+        # The top 32 lands among subnormals, signed zeros and the smallest normals.
+        pool = [
+            0x00000000,
+            _F32_ZERO_NEG,
+            0x00010000,  # subnormals representable in bf16
+            0x00400000,
+            0x80010000,
+            0x80400000,
+            0x00800000,  # FLT_MIN
+            0x80800000,
+            0xBF800000,  # -1.0 filler
+            _F32_INF_NEG,
+            _F32_NAN_NEG,
+        ]
+        weights = torch.tensor([3, 3, 3, 3, 3, 3, 1, 3, 20, 3, 3], dtype=torch.float64)
+        pick = torch.multinomial(weights, num, replacement=True, generator=generator)
+        bits = torch.tensor(pool, dtype=torch.int64)[pick]
+    else:
+        raise ValueError(population)
+    if bf16:
+        bits = bits & 0xFFFF0000
+    return bits
+
+
+def _ftz_bits(bits):
+    """Flush subnormals to a zero of the same sign."""
+    is_sub = ((bits & 0x7F800000) == 0) & ((bits & 0x007FFFFF) != 0)
+    return torch.where(is_sub, bits & 0x80000000, bits)
+
+
+def _srca_bits(bits):
+    """What a bf16 operand looks like after the SrcA path of the top32_rm unpack (measured on
+    BH): NaN becomes an infinity of the same sign, and -0 and every subnormal become +0.
+    """
+    is_nan = ((bits & 0x7F800000) == 0x7F800000) & ((bits & 0x007FFFFF) != 0)
+    bits = torch.where(is_nan, bits & 0xFF800000, bits)
+    return torch.where((bits & 0x7F800000) == 0, torch.zeros_like(bits), bits)
+
+
+def _check_edge_top32(
+    in_bits, idx_in, out_bits, out_idx, allow_ftz, what, srca_path=False
+):
+    """Values: exactly the top 32 in SFPSWAP's order. Indices: valid, distinct, bit-matching.
+
+    `srca_path`: the input went through SrcA (the 16-bit branch), so the golden is computed on
+    what SrcA delivers to Dest rather than on the raw bits; the sort itself is the same.
+    """
+    if srca_path:
+        policies = [("srca", _srca_bits(in_bits))]
+    else:
+        policies = [("raw", in_bits)] + (
+            [("ftz", _ftz_bits(in_bits))] if allow_ftz else []
+        )
+    errors = []
+    for name, view in policies:
+        order = torch.argsort(_sign_mag_key(view), descending=True, stable=True)[:TOP_K]
+        golden_bits = view[order]
+        if not torch.equal(golden_bits, out_bits):
+            errors.append(
+                f"{name}: values device={[hex(int(b)) for b in out_bits]} golden={[hex(int(b)) for b in golden_bits]}"
+            )
+            continue
+        idx = out_idx.to(torch.int64)
+        if (
+            not torch.equal(out_idx, idx.to(out_idx.dtype))
+            or (idx < 0).any()
+            or (idx >= view.numel()).any()
+        ):
+            errors.append(
+                f"{name}: indices out of range or non-integer: {out_idx.tolist()}"
+            )
+            continue
+        pos = torch.searchsorted(idx_in.to(torch.int64), idx)
+        if len(set(idx.tolist())) != TOP_K:
+            errors.append(f"{name}: duplicate indices {idx.tolist()}")
+            continue
+        if not torch.equal(view[pos], out_bits):
+            errors.append(
+                f"{name}: an index does not point at an input equal to its value: {idx.tolist()}"
+            )
+            continue
+        return name
+    raise AssertionError(f"{what}\n  " + "\n  ".join(errors))
+
+
+def _read_top32_bits(configuration, is_32bit):
+    """The 32 packed values and 32 packed indices, as raw bits (NaN sign/payload preserved)."""
+    raw = configuration.variant_stimuli.collect_raw_result_bytes(
+        TestConfig.TENSIX_LOCATION
+    )
+    ds = 4 if is_32bit else 2
+    dtype = np.uint32 if is_32bit else np.uint16
+    vals = np.frombuffer(raw[: TOP_K * ds], dtype=dtype).astype(np.int64)
+    idxs = np.frombuffer(
+        raw[ELEMENTS_PER_TILE * ds : (ELEMENTS_PER_TILE + TOP_K) * ds], dtype=dtype
+    ).astype(np.int64)
+    if not is_32bit:
+        vals, idxs = vals << 16, idxs << 16
+    return torch.from_numpy(vals), _bits_to_f32(torch.from_numpy(idxs))
+
+
+EDGE_POPULATIONS = ["ties_specials", "random_ties", "subnormal"]
+
+
+@parametrize(
+    formats=FORMATS,
+    row_elements=[64, 128, 256],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    population=EDGE_POPULATIONS,
+)
+def test_top32_rm_edge_values(formats, row_elements, dest_acc, population):
+    """The plain mode on ties / +-0 / +-NaN / +-inf (and subnormals), bf16 and fp32."""
+    is_32bit = formats.input_format.is_32_bit()
+    if is_32bit and dest_acc == DestAccumulation.No:
+        pytest.skip("32-bit datums need fp32 Dest")
+
+    generator = torch.Generator().manual_seed(row_elements * 7 + len(population))
+    in_bits = _edge_value_bits(row_elements, population, generator, bf16=not is_32bit)
+    values = _bits_to_f32(in_bits)
+    indices = torch.arange(row_elements, dtype=torch.float32)
+
+    configuration = TestConfig(
+        "sources/top32_rm_test.cpp",
+        formats,
+        templates=[
+            TOP32_RM(
+                row_elements=row_elements,
+                datum_bytes=4 if is_32bit else 2,
+                top_min=False,
+                top32_mode=0,
+            )
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            _pad_to_tile(values),
+            formats.input_format,
+            _pad_to_tile(indices),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=2,
+        ),
+        unpack_to_dest=is_32bit,
+        dest_acc=dest_acc,
+    )
+    configuration.run()
+    out_bits, out_idx = _read_top32_bits(configuration, is_32bit)
+    _check_edge_top32(
+        in_bits,
+        indices,
+        out_bits,
+        out_idx,
+        allow_ftz=(population == "subnormal"),
+        what=f"top32 {population} row={row_elements} dest_acc={dest_acc.name} {formats.input_format.name}",
+        srca_path=not is_32bit,
+    )
+
+
+@parametrize(
+    formats=PRE_SORTED_FORMATS,
+    row_elements=[1024, 2048, 1088],
+    population=EDGE_POPULATIONS,
+)
+def test_top32_rm_pre_sorted_edge_values(formats, row_elements, population):
+    """prep / combine / final (and the tail) on ties / +-0 / +-NaN / +-inf (and subnormals).
+
+    The input contract still holds: each run of 32 is sorted descending, here in SFPSWAP's own
+    total order, with ties left adjacent.
+    """
+    generator = torch.Generator().manual_seed(row_elements * 13 + len(population))
+    in_bits = _edge_value_bits(row_elements, population, generator, bf16=False)
+    runs = in_bits.reshape(-1, TOP_K)
+    order = torch.argsort(_sign_mag_key(runs), dim=1, descending=True, stable=True)
+    in_bits = torch.gather(runs, 1, order).reshape(-1)
+    values = _bits_to_f32(in_bits)
+    indices = torch.arange(row_elements, dtype=torch.float32)
+    tiles_per_operand = -(-row_elements // ELEMENTS_PER_TILE)
+
+    configuration = TestConfig(
+        "sources/top32_rm_test.cpp",
+        formats,
+        templates=[
+            TOP32_RM(
+                row_elements=row_elements,
+                datum_bytes=4,
+                top_min=False,
+                top32_mode=1,
+            )
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            values,
+            formats.input_format,
+            indices,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tiles_per_operand,
+            tile_count_B=tiles_per_operand,
+            tile_count_res=2,
+        ),
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.Yes,
+    )
+    configuration.run()
+    out_bits, out_idx = _read_top32_bits(configuration, True)
+    _check_edge_top32(
+        in_bits,
+        indices,
+        out_bits,
+        out_idx,
+        allow_ftz=(population == "subnormal"),
+        what=f"pre-sorted top32 {population} row={row_elements}",
+    )
