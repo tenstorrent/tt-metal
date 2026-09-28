@@ -333,6 +333,10 @@ class StreamingText:
             taken.append(self.ids.pop(0))
         return taken
 
+    def has_text(self):
+        """Whether ids remain to take, pulling the next piece of text if none is waiting."""
+        return self._ids()
+
     def take_eos(self):
         """The `tts_eos` closing the text track, marked sent so decode does not repeat it."""
         self.sent_eos = True
@@ -502,7 +506,7 @@ def build_streaming_clone_prefill(text, reference, language="Auto", tables=None)
     # Transcript and text projected in one call, as upstream does: two calls show at 1e-7.
     ids = list(reference_ids) + feed.take_ids(codec_lens)
     text_track = tables.text(ids)
-    if not feed._ids():
+    if not feed.has_text():
         # The text is all in hand, so it closes here. With text still waiting, `tts_eos` must
         # follow the last of it instead, and the feed sends it when that comes.
         text_track = torch.cat([text_track, feed.take_eos()], dim=1)
