@@ -99,6 +99,14 @@ def _register_5b_matmul_tables() -> None:
                 (m_720p, ffn_tp, dim): FusedMMRSConfig(
                     ttnn.CoreCoord(12, 8), 6, 2, 8, 2, 2, None, 1
                 ),  # 357.7 us; was v2.3 (6, 4, 6) 410.6 us
+                # to_out / cross-attn to_q in the row-parallel form (WanPipelineConfig
+                # small_n_projection="mmrs", off by default: the sweep put it at 225.1 us with
+                # the addcmul and 210.7 us without, against 228.8 us for today's AGMM -- the
+                # three N=768 projections are bound by the TP-ring bytes, not by N; notes 7.11).
+                # Swept 2026-09-28 at M=2336 only; M=1024 falls back to the v2.3 rules.
+                (m_720p, dim_tp, dim): FusedMMRSConfig(
+                    ttnn.CoreCoord(12, 8), 6, 3, 12, 2, 2, None, 1
+                ),  # 225.1 us with addcmul (210.7 us as (6, 3, 10) without)
             }
         }
     )
