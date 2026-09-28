@@ -20,7 +20,6 @@ from run_checks import run as get_run_checks
 import os
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import RiscLocation
-from ttexalens.memory_access import create_l1_memory_access
 from triage import ScriptConfig, log_check_risc, run_script
 
 script_config = ScriptConfig(
@@ -34,7 +33,7 @@ def check_binary_integrity(risc_location: RiscLocation, dispatcher_data: Dispatc
     if not dispatcher_data.risc_enabled(risc_name):
         return
 
-    l1_mem_access = create_l1_memory_access(location)
+    l1_mem_access = dispatcher_data.l1_memory_access(location)
     dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_location)
 
     # Check firmware ELF binary state on the device
