@@ -304,16 +304,16 @@ ProgramDescriptor build_halo_program(
         // so their device allocations stay valid for the cached workload's
         // lifetime — the address embedded below remains correct on cache hit
         // because the buffers are not re-allocated.
-        core_0_reader_ct_args.push_back(padding_config_buffer0->address());
+        core_0_reader_ct_args.push_back(padding_config_buffer0->address());  // smuggled-rta-ok: see NOTE above
         core_0_reader_ct_args.push_back(padding_config_buffer0->page_size());
 
-        core_0_reader_ct_args.push_back(gather_config_buffer0->address());
+        core_0_reader_ct_args.push_back(gather_config_buffer0->address());  // smuggled-rta-ok: see NOTE above
         core_0_reader_ct_args.push_back(gather_config_buffer0->page_size());
 
-        core_1_reader_ct_args.push_back(padding_config_buffer1->address());
+        core_1_reader_ct_args.push_back(padding_config_buffer1->address());  // smuggled-rta-ok: see NOTE above
         core_1_reader_ct_args.push_back(padding_config_buffer1->page_size());
 
-        core_1_reader_ct_args.push_back(gather_config_buffer1->address());
+        core_1_reader_ct_args.push_back(gather_config_buffer1->address());  // smuggled-rta-ok: see NOTE above
         core_1_reader_ct_args.push_back(gather_config_buffer1->page_size());
 
         tt::tt_metal::TensorAccessorArgs(padding_config_buffer0).append_to(core_0_reader_ct_args);
@@ -414,7 +414,7 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         is_block_sharded,
         transpose_mcast,
         remote_read,
-        device,
+        *device,
         num_cores_x,
         is_in_tiled,
         UNTILIZE_BLOCK_SIZE);
