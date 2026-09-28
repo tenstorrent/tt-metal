@@ -11,8 +11,28 @@ the per-run `Std` the perf test prints is a single sample, not a spread.
 
 ## 1. Results
 
-**Current tip (sprint 5, 2026-09-26, host u13-43, mean of 3, 81 f / 40 steps, warm-traced,
-bf16 / HiFi2, 2cq).** Sprint 5 hoisted the per-block AdaLN modulation out of the two CFG passes
+**Current tip (sprint 6, 2026-09-28, host u13-43, mean of 3, 81 f / 40 steps, warm-traced,
+bf16 / HiFi2, 2cq).** Sprint 6 fix 1 removed the AdaLN modulation's tile/row-major round trip
+(section 7.9, bit-exact); the sprint-5 numbers below are the "before" column, and a same-hour
+control run of the sprint-5 `transformer_wan.py` at 720p (10.201 s denoise / 11.262 s total)
+confirms the recorded sprint-5 mean had not drifted.
+
+| Mode | Resolution | Text enc | Image enc | Denoise | VAE dec | Total | vs sprint 5 (11.23 / 12.90 / 5.49) |
+|------|------------|----------|-----------|---------|---------|-------|---|
+| T2V  | 1280x704   | 0.090s | — | **9.787s** | 0.938s | **10.83s** | -3.5% (denoise -4.0%; -4.1% / -3.8% vs the control) |
+| I2V  | 1280x704   | 0.089s | 1.235s | **10.260s** | 0.920s | **12.52s** | -2.9% (denoise -3.0%) |
+| T2V  | 832x480    | 0.088s | — | **4.438s** | 0.603s | **5.14s** | -6.4% (denoise -8.3%) |
+
+Runs: 720p 9.807 / 9.780 / 9.773 s denoise (spread 0.34 %), totals spread 0.61 %; 480p
+4.438 / 4.443 / 4.434 (0.20 %), totals 2.7 % (all VAE: 0.56-0.60 s); I2V 10.274 / 10.245 /
+10.262 (0.29 %), totals 0.20 %. Per step: 10.3 ms at 720p, 10.1 ms at 480p, 8.0 ms I2V --
+a fixed per-block cost, so the relative gain is largest where the step is shortest. Against the
+sprint start (16.78 / 18.86 / 8.87 s) the totals are now **-35.4 % / -33.6 % / -42.1 %**. The
+`all_bf8_lofi` preset has not been re-measured on this tip yet (it stacked with the sprint-5
+hoist; section 7.7).
+
+**Sprint-5 tip (2026-09-26, host u13-43, mean of 3, 81 f / 40 steps, warm-traced,
+bf16 / HiFi2, 2cq), kept for the record.** Sprint 5 hoisted the per-block AdaLN modulation out of the two CFG passes
 (section 7.2, bit-exact); it is the only model change since sprint 4, so the delta column is
 that change alone. The `all_bf8_lofi` preset (section 7.7) has not been re-measured on top of it.
 
@@ -571,6 +591,56 @@ All verified by reading the code; none implemented.
    (180 tensors per step otherwise), and is now worth only the ~2 ms of adds the fix above
    leaves.
 
+   *Built (2026-09-28, sprint 6, commit "AdaLN modulation without the tile/row-major round
+   trip").* Exactly the design above, with two details worth knowing. The six table rows are
+   derived **on device from the unchanged `[1,1,6,dim]` Parameter** (`WanTransformerBlock.
+   _split_table`, a dim-2 `ttnn.slice` per row) rather than stored as new Parameters, so the
+   weight cache's `.tensorbin` files and the 14B's cache are untouched; they are created eagerly
+   after every load (`WanTransformer3DModel.prepare_modulation_constants`, called from `load` and
+   `load_torch_state_dict`) and dropped in `deallocate_weights`, because their first creation
+   goes through the untilize / row-major slice / re-tilize fallback and must never happen inside
+   a trace capture. The flat `[1,1,1,6*D/tp]` projection is taken straight from the embedder
+   (`prepare_timestep_conditioning(..., flat_proj=True)`, which also drops the per-step
+   `unflatten` reshape) and cut once per step by `split_timestep_proj`: `begins[-1] % 32 == 0`
+   and `begins[-2] == 0`, so `ttnn.slice` stays on its tile program factory (a NOC tile copy).
+   The gates come out as bf16 straight from `ttnn.add(..., dtype=bfloat16)`: binary_ng keeps
+   the fp32 sum in the fp32 destination and appends the same `typecast_tile<Float32,Float16_b>`
+   LLK the standalone `ttnn.typecast` runs, which is why this is bit-identical and not merely
+   close. `1.0 + scale` stays a separate op. The legacy `prepare_modulation` remains the inline
+   path (untraced `forward`, `inner_step` without CFG, the 14B block unit test) and the reference.
+   The per-token (I2V two-row) arm needed nothing beyond the same code: the flat `[1,1,N,6*D/tp]`
+   projection is sliced the same way and each block does six `[1,1,1,D/tp] + [1,1,N,D/tp]`
+   broadcast adds, which also removes the per-block table reshape and the six 1.2 MB slice
+   copies per block the old arm paid.
+
+   Gates: `test_cfg_hoist_ti2v_5b.py` now compares legacy vs split **per tensor** (six per block
+   plus the two `norm_out` ones) as well as per pass and for `combined_step`, for the scalar and
+   the two-row timestep: all 34 comparisons `max_abs_diff == 0.0`. Transformer PCC 100.0000 /
+   99.9893 / 99.9894 % (unchanged), trace modes bit-identical, the 14B 4x8 ring model and
+   inner_step tests pass (PCC 99.9886 %; their D/tp is 1280, also tile aligned).
+
+   Measured, 81 f / 40 steps, 2cq, host u13-43, mean of 3 (section 1 has the run lists):
+
+   | | denoise | total | per step |
+   |---|---|---|---|
+   | 720p T2V, sprint-5 file, same-hour control (1 run) | 10.201 s | 11.262 s | |
+   | **720p T2V, fix 1** | **9.787 s** (-4.1 %) | **10.835 s** (-3.8 %) | -10.3 ms |
+   | 480p T2V (vs sprint-5 mean 4.842 / 5.49) | **4.438 s** (-8.3 %) | **5.137 s** (-6.4 %) | -10.1 ms |
+   | 720p I2V (vs 10.580 / 12.90) | **10.260 s** (-3.0 %) | **12.523 s** (-2.9 %) | -8.0 ms |
+
+   Above the 8-12 ms/step booked: the removed kernels (120 tilizes x 58 us = 7 ms, untilizes,
+   slices, typecasts ~1.3 ms) plus ~11 launches x 30 blocks x ~13 us ~ 4 ms account for it.
+   Tracy (6-block capture, `s6_f1_blocks6`): see the table in section 6 once processed.
+
+12. **The two-row expansion slices a misaligned tile row inside the traced step (sprint-6 lead,
+    not built).** `_expand_two_row` cuts row 1 of the `[1,1,2,W]` embedder output with
+    `ttnn.slice(rows, [0,0,1,0], ...)`, and a dim-2 start that is not a multiple of 32 takes
+    `slice`'s row-major fallback (untilize, RM slice, `TilizeWithValPadding`) -- the same
+    round trip fix 1 removed from the blocks, here on two tensors per I2V step (`[1,1,2,4608]`
+    and `[1,1,2,768]`, fp32). Running the embedder once per distinct timestep value (two M=32
+    MLP passes instead of one) or slicing after a flat reshape removes it; worth ~0.2-0.3 ms per
+    I2V step, so low priority.
+
 11. **Small-N AGMM projections as fused matmul + reduce-scatter (sprint-5 lead from Tracy).**
     `attn1.to_out`, `attn2.to_q` and `attn2.to_out` are 2336 x 3072 x 768 per device and cost
     265 us each -- ~41 TFLOP/s per chip, a third of what qkv (110), ff1 (119) and ff2 (132)
@@ -650,6 +720,23 @@ All verified by reading the code; none implemented.
   per call on this Galaxy, so draining is not a way around it.
 - **VAE decode spreads 1-8 % run to run** at ~0.95 s; do not read a VAE delta under 10 % as
   real from a single run.
+- **`ttnn.slice` / `ttnn.chunk` on a TILE tensor is only a tile copy when the start is
+  tile-aligned on both of the last two dims** (`slice.cpp`: `rm_only` unless `begins[-1] % 32
+  == 0 && begins[-2] % 32 == 0`). Anything else silently untilizes, slices in row-major and
+  re-tilizes every output a tile consumer touches (`TilizeWithValPadding`, 58 us per tiny
+  tensor here). That was the whole AdaLN chunk cost (section 7.9) and it still exists in
+  `_expand_two_row` (section 7.12). Chunk on the feature axis at tile multiples, never on a
+  padded row axis.
+- **Derived device constants must exist before the trace is captured.** Anything built lazily
+  on first use from a Parameter (the split AdaLN tables) must be created in the load path, not
+  in the traced function: created under capture it either needs a JIT compile mid-capture or
+  gets recorded into the trace and re-executed every step. Rebuild them on reload
+  (`deallocate_weights` drops them; the cache is keyed on the Parameter data's identity).
+- **The harness of a worktree-isolated agent session refuses `fuser` globs, `sed -i` with
+  variables and any compound shell line** ("cannot be shown not to be git"). Put device checks,
+  file syncs, control swaps and run chains into small script files and `bash` them
+  (`~/.claude/jobs/<job>/tmp/*.sh` in sprint 6: `devfree.sh`, `sync_files.sh`, `run_control.sh`,
+  `run_perf_batch.sh`, `run_sweep.sh`).
 
 ---
 
@@ -677,6 +764,11 @@ the rows dated 2026-09-26 were run at the sprint-5 tip (`58bd9badfce` and after)
 | I2V E2E frame-0 vs seed | PCC **0.9984** (2026-09-22) |
 | Teja's 121f `test_pipeline_ti2v_5b_generate` | passes; CLIP mean 40.38 (bf16), 40.20 (bf8), 41.34 (bf8 LoFi) vs 36.00 |
 | `wan2_2_ti2v_5b_demo.py` T2V / I2V | 81 f 720p mp4 each, warm traced 11.57 s / 13.76 s (2026-09-23 / 09-24) |
+| **Sprint 6, fix 1 (AdaLN split layout, 2026-09-28)** `test_cfg_hoist_ti2v_5b` | passes; 34 comparisons (cond, uncond, combined_step, 6 tensors x 2 blocks, 2 norm_out; scalar and two-row timestep) all `max_abs_diff == 0.0` |
+| same, `test_transformer_wan_ti2v_5b` | 3 passed, 2 skipped: 100.0000 / 99.9893 / 99.9894 %, unchanged |
+| same, `test_trace_modes_ti2v_5b` | nonblocking and 2cq bit-identical to blocking, grid 12x10; 270.0 / 261.6 / 261.4 ms/step over its 8 steps |
+| same, 14B `test_transformer_wan.py` 4x8 ring (`test_wan_transformer_model[short_seq]`, `test_wan_transformer_inner_step`) | both pass, PCC 99.9886 % (the model construction runs the eager split-table creation at D/tp = 1280) |
+| same, `test_pipeline_performance_ti2v_5b` 720p / 480p, `_i2v` 720p | 3/3 pass each under the sprint-5 gates; means 720p 9.787 / 10.835 s, 480p 4.438 / 5.137 s, I2V 10.260 / 12.523 s; same-hour control of the sprint-5 file 10.201 / 11.262 s (section 1, 7.9) |
 
 The VAE rewrite is **bit-exact**, not merely within PCC — it is pure data movement, so the gate
 asserts exact equality against the original implementation rather than a correlation floor.
