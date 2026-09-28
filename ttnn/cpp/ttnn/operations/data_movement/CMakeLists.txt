@@ -85,7 +85,6 @@ target_sources(
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
             untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
             tilize/device/kernels/compute/tilize_wh.cpp
-            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
             # bcast/
             bcast/bcast_nanobind.hpp
             bcast/device/bcast_device_operation.hpp
