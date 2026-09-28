@@ -289,6 +289,86 @@ def load_gbench_h2d_multichip_csv(path):
     return load_gbench_multichip_csv(path, "BM_H2DSocketMultiChipThroughput")
 
 
+# The leg benchmarks carry every quantity in counters, so nothing is derived from real_time:
+# they run UseRealTime()+Iterations(1), where real_time spans bringup, warmup and teardown.
+_LEG_COLUMNS = [
+    # amortized cost per message -- the quantity the dwell columns are NOT
+    "amortized_us_per_msg",
+    "cycle_us_per_frame_avg",
+    "cycle_us_per_frame_median",
+    "steady_secs",
+    "throughput_gbps",
+    "wire_gbps",
+    "push_gbps",
+    # pipeline occupancy: the denominator L = lambda*W needs
+    "in_flight_avg",
+    "in_flight_median",
+    # batching, and what it bought
+    "accum_avg_us",
+    "accum_median_us",
+    "pending_avg_kb",
+    "pending_median_kb",
+    "frames_per_payload_flush",
+    # dwell, mean and median over the same series
+    "h2h_put_credit_avg_us",
+    "h2h_put_credit_median_us",
+    "h2d_publish_drained_avg_us",
+    "h2d_publish_drained_median_us",
+    "d2h_issue_avg_us",
+    "d2h_issue_median_us",
+    "d2h_stall_avg_us",
+    "d2h_stall_median_us",
+    "avg_us",
+    "median_us",
+    "oneway_avg_us",
+    "oneway_median_us",
+    # health
+    "bad_cores",
+    "bad_frames",
+    "deadline_flushes",
+    "rx_deadline_flushes",
+]
+
+
+def load_gbench_leg_csv(path, name_prefix):
+    """One loader for all four legs: the arg list differs, the counter handling does not."""
+    df = load_gbench_csv(path)
+    df = df[df["name"].apply(_gbench_name_prefix) == name_prefix].copy()
+    if df.empty:
+        raise ValueError(f"No {name_prefix} rows found in {path}")
+    args = _gbench_extract_args(df, _GBENCH_BENCH_ARGS[name_prefix])
+    df = pd.concat([df.reset_index(drop=True), args], axis=1)
+    for col in _LEG_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def leg_print_report(df, name_prefix):
+    """Prints only the columns a given leg actually emits, so one report serves all four."""
+    args = [a for a in _GBENCH_BENCH_ARGS[name_prefix] if a in df.columns]
+    cols = args + [c for c in _LEG_COLUMNS if c in df.columns]
+    print(f"\n  {name_prefix}: {len(df)} row(s)\n")
+    with pd.option_context("display.max_columns", None, "display.width", 250):
+        print(df[cols].to_string(index=False))
+    # The one cross-check that says the accounting is consistent: a page's dwell is the
+    # occupancy times the per-page cost, so the product should land on the measured dwell.
+    if {"amortized_us_per_msg", "in_flight_avg", "h2h_put_credit_avg_us"} <= set(df.columns):
+        pred = df["amortized_us_per_msg"] * df["in_flight_avg"]
+        obs = df["h2h_put_credit_avg_us"]
+        err = ((pred - obs) / obs.where(obs != 0)).abs() * 100.0
+        print("\n  amortized x in_flight vs measured dwell (should agree):")
+        for a, p, o, e in zip(df[args[0]] if args else range(len(df)), pred, obs, err):
+            print(f"    {args[0] if args else 'row'}={a:<8} predicted={p:10.2f} us  measured={o:10.2f} us  err={e:6.1f}%")
+
+
+def leg_export_csv(df, name_prefix, out):
+    args = [a for a in _GBENCH_BENCH_ARGS[name_prefix] if a in df.columns]
+    cols = args + [c for c in _LEG_COLUMNS if c in df.columns]
+    df[cols].to_csv(out, index=False)
+    print(f"  wrote {out}")
+
+
 # benchmark prefix → (loader, runner)
 _GBENCH_DISPATCH = {
     "BM_D2HSocketThroughput": ("load_gbench_d2h_throughput_csv", "run_d2h_throughput"),
@@ -299,7 +379,13 @@ _GBENCH_DISPATCH = {
     "BM_H2DSocketPing": ("load_gbench_h2d_ping_csv", "run_h2d_latency"),
     "BM_D2HSocketMultiChipThroughput": ("load_gbench_d2h_multichip_csv", "run_d2h_multichip"),
     "BM_H2DSocketMultiChipThroughput": ("load_gbench_h2d_multichip_csv", "run_h2d_multichip"),
+    "BM_D2H2H2DVolume": ("load_gbench_leg_csv", "leg_print_report"),
+    "BM_D2HLegBandwidth": ("load_gbench_leg_csv", "leg_print_report"),
+    "BM_H2DLegBandwidth": ("load_gbench_leg_csv", "leg_print_report"),
+    "BM_H2HLegBandwidth": ("load_gbench_leg_csv", "leg_print_report"),
 }
+
+_LEG_PREFIXES = ("BM_D2H2H2DVolume", "BM_D2HLegBandwidth", "BM_H2DLegBandwidth", "BM_H2HLegBandwidth")
 
 
 def run_gbench(path, prefix=""):
@@ -359,6 +445,10 @@ def run_gbench(path, prefix=""):
         mc_plot_bar_comparison(df, out=f"{prefix}h2d_mc_throughput_bar.png", direction="H2D")
         mc_plot_heatmap(df, out=f"{prefix}h2d_mc_throughput_heatmap.png", direction="H2D")
         mc_export_csv(df, out=f"{prefix}h2d_mc_throughput_summary.csv")
+    elif detected in _LEG_PREFIXES:
+        df = load_gbench_leg_csv(path, detected)
+        leg_print_report(df, detected)
+        leg_export_csv(df, detected, out=f"{prefix}{detected}_summary.csv")
     else:
         raise ValueError(
             f"No analysis registered for benchmark '{detected}'. " f"Known: {list(_GBENCH_DISPATCH.keys())}"

@@ -95,6 +95,9 @@ public:
 
     const Counters& counters() const;
     const Timing& timing() const;
+    // Drops every sample and sum taken before the caller's steady window opened, h2h leg
+    // included. Throughput already starts there, and a ratio needs one window, not two.
+    void reset_timing();
     HostRegion& region() const;
     D2HLeg& d2h() const;
     H2HSocket& h2h() const;
