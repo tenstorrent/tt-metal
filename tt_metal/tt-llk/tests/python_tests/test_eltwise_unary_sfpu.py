@@ -1393,6 +1393,7 @@ _TT_POLY_FP32_DEST = {
     "exp2": (),
     "expm1": (),
     "hardsigmoid": (),
+    "hardswish": (),
     "hardtanh": (),
     "log2": (),
     "polygamma": (),
@@ -1402,7 +1403,7 @@ _TT_POLY_FP32_DEST = {
 }
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ("erfinv",)
-_TT_POLY_ADAPTER_OPERATIONS = {}
+_TT_POLY_ADAPTER_OPERATIONS = {"hardswish": "hardswish"}
 _TT_POLY_NATIVE_ARCHITECTURES = {}
 
 
@@ -1532,6 +1533,7 @@ _GENERATED_UNARY_CASES = [
         "None",
         "ckernel_sfpu_activations.h",
     ),
+    (None, "hardswish", True, False, 32, "None", "ckernel_sfpu_hardswish_bf16.h"),
     (
         MathOperation.Hardtanh,
         "hardtanh",
@@ -1643,11 +1645,42 @@ def _tt_poly_reference_erfinv(x):
     return getattr(importlib.import_module("torch"), "erfinv")(x.double(), **{})
 
 
+def _tt_poly_reference_hardswish(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x * (x / 6 + 0.5), dtype=np.float64), x.shape)
+
+    def _declared_piece_2(x):
+        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((-3.0, 3.0), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        active = finite & (bins == 2)
+        result[active] = _declared_piece_2(x[active])
+        return result
+
+    return torch.from_numpy(_declared_forward(x.double().numpy()))
+
+
 _TT_POLY_FORWARD_REFERENCES = {
     "erfinv": (
         _tt_poly_reference_erfinv,
         ((0, 1), (128, 16256), (32768, 32769), (32896, 49024)),
         (16255, 49023),
+        (),
+    ),
+    "hardswish": (
+        _tt_poly_reference_hardswish,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (16447, 16448, 16449, 49215, 49216, 49217),
         (),
     ),
 }
@@ -1711,6 +1744,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "exp2",
     "expm1",
     "hardsigmoid",
+    "hardswish",
     "hardtanh",
     "log2",
     "polygamma",
@@ -1952,6 +1986,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "exp2",
     "expm1",
     "hardsigmoid",
+    "hardswish",
     "hardtanh",
     "log2",
     "polygamma",

@@ -1094,6 +1094,7 @@ _PAIRED_GENERATED = {
     "erf_bw": "backward_complete",
     "hardshrink_bw": "backward_where_factor",
     "hardsigmoid_bw": "backward_complete",
+    "hardswish": "dedicated_unary",
     "hardswish_bw": "backward_complete",
     "hardtanh_bw": "backward_where_factor",
     "log_sigmoid_bw": "backward_complete",
