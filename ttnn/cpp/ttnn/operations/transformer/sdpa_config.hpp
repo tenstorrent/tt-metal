@@ -25,6 +25,9 @@ struct SDPAProgramConfig {
     // Ring joint streaming compute only: fidelity of the QK^T and softmax @ V matmuls; the rest of the kernel keeps
     // the compute kernel config's.
     std::optional<tt::tt_metal::MathFidelity> matmul_math_fidelity;
+    // Ring joint chunked prefill only: cores that neither split K nor hold several Q chunks accumulate each ring
+    // iteration separately and merge, so no bf16 running sum spans the whole prefix.
+    bool segmented_accumulation = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and
