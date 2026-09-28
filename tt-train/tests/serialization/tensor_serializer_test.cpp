@@ -193,8 +193,8 @@ protected:
         return path;
     }
 
-    // Every weight and AdamW moment in the checkpoint must equal the value the training step
-    // actually produced: the HALF view that the fused kernel updated in place.
+    // Every weight and AdamW moment in the checkpoint must be stored in bf16 and equal the value the
+    // training step actually produced: the HALF view that the fused kernel updated in place.
     static void expect_checkpoint_matches(
         const std::filesystem::path& path,
         const ttml::serialization::NamedParameters& params,
@@ -205,6 +205,7 @@ protected:
         const auto expect_saved = [&](const std::string& key, const ttml::autograd::TensorPtr& live) {
             ttnn::Tensor saved;
             ttml::serialization::read_ttnn_tensor(file, key + "/value", saved);
+            EXPECT_EQ(saved.dtype(), ttnn::DataType::BFLOAT16) << key;
             const auto trained = ttml::core::to_xtensor(live->get_value(ttml::autograd::PreferredPrecision::HALF));
             EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(saved), trained, 0.0, 0.0))
                 << key << " in the checkpoint does not match the trained value";
@@ -257,6 +258,8 @@ TEST_F(CheckpointTrainingTest, CheckpointMatchesTrainedValuesAfterResume) {
     file.deserialize(first.string());
     ttml::serialization::read_module(file, "model", &resumed_model);
     ttml::serialization::read_optimizer(file, "optimizer", &resumed_optimizer);
+    // The resumed model and optimizer hold what the checkpoint stored, before any further steps.
+    expect_checkpoint_matches(first, resumed_params, resumed_optimizer);
 
     train(resumed_params, resumed_optimizer, 3);
     expect_checkpoint_matches(save("resumed", resumed_model, resumed_optimizer), resumed_params, resumed_optimizer);
