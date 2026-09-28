@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_attn_norm_L05": {
+   "t": "2026-09-28T06:45:28",
+   "value": 0.999995885552409
+  },
+  "rel_l2_attn_norm_L05": {
+   "t": "2026-09-28T06:45:28",
+   "value": 0.0029137064702808857
+  },
+  "row_norm_ratio_max_attn_norm_L05": {
+   "t": "2026-09-28T06:45:28",
+   "value": 1.0022618770599365
+  },
+  "row_norm_ratio_min_attn_norm_L05": {
+   "t": "2026-09-28T06:45:28",
+   "value": 0.9961590766906738
+  }
+ },
+ "task": "C.full_moe.attn_norm"
+}
