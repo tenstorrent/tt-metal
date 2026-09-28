@@ -1161,3 +1161,49 @@ top grid rows fall behind. The binaries are not the cause (v3 math 6.2 → 7.2 K
 `ab_one.sh`, one chip per batch: bs1 15.5 → 15.7 ms, bs8 98.5 → 98.2, bs16 185.1 → 185.8, bs32 359.5 → 362.6 (iteration
 9 at bs32 434.5 → 441.8). The v3 heads op is bound by its output writes now, not its compute; further compute cuts
 need the Q/K/V write side fixed first (their DRAM traffic, or keeping them in L1 for SDPA).
+
+## 58. FF1 + FF3: the fused-SwiGLU epilogue was the cost; applied on the pack thread in the last K block (landed) (2026-09-28)
+
+Configs from `perf_tools/capture_qkv_call.py` (`CAP_N=9728,19456`): bs8 / bs16 run the fused-SwiGLU `minimal_matmul`
+on the packed gate/up weight ([2560, 19456] bfp4, DRAM interleaved; 8,8,8 1×8 / 4,20,8 1×4), bs32 ran FF1 and FF3
+unfused (bfp4 width-sharded, 8,8,8 1×8) plus `silu_mul`; in0 bfp8 in L1, out bfp8 in DRAM, LoFi. `perf_tools/
+bench_mm_ablate.py ff13 <batch>` (skip reads / writes / both, as for QKV in §56), µs per call:
+
+| | full | compute only | TFLOP/s full / compute |
+|---|---|---|---|
+| bs8 fused | 1433.0 | 1404.7 | 285 / 291 |
+| bs16 fused | 2704.9 | 2651.1 | 302 / 308 |
+| bs32 FF1 | 1670.0 | 1478.9 | 489 / 552 |
+
+bs32's plain FF1 is efficient with an L1 activation (tenstorrent/tt-metal#57626's 332 TFLOP/s was measured with
+DRAM activations at M=4096: stale). The fused kernel is compute-bound at ~300 TFLOP/s; the same packed shape as a plain
+matmul (`ff13plain`) computes in 745.2 / 1477.3 µs (bs8 / bs16, 548-552 TFLOP/s; data-movement-bound in full, 1071 /
+2202, because it writes the 2× wider output). bs32 device profile (tracy, one replay, 340.5 ms of kernel time): FF1 +
+FF3 119.5 ms (35%), `silu_mul` 49.1 ms (14%, 1364 µs per call at the DRAM floor), FF2 + WO 77.3, QKV 39.2, SDPA 21.0.
+
+**Where the epilogue went** (`perf_tools/bench_swiglu_epilogue.py`, variants of `swiglu_block` patched in place,
+bs16 / bs8 µs): base 2709 / 1435, copy + pack only 1613 / 788, SiLU only 2287 / 1199, multiply only 1964 / 1010, inits
+hoisted (one pair per DST session kept) 2676 / 1417. So the SFPU SiLU (~675 µs at bs16) and the SFPU multiply (~350)
+are the epilogue, the per-tile inits are not (§35's batching was right to find the packer, not the inits, the limit).
+A single SFPU pass computing silu(gate) · up (`moe_compute` / `moe_gpt`'s `swiglu_sfpu.h` pattern, `_sfpu_sigmoid_`
+and the bf16 roundings of silu_tile + mul_binary_tile) is 2307 / 1222 on the pack thread (2348 / 1231 on the math
+thread; moe's bf16 exp + one reciprocal step 2292 / 1212, less precise); PCC vs base 1.00000.
+
+**In the K loop** (landed in `compute_metal2.cpp`, `matmul_blocks_swiglu`): on each output block's last K block the math
+thread accumulates the subblock from zero, adds its partial sums of K blocks 0..K-2 with one dest-reuse add (same
+rounding order as the packer's L1 accumulation), and the pack thread applies the single-pass SwiGLU in its DST half and
+packs straight into the half-width output, overlapping the math thread's next subblock; no epilogue pass re-reads the
+intermediate. µs per call and PCC vs an fp32 torch SwiGLU of the same operands (first 64 rows): bs8 1435.0 → 1049.8
+(0.98697 → 0.98697), bs16 2704.8 → 1958.7 (0.98690 → 0.98691), bs32 fused 5324.8 → 4128.7 at 8,8,8 1×8, 5165.5 →
+3830.5 at 4,20,8 1×4. Reloading the partials into DST first and accumulating on top was as fast but less accurate
+(PCC vs base 0.99989 / 0.99974, vs torch 0.98692 / 0.98670: the large partial swamps the bf16 DST accumulation).
+ttnn nightly `test_minimal_matmul.py -k swiglu` (4, incl. the bias path, which keeps the epilogue) and
+`test_minimal_matmul_split.py -k swiglu` (6) pass.
+
+At bs32 the fused kernel (3831 µs per layer) now beats FF1 + FF3 + `silu_mul` (1670 × 2 + 1364 = 4704), and it is the
+bs32 default (§13's "structurally slower" was the epilogue). e2e, sustained_run.sh, 3 alternating rounds per batch
+(committed vs new kernel, chips 0 / 1 / 2 concurrently): bs8 98.6 / 113.7 → 85.0 / 103.7 ms (cold / sustained, −13.8 /
+−8.8%), bs16 185.1 / 225.7 → 158.3 / 210.4 (−14.5 / −6.8%), bs32 364.1 / 436.3 → 329.4 / 411.0 (−9.5 / −5.8%, fused);
+the settled clock drops 40-90 MHz (more power per iteration with less waiting). STS-B 0.8116 / 0.8150 / 0.8135 at
+batch 8 / 16 / 32 (0.8114 / 0.8144 / 0.8146 before; bs32 changes path). The FF13 block knobs are shared with the
+unfused FF1 / FF3: bs32's 4,20,8 1×4 applies only when fused (the unfused path at those blocks: 410.2 ms).
