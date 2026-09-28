@@ -761,10 +761,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
     constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = 5u;
 #endif
-    // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
-    // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
-    // _unary_comp_int_scalar); the two sides must move together.
+    // Integer scalar that the Int32 unary compares (eq/ne via metal calculate_comp_unary_int,
+    // gt/lt/ge/le via tt-llk _calculate_comp_unary_int_) compare against. Overridable via the
+    // SFPU_UNARY_COMP_INT_SCALAR template parameter, on the same #ifdef arrangement as
+    // SHIFT_AMOUNT, so a sweep can drive INT_MIN/INT_MAX and both signs; the macro carries the
+    // two's-complement pattern as a uint32 and is static_cast back to int here. A test that does
+    // not set it keeps the fixed 5. test_sfpu_comp_int32.py sweeps it and computes its golden
+    // from the same scalar, so the two sides move together.
+#ifdef SFPU_UNARY_COMP_INT_SCALAR
+    constexpr int UNARY_COMP_INT_SCALAR = static_cast<int>(static_cast<std::uint32_t>(SFPU_UNARY_COMP_INT_SCALAR));
+#else
     constexpr int UNARY_COMP_INT_SCALAR = 5;
+#endif
     // Clamp/Hardtanh fp32-encoded bounds. Shared with the golden
     // (sfpu_dispatch_constants.py: CLAMP_MIN / CLAMP_MAX); the two sides must move together.
     constexpr std::uint32_t CLAMP_MIN_FP32 = 0xBF800000u; // -1.0f
@@ -1403,14 +1411,31 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::unary_gt)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        // Int32 input compares against the integer scalar via tt-llk _calculate_comp_unary_int_
+        // (== production unary_gt_tile_int32); float input keeps the fp32 0.5 threshold path.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_comp_unary_int_,
+                (APPROX_MODE, SfpuType::unary_gt, ITERATIONS),
+                dst_index,
+                vector_mode,
+                UNARY_COMP_INT_SCALAR);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::unary_ne)
     {
         // Int32 input compares against the integer scalar via metal calculate_comp_unary_int
         // (== production unary_ne_tile_int32); float input keeps the fp32 0.5 threshold path.
-        // UNARY_COMP_INT_SCALAR is shared with the golden (golden_generators.py:
-        // _unary_comp_int_scalar) — keep the two in sync.
+        // UNARY_COMP_INT_SCALAR is what test_sfpu_comp_int32.py's golden compares against — keep
+        // the two in sync.
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
             SFPU_UNARY_CALL(
@@ -1449,15 +1474,66 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::unary_lt)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        // Int32 input compares against the integer scalar via tt-llk _calculate_comp_unary_int_
+        // (== production unary_lt_tile_int32); float input keeps the fp32 0.5 threshold path.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_comp_unary_int_,
+                (APPROX_MODE, SfpuType::unary_lt, ITERATIONS),
+                dst_index,
+                vector_mode,
+                UNARY_COMP_INT_SCALAR);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::unary_ge)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        // Int32 input compares against the integer scalar via tt-llk _calculate_comp_unary_int_
+        // (== production unary_ge_tile_int32); float input keeps the fp32 0.5 threshold path.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_comp_unary_int_,
+                (APPROX_MODE, SfpuType::unary_ge, ITERATIONS),
+                dst_index,
+                vector_mode,
+                UNARY_COMP_INT_SCALAR);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::unary_le)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        // Int32 input compares against the integer scalar via tt-llk _calculate_comp_unary_int_
+        // (== production unary_le_tile_int32); float input keeps the fp32 0.5 threshold path.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _calculate_comp_unary_int_,
+                (APPROX_MODE, SfpuType::unary_le, ITERATIONS),
+                dst_index,
+                vector_mode,
+                UNARY_COMP_INT_SCALAR);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0x3f000000u /* value = 0.5f */);
+        }
     }
     else if constexpr (OPERATION == SfpuType::unary_max)
     {

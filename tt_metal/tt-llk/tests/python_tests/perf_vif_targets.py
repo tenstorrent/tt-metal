@@ -1,18 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Perf for `calculate_comp_int`, which the shared sweep structurally cannot reach.
+"""Perf for the Int32 comparison kernels, which the shared sweep structurally cannot reach.
 
 `perf_eltwise_unary_sfpu.py` asserts its format matrix against `PERF_SWEEP_OPS`
-and does not carry Int32, but `calculate_comp_int` is reachable only with an
-Int32 input — so these six comparison-to-zero modes have no perf coverage
-anywhere. This module is the extra slice that supplies it, exactly as
-`test_perf_eltwise_unary_sfpu_comp_uint16` and `_comp_uint32` already do for
-their formats: a slice that bypasses `PERF_SWEEP_OPS` rather than widening it.
+and does not carry Int32, but `calculate_comp_int` (the six comparisons to zero)
+and the Int32 scalar compares -- metal `calculate_comp_unary_int` for eq/ne,
+tt-llk `_calculate_comp_unary_int_` for gt/lt/ge/le, i.e. the
+`unary_*_tile_int32` production path -- are reachable only with an Int32 input,
+so they have no perf coverage anywhere else. This module is the extra slice that
+supplies it, exactly as `test_perf_eltwise_unary_sfpu_comp_uint16` and
+`_comp_uint32` already do for their formats: a slice that bypasses
+`PERF_SWEEP_OPS` rather than widening it.
 
 Nothing here duplicates the shared sweep. Every float op these kernels touch is
 already in `_OP_DOMAIN_REGISTRY`, hence in `PERF_SWEEP_OPS`, and measured at
-these same parameters; `run_llk_perf_wormhole.sh` collects the whole directory,
-so carrying them here too would measure those rows twice in every perf shard.
+these same parameters; the perf collectors gather the whole directory, so
+carrying them here too would measure those rows twice in every perf shard.
 
 loop_factor/iterations/dimensions match the shared sweep so the numbers stay
 directly comparable with it.
@@ -25,7 +28,6 @@ ELFs and reports a 1.00x delta that means nothing.
 """
 
 import pytest
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -65,6 +67,19 @@ _INT_COMP_OPS = [
     MathOperation.GreaterThanZero,
     MathOperation.LessThanEqualZero,
     MathOperation.GreaterThanEqualZero,
+]
+
+# Int32 scalar compares (the kernel's fixed scalar, 5): eq/ne via metal
+# calculate_comp_unary_int, gt/lt/ge/le via tt-llk _calculate_comp_unary_int_. The
+# ordered four split on the scalar's sign on the RISC, so the non-negative path is the one
+# measured here.
+_INT_SCALAR_COMP_OPS = [
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryLe,
 ]
 
 
@@ -109,11 +124,10 @@ def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
     )
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
-    mathop=_INT_COMP_OPS,
+    mathop=_INT_COMP_OPS + _INT_SCALAR_COMP_OPS,
     input_dimensions=_DIMS,
 )
 def test_perf_vif_comp_int32(perf_report, formats, mathop, input_dimensions):
