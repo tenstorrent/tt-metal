@@ -1,0 +1,477 @@
+{
+ "upstream_sha": "99f7e834cea8bc42f0b478b9cc59a7b89f2f9c1a",
+ "tests": {
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_noncausal[b=1-nh=8-nkv=1-s=2048-d=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_noncausal_randn_bias[b=1-nh=12-s=197-d=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=2048-d=128-sliding_window=128-k256-q256-bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=8192-d=128-sliding_window=512-k256-q256-bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window_streaming_parity[b=1-nh=8-nkv=1-s=1024-d=128-q_chunk_size=256-k_chunk_size=256-sliding_window=130-is_causal=False-bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window_streaming_parity[b=1-nh=8-nkv=1-s=2048-d=128-q_chunk_size=256-k_chunk_size=256-sliding_window=130-is_causal=True-bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=2048-d=128-k128-q128-dram_interleaved-bfp8]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=8-nkv=1-s=2048-d=128-k128-q128-bfp8]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=256-d=32-k128-q32-causal-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=256-d=32-k128-q32-noncausal-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[bf16-dest-nonunit-scale-masked-second-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[bf16-dest-nonunit-scale-one-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[bf16-dest-unit-scale-masked-second-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[bf16-dest-unit-scale-one-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[fp32-dest-nonunit-scale-masked-second-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[fp32-dest-nonunit-scale-one-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[fp32-dest-unit-scale-masked-second-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.sdpa.test_sdpa_standard_exp::test_standard_sdpa_exp_modes[fp32-dest-unit-scale-one-k-chunk]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_chunked_sdpa_geometry_override_hma_shared_buffer": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_chunked_sdpa_geometry_override_rejects_elems_per_block_mismatch": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=1024-k128-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=1024-k128-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=1024-k256-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=1024-k256-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=2048-k128-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=2048-k128-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=2048-k256-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=128-prefill_chunk_size=2048-k256-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=1024-k128-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=1024-k128-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=1024-k256-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=1024-k256-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=2048-k128-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=2048-k128-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=2048-k256-q128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked[b=1-nh=8-nkv=1-s=16384-d=128-no_trace-flexible-page_block_size=64-prefill_chunk_size=2048-k256-q256-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_chunked::test_sdpa_chunked_iterate_batch[b=2-nh=1-nkv=1-s=4096-d=128-page_block_size=64-prefill_chunk_size=1024-k_chunk_size=128-q_chunk_size=128-k_dtype=DataType.BFLOAT8_B-q_dtype=DataType.BFLOAT16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=16-nkv=2-s=1024-d=128-sliding_window=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=16-nkv=2-s=1024-d=128-sliding_window=128-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=16-nkv=2-s=1024-d=128-sliding_window=128-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=16-nkv=2-s=1024-d=128-sliding_window=128-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=4-nkv=2-s=32768-d=128-sliding_window=1024-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=4-nkv=2-s=32768-d=128-sliding_window=1024-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=4-nkv=2-s=32768-d=128-sliding_window=1024-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=4-nkv=2-s=32768-d=128-sliding_window=1024-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=128-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=128-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=128-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=256-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=256-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=256-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=256-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=64-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=64-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=64-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=1024-d=128-sliding_window=64-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=2048-d=128-sliding_window=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=2048-d=128-sliding_window=128-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=2048-d=128-sliding_window=128-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=1-nh=8-nkv=1-s=2048-d=128-sliding_window=128-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=2-nh=8-nkv=1-s=512-d=128-sliding_window=64-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=2-nh=8-nkv=1-s=512-d=128-sliding_window=64-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=2-nh=8-nkv=1-s=512-d=128-sliding_window=64-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window[b=2-nh=8-nkv=1-s=512-d=128-sliding_window=64-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window_program_cache_key_includes_window[k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_sliding_window_program_cache_key_includes_window[k128-q128-bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=16-nkv=1-s=256-d=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=16-nkv=1-s=256-d=128-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=256-d=32-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=256-d=32-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=4096-d=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=4096-d=128-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=4096-d=64-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=1-s=4096-d=64-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=2-s=128-d=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=1-nh=8-nkv=2-s=128-d=128-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=32-nh=8-nkv=1-s=256-d=128-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink[b=32-nh=8-nkv=1-s=256-d=128-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink_gpt_oss_prefill_sampled_accuracy[bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink_sliding_window[gemma-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink_sliding_window[gemma-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink_sliding_window[gpt-oss-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_with_attention_sink_sliding_window[gpt-oss-k128-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_large_score_precision[nh8_s2048-bf16_acc-causal-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_large_score_precision[nh8_s2048-bf16_acc-noncausal-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_large_score_precision[nh8_s2048-fp32_acc-causal-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_large_score_precision[nh8_s2048-fp32_acc-noncausal-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=16-nkv=1-s=2048-d=64-k128-q128-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=16-nkv=1-s=2048-d=64-k128-q192-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=16-nkv=1-s=2048-d=64-k128-q256-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=71-nkv=1-s=2048-d=64-k128-q128-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=71-nkv=1-s=2048-d=64-k128-q192-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=71-nkv=1-s=2048-d=64-k128-q256-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=2048-d=128-k128-q128-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=2048-d=128-k128-q192-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=2048-d=128-k128-q256-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=8192-d=128-k128-q128-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=8192-d=128-k128-q192-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=1-nh=8-nkv=1-s=8192-d=128-k128-q256-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=8-nh=8-nkv=1-s=2048-d=128-k128-q128-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=8-nh=8-nkv=1-s=2048-d=128-k128-q192-dram_interleaved-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt[b=8-nh=8-nkv=1-s=2048-d=128-k128-q256-dram_interleaved-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_small_chunks[f40b-k32-q32-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_small_chunks[f40b-k32-q32-bfp8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=16-nkv=1-s=2048-d=64-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=16-nkv=1-s=2048-d=64-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=16-nkv=1-s=2048-d=64-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=16-nkv=1-s=2048-d=64-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=71-nkv=1-s=2048-d=64-k128-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=71-nkv=1-s=2048-d=64-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=71-nkv=1-s=2048-d=64-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=71-nkv=1-s=2048-d=64-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=8-nkv=1-s=2048-d=128-k128-q128-bf16]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=8-nkv=1-s=2048-d=128-k128-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=8-nkv=1-s=2048-d=128-k256-q128-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.sdpa.test_sdpa_prefill::test_sdpa_tt_with_program_cache[b=1-nh=8-nkv=1-s=2048-d=128-k256-q256-bf16]": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}
