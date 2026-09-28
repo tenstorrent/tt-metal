@@ -555,3 +555,21 @@ replay; traced output bit-identical to eager, checked). ms per layer, eager wall
 Device time (profiler: sum of per-op kernel durations, the slowest chip per op) excludes op-to-op gaps and host;
 wall adds them; traced removes the host, so traced ~ device execution. At 640 tok/chip eager layers are partly
 host-bound (0.3-0.8 ms of eager wall is host); at 2048 they are device-bound (traced ~ eager).
+
+**Device time vs traced, 0 starting context** (`MIMO_PERF_CTX=8192 MIMO_PERF_KV_ACTUAL=0`: the first chunk; the cache
+must be longer than one chunk, the ring SDPA's chunked path is the only one sliding-window supports) with
+`TT_METAL_SHM_TRACKING_DISABLED=1 LOGURU_LEVEL=ERROR` (#55960's settings). `analyze_device_time.py`: per-op max (sum of
+each op's slowest device: over-counts, a collective's kernel time includes waiting for peers), busy (per device, sum
+of its kernels), span. ms per layer:
+| layer | tok/chip | impl | per-op max | busy (slowest device) | traced | eager |
+|---|---|---|---|---|---|---|
+| L1 SWA+MoE | 640 | unified | 5.41 | 4.65 | 4.67 | 4.84 |
+| | | flat | 4.76 | 3.98 | 4.01 | 4.17 |
+| L1 SWA+MoE | 2048 | unified | 12.56 | 11.16 | 11.20 | 11.30 |
+| | | flat | 11.48 | 10.07 | 10.07 | 10.16 |
+| L5 GA+MoE | 640 | unified | 8.23 | 7.57 | 7.57 | 7.77 |
+| | | flat | 5.49 | 5.15 | 5.16 | 5.37 |
+| L5 GA+MoE | 2048 | unified | 14.72 | 13.79 | 13.78 | 13.89 |
+| | | flat | 11.59 | 10.87 | 10.88 | 10.97 |
+Traced == the slowest device's busy time (within 0.03 ms): traced runs are device-bound. The env settings bring eager
+within 0.1-0.2 ms of traced (at 32k ctx without them the gap was 0.3-0.8 ms at 640 tok/chip).

@@ -30,6 +30,14 @@ except ImportError:  # pragma: no cover
 CTX = int(os.environ.get("MIMO_PERF_CTX", "32768"))
 
 
+def _report(msg):
+    """Result lines: logged, and appended to MIMO_PERF_OUT (a run under LOGURU_LEVEL=ERROR still gets them)."""
+    logger.info(msg)
+    if os.environ.get("MIMO_PERF_OUT"):
+        with open(os.environ["MIMO_PERF_OUT"], "a") as f:
+            f.write(msg + "\n")
+
+
 @pytest.mark.timeout(3600)
 @MESH_PARAMS
 @pytest.mark.parametrize("layer_idx", [int(x) for x in os.environ.get("MIMO_PERF_LAYERS", "0,1,5").split(",")])
@@ -66,9 +74,14 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
     trans = build_transformation_mat(mesh_device)
     ids = hf.tokenize_prompt(chunk)
     x_host = global_state()["embed_tokens.weight"][ids].float()[None, None]
-    kv_actual = max_seq - chunk
+    # MIMO_PERF_KV_ACTUAL: the chunk's start (its prior context; default the last chunk of CTX). The cache must be longer
+    # than one chunk: the ring SDPA's chunked path (the only one sliding-window supports) needs Q shorter than K
+    kv_actual = int(os.environ["MIMO_PERF_KV_ACTUAL"]) if os.environ.get("MIMO_PERF_KV_ACTUAL") else max_seq - chunk
+    assert kv_actual % chunk == 0 and kv_actual + chunk <= max_seq and max_seq > chunk, (kv_actual, chunk, max_seq)
     kind = "GA" if spec.window is None else "SWA"
-    tag = f"L{layer_idx}_{kind}_C{chunk_local}_ctx{max_seq}"
+    tag = f"L{layer_idx}_{kind}_C{chunk_local}_ctx{max_seq}" + (
+        f"_kv{kv_actual}" if os.environ.get("MIMO_PERF_KV_ACTUAL") else ""
+    )
     wall = []  # MIMO_PERF_WALL=N: N timed iterations (run without --profile: host + device wall time per layer)
     n_it = 1 + int(os.environ.get("MIMO_PERF_WALL", "2"))
     for it in range(n_it):
@@ -119,7 +132,7 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
         ttnn.synchronize_device(mesh_device)
         b2b = (time.perf_counter() - t0) * 1e3 / n_tr
         s_ = sorted(synced)
-        logger.info(
+        _report(
             f"TRACE {tag}: replay synced median {s_[len(s_) // 2]:.2f} ms (min {s_[0]:.2f}), back to back {b2b:.2f} ms/layer over {n_tr}"
         )
         traced_h = [ttnn.to_torch(t_) for t_ in ttnn.get_device_tensors(out)]
@@ -128,7 +141,7 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
         out.deallocate(True)
         x.deallocate(True)
     w_ = sorted(wall[1:])
-    logger.info(
+    _report(
         f"WALL {tag}: median {w_[len(w_) // 2]:.2f} ms, min {w_[0]:.2f} ms over {len(w_)} (all {[round(v, 2) for v in wall]})"
     )
     logger.info(f"ran {tag}")
