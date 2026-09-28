@@ -246,7 +246,7 @@ struct BasicUnaryWithParam<T> {
         return params[index];
     }
 
-    static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
+    static constexpr auto attribute_names = std::forward_as_tuple("op_type", "params");
     auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
 };
 
