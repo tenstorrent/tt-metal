@@ -4,3 +4,13 @@ intake:
   files:
     models/demos/mimo_v2_6_d_p_2x2/bringup/spec.yaml: 1f644c8262d314db6656d883db8dabc74571202ca38c61cbd98ae60da3e8b1af
   note: 'owner approved 2026-09-28 (added rule 5: bring-up ops awareness)'
+plan:
+  by: dnijemcevic
+  at: '2026-09-28T04:55:33'
+  files:
+    models/demos/mimo_v2_6_d_p_2x2/bringup/plan.yaml: 44b3f92344fdbfa1008287c07105ac21a1d23a88318bfe060583460f6cbaccdb
+    models/demos/mimo_v2_6_d_p_2x2/bringup/plan.md: 33c988c105d52c4d07eef9154e57aed91230880fd1ea5c8f08149a674de5bd53
+    models/demos/mimo_v2_6_d_p_2x2/bringup/components.yaml: a0d264d1fc4ece4c291e611c5557d1d265945007a5d425704506ed05a38a0ea8
+  note: owner approved 2026-09-28 (DeepSeek 2D dispatch on axis 0, TP=4 attention,
+    no SP)
+  ledger: a166f4a8bc1afd9a8e2e198b4a42f36923012f9d597f6efbc5a8930850b4fd5e
