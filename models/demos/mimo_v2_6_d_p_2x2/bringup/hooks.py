@@ -21,7 +21,7 @@ for _name in ("tokenizer", "hf_model", "hf_layers"):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": {"attention"},
+    "sliding_moe": {"attention", "router"},
     "full_moe": set(),
 }
 
@@ -117,6 +117,39 @@ def _attention_module(mesh, spec, layer, loader=None, cfg=None):
     return build_attention(mesh, loader, cfg, layer, _rope_max_seq(spec)), cfg
 
 
+def _max_chunk(spec):
+    """Largest chunk any rung or the target runs: the router's bias / zero tables are built once for it at load."""
+    chunks = [int(r.get("chunk", 0)) for r in spec.data.get("ladder", [])]
+    chunks.append(int((spec.data.get("target") or {}).get("chunk", 0)))
+    return max(chunks)
+
+
+def _router_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtRouter (replicated on 2x2, fp32 logits, fp32 sigmoid + bias choice, ttnn.topk, no CCL) for one MoE layer.
+    MIMO_ROUTER_MODE=fused selects moe_grouped_topk (TF32 keys) for comparison."""
+    from models.demos.mimo_v2_6_d_p_2x2.tt.model import build_router
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    return build_router(mesh, loader, cfg, layer, _max_chunk(spec))
+
+
+def _router_host_fn(mesh, module):
+    """fn(ctx, x_host [S, H]) -> dense routing host [S, E] (chip 0's copy of the replicated result)."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_2x2.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x):
+        xd = to_device_replicated(mesh, x)
+        dense, idx, wts = module(xd)
+        y = replicated_to_host(dense)
+        for t in (xd, dense, idx, wts):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def _new_kv_cache(mesh, cfg, layer, max_seq):
     from models.demos.mimo_v2_6_d_p_2x2.tt.model import new_kv_cache
 
@@ -164,6 +197,8 @@ def device_component(mesh, spec, layer, step):
         return _attention_host_fn(mesh, module, cache_of)
     if step == "mlp":
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
+    if step == "router":
+        return _router_host_fn(mesh, _router_module(mesh, spec, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -212,6 +247,8 @@ class HybridDeviceModel:
                 self.attn_layers.append(i)
             if "mlp" in steps:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
+            if "router" in steps:
+                ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader, self.cfg))
             self.overrides[i] = ov
         self.load_seconds = time.time() - t0
 

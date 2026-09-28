@@ -285,3 +285,21 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate (device): pcc_swap_out 0.999993, out rel 0.0038; attention rel 0.0193 (limit 0.022, tighter margin than the
   1x4's 0.0145), vs CPU w128 0.0130 (limit 0.015); ffn_norm rel 0.0035.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_04_ffn_norm.py`
+
+## C.sliding_moe.router.test.1 (2026-09-28)
+- Replaced the rendered test with the prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_router.py` (same golden). The docstring now notes that it was adopted. Every check is on the gathered [2048, 256] output, so none depends on the mesh.
+- Checks: PCC >= 0.99 (gated), exactly 8 nonzeros per row, weights >= 0, mean top-8 selection overlap >= 0.985, matched-row weight rel L2 <= 0.005, row sums 1 +- 0.01.
+- BRINGUP_IMPL=reference: pcc 0.999328, overlap 0.99878, matched 2028/2048 rows, rel L2 0.00159, row sums [1.0000, 1.0000]: PASS. BRINGUP_IMPL=stub: pcc 0.0: FAIL.
+- Default gate: fails with NotImplementedError (no device router module yet, that is the implement step).
+- For the implementer: fp32 logits plus an fp32 choice score (bias 1.72..2.18). Do not use moe_grouped_topk (it sorts TF32 keys). Start from `mimo_v2_6_d_p/tt/router.py:TtRouter` (see known issues). On 2x2, return the full [S, 256] routing matrix.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_router.py`
+
+## C.sliding_moe.router.implement.1 (2026-09-28)
+- Copied `mimo_v2_6_d_p/tt/router.py:TtRouter` to `tt/router.py`. Only the docstring changed: the weight, bias and zero table are replicated with ReplicateTensorToMesh, which works for any mesh shape, so the 2x2 mesh needs no other change. There is no CCL.
+- Default mode is fp32: fp32 logits (HiFi4, fp32 accumulation), then ttnn.sigmoid, then ttnn.add of the fp32 bias, then ttnn.topk(8), then gather / sum / div, then a bf16 scatter into the dense [S, 256] boundary.
+- `MIMO_ROUTER_MODE=fused` still selects moe_grouped_topk for comparison. It sorts on TF32 keys (see known issues).
+- Added `tt/model.py:build_router`. In hooks, added `_max_chunk`, `_router_module` and `_router_host_fn`, the `router` branch in `device_component`, the HybridDeviceModel override, and `router` in `DEVICE_STEPS["sliding_moe"]`.
+- The zero/bias tables are built once, for max chunk 8192.
+- Gate: pcc_router_L01 0.999129. nnz is 8 on every row, selection overlap 0.99841, matched rows 2022/2048, matched rel L2 0.00102, row sums [0.9976, 1.0020]. PASS.
+  - The first `FAIL pcc=0` line is the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_router.py`
