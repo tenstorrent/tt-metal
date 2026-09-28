@@ -1583,10 +1583,11 @@ def main() -> None:
         matplotlib.use("Agg")
         tag = f"M{args.M}"
         op_names = ", ".join(op.name for op in ops)
+        tp, sp = args.tp, 32 // args.tp
         shape_title = (
-            f"MiniMax-H3 transformer block, 15 s / 768P / 16:9 (M = {args.M} rows per device, TP = 4, SP = 8)"
-            if args.M == M_15S_768P_16_9
-            else f"MiniMax-H3 transformer block, M = {args.M} rows per device (TP = 4)"
+            f"MiniMax-H3 transformer block, 15 s / 768P / 16:9 (M = {args.M} rows per device, TP = {tp}, SP = {sp})"
+            if args.M == M_15S_768P_16_9_BY_SP[sp]
+            else f"MiniMax-H3 transformer block, M = {args.M} rows per device (TP = {tp})"
         )
         if args.no_measured or not measured:
             measured_note = "no measurement"
