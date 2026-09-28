@@ -80,7 +80,7 @@ constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
 // what the hand-placed control tables have to clear.
 uint32_t untilizer_cb_end(uint32_t base, uint32_t token_size_bytes, const CombineFabric2dInputs& tensor_args) {
     uint32_t end = align_l1(base) + cmbf2d::UNT_RING_BATCHES * cmbf2d::UNT_BATCH_ROWS * token_size_bytes;
-    end = align_l1(end) + tile_size_bytes(tensor_args);  // the batch count
+    end = align_l1(end) + untilized_tile_size_bytes(tensor_args);  // the batch count
     end = align_l1(end) + 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args);
     return align_l1(end);
 }
@@ -145,6 +145,14 @@ void validate_allocations(
         "between the two",
         output.buffer()->aligned_page_size(),
         token_size_bytes(tensor_args));
+    // The untilizer reads a tile per page and strides its input CB by the same size.
+    TT_FATAL(
+        !dispatched_is_tiled(tensor_args) ||
+            tensor_args.dispatched_buffer.buffer()->aligned_page_size() == tile_size_bytes(tensor_args),
+        "combine_fabric2d: TILE dispatched_buffer pages by {} B but a {} tile is {} B",
+        tensor_args.dispatched_buffer.buffer()->aligned_page_size(),
+        tensor_args.dispatched_buffer.dtype(),
+        tile_size_bytes(tensor_args));
     TT_FATAL(
         output.buffer()->num_pages() >= args.seq_len_per_chip * args.num_experts_per_tok,
         "combine_fabric2d: output holds {} pages but seq_len_per_chip x num_experts_per_tok = {} are needed",
@@ -305,19 +313,21 @@ void add_untilizer_cbs(
             .page_size = token_size_bytes(tensor_args),
         }}}});
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = tile_size_bytes(tensor_args),
+        .total_size = untilized_tile_size_bytes(tensor_args),
         .core_ranges = core,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = cmbf2d::UNT_CB_BATCHES,
             .data_format = tt::DataFormat::UInt32,
-            .page_size = tile_size_bytes(tensor_args),
+            .page_size = untilized_tile_size_bytes(tensor_args),
         }}}});
+    // In the dispatched buffer's own format, so the unpacker dequantises a bfp8 tile on its way to the
+    // BFLOAT16 cb_out.
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 2 * untilize_block_tiles(tensor_args) * tile_size_bytes(tensor_args),
         .core_ranges = core,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = cmbf2d::UNT_CB_IN,
-            .data_format = tt::DataFormat::Float16_b,
+            .data_format = dispatched_data_format(tensor_args),
             .page_size = tile_size_bytes(tensor_args),
         }}}});
 }

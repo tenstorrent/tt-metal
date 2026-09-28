@@ -31,11 +31,19 @@ inline uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
+// The format every token moves in, from the untilized rows through the ring and the fabric to the output.
+// A BFLOAT8_B dispatched buffer is unpacked to it by the untilize, so only the tile read from DRAM is bfp8.
+constexpr uint32_t TOKEN_ELEMENT_BYTES = 2;  // BFLOAT16
+
 // One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
 // SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
 inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
-           tensor_args.dispatched_buffer.element_size();
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) * TOKEN_ELEMENT_BYTES;
+}
+
+// The dispatched buffer's format as the untilize's input CB declares it: BFLOAT16 or BFLOAT8_B.
+inline tt::DataFormat dispatched_data_format(const CombineFabric2dInputs& tensor_args) {
+    return tt::tt_metal::datatype_to_dataformat_converter(tensor_args.dispatched_buffer.dtype());
 }
 
 inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
@@ -48,9 +56,16 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
            tensor_args.dispatched_buffer.tensor_spec().tile().get_width();
 }
 
+// One tile of the dispatched buffer as it sits in DRAM, which is also its page: a bfp8 tile carries its
+// shared exponents on top of the mantissas, so this is not tile_hw times any element size.
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
+    return tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_size(dispatched_data_format(tensor_args));
+}
+
+// One tile of the untilize's BFLOAT16 output, which is what the batch-count CB is sized as.
+inline uint32_t untilized_tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
-           tensor_args.dispatched_buffer.element_size();
+           TOKEN_ELEMENT_BYTES;
 }
 
 // Tiles the untilize takes per pack call, and so the width of the input window: as wide as it can be, and a
