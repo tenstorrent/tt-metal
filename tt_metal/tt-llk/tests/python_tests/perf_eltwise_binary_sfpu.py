@@ -123,6 +123,41 @@ def test_perf_eltwise_binary_sfpu_float(
     configuration.run(perf_report)
 
 
+# logsigmoid is a binary SFPU op (x, exp(-x)) that is not in the float sweep above; give it its own
+# MATH_ISOLATE path so a kernel change can be measured in cycles/tile. Float16_b and Float32 only, the
+# formats the correctness test drives.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    approx_mode=[ApproximationMode.No],
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=lambda formats: get_dest_accum_modes(formats),
+    loop_factor=[16],
+    iterations=[32],
+    input_dimensions=[[128, 64]],  # tile_cnt: 8
+)
+def test_perf_eltwise_binary_sfpu_logsigmoid(
+    perf_report,
+    formats,
+    mathop,
+    approx_mode,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
+    test_perf_eltwise_binary_sfpu_float(
+        perf_report,
+        formats,
+        mathop,
+        approx_mode,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    )
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
