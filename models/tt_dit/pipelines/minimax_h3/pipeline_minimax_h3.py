@@ -124,6 +124,7 @@ from .policy import (
     MINIMAX_H3_MAX_TEXT_TOKENS,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
     align_num_frames,
+    decodable_canvases,
     get_num_frames,
     served_canvases,
     served_envelope,
@@ -758,6 +759,13 @@ class MiniMaxH3Pipeline:
         """Generation logs: host rank, measured call only. Warmup is silent."""
         if self._log_generation:
             self._host_log(message)
+
+    def _resolve_explicit_canvas(self, height: int, width: int) -> tuple[int, int]:
+        """Snap an explicit canvas to its aspect ratio's resolved canvas, the set warmup decodes."""
+        resolved = resolve_canvas_size(width, height)
+        if resolved != (height, width):
+            self._log(f"canvas {height}x{width} resolved to {resolved[0]}x{resolved[1]}")
+        return resolved
 
     @contextmanager
     def quiet(self):
@@ -1701,7 +1709,9 @@ class MiniMaxH3Pipeline:
         keyframe_anchors = tuple(anchor for anchor, k in (("first", image), ("last", last_image)) if k is not None)
         sources = [ImageOps.exif_transpose(k).convert("RGB") for k in (image, last_image) if k is not None]
 
-        if height is None:
+        if height is not None:
+            height, width = self._resolve_explicit_canvas(height, width)
+        else:
             # A keyframe's own dimensions decide the canvas; `aspect_ratio` only applies to t2va.
             height, width = resolve_canvas_size(*(sources[0].size if sources else aspect_ratio))
         ratio = self.vae_config.spatial_compression_ratio
@@ -1831,7 +1841,9 @@ class MiniMaxH3Pipeline:
         # 1. Setup. The canvas comes from the request, never from a reference: references do not bind
         # the generated geometry, which is the property that makes them cost extra rows rather than
         # change the output shape.
-        if height is None:
+        if height is not None:
+            height, width = self._resolve_explicit_canvas(height, width)
+        else:
             height, width = resolve_canvas_size(*aspect_ratio)
         ratio = self.vae_config.spatial_compression_ratio
 
@@ -2114,6 +2126,8 @@ class MiniMaxH3Pipeline:
         self._log_generation = False
         try:
             self(prompt, num_inference_steps=num_inference_steps, **generation_kwargs)
+            if self.vae_output_type == "yuv420":
+                self._warm_vae_decode()
             if not self.bucket_denoise:
                 return
             natural = self.last_seq_len.padded
@@ -2212,7 +2226,16 @@ class MiniMaxH3Pipeline:
         before = self.mesh_device.num_program_cache_entries()
         tower_sizes = set()
 
-        for n_keyframes, canvas in served_envelope(self.task, patch_alignment=alignment):
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for n_keyframes, canvas in tqdm.tqdm(
+            list(served_envelope(self.task, patch_alignment=alignment)),
+            desc="Warming prompt encoder keyframe layouts",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
             if canvas is None:
                 keyframes: list[Image.Image] = []
                 vision_len = 0
@@ -2242,6 +2265,29 @@ class MiniMaxH3Pipeline:
         self._host_log(
             f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
         )
+
+    def _warm_vae_decode(self) -> None:
+        """Compile the yuv420 decode at every canvas a request can reach, strictly before trace capture.
+
+        The post-decoder stitch and colour conversion bake the canvas width and height into their
+        kernels, and one decoder chunk per canvas reaches all of them.
+        """
+        ratio = self.vae_config.spatial_compression_ratio
+        chunk_latents = self._vae.decode_unit_shape()[0]
+        before = self.mesh_device.num_program_cache_entries()
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for height, width in tqdm.tqdm(
+            decodable_canvases(),
+            desc="Warming VAE decode canvases",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
+            latents = torch.zeros(1, self.vae_config.latent_channels, chunk_latents, height // ratio, width // ratio)
+            self._vae.decode(latents, output_type="yuv420")
+        self._host_log(f"VAE decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
     def _warm_ref2va_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served ref2va request can reach, strictly before
@@ -2313,7 +2359,16 @@ class MiniMaxH3Pipeline:
         def zeros(shape: tuple[int, ...]) -> ttnn.Tensor:
             return ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
 
-        for seq_len in seq_lens:
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        for seq_len in tqdm.tqdm(
+            seq_lens,
+            desc="Warming vision merge sequence lengths",
+            disable=not host,
+            file=sys.stderr,
+            bar_format=_TQDM_BAR_FORMAT,
+        ):
             text = zeros((1, seq_len // self.sp_factor, hidden))
             below = 0
             for size in tower_sizes:
