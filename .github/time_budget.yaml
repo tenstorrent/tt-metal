@@ -431,19 +431,20 @@ models:
     bh_p300: 800
   # Request-behavior additions reserve declared job timeouts, not measured usage.
   # See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
+  # Trace allocation sweeps reserve twice the source e2e job time for diagnostics.
   sweep_tier1:
     wh_llmbox: 131
-    wh_n150: 30
+    wh_n150: 52
     wh_n150_civ2: 45
     wh_galaxy: 40
-    wh_galaxy_perf: 205
-    bh_p150: 30
+    wh_galaxy_perf: 295
+    bh_p150: 52
     bh_p150b_civ2: 45
-    bh_quietbox_2: 405
-    bh_galaxy: 90
+    bh_quietbox_2: 609
+    bh_galaxy: 150
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 225
+    wh_llmbox_perf: 271
     bh_quietbox_2: 75
     bh_p150: 30
   vllm:

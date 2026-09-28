@@ -207,3 +207,100 @@ class FunGen:
         # This can be a host copy, or a copy to some other safe tensor.
         result = ttnn.from_device(trace_output, blocking=True)
         return result
+
+```
+
+## LLM trace allocation tests in CI
+
+Issue [#55039](https://github.com/tenstorrent/tt-metal/issues/55039) adds allocation checks to
+the model sweeps and a monthly audit. These jobs cover LLM inference, including vision-language
+variants. They exclude CNNs, diffusion models (including Qwen Image), audio models, embedding
+models and training tests.
+
+The focused sweeps use the existing e2e commands from
+[`models_e2e_tests.yaml`](../../tests/pipeline_reorg/models_e2e_tests.yaml). The configuration in
+[`models_trace_config.yaml`](../../tests/pipeline_reorg/models_trace_config.yaml) selects model
+IDs and SKUs. A shared runner generates standard entries in
+[`models_sweep_tests.yaml`](../../tests/pipeline_reorg/models_sweep_tests.yaml), preserving each
+source test's model tier, SKU and owner:
+
+| Model | Tier 1: Wednesday and Saturday | Tier 2: Saturday |
+| --- | --- | --- |
+| Llama 3.1-8B | WH N150, BH P150 | WH T3K |
+| Qwen 3.6-27B | BH QuietBox 2 | |
+| Gemma 4-26B-A4B | BH QuietBox 2 | WH T3K |
+| GPT-OSS 120B | WH Galaxy, BH QuietBox 2, BH Galaxy | |
+| DeepSeek V3 | WH Galaxy | |
+
+The **LLM Trace Allocation Audit** workflow runs on the first day of each month at 06:00 UTC.
+It reads the same e2e registry and selects all entries in the Llama, Qwen, Gemma, Mistral,
+Falcon, GPT-OSS, Phi, Mamba and DeepSeek families, except Qwen Image. It retains all registered
+SKUs and tiers, including the DeepSeek SC4 and SC16 jobs. New models and SKUs within these
+families enter the audit automatically. For a new LLM family, add its `model_family` value to
+`families` in `models_trace_config.yaml`. Use `exclude_models` for non-LLM models that share
+an LLM family. Neither change needs Python code.
+
+To add a focused sweep, first register the model's traced inference command in the e2e registry.
+Then add its model ID and selected single-host SKUs under `sweeps` in `models_trace_config.yaml`, for example:
+
+```yaml
+sweeps:
+  new-llm: [wh_n150, bh_p150]
+```
+
+Generate the CI entries and check the time budgets:
+
+```bash
+python .github/scripts/utils/model_trace_tests.py sync-sweeps
+python .github/scripts/utils/verify_time_budget.py
+```
+
+Commit both the configuration and generated sweep entries. Adjust `.github/time_budget.yaml`
+if the added work exceeds an existing budget. The generator inherits the e2e metadata and
+resolves separate e2e entries for the same model across SKUs. It rejects unknown selections.
+CI checks that the generated section is current, including when an e2e tier or timeout changes.
+The sweep workflows accept model filters as text, so new models do not require dropdown edits.
+
+Both paths set the following variables before the model command starts:
+
+```bash
+export TT_METAL_TRACE_ALLOC_TRACKING=1
+export TT_METAL_TRACE_ALLOC_TRACEBACKS=1
+export TT_METAL_TRACE_ALLOC_REFERRER_DEPTH=10
+export TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+```
+
+The check includes program-cache allocations. The flags are also inherited by `tt-run`,
+which forwards `TT_` variables to its ranks. The sweeps do not add allocation acknowledgements,
+retry failures, increase trace reservations or change model assertions. An allocation error
+fails the job. Logs and pytest reports use the existing CI artifact and dashboard paths.
+
+Run a focused check from the repository root on the matching CI hardware:
+
+```bash
+python .github/scripts/utils/model_trace_tests.py run \
+  --test-name 'Llama 3.1-8B e2e tests' --sku wh_n150
+```
+
+Add `--dry-run` to print the command without opening a device. The SKU selects the registered
+CI configuration; it does not turn a larger machine into that SKU. A local Galaxy submesh
+requires the model's normal submesh setting and is not a physical N150 or T3K CI validation.
+The model checkpoint and tensor cache must be available at the paths in the source command.
+For shared CI caches, use the workflow's write-access option when a cache must be created.
+
+Use **Run workflow** on `llm-trace-allocation.yaml` to run the audit manually. The `model` and
+`skus` inputs accept `all` or comma-separated exact identifiers. A selection with no matching
+LLM tests fails during matrix preparation. To inspect the matrix locally:
+
+```bash
+python .github/scripts/utils/model_trace_tests.py matrix \
+  --model gpt-oss-120b --skus wh_galaxy_perf
+python -m pytest --noconftest .github/scripts/utils/test_model_trace_tests.py -q
+```
+
+Allocation diagnostics add host overhead. The jobs reserve twice the source e2e job time;
+these estimates need measurements on each CI SKU. Individual test timeouts and performance
+assertions remain unchanged, so a timeout or performance failure must be distinguished from
+an unsafe-allocation report. The tracker checks trace replays that the source test actually
+executes. Passing an eager-only or skipped test does not establish trace correctness. The audit
+does not replace output-accuracy tests or prove that every serving shape has been warmed up.

@@ -1,0 +1,78 @@
+name: "LLM Trace Allocation Audit"
+
+on:
+  schedule:
+    # All LLM e2e entries, all tiers and their existing SKUs, monthly.
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "all, or comma-separated exact LLM model identifiers from models_e2e_tests.yaml"
+        type: string
+        default: all
+      skus:
+        description: "all, or comma-separated canonical SKU names (including multihost SKUs)"
+        type: string
+        default: all
+      mlperf-write-access:
+        description: "Enable write access to populate tensor caches. Default is read-only."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+      - name: Install matrix dependencies
+        run: pip3 install PyYAML pytest pytest-timeout
+      - name: Check trace test configuration
+        run: python3 -m pytest --noconftest .github/scripts/utils/test_model_trace_tests.py -q
+      - name: Build LLM audit matrix
+        id: matrix
+        env:
+          MODEL: ${{ inputs.model || 'all' }}
+          SKUS: ${{ inputs.skus || 'all' }}
+        run: python3 .github/scripts/utils/model_trace_tests.py matrix --model "$MODEL" --skus "$SKUS"
+
+  check-harbor:
+    needs: prepare-matrix
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      build-inplace-wheel: true
+      platform: "Ubuntu 22.04"
+      enable-lto: false
+  trace-allocation-tests:
+    needs: [prepare-matrix, build-artifact]
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      matrix: ${{ needs.prepare-matrix.outputs.matrix }}
+      # The supplied matrix includes all tiers and is already filtered.
+      enabled-skus: all
+      tier: all
+      mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
+      summary-scope: llm-trace-allocation
