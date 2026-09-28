@@ -5,18 +5,18 @@
 // Driver for the upper-unclamped exp SFPU entry
 // (tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_sdpa_exp_unclamped.h).
 //
-// That header only exposes leaf helpers that map a vFloat to a vFloat; there is
-// no dst_reg loop and no _init_ entry. The loop lives in the metal llk_api tree
-// (`ckernel::sfpu::calculate_sdpa_exp_unclamped`, one SFPU slot per iteration,
-// 8 iterations per face, in
-// hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa_exp_unclamped.h),
-// alongside the other SDPA SFPU wrappers, and this test drives it through the
-// standard VectorMode::RC dispatch.
+// What is under test: `_calculate_sdpa_exp_unclamped_`, the replayed TTI twin of the shared
+// clamped exp_21f with the *upper* input clamp removed (and, unchanged, the sfpi leaf
+// `_ckernel_sfpu_exp_accurate_upper_unclamped_` the compute API uses on the PACK thread).
+// The clamped variant saturates xlog2 = val/ln2 + 127 at its upper bound, which is dead
+// code for the SDPA use case where val <= 0 always.
 //
-// What is under test: `_ckernel_sfpu_exp_accurate_upper_unclamped_` is a copy of
-// the accurate exp path with the *upper* input clamp removed. The clamped variant
-// saturates xlog2 = val/ln2 + 127 at its upper bound, which is dead code for the
-// SDPA use case where val <= 0 always.
+// The face loop lives in the metal llk_api tree (`ckernel::sfpu::calculate_sdpa_exp_unclamped`,
+// one SFPU slot per iteration, 8 iterations per face, in
+// hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa_exp_unclamped.h),
+// alongside the other SDPA SFPU wrappers, and this test drives it through the standard
+// VectorMode::RC dispatch. The kernel needs its op init (`sdpa_exp_unclamped_init`: ADDR_MOD_6
+// dest += 2 for the replayed store, LREG12/13 = 1/ln2, c2) after the invariant SFPU init.
 //
 // Scope of the sweep: every point the python side feeds is inside the domain where
 // this kernel is bit-identical to `_sfpu_exp_21f_bf16_`, so what is verified is that
@@ -27,10 +27,10 @@
 // val ~= -176 an unclamped xlog2 recombines to ~1.0 against a golden of 0.
 //
 // The removed clamp's own domain is not swept, on purpose: past the upper clamp point
-// it is the unclamped variant that stops tracking exp(val) -- the float-to-int step in
-// `_float_to_int32_for_exp_21f_` wraps there -- and exp() overflows bf16 above
-// val ~= 88.7 regardless, so there is no reference to compare against. See the
-// python docstring, which is the authority on the swept domain.
+// it is the unclamped variant that stops tracking exp(val) -- the float-to-int step
+// wraps there -- and exp() overflows bf16 above val ~= 88.7 regardless, so there is no
+// reference to compare against. See the python docstring, which is the authority on the
+// swept domain.
 //
 // NOTE: the LLK header has an inverted dependency -- it does `#include
 // "ckernel_sfpu_exp.h"`, and there is no such file in tt-llk: the exp kernels
@@ -105,6 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+    sfpu::sdpa_exp_unclamped_init();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
