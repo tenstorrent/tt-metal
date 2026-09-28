@@ -40,15 +40,14 @@ and absolute errors; PCC alone is not an acceptance criterion. See the
 
 ## Current support and rejection rules
 
-The current PR2 implementation supports Blackhole devices and uniform SPMD
-meshes, dense noncausal unmasked attention, and:
+Recipes support Blackhole devices and uniform SPMD meshes, dense and joint
+noncausal attention (dense optionally with an additive `attn_mask`), and:
 
-- Q `[B, Hq, Q, D]`, K/V `[B, Hkv, K, D]` with D = 64, 128 or 256 (dense and
-  joint), positive dimensions and `Hq` divisible
-  by `Hkv` (including grouped-query attention);
-- arbitrary positive sequence lengths; K256/K384/K512 blocks and a Q chunk from
-  128 to 320 rows in 32-row steps (see [Q blocking](#q-blocking) and
-  [K blocking](#k-blocking));
+- Q `[B, Hq, Q, D]`, K/V `[B, Hkv, K, D]` with any tile-aligned head dim D,
+  positive dimensions and `Hq` divisible by `Hkv` (including grouped-query attention);
+- arbitrary positive sequence lengths; any tile-aligned Q chunk from 32 to 1024
+  rows and any tile-aligned K chunk, bounded only by L1 (see
+  [Q blocking](#q-blocking) and [K blocking](#k-blocking));
 - standard 32x32 tiles, minimal sequence tile padding, interleaved DRAM
   inputs/output, and no padding in the other dimensions;
 - BF16 Q, BF16 KV for A-D, matching BF16/BFP8/BFP4 KV for E;
@@ -61,8 +60,8 @@ forwarding chain, capped by `max_cores_per_head_batch` (default 16) and availabl
 Q blocks. Unequal chain job counts are supported. Q is double buffered; KV
 has one slot for C/D and two slots for A/B/E, matching the frozen schedules.
 
-Explicit recipes reject causal/masked/windowed/sink attention, alternative
-scales, sub-core grids, other head dimensions, core-sharded/L1 tensors,
+Explicit recipes reject causal/windowed/sink attention, alternative
+scales, sub-core grids, non-tile-aligned head dimensions, core-sharded/L1 tensors,
 and unsupported architectures. They also reject an explicit
 `compute_kernel_config` or `exp_approx_mode=False`: the recipe already owns
 those numerical decisions. They never silently fall back to legacy attention.
@@ -75,13 +74,14 @@ complete for each local query. This is not sequence-parallel ring attention.
 
 ## Q blocking
 
-`q_chunk_size` may be 128 to 320 rows in 32-row steps; `k_chunk_size` stays 512.
-COMPENSATED and LOW_PRECISION pair query tile rows in their compensated state and
-end an odd chunk (Q224/Q288) with a single-row group; those odd-chunk kernels are
-compiled with -Os to fit the kernel config buffer. The host rejects a
-layout that exceeds unreserved L1 before dispatch; at K512, Q320 fits FAST and
-the BFP8/BFP4 LOW_PRECISION storage choices but not B, C, D or BF16 E. Q224
-runs FAST, BALANCED and ACCURATE; Q288 runs only FAST (C/D exceed L1).
+`q_chunk_size` may be any multiple of 32 from 32 to 1024 rows (the recurrent-state
+arrays hold 32 tile rows). COMPENSATED and LOW_PRECISION pair query tile rows in
+their compensated state and end an odd chunk with a single-row group. Builds
+outside the previously qualified geometries (Q128-Q320, K256/K384/K512,
+D64/D128/D256) and odd BF16 chunks size-optimize the pack thread to fit the kernel
+config buffer. The host rejects a layout that exceeds unreserved L1 before
+dispatch; for example at K512/D128, Q384 fits only some recipes and Q512/Q1024 fit
+none (Q1024 is exercised at K128/D64).
 
 Q256 remains the frozen, bit-for-bit qualified geometry. Other Q chunks keep
 each recipe's arithmetic but are **not bit-identical** to Q256: Phase 2
@@ -94,7 +94,9 @@ determinism, FP64 L2 no worse than Q256, and a bounded difference from Q256.
 
 ## K blocking
 
-`k_chunk_size` may be 256, 384 or 512 for dense and joint recipes. K blocking sets the online-softmax update cadence, the PV partial
+`k_chunk_size` may be any multiple of 32 for dense and joint recipes. The QK and PV
+subblock widths are the largest of 4, 2 and 1 that divide the K chunk and head dim.
+K blocking sets the online-softmax update cadence, the PV partial
 grouping and which K chunks COMPENSATED/LOW_PRECISION pair, so K256/K384 are
 qualified on accuracy relative to K512 rather than bitwise. C/D are essentially
 K-invariant. COMPENSATED at K256 keeps less of its long-context advantage: on
@@ -103,11 +105,25 @@ K384, still below FAST (2.0%). Prefer K384/K512 for COMPENSATED at long context.
 
 ## Head dimensions
 
-D64 and D256 use the same recipe arithmetic as D128; the compensated state's row
-layout, PV subblock width and dataflow tile counts follow the head dim, and the
-default scale is `1 / sqrt(D)`. They are qualified on accuracy relative to the
-D128 recipe on the same generator. D256 is L1-limited (Ideogram4 uses Q128/K256).
-Input preparation for LOW_PRECISION accepts D64/D128/D256.
+Any tile-aligned head dim uses the same recipe arithmetic as D128; the compensated
+state's row layout (including an odd last column), PV subblock width and dataflow
+tile counts follow the head dim, and the default scale is `1 / sqrt(D)`. Head dims
+are qualified on accuracy relative to the D128 recipe on the same generator. Large
+head dims are L1-limited (Ideogram4 D256 uses Q128/K256; single-head D512 VAE
+attention does not fit). Input preparation for LOW_PRECISION accepts any
+tile-aligned head dim.
+
+## Attention masks
+
+Dense recipes accept an additive `attn_mask` shaped `[1|B, 1|H, Sq, Sk]` in BF16,
+BFP8 or BFP4 (FP32 for BALANCED/ACCURATE), tiled in interleaved DRAM. As in legacy
+SDPA the op pre-multiplies the mask by `1/scale` (in FP32 for the FP32-state
+recipes), because the kernels fold the scale into the exponent; 0 and -inf are
+exact. The reader streams the mask from DRAM for every K chunk of every Q chunk and
+the compute adds it to the packed scores by L1 accumulation before the row maximum,
+so a mask costs its full read whatever its contents (1.3-2.4x an unmasked call on a
+dense 4096x4096 mask). Slice K instead of passing a pure key-padding mask where
+possible. Joint attention takes no mask.
 
 ## Joint attention
 
@@ -116,7 +132,7 @@ Input preparation for LOW_PRECISION accepts D64/D128/D256.
 Q/K/V segments. Omitting `precision` preserves the existing joint implementation.
 
 The joint adapter supports `joint_strategy="rear"` and the same device,
-dtype, D128, batch/GQA and grid restrictions above. Each segment must have positive
+dtype, head-dim, batch/GQA and grid rules above. Each segment must have positive
 logical lengths. Segment boundaries and the end of the concatenated sequence
 may occur inside a Q or K chunk; Q and K lengths may differ.
 
