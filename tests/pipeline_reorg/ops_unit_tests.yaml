@@ -103,6 +103,24 @@
   budget_type: unit
   category: experimental
 
+- name: ttnn nightly sdpa recipe geometry and masks (blackhole)
+  # Generic Q/K/D geometry around the qualified blocking and additive attn_mask for the named SDPA
+  # precision recipes (measured ~30 min on a P150b). The 25-geometry sweep
+  # (test_sdpa_recipe_geometry.py, ~20 min) is run manually when the recipe kernels change.
+  cmd: >-
+    pytest --timeout 600 -xv
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_q_chunks.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_k_chunks.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_head_dims.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_masks.py
+  skus:
+    bh_p100:
+      timeout: 40
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: sdpa
+
 - name: ttnn attn_res_weighted_reduce_nc unit tests
   # The test file sits in a directory no group suite globs, so this row is the only thing
   # that runs it. That is deliberate: the op is brought up and measured on Blackhole P150b
