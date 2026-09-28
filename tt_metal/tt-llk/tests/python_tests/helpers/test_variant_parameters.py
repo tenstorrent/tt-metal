@@ -329,6 +329,27 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
+    """Float threshold for relu_max, emitted as its fp32 bit pattern.
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD`: sfpu_operations.h selects on ``#ifdef``, the
+    header is shared by every unary test, and only the relu_max threshold sweep sets this.
+    Unset means the kernel's fixed 5.0 (RELU_MAX_THRESHOLD on the golden side).
+
+    Takes a Python float and emits its IEEE-754 single bits, which is the encoding
+    ``relu_max_tile`` takes (relu6 passes ``0x40c00000u``), so 0.0, -0.0 and a negative
+    threshold are all expressible.
+    """
+
+    threshold: float = 5.0
+
+    def convert_to_cpp(self) -> str:
+        bits = struct.unpack("<I", struct.pack("<f", self.threshold))[0]
+        return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 

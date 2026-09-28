@@ -1147,8 +1147,25 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::relu_max)
     {
+        // The threshold as fp32 bits, which is the encoding relu_max_tile takes (relu6 passes
+        // 0x40c00000u). Overridable through the SFPU_RELU_MAX_THRESHOLD template parameter, on
+        // the same #ifdef arrangement as SFPU_RELU_MIN_INT_THRESHOLD, so the relu_max threshold
+        // sweep can drive relu6's 6.0, a zero and a negative threshold. A test that does not set
+        // it keeps the fixed 5.0; the golden reads the same value through UnarySFPUGolden's
+        // relu_max_threshold argument, so the two sides move together.
+#ifdef SFPU_RELU_MAX_THRESHOLD
+        constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = SFPU_RELU_MAX_THRESHOLD;
+#else
+        constexpr std::uint32_t RELU_MAX_THRESHOLD_BITS = 0x40A00000u; // 5.0f
+#endif
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, _relu_max_, (sfpi::vFloat, APPROX_MODE, ITERATIONS, float), dst_index, vector_mode, 5.0f /* threshold */);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _relu_max_,
+            (sfpi::vFloat, APPROX_MODE, ITERATIONS, std::uint32_t),
+            dst_index,
+            vector_mode,
+            RELU_MAX_THRESHOLD_BITS);
     }
     else if constexpr (OPERATION == SfpuType::relu_min)
     {
