@@ -149,9 +149,13 @@ def test_optimizer_gemma4_perf(monkeypatch):
                 1, paged_attention_config.max_num_blocks
             )
 
-            generator.warmup_model_prefill(
-                kv_cache=tt_kv_cache, enable_trace=enable_trace, can_sample_on_device=True, greedy_only=True
-            )
+            if enable_trace:
+                # Captures the prefill traces, compiling full-depth prefills at several sequence
+                # lengths. Only a traced run needs it: under the profiler (trace off) those forwards
+                # were most of a capture that reached 38 GB before it finished (2026-09-28).
+                generator.warmup_model_prefill(
+                    kv_cache=tt_kv_cache, enable_trace=enable_trace, can_sample_on_device=True, greedy_only=True
+                )
 
             def prefill():
                 out = generator.prefill_forward_text(
