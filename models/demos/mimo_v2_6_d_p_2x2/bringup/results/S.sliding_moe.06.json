@@ -1,0 +1,173 @@
+{
+ "metrics": {
+  "attn_coef_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 1.0199424028396606
+  },
+  "attn_rel_l2_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.1536252200603485
+  },
+  "matched_rel_l2_golden_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.001438300241716206
+  },
+  "matched_rel_l2_iso_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.0015774748753756285
+  },
+  "pcc_swap_attn_norm": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9999959137757449
+  },
+  "pcc_swap_attn_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9998985740032578
+  },
+  "pcc_swap_experts_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9998371034260336
+  },
+  "pcc_swap_ffn_norm": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9999940754476874
+  },
+  "pcc_swap_h_mid": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9999958423343641
+  },
+  "pcc_swap_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9999922928408628
+  },
+  "pcc_swap_router": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9984863247705122
+  },
+  "rel_l2_head_rows_swap_attn_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.014789105392992496
+  },
+  "rel_l2_head_rows_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.002884343033656478
+  },
+  "rel_l2_head_rows_swap_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.0030074447859078646
+  },
+  "rel_l2_iso_swap_experts_out": {
+   "t": "2026-09-28T06:33:46",
+   "value": 0.005380704533308744
+  },
+  "rel_l2_swap_attn_norm": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.0028921649791300297
+  },
+  "rel_l2_swap_attn_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.019297856837511063
+  },
+  "rel_l2_swap_experts_out": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.01807336136698723
+  },
+  "rel_l2_swap_ffn_norm": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.003481936175376177
+  },
+  "rel_l2_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.0029203889425843954
+  },
+  "rel_l2_swap_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.003958209417760372
+  },
+  "rel_l2_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.054242994636297226
+  },
+  "rel_l2_vs_cpu_window_swap_attn_out": {
+   "t": "2026-09-28T06:33:42",
+   "value": 0.012984463013708591
+  },
+  "row_norm_ratio_max_iso_swap_experts_out": {
+   "t": "2026-09-28T06:33:46",
+   "value": 1.0055325031280518
+  },
+  "row_norm_ratio_max_swap_attn_norm": {
+   "t": "2026-09-28T06:33:41",
+   "value": 1.0061274766921997
+  },
+  "row_norm_ratio_max_swap_attn_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 1.0652282238006592
+  },
+  "row_norm_ratio_max_swap_ffn_norm": {
+   "t": "2026-09-28T06:33:44",
+   "value": 1.0052999258041382
+  },
+  "row_norm_ratio_max_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 1.0017905235290527
+  },
+  "row_norm_ratio_min_iso_swap_experts_out": {
+   "t": "2026-09-28T06:33:46",
+   "value": 0.9946486353874207
+  },
+  "row_norm_ratio_min_swap_attn_norm": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9935176968574524
+  },
+  "row_norm_ratio_min_swap_attn_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.9738918542861938
+  },
+  "row_norm_ratio_min_swap_ffn_norm": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.9946393370628357
+  },
+  "row_norm_ratio_min_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.9991376399993896
+  },
+  "row_sum_max_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 1.001953125
+  },
+  "row_sum_min_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.998046875
+  },
+  "selection_overlap_golden_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.99725341796875
+  },
+  "selection_overlap_iso_swap_router": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.99920654296875
+  },
+  "worst_row_rel_l2_iso_swap_experts_out": {
+   "t": "2026-09-28T06:33:46",
+   "value": 0.015011627227067947
+  },
+  "worst_row_rel_l2_swap_attn_norm": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.006967208348214626
+  },
+  "worst_row_rel_l2_swap_attn_out": {
+   "t": "2026-09-28T06:33:41",
+   "value": 0.06543365120887756
+  },
+  "worst_row_rel_l2_swap_ffn_norm": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.008082941174507141
+  },
+  "worst_row_rel_l2_swap_h_mid": {
+   "t": "2026-09-28T06:33:44",
+   "value": 0.00397438695654273
+  }
+ },
+ "task": "S.sliding_moe.06"
+}
