@@ -314,8 +314,8 @@ void bind_fabric_api(nb::module_& mod) {
             the caller's semaphore values. No PD needed.
 
             The two semaphore values are copied through verbatim; sem_args_are_l1_addresses
-            says they are raw L1 addresses rather than program semaphore IDs, so they can be
-            validated here. When true both must be 16 B aligned.
+            says they are raw L1 addresses rather than program semaphore IDs, and must then
+            be 16 B aligned.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip

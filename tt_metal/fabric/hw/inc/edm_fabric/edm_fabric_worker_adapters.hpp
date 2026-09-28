@@ -87,10 +87,8 @@ struct WorkerToFabricEdmSenderBase {
 
     WorkerToFabricEdmSenderBase() = default;
 
-    // sem_args_are_l1_addresses: the teardown and buffer-index runtime args are the addresses
-    // themselves, for workers keeping these two semaphores outside the program semaphore
-    // table. Default false resolves them as program semaphore ids. Chosen per call, so one
-    // kernel may mix both.
+    // sem_args_are_l1_addresses: take the teardown and buffer-index runtime args as raw L1
+    // addresses instead of resolving them as program semaphore ids.
     template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
@@ -236,8 +234,8 @@ struct WorkerToFabricEdmSenderBase {
         this->worker_teardown_addr = worker_teardown_addr;
         ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
         // Local landing zone for the SenderChannelProducerCursor block read back in open_start().
-        // It must be 16B aligned and own a full 16B slot, so a whole-block read here cannot
-        // disturb a neighbouring semaphore. open_start() asserts the alignment at that read.
+        // Must be 16B aligned and own a full 16B slot, so that block read cannot disturb a
+        // neighbouring semaphore.
         this->local_producer_cursor_addr = local_buffer_index_addr;
         ASSERT(is_l1_address(local_producer_cursor_addr));  // must be a L1 address
         this->edm_buffer_base_addr = edm_buffer_base_addr;

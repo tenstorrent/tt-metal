@@ -441,7 +441,7 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC for open        | uint8_t                                        | False    |
- * | sem_args_are_l1_addresses             | Template parameter: sem args are addresses, not ids | bool                               | False    |
+ * | sem_args_are_l1_addresses             | Template parameter: sem args are addrs  | bool                                           | False    |
  * | connection_manager                    | Connection manager to build and open    | RoutingPlaneConnectionManager&                 | True     |
  * | num_connections_to_build              | Number of connections to build/open     | uint32_t                                       | True     |
  * | rt_arg_idx                            | Runtime-args cursor (advanced as parsed)| size_t&                                        | True     |
