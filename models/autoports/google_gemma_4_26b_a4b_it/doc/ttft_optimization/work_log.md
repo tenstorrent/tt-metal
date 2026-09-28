@@ -466,3 +466,19 @@ verified all 537 original archives and type-sensitive JSON/whitespace-only log
 equivalence. No original gzip or original hash changed. The final host
 `pre-commit run` exits zero, as do staged/worktree whitespace checks. No hook
 was skipped, no exclusion broadened, and no runtime source changed.
+
+Independent local review returns clean-pass, with remote qualification still
+mandatory. Normal commits and pushes publish TT-Metal implementation
+`079b9fb26dd7300b61a83f1f02307e8690ea0a2d`, inference
+`b6c06944f6d099350f8e9dac3b3e72c58f146112`, Shield
+`4f900886b74b82f8fd028d40f1c011c0dc322070`, and QB2
+`05415de64c82d91ebb3c41362266c2ba4c076c26`. The QB2 reusable workflow pins the
+complete reviewed Shield SHA. No force push, PR or history rewrite occurs.
+
+The exact nested vLLM commit cannot be published with the available account:
+push returns 403, repository permissions explicitly say `push:false`, and the
+required commit API lookup returns 422. There is no existing accessible personal
+fork. No new repository is created without direction. The workflow is not
+dispatched with an unavailable plugin SHA, and overall completion is not claimed.
+[publication.md](publication.md) records the evidence, exact pending command,
+and two unblock options (upstream access/publication or explicit fork creation).

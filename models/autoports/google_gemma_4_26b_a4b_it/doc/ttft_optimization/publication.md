@@ -8,13 +8,16 @@ Normal local commits and non-force pushes succeeded for:
 
 | Repository | Exact commit | Branch |
 | --- | --- | --- |
+| tenstorrent/tt-metal | `079b9fb26dd7300b61a83f1f02307e8690ea0a2d` | `mvasiljevic/gemma4-ttft-opt` |
 | tenstorrent/tt-inference-server | `b6c06944f6d099350f8e9dac3b3e72c58f146112` | `mvasiljevic/gemma4-ttft-monorepo-compat` |
 | tenstorrent/tt-shield | `4f900886b74b82f8fd028d40f1c011c0dc322070` | `mvasiljevic/gemma4-ttft-monorepo-compat` |
 | tenstorrent/tt-agentic-bringup-qb2 | `05415de64c82d91ebb3c41362266c2ba4c076c26` | `mvasiljevic/gemma4-ttft-monorepo-compat` |
 
 The QB2 reusable workflow pins that complete reviewed Shield SHA; its exact-ref
-contract test passes. TT-Metal's reviewed checkpoint is on
-`mvasiljevic/gemma4-ttft-opt`; its exact SHA is recorded after checkpointing.
+contract test passes. TT-Metal's reviewed implementation checkpoint above
+contains the measured source, sealed evidence and independent review. A later
+documentation-only checkpoint records this publication result; use the exact
+implementation SHA above for the eventual benchmark.
 No PR, force push, history rewrite, or default-branch change was made.
 
 ## Blocking evidence
@@ -53,7 +56,7 @@ gh workflow run 342177897 -R tenstorrent/tt-agentic-bringup-qb2 \
   --ref mvasiljevic/gemma4-ttft-monorepo-compat \
   -f model=gemma-4-26B-A4B-it -f impl-of-model=gemma4-autoport \
   -f runner-label=bh-qb-ge -f device-type=p300x2 -f workflow=benchmarks \
-  -f tt-metal-git-ref=<reviewed-pushed-full-SHA> \
+  -f tt-metal-git-ref=079b9fb26dd7300b61a83f1f02307e8690ea0a2d \
   -f inference-server-git-ref=b6c06944f6d099350f8e9dac3b3e72c58f146112 \
   -f vllm-repository=tenstorrent/vllm \
   -f vllm-git-ref=7f72b1c6e905f5137fe3377f2e7b42738d3f271d \
