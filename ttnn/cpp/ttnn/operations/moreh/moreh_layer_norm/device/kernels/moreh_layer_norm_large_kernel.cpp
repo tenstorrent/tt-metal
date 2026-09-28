@@ -283,7 +283,7 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_var_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig)>{},
-            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_recip_std_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
