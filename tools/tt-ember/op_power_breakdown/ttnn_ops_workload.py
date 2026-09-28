@@ -30,7 +30,8 @@ from datetime import datetime
 if not os.environ.get("TT_METAL_HOME"):
     sys.stderr.write(
         "TT_METAL_HOME is not set. Export it to your tt-metal checkout and run this from a\n"
-        "shell with the tt-metal python venv active (see README.md).\n")
+        "shell with the tt-metal python venv active (see README.md).\n"
+    )
     raise SystemExit(2)
 
 try:
@@ -40,7 +41,8 @@ except ImportError as e:
     sys.stderr.write(
         f"Could not import ttnn ({e}).\n"
         "This must run under the tt-metal python venv -- create it with ./create_venv.sh and\n"
-        "activate it before invoking tt-ember, so auto.py inherits it (see README.md).\n")
+        "activate it before invoking tt-ember, so auto.py inherits it (see README.md).\n"
+    )
     raise SystemExit(2)
 
 
@@ -76,9 +78,7 @@ def make_factories(device, seq, hidden, ffn, heads):
     head_dim = hidden // heads
 
     def T(*shape):
-        return ttnn.from_torch(
-            torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        return ttnn.from_torch(torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     def norm(b):
         x = T(b, 1, seq, hidden)
@@ -136,10 +136,18 @@ def make_factories(device, seq, hidden, ffn, heads):
         return (lambda: ttnn.matmul(h, w)), b * 2 * seq * ffn * hidden, by
 
     return [
-        ("rms_norm_in", norm), ("matmul_qkv", qkv), ("attn_qk", qk), ("softmax", smax),
-        ("attn_av", av), ("matmul_out", out_proj), ("residual_add", res_add),
-        ("rms_norm_post", norm), ("matmul_ffn_up", ffn_up), ("silu", act),
-        ("gate_mul", gate), ("matmul_ffn_dn", ffn_dn),
+        ("rms_norm_in", norm),
+        ("matmul_qkv", qkv),
+        ("attn_qk", qk),
+        ("softmax", smax),
+        ("attn_av", av),
+        ("matmul_out", out_proj),
+        ("residual_add", res_add),
+        ("rms_norm_post", norm),
+        ("matmul_ffn_up", ffn_up),
+        ("silu", act),
+        ("gate_mul", gate),
+        ("matmul_ffn_dn", ffn_dn),
     ]
 
 
@@ -159,9 +167,13 @@ def main():
     ap.add_argument("--hidden", type=int, default=2048)
     ap.add_argument("--ffn", type=int, default=8192)
     ap.add_argument("--heads", type=int, default=16)
-    ap.add_argument("--target-call-ms", type=float, default=1.5,
-                    help="Batch each op so one call takes about this long, to clear the ~103 us "
-                         "telemetry sample interval by roughly 10x.")
+    ap.add_argument(
+        "--target-call-ms",
+        type=float,
+        default=1.5,
+        help="Batch each op so one call takes about this long, to clear the ~103 us "
+        "telemetry sample interval by roughly 10x.",
+    )
     ap.add_argument("--max-batch", type=int, default=96)
     ap.add_argument("--target-seconds", type=float, default=4.0)
     ap.add_argument("--pause-seconds", type=float, default=5.0)
@@ -170,14 +182,18 @@ def main():
 
     print("=== Transformer block op power breakdown (batched) ===", flush=True)
     print(f"seq={args.seq} hidden={args.hidden} ffn={args.ffn} heads={args.heads}", flush=True)
-    print(f"Target call {args.target_call_ms:.2f} ms, window {args.target_seconds:.1f} s, "
-          f"idle gap {args.pause_seconds:.1f} s", flush=True)
+    print(
+        f"Target call {args.target_call_ms:.2f} ms, window {args.target_seconds:.1f} s, "
+        f"idle gap {args.pause_seconds:.1f} s",
+        flush=True,
+    )
 
     device = ttnn.open_device(device_id=args.device_id)
     rows = []
     try:
         for idx, (name, factory) in enumerate(
-                make_factories(device, args.seq, args.hidden, args.ffn, args.heads), start=1):
+            make_factories(device, args.seq, args.hidden, args.ffn, args.heads), start=1
+        ):
             if idx > 1:
                 time.sleep(args.pause_seconds)
 
@@ -199,8 +215,11 @@ def main():
                     print(f"# NOTE {name}: retrying at batch={batch} ({str(e)[:60]})", flush=True)
 
             iters = max(1, int(args.target_seconds / per_call))
-            print(f"# OP {idx} {name} iters={iters} flops_per_iter={flops} batch={batch} "
-                  f"bytes_per_iter={nbytes} call_us={per_call*1e6:.1f}", flush=True)
+            print(
+                f"# OP {idx} {name} iters={iters} flops_per_iter={flops} batch={batch} "
+                f"bytes_per_iter={nbytes} call_us={per_call*1e6:.1f}",
+                flush=True,
+            )
 
             ttnn.synchronize_device(device)
             start = now_str()
@@ -213,18 +232,21 @@ def main():
 
             tflops = (flops * iters / elapsed / 1e12) if flops else 0.0
             rows.append((idx, iters, elapsed, tflops, elapsed / iters * 1000.0, start, end))
-            print(f"# DONE {name}: batch={batch} {elapsed/iters*1e6:.1f} us/call "
-                  f"({tflops:.1f} TFLOPS)", flush=True)
+            print(f"# DONE {name}: batch={batch} {elapsed/iters*1e6:.1f} us/call " f"({tflops:.1f} TFLOPS)", flush=True)
             del fn
     finally:
         ttnn.close_device(device)
 
     print()
-    print(f"{'Grid':>8} {'Cores':>7} {'Iters':>10} {'Time [s]':>12} {'TFLOPS':>10} "
-          f"{'Per iter [ms]':>16} {'Start Time':>27} {'End Time':>27}")
+    print(
+        f"{'Grid':>8} {'Cores':>7} {'Iters':>10} {'Time [s]':>12} {'TFLOPS':>10} "
+        f"{'Per iter [ms]':>16} {'Start Time':>27} {'End Time':>27}"
+    )
     for idx, iters, elapsed, tflops, per_iter_ms, start, end in rows:
-        print(f"{f'{idx}x1':>8} {idx:>7} {iters:>10} {elapsed:>12.6f} {tflops:>10.2f} "
-              f"{per_iter_ms:>16.6f} {start:>27} {end:>27}")
+        print(
+            f"{f'{idx}x1':>8} {idx:>7} {iters:>10} {elapsed:>12.6f} {tflops:>10.2f} "
+            f"{per_iter_ms:>16.6f} {start:>27} {end:>27}"
+        )
     print()
     print("Test Passed")
     return 0
