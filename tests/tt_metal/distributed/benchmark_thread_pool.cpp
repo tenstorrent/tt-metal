@@ -6,7 +6,8 @@
 // after an idle gap, join cost, and CPU spent by the workers.
 //
 // Each iteration keeps the caller busy for `gap_us` (host work between ops), then submits
-// `tasks_per_worker` tasks to each of `workers` workers, each busy for `work_ns`, and joins.
+// `tasks_per_worker` tasks to each of `workers` workers, each busy for `work_ns`, and joins, either with
+// enqueue() and wait() (BM_ThreadPoolFanOut) or with one parallel_for() (BM_ThreadPoolParallelFor).
 // Only the submit and join are timed. The pass-through pool runs the same tasks inline and is the
 // serial reference.
 //
@@ -26,6 +27,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "tt_metal/common/env_lib.hpp"
@@ -112,19 +114,46 @@ struct PassThroughPool {
 struct alignas(64) TaskTimes {
     int64_t start = 0;
     int64_t end = 0;
+    bool on_caller = false;
 };
 
-// Submits one fan-out. Batched submit APIs get their own variant of this function.
-template <typename MakeTask>
-void submit_fan_out(ThreadPool& pool, uint32_t workers, uint32_t tasks_per_worker, const MakeTask& make_task) {
-    for (uint32_t t = 0; t < tasks_per_worker; t++) {
-        for (uint32_t w = 0; w < workers; w++) {
-            pool.enqueue(make_task((t * workers) + w), w);
-        }
+// Task i goes to worker i % workers.
+std::vector<uint32_t> worker_of_task(uint32_t workers, uint32_t tasks_per_worker) {
+    std::vector<uint32_t> ids(workers * tasks_per_worker);
+    for (uint32_t i = 0; i < ids.size(); i++) {
+        ids[i] = i % workers;
     }
+    return ids;
 }
 
-template <typename Pool, size_t PadBytes>
+// One task per enqueue(), joined with wait().
+struct EnqueueWait {
+    static constexpr const char* name = "BM_ThreadPoolFanOut";
+    static constexpr bool separate_submit = true;
+    // Returns when the last task was submitted.
+    template <typename MakeTask>
+    static int64_t fan_out(ThreadPool& pool, const std::vector<uint32_t>& worker_ids, const MakeTask& make_task) {
+        for (uint32_t i = 0; i < worker_ids.size(); i++) {
+            pool.enqueue(make_task(i), worker_ids[i]);
+        }
+        const int64_t submitted = now_ns();
+        pool.wait();
+        return submitted;
+    }
+};
+
+// All tasks in one parallel_for(), which submits and joins.
+struct ParallelFor {
+    static constexpr const char* name = "BM_ThreadPoolParallelFor";
+    static constexpr bool separate_submit = false;
+    template <typename MakeTask>
+    static int64_t fan_out(ThreadPool& pool, const std::vector<uint32_t>& worker_ids, const MakeTask& make_task) {
+        pool.parallel_for(worker_ids, [&make_task](size_t i) { make_task(i)(); });
+        return 0;
+    }
+};
+
+template <typename Pool, typename Api, size_t PadBytes>
 void BM_FanOut(benchmark::State& state) {
     const auto workers = static_cast<uint32_t>(state.range(0));
     const auto tasks_per_worker = static_cast<uint32_t>(state.range(1));
@@ -137,13 +166,16 @@ void BM_FanOut(benchmark::State& state) {
     pin_caller();
     auto& pool = Pool::get();
     const uint32_t num_tasks = workers * tasks_per_worker;
+    const auto worker_ids = worker_of_task(workers, tasks_per_worker);
+    const auto caller = std::this_thread::get_id();
     std::vector<TaskTimes> times(num_tasks);
     std::vector<double> wall_us, submit_us, first_start_us, last_start_us, join_us;
     // Padding makes the capture exceed the callable's small buffer, as the dispatch captures do.
     std::array<char, PadBytes> pad{};
-    auto make_task = [&times, work_ns, &pad](uint32_t i) {
-        return [slot = &times[i], work_ns, pad]() {
+    auto make_task = [&times, work_ns, &pad, caller](uint32_t i) {
+        return [slot = &times[i], work_ns, pad, caller]() {
             slot->start = now_ns();
+            slot->on_caller = std::this_thread::get_id() == caller;
             benchmark::DoNotOptimize(pad);
             spin_for_ns(work_ns);
             slot->end = now_ns();
@@ -152,13 +184,12 @@ void BM_FanOut(benchmark::State& state) {
 
     const Usage self_before = usage(RUSAGE_SELF);
     const Usage caller_before = usage(RUSAGE_THREAD);
+    int64_t tasks_on_caller = 0;
     const int64_t run_begin = now_ns();
     for ([[maybe_unused]] auto _ : state) {
         spin_for_ns(gap_ns);
         const int64_t t0 = now_ns();
-        submit_fan_out(pool, workers, tasks_per_worker, make_task);
-        const int64_t t1 = now_ns();
-        pool.wait();
+        const int64_t t1 = Api::fan_out(pool, worker_ids, make_task);
         const int64_t t2 = now_ns();
 
         int64_t first_start = INT64_MAX, last_start = 0, last_end = 0;
@@ -166,6 +197,7 @@ void BM_FanOut(benchmark::State& state) {
             first_start = std::min(first_start, t.start);
             last_start = std::max(last_start, t.start);
             last_end = std::max(last_end, t.end);
+            tasks_on_caller += t.on_caller ? 1 : 0;
         }
         state.SetIterationTime((t2 - t0) * 1e-9);
         wall_us.push_back((t2 - t0) * 1e-3);
@@ -181,17 +213,20 @@ void BM_FanOut(benchmark::State& state) {
 
     state.counters["wall_p50_us"] = percentile(wall_us, 0.5);
     state.counters["wall_p99_us"] = percentile(wall_us, 0.99);
-    // For the pass-through pool the submit time includes running the tasks.
-    state.counters["submit_per_task_us"] = percentile(submit_us, 0.5);
+    if (Api::separate_submit) {
+        // For the pass-through pool the submit time includes running the tasks.
+        state.counters["submit_per_task_us"] = percentile(submit_us, 0.5);
+    }
     state.counters["first_start_p50_us"] = percentile(first_start_us, 0.5);
     state.counters["first_start_p99_us"] = percentile(first_start_us, 0.99);
     state.counters["last_start_p50_us"] = percentile(last_start_us, 0.5);
     state.counters["last_start_p99_us"] = percentile(last_start_us, 0.99);
     state.counters["join_p50_us"] = percentile(join_us, 0.5);
     state.counters["caller_parks"] = (caller_after.voluntary_switches - caller_before.voluntary_switches) / iters;
+    state.counters["caller_task_share"] = tasks_on_caller / (iters * num_tasks);
     if (!Pool::runs_on_caller) {
         const double worker_cpu_s = (self_after.cpu_s - self_before.cpu_s) - (caller_after.cpu_s - caller_before.cpu_s);
-        const double task_cpu_s = iters * num_tasks * work_ns * 1e-9;
+        const double task_cpu_s = ((iters * num_tasks) - tasks_on_caller) * work_ns * 1e-9;
         // Cores kept busy by the workers beyond the task bodies (spinning, wake-ups, queue operations),
         // averaged over the run including the idle gaps.
         state.counters["worker_overhead_cores"] = (worker_cpu_s - task_cpu_s) / run_s;
@@ -204,10 +239,10 @@ void BM_FanOut(benchmark::State& state) {
 // {workers, tasks_per_worker, work_ns, gap_us}
 using Grid = std::vector<std::vector<int64_t>>;
 
-template <typename Pool, size_t PadBytes>
+template <typename Pool, size_t PadBytes, typename Api = EnqueueWait>
 void register_fan_out(const Grid& grid, int64_t iterations) {
-    const std::string name = std::string("BM_ThreadPoolFanOut/") + Pool::name + "/pad:" + std::to_string(PadBytes);
-    benchmark::RegisterBenchmark(name, BM_FanOut<Pool, PadBytes>)
+    const std::string name = std::string(Api::name) + "/" + Pool::name + "/pad:" + std::to_string(PadBytes);
+    benchmark::RegisterBenchmark(name, BM_FanOut<Pool, Api, PadBytes>)
         ->ArgNames({"workers", "tasks_per_worker", "work_ns", "gap_us"})
         ->ArgsProduct(grid)
         ->Iterations(iterations)
@@ -218,20 +253,28 @@ void register_fan_out(const Grid& grid, int64_t iterations) {
 template <typename Pool>
 void register_pool() {
     if (tt::parse_env("TT_POOL_BENCH_FULL", false)) {
-        register_fan_out<Pool, 0>({{1, 8, 32}, {1, 4}, {0, 600, 1300, 2000, 10000}, {0, 5, 63, 144, 500}}, 2000);
+        const Grid full = {{1, 8, 32}, {1, 4}, {0, 600, 1300, 2000, 10000}, {0, 5, 63, 144, 500}};
+        register_fan_out<Pool, 0>(full, 2000);
         register_fan_out<Pool, 64>({{32}, {1}, {600}, {0, 63}}, 2000);
+        register_fan_out<Pool, 0, ParallelFor>(full, 2000);
         return;
     }
     // Measured on GLM-5.2 and Kimi K2.7 chunked prefill on a Blackhole Galaxy (#57586): a per-device command write
     // takes 0.6 us at the median and 1.3 us at p90, and the host spends 63 us between enqueues at the median and
     // 144 us at p90.
-    register_fan_out<Pool, 0>({{8, 32}, {1}, {600, 1300}, {0, 63, 144}}, 5000);
+    const Grid model_sized = {{8, 32}, {1}, {600, 1300}, {0, 63, 144}};
+    register_fan_out<Pool, 0>(model_sized, 5000);
     // Chunked fan-out.
     register_fan_out<Pool, 0>({{32}, {4}, {600}, {0}}, 5000);
     // Capture larger than the callable's small buffer.
     register_fan_out<Pool, 64>({{32}, {1}, {600}, {0}}, 5000);
     // Parked workers: the dispatch pool's fan-outs in those models are ~10 ms apart.
-    register_fan_out<Pool, 0>({{32}, {1}, {600}, {10000}}, 300);
+    const Grid parked = {{32}, {1}, {600}, {10000}};
+    register_fan_out<Pool, 0>(parked, 300);
+    // The same fan-outs through parallel_for; the capture size does not apply.
+    register_fan_out<Pool, 0, ParallelFor>(model_sized, 5000);
+    register_fan_out<Pool, 0, ParallelFor>({{32}, {4}, {600}, {0}}, 5000);
+    register_fan_out<Pool, 0, ParallelFor>(parked, 300);
 }
 
 const bool registered = [] {
