@@ -35,7 +35,7 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
 
     // Clear stale RT-profiler carve-out state left in L1 from prior runs.
     rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
-    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_remote_wr_idx_addr = 0;
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     // Wait until host explicitly enables RT profiler, or terminate if RT is not used.
@@ -67,6 +67,11 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
             if (current_count != last_counts[i]) {
                 DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
+                // KNOWN ISSUE (unfixed, rare): this helper writes the end timestamp into dispatch_s's open record
+                // slot with no handshake. dispatch_s can publish that slot between our slot pick and our two
+                // 32-bit stores, so the BRISC may read the slot mid-write (new time_lo, old time_hi: wrong only if
+                // the low word wrapped, ~every 3.2 s at 1.35 GHz) or before this write lands (end a few cycles
+                // early). Separate from the lost-record bug (#57632); fix it if it shows up in practice.
                 record_realtime_timestamp(rt_profiler_msg, false);
             }
         }

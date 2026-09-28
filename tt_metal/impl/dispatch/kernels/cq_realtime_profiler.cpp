@@ -8,6 +8,7 @@
 // via PCIe. This split decouples the NOC read from the PCIe push, allowing
 // dispatch_s to proceed without waiting.
 
+#include <cstddef>
 #include <cstdint>
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"
@@ -19,12 +20,16 @@
 // Size of timestamp data to read from dispatch core (kernel_start + kernel_end)
 constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profiler_timestamp_t);  // 32 bytes
 
+static_assert(realtime_profiler_timestamp_size == sizeof(realtime_profiler_record_t));
+static_assert((REALTIME_PROFILER_RECORD_SLOTS & (REALTIME_PROFILER_RECORD_SLOTS - 1)) == 0);
+static_assert(offsetof(realtime_profiler_msg_t, records) % 16 == 0, "record slots are NOC-read into 16 B-aligned L1");
+
 // Compile-time defines set by host:
-// DISPATCH_CORE_NOC_X  - NOC X coordinate of dispatch_s core
-// DISPATCH_CORE_NOC_Y  - NOC Y coordinate of dispatch_s core
-// DISPATCH_DATA_ADDR_A - Address of kernel_start_a in dispatch_s's L1 mailbox
-// DISPATCH_DATA_ADDR_B - Address of kernel_start_b in dispatch_s's L1 mailbox
-// RING_BUFFER_ADDR     - L1 address of the shared ring buffer
+// DISPATCH_CORE_NOC_X        - NOC X coordinate of dispatch_s core
+// DISPATCH_CORE_NOC_Y        - NOC Y coordinate of dispatch_s core
+// DISPATCH_RECORDS_ADDR      - Address of records[0] in dispatch_s's L1 mailbox
+// DISPATCH_RECORD_RD_IDX_ADDR - Address of record_rd_idx in dispatch_s's L1 mailbox
+// RING_BUFFER_ADDR           - L1 address of the shared ring buffer
 
 // L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
 // reserved RT-profiler tensix core. The matching dispatch cores use the same define to address
@@ -34,8 +39,8 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
 
-// Read timestamps from dispatch_s into the next ring buffer slot
-__attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a) {
+// Read one record slot from dispatch_s into the next ring buffer slot
+__attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t record_idx) {
     // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
     // Host post-mortems can pair it with ncrisc_debug.socket_reserve_pages_{enter,exit}_count.
     if (rt_ring_full(ring_buffer)) {
@@ -47,7 +52,8 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
 
     uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
 
-    uint32_t dispatch_data_addr = buffer_a ? DISPATCH_DATA_ADDR_A : DISPATCH_DATA_ADDR_B;
+    uint32_t dispatch_data_addr = DISPATCH_RECORDS_ADDR + (record_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)) *
+                                                              sizeof(realtime_profiler_record_t);
     uint64_t dispatch_noc_addr = get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, dispatch_data_addr);
 
     noc_async_read(dispatch_noc_addr, slot_addr, realtime_profiler_timestamp_size);
@@ -57,6 +63,29 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
         ring_buffer->write_index++;
     }
+}
+
+// Consumer index into the dispatch_s record ring; this kernel is its only writer.
+uint32_t record_rd_idx = 0;
+
+// Drain every record dispatch_s has published, then hand the slots back.
+// Returns true once dispatch_s has terminated and every record up to its final count has been read.
+__attribute__((noinline)) bool realtime_profiler_drain_records() {
+    const uint32_t published = rt_profiler_msg->record_wr_idx;
+    const uint32_t wr_idx = published & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+    const uint32_t pending = (wr_idx - record_rd_idx) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+    // dispatch_s publishes at most SLOTS - 1 records past our last ack, plus its final record at terminate,
+    // so a larger gap can only be a stale index; reading it would replay old slots.
+    if (pending != 0 && pending <= REALTIME_PROFILER_RECORD_SLOTS) {
+        while (record_rd_idx != wr_idx) {
+            realtime_profiler_read_and_enqueue(record_rd_idx);
+            record_rd_idx = (record_rd_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
+        }
+        // Every read above has landed (noc_async_read_barrier), so dispatch_s may now reuse these slots.
+        noc_inline_dw_write(
+            get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, DISPATCH_RECORD_RD_IDX_ADDR), record_rd_idx);
+    }
+    return (published & REALTIME_PROFILER_RECORD_WR_IDX_TERMINATE) && record_rd_idx == wr_idx;
 }
 
 // Handle sync requests from host: capture device timestamp and enqueue
@@ -69,6 +98,9 @@ __attribute__((noinline)) void realtime_profiler_sync() {
     uint32_t sync_count = 0;
     while (rt_profiler_msg->sync_request) {
         invalidate_l1_cache();
+
+        // Keep serving dispatch_s during a sync, or it would stall once the record ring fills.
+        realtime_profiler_drain_records();
 
         uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
         if (host_time > 0) {
@@ -112,32 +144,19 @@ void kernel_main() {
     ring_buffer->read_index = 0;
     ring_buffer->terminate = 0;
 
-    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-
+    // record_wr_idx on this core is written only by dispatch_s (host zeroes it before launch).
     while (true) {
         invalidate_l1_cache();
 
-        RealtimeProfilerState state = static_cast<RealtimeProfilerState>(rt_profiler_msg->realtime_profiler_state);
+        if (realtime_profiler_drain_records()) {
+            noc_async_write_barrier();  // last record_rd_idx ack
+            ring_buffer->terminate = 1;
+            return;
+        }
 
-        switch (state) {
-            case REALTIME_PROFILER_STATE_IDLE:
-                if (rt_profiler_msg->sync_request) {
-                    DPRINT("REALTIME: sync_request detected!\n");
-                    realtime_profiler_sync();
-                }
-                continue;
-
-            case REALTIME_PROFILER_STATE_PUSH_A:
-                realtime_profiler_read_and_enqueue(true);
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-                break;
-
-            case REALTIME_PROFILER_STATE_PUSH_B:
-                realtime_profiler_read_and_enqueue(false);
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-                break;
-
-            case REALTIME_PROFILER_STATE_TERMINATE: ring_buffer->terminate = 1; return;
+        if (rt_profiler_msg->sync_request) {
+            DPRINT("REALTIME: sync_request detected!\n");
+            realtime_profiler_sync();
         }
     }
 }

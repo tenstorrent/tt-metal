@@ -70,6 +70,8 @@ public:
     uint64_t num_published_records() const { return num_published_records_.load(std::memory_order_relaxed); }
     uint64_t num_published_batches() const { return num_published_batches_.load(std::memory_order_relaxed); }
     uint32_t ring_full_wait_count() const;  // reads device L1
+    // Peak count of dispatch_s waits for a free record slot (the BRISC fell a full ring behind); reads device L1.
+    uint32_t record_ring_full_wait_count() const;
     size_t num_active_devices() const { return devices_.size(); }
 
 private:
@@ -78,6 +80,9 @@ private:
         uint32_t chip_id = 0;
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
+        // dispatch_s core feeding this device's profiler, and the L1 address of its record_full_wait_count.
+        std::optional<CoreCoord> dispatch_s_core;
+        uint32_t record_full_wait_count_addr = 0;
         std::unique_ptr<D2HSocket> socket;
         // Owns the BRISC+NCRISC program to keep its kernels (and their metadata for tt-inspector) alive for the
         // manager's lifetime.
