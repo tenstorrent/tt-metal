@@ -1,0 +1,34 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.offset_cumsum), run in place against this fork
+# (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". The tests call the op directly or reach it through TtMoERoutingSetup
+# (models/demos/deepseek_v3_d_p/tt/moe/tt_moe_routing_setup.py), which looks it up by name at call time.
+#
+# This box (4x Blackhole p150b, ClusterType P150_X4) can run only the 4-device cases: fabric2d-mesh-2x2 (2 dispatch
+# groups of 2 chips) and the ring 4x1 (fabric2d-torus-y). The DeepSeek conftest's hardware table has no P150_X4 row,
+# so it skips torus-y 4x1 as "unfeasible on the given hardware", though those cases open and pass here (the 4 chips
+# form a ring; the ernie45 1x4 FABRIC_1D_RING mesh uses the same links). `unskip` drops that one skip reason, in both
+# runs. The 8-device (8x1, 4x2, 2x4) and 32-device (8x4) cases are filtered out with -k.
+#
+# Excluded: test_offset_cumsum_distinct_groups_cache (2x4 only: L1_SMALL semaphores, DRAM/L1 output, both cluster
+# axes, program-cache reuse); test_ttnn_dispatch_combine's row_major cases (the dispatched-buffer layout does not
+# reach offset_cumsum: same inputs as the tile cases); test_ttnn_moe.py and the other pcc tests (whole MoE block or
+# model level). No test under tests/ttnn calls this op.
+#
+# Not covered: a 1-device dispatch axis (the fork's one change: it skips the internal all_gather), since no upstream
+# test has one; the fork's own tests/test_offset_cumsum.py covers it (the model cases). On a multi-device axis the fork
+# runs the original's all_gather + prefix-sum path unchanged.
+upstream_sha: ca961d76773a26a7e8c1d35e7a0fc60eaf646461
+swap:
+  ttnn.experimental.deepseek_prefill.offset_cumsum: ttnn.bringup.offset_cumsum
+tests:
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_offset_cumsum.py
+    k: "test_offset_cumsum and torus-y-4x1"
+    unskip: "unfeasible on the given hardware"
+    why: "offset_cumsum alone vs the torch reference (offsets, totals, expert region offsets, exact), ring 4x1 1-link, 256 experts (64 per chip), L1 output"
+  - path: models/demos/deepseek_v3_d_p/tests/pcc/test_moe_routing_setup.py
+    k: "fabric2d-mesh-2x2"
+    why: "masked_bincount -> offset_cumsum via TtMoERoutingSetup vs the torch gate reference, fabric2d 2x2 (2 dispatch groups of 2 chips) 2-link, 64 experts top-2, DRAM output, predictable and random routing, 0% and 50% padded tokens"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py
+    k: "test_ttnn_dispatch_combine and 4x1 and tile"
+    unskip: "unfeasible on the given hardware"
+    why: "TtMoERoutingSetup -> dispatch -> combine round trip (dispatch and combine stay the original), ring 4x1 2-link: 8 model shapes at seq 640 (expert counts and experts per chip of dsv3, glm_51, kimi_k2_7, minimax_m27, dsv4_pro, dsv4_flash, gptoss_120b, mistral4), predictable and random data"
