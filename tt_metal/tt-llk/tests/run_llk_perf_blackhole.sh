@@ -8,13 +8,17 @@
 # pytest-split sharding: compile this shard's items (producer), then measure
 # them (consumer) -- one invocation each over the whole perf suite.
 #
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> LLK_DISABLE_PERF_RELEVANCE=<0|1> \
+#        run_llk_perf_blackhole.sh <group> <n_groups>
+#
+# LLK_DISABLE_PERF_RELEVANCE=1 skips isolate reuse. Default 0.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
 SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+export LLK_DISABLE_PERF_RELEVANCE="${LLK_DISABLE_PERF_RELEVANCE:-0}"
 
 case "$SPEED_OF_LIGHT" in
   true)
@@ -25,6 +29,14 @@ case "$SPEED_OF_LIGHT" in
     ;;
   *)
     echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
+    exit 2
+    ;;
+esac
+
+case "$LLK_DISABLE_PERF_RELEVANCE" in
+  0|1) ;;
+  *)
+    echo "LLK_DISABLE_PERF_RELEVANCE must be '0' or '1', got '$LLK_DISABLE_PERF_RELEVANCE'" >&2
     exit 2
     ;;
 esac
