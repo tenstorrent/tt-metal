@@ -113,20 +113,9 @@ class TtMhaCore:
 
     @staticmethod
     def _can_fuse_rope(cos, head_dim: int) -> bool:
-        """``ops.rotary_embedding`` needs batch-shared (1,1,S,Dh) cos/sin and a
+        """``ops.qkv_heads_rope`` needs batch-shared (1,1,S,Dh) cos/sin and a
         rotate_half midpoint on a tile boundary."""
         return cos.shape[0] == 1 and cos.shape[1] == 1 and head_dim % 64 == 0
-
-    @staticmethod
-    def _fused_rope(x, cos, sin, memory_config):
-        """Rotate and deallocate ``x``; the output keeps x's logical seq length."""
-        import ttnn
-
-        from models.experimental.chronos_forecast import ops
-
-        out = ops.rotary_embedding(x, cos, sin, memory_config=memory_config)
-        ttnn.deallocate(x)
-        return out
 
     @staticmethod
     def _rotate_half(x):
@@ -160,7 +149,14 @@ class TtMhaCore:
             x_norm, wqkv, dtype=self.precision.attention_dtype(), memory_config=mem, math_fidelity=fidelity
         )
         ttnn.deallocate(x_norm)
-        if head_dim % 32 == 0:
+        rope = cos is not None and sin is not None
+        if rope and self._can_fuse_rope(cos, head_dim):
+            from models.experimental.chronos_forecast import ops
+
+            q, k, v = ops.qkv_heads_rope(xqkv, cos, sin, num_heads=num_heads, memory_config=mem)
+            ttnn.deallocate(xqkv)
+            rope = False
+        elif head_dim % 32 == 0:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
                 xqkv,
                 num_heads=num_heads,
@@ -180,10 +176,8 @@ class TtMhaCore:
 
             q, k, v = _split_head(0), _split_head(1), _split_head(2)
             ttnn.deallocate(xqkv)
-        # 3. Optional RoPE on Q/K (V untouched).
-        if cos is not None and sin is not None and self._can_fuse_rope(cos, head_dim):
-            q, k = self._fused_rope(q, cos, sin, mem), self._fused_rope(k, cos, sin, mem)
-        elif cos is not None and sin is not None:
+        # 3. Optional RoPE on Q/K (V untouched), unless the head split already applied it.
+        if rope:
             q_rot = ttnn.add(ttnn.mul(q, cos), ttnn.mul(self._rotate_half(q), sin))
             k_rot = ttnn.add(ttnn.mul(k, cos), ttnn.mul(self._rotate_half(k), sin))
             ttnn.deallocate(q)

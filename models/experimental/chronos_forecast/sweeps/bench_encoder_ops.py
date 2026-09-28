@@ -4,7 +4,7 @@
 """Trace-timed microbenchmarks of the encoder's non-matmul ops at one L1 chunk (64 series x 160 tokens),
 with the dtypes and memory configs of TtChronosPrecision.performance().
 
-    python models/experimental/chronos_forecast/sweeps/bench_encoder_ops.py [rope add rms_norm heads concat]
+    python models/experimental/chronos_forecast/sweeps/bench_encoder_ops.py [rope add rms_norm heads qkv_rope concat]
 """
 
 import sys
@@ -97,6 +97,41 @@ def bench_heads(dev):
     yield "create_qkv_heads", trace_us(dev, fn), pcc(ref, got)
 
 
+def bench_qkv_rope(dev):
+    xqkv = to_dev(torch.randn(SERIES, T, 3 * D), ttnn.bfloat8_b, dev)
+    cos = to_dev(torch.randn(1, 1, T, DH), ttnn.bfloat16, dev)
+    sin = to_dev(torch.randn(1, 1, T, DH), ttnn.bfloat16, dev)
+    x_h, cos_h, sin_h = (ttnn.to_torch(t).float() for t in (xqkv, cos, sin))
+    q_h, k_h, v_h = (p.reshape(SERIES, T, H, DH).permute(0, 2, 1, 3) for p in x_h.split(D, dim=-1))
+    refs = [q_h * cos_h + rotate_half(q_h) * sin_h, k_h * cos_h + rotate_half(k_h) * sin_h, v_h]
+
+    def split_then_rope():
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            xqkv, num_heads=H, transpose_key=False, memory_config=L1
+        )
+        out = [ops.rotary_embedding(t, cos, sin, memory_config=L1) for t in (q, k)] + [v]
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        return out
+
+    def fused():
+        return list(ops.qkv_heads_rope(xqkv, cos, sin, num_heads=H, memory_config=L1))
+
+    for name, fn in (("split + 2x rope", split_then_rope), ("qkv_heads_rope", fused)):
+        outs = fn()
+        p = min(pcc(ref, ttnn.to_torch(t).float()[..., :T, :]) for ref, t in zip(refs, outs))
+        for t in outs:
+            ttnn.deallocate(t)
+
+        def keep_q(fn=fn):
+            q, *rest = fn()
+            for t in rest:
+                ttnn.deallocate(t)
+            return q
+
+        yield name, trace_us(dev, keep_q), p
+
+
 def bench_concat(dev):
     ctx = to_dev(torch.randn(SERIES, H, T, DH), ttnn.bfloat8_b, dev)
     ref = ttnn.to_torch(ctx).float().permute(0, 2, 1, 3).reshape(SERIES, T, D)
@@ -112,6 +147,7 @@ BENCHES = {
     "add": bench_add,
     "rms_norm": bench_rms_norm,
     "heads": bench_heads,
+    "qkv_rope": bench_qkv_rope,
     "concat": bench_concat,
 }
 
