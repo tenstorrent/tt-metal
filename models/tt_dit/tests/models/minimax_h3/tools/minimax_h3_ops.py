@@ -192,7 +192,7 @@ FF2 = OpSpec(
     op_code="MinimalMatmulDeviceOperation",
     rs_op_code="ReduceScatterMinimalAsyncDeviceOperation",
     measured_us_wh_15s=6770.7,  # the matmul alone; the reduce-scatter is a separate ~2.8 ms op
-    color="#8a8983",
+    color="#4a3aa7",  # its own slot: gray is reserved for "other" / ad hoc ops
     marker="D",
 )
 

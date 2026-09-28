@@ -936,6 +936,18 @@ CLASS_COLOR = {
     "other": "#8a8983",
 }
 CLASS_LABEL = {"compute": "compute-bound", "dram": "DRAM-bound", "fabric": "fabric-bound", "other": "measured only"}
+SURFACE = "#ffffff"  # the figures' background; tints are blended toward it explicitly rather than via alpha
+
+
+def tint(color: str, amount: float = 0.45, surface: str = SURFACE) -> str:
+    """`color` moved `amount` of the way toward `surface`: the "measured" bars are this tint of their class colour,
+    so the legend can show the same swatch, and the result does not depend on what the figure is drawn over."""
+    c = [int(color[k : k + 2], 16) for k in (1, 3, 5)]
+    b = [int(surface[k : k + 2], 16) for k in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * amount):02x}" for x, y in zip(c, b))
+
+
+MEASURED_TINT = {k: tint(v) for k, v in CLASS_COLOR.items()}
 # Op codes whose bound is one pass over their DRAM-resident bytes (`load_block_profile`), and their figure labels.
 DRAM_BOUND_NAMES = {
     "EmbeddingsDeviceOperation": "Embeddings (adaLN tables)",
@@ -1298,7 +1310,7 @@ def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, sou
     ys = list(range(len(rows)))
     for y, o in zip(ys, rows):
         c = CLASS_COLOR[o.klass]
-        ax.barh(y + 0.18, o.measured * 1e3, 0.34, color=c, alpha=0.55, zorder=3)
+        ax.barh(y + 0.18, o.measured * 1e3, 0.34, color=MEASURED_TINT[o.klass], zorder=3)
         note = f"{o.measured * 1e3:,.2f} ms measured"
         if o.ideal is not None:
             ax.barh(y - 0.18, o.ideal * 1e3, 0.34, color=c, zorder=3)
@@ -1312,7 +1324,7 @@ def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, sou
     handles = [
         Patch(color=CLASS_COLOR[k], label=CLASS_LABEL[k] + " (ideal, solid)") for k in ("compute", "dram", "fabric")
     ]
-    handles.append(Patch(color=INK_MUTED, alpha=0.55, label="measured (faded)"))
+    handles.append(Patch(color=MEASURED_TINT["compute"], label="measured (tint of its class colour)"))
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8)
     fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
     fig.text(0.01, 0.93, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
@@ -1371,7 +1383,7 @@ def fig_block_other(other: BlockOp, block_total: float, arch: Arch, fidelity: st
     ys = list(range(n))
     for y, o in zip(ys, rows):
         c = CLASS_COLOR[o.klass]
-        ax_bars.barh(y + 0.18, o.measured * 1e3, 0.34, color=c, alpha=0.55, zorder=3)
+        ax_bars.barh(y + 0.18, o.measured * 1e3, 0.34, color=MEASURED_TINT[o.klass], zorder=3)
         note = f"{o.measured * 1e3:,.3f} ms  ·  {100 * o.measured / other.measured:.0f}% of group, {100 * o.measured / block_total:.2f}% of block"
         if o.ideal is not None:
             ax_bars.barh(y - 0.18, o.ideal * 1e3, 0.34, color=c, zorder=3)
@@ -1391,8 +1403,8 @@ def fig_block_other(other: BlockOp, block_total: float, arch: Arch, fidelity: st
         if k in present
     ]
     if "other" in present:
-        handles.append(Patch(color=CLASS_COLOR["other"], alpha=0.55, label="no bound model (measured only)"))
-    handles.append(Patch(color=INK_MUTED, alpha=0.55, label="measured (faded)"))
+        handles.append(Patch(color=MEASURED_TINT["other"], label="no bound model (measured only)"))
+    handles.append(Patch(color=MEASURED_TINT["compute"], label="measured (tint of its class colour)"))
     handles.append(Line2D([], [], color=INK, ls=(0, (3, 2)), label="sum of ideals"))
     fig.legend(
         handles=handles,
