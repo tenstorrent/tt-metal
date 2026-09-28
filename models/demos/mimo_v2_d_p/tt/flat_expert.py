@@ -1543,9 +1543,14 @@ class FlatExpert:
         if parts is None:
             if len(self._cache) > 16:
                 self._cache.clear()
-            parts = [self._make(*key, g_) for g_ in self.gids]
+            built = [self._make(*key, g_) for g_ in self.gids]
+            # one descriptor per device, kept: a call only swaps in its CBs (same on every device)
+            parts = ([ttnn.ProgramDescriptor(kernels=k_, semaphores=s_, cbs=[]) for k_, s_, _ in built], built[0][2])
             self._cache[key] = parts
-        progs = [ttnn.ProgramDescriptor(kernels=k_, semaphores=s_, cbs=cb_(arena)) for k_, s_, cb_ in parts]
+        cbs = parts[1](arena)
+        progs = parts[0]
+        for p_ in progs:
+            p_.cbs = cbs
         if own:
             ttnn.deallocate(arena)
             ttnn.deallocate(words)

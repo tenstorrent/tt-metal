@@ -500,3 +500,18 @@ without an atomic barrier). test_flat_expert_mesh.py (2x2, spiky counts, a matmu
 buffer between launches) guards it; the harness has `MIMO_FL_BETWEEN=matmul`.
 
 Decoder layer L1 (SWA + MoE) with the flat expert vs HF: PCC 0.99956 (unified: 0.9996).
+
+**Layer perf, flat vs unified** (2x2 QuietBox, real prompt routing, 33k ctx; `test_layer_perf.py`). Device kernel
+time (sum of per-op max over chips, --profile) and unprofiled wall time per layer (`MIMO_PERF_WALL=6`, median of the
+warm iterations; host + device):
+| layer | tok/chip | kernel unified -> flat | expert op: tilize + unified -> flat | wall unified -> flat |
+|---|---|---|---|---|
+| L1 SWA + MoE | 640 | 6059 -> 4609 us (-24%) | 2247 -> 1104 us (2.04x) | 5.77 -> 5.13 ms (-11%) |
+| L1 SWA + MoE | 2048 | 13228 -> 11414 us (-14%) | 3643 -> 2097 us (1.74x) | 11.73 -> 10.29 ms (-12%) |
+| L5 GA + MoE | 640 | 10242 -> 7882 us (-23%) | 4180 -> 1915 us (2.18x) | 10.21 -> 7.92 ms (-22%) |
+| L5 GA + MoE | 2048 | 21609 -> 18450 us (-15%) | 5543 -> 2739 us (2.02x) | 20.61 -> 17.83 ms (-13%) |
+(Reduce-scatter varies +-300 us run to run in both modes.) Host cost per flat call on the mesh without the profiler:
+0.84 ms (descriptor 0.29 with the per-device descriptors cached and only the CBs swapped, enqueue 0.35, allocs), a
+kernel-cache miss (new buffer addresses: once after the warm-up iteration) 29 ms; under Tracy both are ~10x (a miss
+340-965 ms), which is why profiled layer spans looked like 180-500 ms. L1 at 640 tok/chip gains 0.64 ms wall of the
+1.14 ms expert saving: that layer is partly host-bound, the flat call's host path shows; L5 (longer attention) hides it.

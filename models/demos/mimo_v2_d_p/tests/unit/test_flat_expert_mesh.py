@@ -128,6 +128,34 @@ def test_flat_expert_mesh(mesh_device, device_params):
         )
     ttnn.synchronize_device(mesh_device)
     logger.info("all launches done")
+    if int(os.environ.get("MIMO_FLAT_HOSTPROF", "0")):  # host cost per call (run without the profiler)
+        import time
+
+        n_ = 10
+        ar_, wo_ = fe.alloc_scratch()
+        tm = time.perf_counter()
+        fe.program(x, y, counts, regions, ar_, wo_)  # (the kernels' cache entry for these addresses: a miss)
+        t0 = time.perf_counter()
+        logger.info(f"HOSTPROF miss ms: {(t0 - tm) * 1e3:.1f}")
+        for _ in range(n_):
+            p_ = fe.program(x, y, counts, regions, ar_, wo_)
+        t1 = time.perf_counter()
+        for _ in range(n_):
+            ttnn.generic_op([fe.w_dev, fe.wd_dev, x, ar_, y, wo_, fe.done], p_)
+        t2 = time.perf_counter()
+        ttnn.synchronize_device(mesh_device)
+        t3 = time.perf_counter()
+        ttnn.deallocate(ar_)
+        ttnn.deallocate(wo_)
+        for _ in range(n_):
+            fe(x, counts, regions, y=y)
+        t4 = time.perf_counter()
+        ttnn.synchronize_device(mesh_device)
+        t5 = time.perf_counter()
+        logger.info(
+            f"HOSTPROF ms/call: program() {(t1 - t0) / n_ * 1e3:.2f}, generic_op enqueue {(t2 - t1) / n_ * 1e3:.2f} "
+            f"(+drain {(t3 - t2) * 1e3:.1f} total), full call enqueue {(t4 - t3) / n_ * 1e3:.2f} (+drain {(t5 - t4) * 1e3:.1f})"
+        )
     q = lambda w: ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
     ys = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(y)]
     worst = 1.0

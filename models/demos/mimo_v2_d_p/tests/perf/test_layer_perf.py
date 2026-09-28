@@ -4,9 +4,9 @@
 routing). Signposts ``L{idx}_{kind}_C{chunk_local}_ctx{ctx}``; analyze with analyze_tags.py --ops."""
 
 import os
+import time
 
 import pytest
-import torch
 from loguru import logger
 
 import ttnn
@@ -32,7 +32,9 @@ CTX = int(os.environ.get("MIMO_PERF_CTX", "32768"))
 @pytest.mark.timeout(3600)
 @MESH_PARAMS
 @pytest.mark.parametrize("layer_idx", [int(x) for x in os.environ.get("MIMO_PERF_LAYERS", "0,1,5").split(",")])
-@pytest.mark.parametrize("chunk_local", [int(c) for c in os.environ.get("MIMO_PERF_CHUNK_LOCAL", "640,2048").split(",")])
+@pytest.mark.parametrize(
+    "chunk_local", [int(c) for c in os.environ.get("MIMO_PERF_CHUNK_LOCAL", "640,2048").split(",")]
+)
 def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
     cfg = MiMoTextConfig.from_json()
     spec = cfg.layer_attn(layer_idx)
@@ -41,9 +43,24 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
     max_seq = (CTX + chunk - 1) // chunk * chunk
     sp_topo, _ = per_axis_topology(device_params["fabric_config"])
     ccl = CCLManager(mesh_device, num_links=default_num_links(), topology=sp_topo)
-    layer = TtDecoderLayer(mesh_device, cfg, layer_idx, layer_state(layer_idx, cfg), ccl=ccl, sp_topology=sp_topo, seq_len_per_chip=chunk_local,
-                           num_links=default_num_links())
-    kv = allocate_kv_cache(mesh_device, num_layers=1, max_seq_len=max_seq, n_kv_local=layer.attn.nkv_l, k_dim=spec.head_dim, v_dim=cache_v_dim(spec))
+    layer = TtDecoderLayer(
+        mesh_device,
+        cfg,
+        layer_idx,
+        layer_state(layer_idx, cfg),
+        ccl=ccl,
+        sp_topology=sp_topo,
+        seq_len_per_chip=chunk_local,
+        num_links=default_num_links(),
+    )
+    kv = allocate_kv_cache(
+        mesh_device,
+        num_layers=1,
+        max_seq_len=max_seq,
+        n_kv_local=layer.attn.nkv_l,
+        k_dim=spec.head_dim,
+        v_dim=cache_v_dim(spec),
+    )
     rope = build_indexed_rope(mesh_device, spec, max_seq_len=max_seq, chunk_size=chunk)
     trans = build_transformation_mat(mesh_device)
     ids = hf.tokenize_prompt(chunk)
@@ -51,16 +68,29 @@ def test_layer_perf(mesh_device, device_params, layer_idx, chunk_local):
     kv_actual = max_seq - chunk
     kind = "GA" if spec.window is None else "SWA"
     tag = f"L{layer_idx}_{kind}_C{chunk_local}_ctx{max_seq}"
-    for it in range(3):
-        x = ttnn.from_torch(x_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
-                            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None)))
+    wall = []  # MIMO_PERF_WALL=N: N timed iterations (run without --profile: host + device wall time per layer)
+    n_it = 1 + int(os.environ.get("MIMO_PERF_WALL", "2"))
+    for it in range(n_it):
+        x = ttnn.from_torch(
+            x_host,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None)),
+        )
         ttnn.synchronize_device(mesh_device)
         if it:
             signpost(f"{tag}_start")
+        t0 = time.perf_counter()
         out = layer(x, rope, trans, kv, cache_layer=0, kv_actual=kv_actual)
         ttnn.synchronize_device(mesh_device)
+        wall.append((time.perf_counter() - t0) * 1e3)
         if it:
             signpost(f"{tag}_end")
         out.deallocate(True)
         x.deallocate(True)
+    w_ = sorted(wall[1:])
+    logger.info(
+        f"WALL {tag}: median {w_[len(w_) // 2]:.2f} ms, min {w_[0]:.2f} ms over {len(w_)} (all {[round(v, 2) for v in wall]})"
+    )
     logger.info(f"ran {tag}")
