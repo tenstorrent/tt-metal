@@ -218,7 +218,7 @@
   },
   {
    "sig": "8d29c1ff0f",
-   "count": 12,
+   "count": 1,
    "op": "ttnn.bringup.rms_norm",
    "args": [
     {
@@ -255,6 +255,89 @@
      "buffer": "DRAM",
      "memory_layout": "INTERLEAVED"
     },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "952cfae417",
+   "count": 11,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      5120,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-06,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "residual_input_tensor": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      5120,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      1,
+      4
+     ],
+     "devices": 4
+    },
+    "residual_sum_memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "return_residual_sum": true,
     "weight": {
      "tensor": true,
      "shape": [
