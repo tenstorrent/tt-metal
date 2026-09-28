@@ -11,8 +11,9 @@
 namespace ttnn::operations::transformer::sdpa::detail {
 
 RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataType kv_type);
-// Dense/joint recipes: any tile-aligned Q chunk up to 1024 rows and any tile-aligned K chunk (L1 fit is checked
-// when the program is built).
+// Dense/joint recipes: any tile-aligned Q chunk up to 1024 rows and any tile-aligned K chunk (ring and exp ring
+// validate through recipe_geometry_rejection in sdpa_recipe_blocking.hpp; L1 fit is checked when the program is
+// built).
 uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config);
 uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config);
 
@@ -22,7 +23,7 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
 uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles);
 
 // Recipe QK/PV matmul subblock width for a K chunk or head dim of `tiles` tiles: the largest of 4, 2 and 1
-// dividing it (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W).
+// dividing it (SDPA_RECIPE_QK_W / SDPA_RECIPE_PV_W). Shared by the dense, ring and exp ring recipe hosts.
 uint32_t recipe_subblock_width(uint32_t tiles);
 
 tt::tt_metal::ProgramDescriptor recipe_compute_program(

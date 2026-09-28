@@ -16,6 +16,10 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 
+namespace ttnn::transformer {
+enum class SDPAPrecision : uint8_t;
+}
+
 namespace ttnn::prim {
 
 struct RingJointSDPAParams {
@@ -47,6 +51,7 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
+    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -132,6 +137,7 @@ struct RingJointSDPAParams {
         "sliding_window_size",
         "circular_kv_cache",
         "kv_stripe_split",
+        "precision",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -154,6 +160,7 @@ struct RingJointSDPAParams {
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
+            std::cref(precision),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -251,11 +258,12 @@ inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJ
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
 constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
 constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
+constexpr size_t RING_JOINT_SDPA_STATE_OUTPUT_IDX = 3;  // precision recipes only: state checkpoints
 
-// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output]
+// RingJointSDPAResult: [output, joint_output, stats_output], plus state_output when a precision recipe is set
 using RingJointSDPAResult = Tensors;
 
-// RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
+// RingJointSDPAResultSpec: [output, joint_output, stats_output], plus state_output when a precision recipe is set
 using RingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim
