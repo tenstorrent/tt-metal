@@ -29,6 +29,7 @@ whose only unfinished tasks are DEFERRED ends with exit 0, "complete with N defe
 |---|---|---|---|
 | intake | spec.yaml | person + `/bringup` | `approve intake` |
 | reference | R.1 checkpoint, R.2 HF parity, R.3 chunked + graph replay | agent (reference role) | PCC vs HF >= 0.9999, chunked == one-shot, graph replays exactly |
+| trim | R.4 (layer subsets only) | script | after the HF sanity and parity passed: only layers 0..last subset layer stay on disk, tensors byte-identical (F47) |
 | goldens | G.<rung> | script | manifest with content hash, every layer and chunk |
 | box | B.1 | script | mesh opens, collectives exact |
 | plan | PL.0 ledger, PL.1 plan | agent (plan role) + person | memory computed from the checkpoint fits per-chip DRAM, every step mapped, approved |
