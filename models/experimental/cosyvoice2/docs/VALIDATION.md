@@ -243,6 +243,15 @@ at a median reference margin of 0.047 nats. With bf16 weights but fp32 accumulat
   The 2 points between it and the bf16 + fp32-head reference (98.37 %) are the TT decoder's own rounding, not
   broken down further.
 
+**Why fp32 logits are the default.** The noise floor shows how little room a bf16 head leaves:
+- even the reference itself, run in bf16 with no port error at all, clears 95 % by only 0.7 points (95.70 %);
+- TT's bf16 head measured 90.66 %, 4.3 points under the target;
+- an fp32 head lifts the bf16 reference by 2.7 points (to 98.37 %), and TT by 5.7 (to 96.37 %).
+
+The head is one 896 × 6,564 matmul per decode step. Its fp32 accumulation and output cost about 0.3 ms per step,
+about 3 % of the decode time. So `CosyVoice2Config.llm_head_logits_dtype` defaults to `"float32"`; `"bfloat16"`
+restores the old head.
+
 ## Bucketing (2026-09-27)
 
 Non-streaming geometries are bucketed and warmed at start-up (`tt/pipeline.py`, module docstring), because each new
