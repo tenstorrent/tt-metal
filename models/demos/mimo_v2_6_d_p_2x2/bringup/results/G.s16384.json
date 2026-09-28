@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "golden_chunks": {
+   "t": "2026-09-28T04:41:09",
+   "value": 2
+  },
+  "golden_hash_ok": {
+   "t": "2026-09-28T04:41:14",
+   "value": 1
+  },
+  "golden_layers": {
+   "t": "2026-09-28T04:41:09",
+   "value": 6
+  },
+  "golden_reused": {
+   "t": "2026-09-28T04:41:14",
+   "value": 1
+  }
+ },
+ "task": "G.s16384"
+}
