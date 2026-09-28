@@ -385,23 +385,17 @@ SoftmaxDeviceOperation::create_op_performance_model(
 // alike). The generic reduce op defaults this to true for the same reason and for the same
 // reduction; see ttnn/cpp/ttnn/operations/reduction/generic/device/reduce_op.cpp.
 //
-// One exception. A caller-supplied sharded program config chooses subblock_w itself, and the
-// sharded compute kernel holds subblock_w tiles in Dest at once. Dest holds 8 tiles at 16 bits but
-// only 4 in fp32 mode, so turning the default on would reject sharded configs that run today:
-// models/demos/*/sentence_bert ships subblock_w = 6. Those keep the 16-bit accumulator, so every
-// sharded call that runs today keeps running and its output is unchanged. A caller who wants fp32
-// there still has to pass it explicitly, and gets the behaviour that path already has.
-static bool fp32_dest_acc_fits(const SoftmaxProgramConfig& program_config) {
+// One exception. A caller-supplied sharded program config keeps the default main has always had,
+// fp32 accumulation for a FLOAT32 input only. Turning it on there also widens every intermediate
+// buffer of the sharded factory to Float32, which is an L1 and throughput change for the models
+// that ship sharded configs, and belongs in its own change. A caller who wants fp32 there passes
+// it explicitly.
+static bool fp32_dest_acc_default(const SoftmaxProgramConfig& program_config, bool is_fp32_input) {
     return std::visit(
-        [](const auto& config) {
+        [&](const auto& config) {
             using ConfigType = std::decay_t<decltype(config)>;
             if constexpr (std::is_same_v<ConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                // The capacity also depends on dst_full_sync_en, which is not resolved here, so take
-                // the smallest of the three (half sync, fp32). Being conservative only means keeping
-                // the 16-bit default in a case that might have fit, which changes nothing for the
-                // caller: it is the behaviour that config has today.
-                constexpr uint32_t conservative_fp32_dest_tiles = 4;
-                return config.subblock_w <= conservative_fp32_dest_tiles;
+                return is_fp32_input;
             }
             return true;
         },
@@ -411,9 +405,10 @@ static bool fp32_dest_acc_fits(const SoftmaxProgramConfig& program_config) {
 static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
     tt::ARCH arch,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
-    const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{}) {
+    const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
+    bool is_fp32_input = false) {
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_fp32_acc = fp32_dest_acc_fits(program_config);
+    const auto default_fp32_acc = fp32_dest_acc_default(program_config, is_fp32_input);
     // hw bug (#38306): on Wormhole B0, HiFi4 with fp32 accumulation can produce less accurate
     // results than HiFi3 for some inputs. Use HiFi3 as the safe default when fp32 acc is enabled.
     const auto default_fidelity =
@@ -596,8 +591,11 @@ Tensor softmax_in_place(
     SoftmaxProgramConfig program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
-    const auto compute_kernel_config_val =
-        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, program_config);
+    const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        program_config,
+        input_tensor.dtype() == DataType::FLOAT32);
 
     // Operation specific checks
     TT_FATAL(
@@ -633,8 +631,11 @@ Tensor scale_mask_softmax_in_place(
     bool is_causal_mask,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
-    const auto compute_kernel_config_val =
-        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, program_config);
+    const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        program_config,
+        input_tensor.dtype() == DataType::FLOAT32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -661,8 +662,11 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     SoftmaxProgramConfig program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
-    const auto compute_kernel_config_val =
-        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, program_config);
+    const auto compute_kernel_config_val = softmax_init_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        program_config,
+        input_tensor.dtype() == DataType::FLOAT32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 

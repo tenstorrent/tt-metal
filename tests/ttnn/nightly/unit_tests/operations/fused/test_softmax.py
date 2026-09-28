@@ -108,7 +108,15 @@ def test_transformer_attention_softmax_inplace_large_kernel_stress(
 # accumulator that round-trips through L1 once per pass and the shorter rows do not.
 @pytest.mark.parametrize(
     "shape",
-    [(1, 32, 1024), (1, 32, 8192), (1, 1, 32, 2048), (1, 1, 32, 8192), (1, 1, 32, 32768), (1, 1, 32, 128000)],
+    [
+        (1, 32, 1024),
+        (1, 32, 8192),
+        (1, 32, 32768),
+        (1, 1, 32, 2048),
+        (1, 1, 32, 8192),
+        (1, 1, 32, 32768),
+        (1, 1, 32, 128000),
+    ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_softmax_rows_are_normalised(device, shape, dtype):
