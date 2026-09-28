@@ -1073,6 +1073,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {
                 "log_with_base_tile_init();", fmt::format("log_with_base_tile<false, true>({}, 0x3fb8aa3bu);", idst)};
         case UnaryOpType::ABS:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"abs_tt_poly_bf16_tile_init();", fmt::format("abs_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
             if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
                 return {};
             }
