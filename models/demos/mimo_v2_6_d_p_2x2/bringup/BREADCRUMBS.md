@@ -81,3 +81,14 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: pcc_attention_L00 0.999988, rel_l2 0.008036, first 128 rows 0.007031, row_norm_ratio [1.0018, 1.0115], PASS.
   The first `FAIL pcc=0.000000` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py`
+
+## S.full_dense.02.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_dense_02_attention.py`
+  (same golden, s4096 chunk 1, KV prefix 2048). Only the docstring changed. Gate: pcc_swap_out >= 0.98. Extra asserted checks:
+  block out finite, rel L2 <= 0.01 (whole chunk and first 128 rows); each swapped step finite, PCC >= 0.99, norm ratio in [0.97, 1.03],
+  rel L2 <= 0.03 (attn_norm) / <= 0.015 (attention, also on the first 128 rows).
+- BRINGUP_IMPL=reference: out 0.999999 / rel 0.0017, attention rel 0.0017, PASS. BRINGUP_IMPL=stub: every check fails (out PCC 0, rel 1.60).
+- Device gate (2x2): pcc_swap_out 0.999995, out rel 0.0036, attn_norm rel 0.0017, attention rel 0.0079 / first rows 0.0070,
+  ratio [1.0018, 1.0112], PASS. Attention headroom is ~1.9x (the 1x4 prior had ~3x at rel 0.0052); if a perf change pushes attention rel toward 0.015,
+  look at the SDPA preset first. The first `FAIL pcc=0` block comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_02_attention.py`

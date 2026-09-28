@@ -558,6 +558,86 @@
   "started": "2026-09-28T05:02:25",
   "status": "PASS"
  },
+ "S.full_dense.02": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "874b140f37e897ed93af3c87748bed94e2c82b9c",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5[1m]",
+   "session_id": "9e68b748-9bca-452d-bf53-e6943a967f99"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/briefs/S.full_dense.02.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "874b140f37e897ed93af3c87748bed94e2c82b9c",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "e435e97c9c02bb35fe513d6a8afeffdb6aa3dece",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "6d9f91033fc81a16afa124ee0bc4cda522f549c8",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/agents/S.full_dense.02.test.1.jsonl",
+    "model": "claude-opus-5-5[1m]",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 101.1,
+    "session_id": "9e68b748-9bca-452d-bf53-e6943a967f99",
+    "t": "2026-09-28T05:09:11"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 16.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T05:10:05"
+   }
+  ],
+  "last_run": "2026-09-28T05:10:05",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/S.full_dense.02.log",
+  "metrics": {
+   "pcc_swap_attn_norm": 0.9999986085417389,
+   "pcc_swap_attn_out": 0.999988612904311,
+   "pcc_swap_ffn_norm": 0.9999936477021852,
+   "pcc_swap_h_mid": 0.9999882230280646,
+   "pcc_swap_mlp_out": 0.9999958336958551,
+   "pcc_swap_out": 0.999994991019868,
+   "rel_l2_head_rows_swap_attn_out": 0.007003534119576216,
+   "rel_l2_head_rows_swap_out": 0.0033809461165219545,
+   "rel_l2_swap_attn_norm": 0.0017379267374053597,
+   "rel_l2_swap_attn_out": 0.007867695763707161,
+   "rel_l2_swap_out": 0.003622455755248666,
+   "row_norm_ratio_max_swap_attn_norm": 1.0026838779449463,
+   "row_norm_ratio_max_swap_attn_out": 1.0111615657806396,
+   "row_norm_ratio_min_swap_attn_norm": 0.9956474304199219,
+   "row_norm_ratio_min_swap_attn_out": 1.0017900466918945
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T05:09:49",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T04:27:18",
