@@ -4210,6 +4210,84 @@ def test_extractor_files_opcode_values_under_the_checkers_family():
 
 
 @case
+def test_built_extractor_places_instruction_and_opcode_facts_at_use_sites():
+    """Runs the BUILT extractor on a header shaped like `ckernel_ops.h`: the instruction
+    macros are layered over the `TT_INSN`/`TTI_INSN` encoding plumbing and `TT_OP`. An
+    instruction must be recorded at its use line, the plumbing must record nothing, and an
+    opcode value must land in its own family only where the source writes it. Skips (does
+    not fail) if the extractor is not built, or is older than its source."""
+    import json
+    import subprocess
+    import tempfile
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    exe = os.path.join(here, "extractor", "llk_extract")
+    src_path = os.path.join(here, "extractor", "llk_extract.cpp")
+    if not os.access(exe, os.X_OK) or os.path.getmtime(exe) < os.path.getmtime(
+        src_path
+    ):
+        return
+    lines = [
+        "#define TT_OP(opcode, params) ((opcode << 24) + params)",
+        '#define TTI_INSN(ENCODING) void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))',
+        "#define TT_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))",
+        "#define TT_OP_NOP TT_OP(0x02, 0)",
+        "#define TTI_NOP TTI_INSN(TT_OP_NOP)",
+        "#define TT_OP_SETC16(a, b) TT_OP(0xb2, (((a) << 16) + (b)))",
+        "#define TT_SETC16(a, b) TT_INSN(TT_OP_SETC16(a, b))",
+        "#define TTI_SETC16(a, b) TTI_INSN(TT_OP_SETC16(a, b))",
+        "namespace ckernel { extern volatile unsigned int instrn_buffer[]; }",
+        "inline unsigned f(unsigned v) {",
+        "    TTI_NOP;",  # use line 11
+        "    TTI_SETC16(1, 2);",  # 12
+        "    TT_SETC16(3, v);",  # 13
+        "    return TT_OP_SETC16(4, 5);",  # 14: an opcode VALUE written in source
+        "}",
+    ]
+    use = {"TTI_NOP": 11, "TTI_SETC16": 12, "TT_SETC16": 13}
+    with tempfile.TemporaryDirectory(prefix="llk_extract_probe_") as d:
+        hdr = os.path.join(d, "ops_probe.h")
+        with open(hdr, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        run = subprocess.run(
+            [
+                exe,
+                "--arch=wormhole",
+                f"--path-filter={d}",
+                hdr,
+                "--",
+                "clang++",
+                "-x",
+                "c++-header",
+                "-std=c++17",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    assert run.returncode == 0, run.stderr[-2000:]
+    facts = [
+        f
+        for ln in run.stdout.splitlines()
+        if ln.strip()
+        for f in json.loads(ln).get("facts", [])
+    ]
+    assert facts, "extractor emitted no facts for the probe header"
+    by_name = {}
+    for f in facts:
+        if f.get("family") in ("macro", "opcode_value"):
+            by_name.setdefault(f["name"], []).append((f["family"], f["line"]))
+    for name, line in use.items():
+        assert by_name.get(name) == [("macro", line)], (name, by_name.get(name))
+    assert "TT_INSN" not in by_name and "TTI_INSN" not in by_name, by_name
+    # nested TT_OP_* inside the instruction macros are dropped; only the source-written value remains
+    assert by_name.get("TT_OP_SETC16") == [("opcode_value", 14)], by_name.get(
+        "TT_OP_SETC16"
+    )
+    assert "TT_OP_NOP" not in by_name and "TT_OP" not in by_name, by_name
+
+
+@case
 def test_opcode_value_never_earns_an_instruction_role():
     """Defense in depth for the same thesis: even if an opcode value reached a
     macro-consuming path, it must not classify as an issued instruction — every
