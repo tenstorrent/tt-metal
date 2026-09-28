@@ -13,6 +13,7 @@
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
+#include "mx_host_packing.hpp"
 #include "tensor_impl.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
@@ -345,7 +346,7 @@ HostTensor to_row_major_layout(const HostTensor& tensor) {
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
         if constexpr (
             std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
-            std::is_same_v<T, float8_e4m3>) {
+            std::is_same_v<T, tensor_impl::mx_tiles> || std::is_same_v<T, float8_e4m3>) {
             // bfloat4_b / bfloat8_b: TODO(#43763):
             // Flipping this assert to TT_FATAL triggers multiple failures in **sanity** test suite.
             // This silent fail has a high impact area and should be studied and addressed asap.
@@ -354,6 +355,7 @@ HostTensor to_row_major_layout(const HostTensor& tensor) {
             // TODO: Flip to assert when we remove use cases in python and c++
             //
             // FP8_E4M3 is constrained to ROW_MAJOR at construction, so it is already row-major.
+            // MX formats are TILE-only, like BFP.
             return tensor;
         } else {
             return CMAKE_UNIQUE_NAMESPACE::to_row_major_layout_impl<T>(tensor);
@@ -371,8 +373,10 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
             tensor.tensor_spec().tile());
     }
     return tensor_impl::dispatch(tensor.dtype(), [&]<typename T>() {
-        if constexpr (std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b>) {
-            // Block-float formats are natively TILE — no conversion needed.
+        if constexpr (
+            std::is_same_v<T, tensor_impl::bfloat4_b> || std::is_same_v<T, tensor_impl::bfloat8_b> ||
+            std::is_same_v<T, tensor_impl::mx_tiles>) {
+            // Block-float and MX formats are natively TILE — no conversion needed.
             return tensor;
         } else {
             return CMAKE_UNIQUE_NAMESPACE::to_tile_layout_impl<T>(tensor, tile);
@@ -397,8 +401,9 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 struct bfloat4_tag {};
 struct bfloat8_tag {};
+struct mx_tag {};  // any MX format; the concrete one is output_spec.data_type()
 
-// Preprocess the storage to unpack the bfloat8/4 tiles into float32.
+// Preprocess the storage to unpack the bfloat8/4 or MX tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
     const tt::tt_metal::DistributedHostBuffer& input_storage,
     const DataType input_dtype,
@@ -417,6 +422,14 @@ tt::tt_metal::DistributedHostBuffer preprocess_buffers(
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
             auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
+            return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
+        });
+    }
+    if (is_mx(input_dtype)) {
+        return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
+            ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
+            auto float_unpacked_data =
+                tensor_impl::unpack_mx_tiles_into_float_vec(input_dtype, uint32_data, row_major_output, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
@@ -476,6 +489,36 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
         };
 
         return input_buffer.transform(transform_fn);
+    } else if constexpr (std::is_same_v<DstType, mx_tag>) {
+        auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
+            // The MX packers only take float, so widen other element types first.
+            ttsl::Span<const SrcType> src = buffer.view_as<const SrcType>();
+            std::vector<float> float_data;
+            ttsl::Span<const float> data;
+            if constexpr (std::is_same_v<SrcType, float>) {
+                data = src;
+            } else {
+                float_data.resize(src.size());
+                std::transform(src.begin(), src.end(), float_data.begin(), [](SrcType value) {
+                    return static_cast<float>(value);
+                });
+                data = ttsl::make_const_span(float_data);
+            }
+
+            std::vector<float> tilized_data;  // empty if `data` is already in tile layout.
+            if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
+                tilized_data =
+                    tensor_impl::to_tile_major_layout(output_spec.physical_shape(), output_spec.tile(), data);
+                data = ttsl::make_const_span(tilized_data);
+            }
+
+            constexpr bool row_major_input = false;
+            auto packed_data =
+                tensor_impl::pack_as_mx_tiles(output_spec.data_type(), data, row_major_input, output_spec.tile());
+            return tt::tt_metal::HostBuffer(std::move(packed_data));
+        };
+
+        return input_buffer.transform(transform_fn);
     } else {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             auto data = buffer.view_as<const SrcType>();
@@ -514,8 +557,9 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     auto input_buffer =
         CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
 
-    const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+    const auto layout = (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B || is_mx(dtype))
+                            ? Layout::TILE
+                            : input_tensor.layout();
 
     tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
 
@@ -555,14 +599,31 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                 case DataType::INT8: return with_src_and_dst.operator()<SrcType, int8_t>();
                 case DataType::INT32: return with_src_and_dst.operator()<SrcType, int32_t>();
                 case DataType::FP8_E4M3: return with_src_and_dst.operator()<SrcType, float8_e4m3>();
+                case DataType::MXFP8_E4M3:
+                case DataType::MXFP8_E5M2:
+                case DataType::MXFP6_E2M3:
+                case DataType::MXFP6_E3M2:
+                case DataType::MXFP4:
+                case DataType::MXINT8:
+                case DataType::MXINT4:
+                case DataType::MXINT2: return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::mx_tag>();
                 case DataType::INVALID: TT_THROW("Unsupported data type conversion requested. Source type is invalid!");
             }
             TT_THROW("Unreachable");
         };
 
         switch (src_type) {
+            // Block formats were unpacked to float by preprocess_buffers.
             case DataType::BFLOAT4_B:
             case DataType::BFLOAT8_B:
+            case DataType::MXFP8_E4M3:
+            case DataType::MXFP8_E5M2:
+            case DataType::MXFP6_E2M3:
+            case DataType::MXFP6_E3M2:
+            case DataType::MXFP4:
+            case DataType::MXINT8:
+            case DataType::MXINT4:
+            case DataType::MXINT2:
             case DataType::FLOAT32: return with_src.operator()<float>();
             case DataType::BFLOAT16: return with_src.operator()<bfloat16>();
             case DataType::UINT8: return with_src.operator()<uint8_t>();
@@ -607,7 +668,7 @@ void validate_datatype(DataType dtype) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
-            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B,
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or is_mx(dtype),
             "Incorrect data type {}",
             dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {

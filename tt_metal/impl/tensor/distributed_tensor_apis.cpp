@@ -47,6 +47,14 @@ MeshTensor allocate_mesh_tensor_on_device_with_topology(
             "FP8_E4M3 is not supported on arch {}",
             mesh_device.arch());
     }
+    // Same guard for the MX formats, which only Quasar implements.
+    if (is_mx(spec.data_type())) {
+        TT_FATAL(
+            tt::is_data_format_supported(datatype_to_dataformat_converter(spec.data_type()), mesh_device.arch()),
+            "{} is not supported on arch {}",
+            spec.data_type(),
+            mesh_device.arch());
+    }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
     return mesh_tensor_from_buffer_with_topology(std::move(*mesh_buffer), std::move(spec), std::move(topology));
 }

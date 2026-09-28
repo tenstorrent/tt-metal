@@ -195,7 +195,13 @@ struct RowMajorHostBuffer {
 
 HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
     const auto tt_dtype = tensor_spec.data_type();
-    TT_FATAL(is_block_float(tt_dtype), "Expected block-float dtype, got {}", tt_dtype);
+    TT_FATAL(is_block_float(tt_dtype) || is_mx(tt_dtype), "Expected block-float or MX dtype, got {}", tt_dtype);
+
+    if (is_mx(tt_dtype)) {
+        // The per-format MX unpackers sit behind the host tensor APIs; to_dtype keeps the tile layout.
+        auto float_tensor = tt::tt_metal::to_dtype(HostTensor::from_buffer(buffer, tensor_spec), DataType::FLOAT32);
+        return host_buffer::get_host_buffer(float_tensor);
+    }
 
     const auto& tile = tensor_spec.tile();
     ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
@@ -277,7 +283,15 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(buffer);
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: {
+            case DataType::BFLOAT4_B:
+            case DataType::MXFP8_E4M3:
+            case DataType::MXFP8_E5M2:
+            case DataType::MXFP6_E2M3:
+            case DataType::MXFP6_E3M2:
+            case DataType::MXFP4:
+            case DataType::MXINT8:
+            case DataType::MXINT4:
+            case DataType::MXINT2: {
                 if (!padded_output) {
                     return convert_block_float_to_logical_row_major(buffer, tensor_spec);
                 }
@@ -328,6 +342,14 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tt_tensor);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
         case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
     }
@@ -708,7 +730,7 @@ void pytensor_module(nb::module_& mod) {
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
                 const bool tile_layout_by_default =
-                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
+                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B || is_mx(dst_dtype));
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
                 new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
@@ -900,7 +922,15 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::FLOAT32: return self.to_vector<float>()[0];
                         case DataType::BFLOAT16: return static_cast<float>(self.to_vector<bfloat16>()[0]);
                         case DataType::BFLOAT8_B:
-                        case DataType::BFLOAT4_B: return self.to_vector<float>()[0];
+                        case DataType::BFLOAT4_B:
+                        case DataType::MXFP8_E4M3:
+                        case DataType::MXFP8_E5M2:
+                        case DataType::MXFP6_E2M3:
+                        case DataType::MXFP6_E3M2:
+                        case DataType::MXFP4:
+                        case DataType::MXINT8:
+                        case DataType::MXINT4:
+                        case DataType::MXINT2: return self.to_vector<float>()[0];
                         case DataType::INT32: return self.to_vector<int32_t>()[0];
                         case DataType::INT8: return self.to_vector<int8_t>()[0];
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
@@ -1675,7 +1705,7 @@ void pytensor_module(nb::module_& mod) {
                     auto data_vec = [&self]() {
                         if constexpr (
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
-                            std::is_same_v<T, bfloat16>) {
+                            std::is_same_v<T, mx_tiles> || std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
                         } else if constexpr (std::is_same_v<T, float8_e4m3>) {
                             // to_vector<float>() doesn't yet handle FP8 source (see

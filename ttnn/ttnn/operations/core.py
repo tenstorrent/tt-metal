@@ -262,8 +262,8 @@ def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=N
         # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
 
-    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-        # Round-trip block floats through host packing so the golden includes BFP quantization.
+    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) or ttnn.is_mx_dtype(target_dtype):
+        # Round-trip block floats and MX through host packing so the golden includes their quantization.
         target_layout = spec.layout if spec is not None else layout
         target_layout = target_layout or ttnn.TILE_LAYOUT
         return ttnn.Tensor(tensor=input_tensor, data_type=target_dtype, layout=target_layout).to_torch()
@@ -712,7 +712,7 @@ def _typecast_golden_function(
     if output_dtype == ttnn.fp8_e4m3:
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
 
-    if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+    if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) or ttnn.is_mx_dtype(output_dtype):
         return ttnn.Tensor(tensor=input_tensor, data_type=output_dtype, layout=ttnn.TILE_LAYOUT).to_torch()
 
     return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(output_dtype))

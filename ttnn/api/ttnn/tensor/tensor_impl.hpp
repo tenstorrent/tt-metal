@@ -22,6 +22,8 @@ namespace ttnn::tensor_impl {
 // Empty structs to facilitate Tensor template logic.
 struct bfloat4_b {};
 struct bfloat8_b {};
+// One tag for all MX formats (packed MX tiles); the concrete format comes from the runtime DataType.
+struct mx_tiles {};
 
 // Utility to convert runtime DataType to compile-time constant and dispatch the function call
 template <typename Func, typename... Args>
@@ -47,6 +49,15 @@ auto dispatch(tt::tt_metal::DataType dtype, Func&& func, Args&&... args) {
             return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
         case tt::tt_metal::DataType::FP8_E4M3:
             return (std::forward<Func>(func)).template operator()<float8_e4m3>(std::forward<Args>(args)...);
+        case tt::tt_metal::DataType::MXFP8_E4M3:
+        case tt::tt_metal::DataType::MXFP8_E5M2:
+        case tt::tt_metal::DataType::MXFP6_E2M3:
+        case tt::tt_metal::DataType::MXFP6_E3M2:
+        case tt::tt_metal::DataType::MXFP4:
+        case tt::tt_metal::DataType::MXINT8:
+        case tt::tt_metal::DataType::MXINT4:
+        case tt::tt_metal::DataType::MXINT2:
+            return (std::forward<Func>(func)).template operator()<mx_tiles>(std::forward<Args>(args)...);
         default: TT_THROW("Unsupported data type");
     }
 }

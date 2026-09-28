@@ -44,6 +44,14 @@ tt::tt_metal::DataType from_flatbuffer(flatbuffer::DataType type) {
         case flatbuffer::DataType::UInt16: return tt::tt_metal::DataType::UINT16;
         case flatbuffer::DataType::Int32: return tt::tt_metal::DataType::INT32;
         case flatbuffer::DataType::Int8: return tt::tt_metal::DataType::INT8;
+        case flatbuffer::DataType::MxFp8E4M3: return tt::tt_metal::DataType::MXFP8_E4M3;
+        case flatbuffer::DataType::MxFp8E5M2: return tt::tt_metal::DataType::MXFP8_E5M2;
+        case flatbuffer::DataType::MxFp6E2M3: return tt::tt_metal::DataType::MXFP6_E2M3;
+        case flatbuffer::DataType::MxFp6E3M2: return tt::tt_metal::DataType::MXFP6_E3M2;
+        case flatbuffer::DataType::MxFp4: return tt::tt_metal::DataType::MXFP4;
+        case flatbuffer::DataType::MxInt8: return tt::tt_metal::DataType::MXINT8;
+        case flatbuffer::DataType::MxInt4: return tt::tt_metal::DataType::MXINT4;
+        case flatbuffer::DataType::MxInt2: return tt::tt_metal::DataType::MXINT2;
         case flatbuffer::DataType::Invalid: return tt::tt_metal::DataType::INVALID;
     }
     TT_THROW("Unsupported DataType from flatbuffer.");
@@ -61,6 +69,14 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
         case tt::tt_metal::DataType::INT8: return flatbuffer::DataType::Int8;
         case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
+        case tt::tt_metal::DataType::MXFP8_E4M3: return flatbuffer::DataType::MxFp8E4M3;
+        case tt::tt_metal::DataType::MXFP8_E5M2: return flatbuffer::DataType::MxFp8E5M2;
+        case tt::tt_metal::DataType::MXFP6_E2M3: return flatbuffer::DataType::MxFp6E2M3;
+        case tt::tt_metal::DataType::MXFP6_E3M2: return flatbuffer::DataType::MxFp6E3M2;
+        case tt::tt_metal::DataType::MXFP4: return flatbuffer::DataType::MxFp4;
+        case tt::tt_metal::DataType::MXINT8: return flatbuffer::DataType::MxInt8;
+        case tt::tt_metal::DataType::MXINT4: return flatbuffer::DataType::MxInt4;
+        case tt::tt_metal::DataType::MXINT2: return flatbuffer::DataType::MxInt2;
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
