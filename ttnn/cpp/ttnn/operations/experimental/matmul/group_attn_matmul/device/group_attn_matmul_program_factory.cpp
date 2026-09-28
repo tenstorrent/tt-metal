@@ -116,16 +116,16 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
     CoreRangeSet mcast_receiver_cores = num_cores_to_corerangeset(
         Q_HEADS, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
     CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
-    // Partial bounding boxes contain filler cores whose reader exits without acknowledging.
     const auto mcast_sender_cores = num_cores_to_corerangeset(
         TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
     const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     const tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     const auto in1_mcast_grid = CoreRangeSet(mcast_receiver_cores_bounding_box);
+    const auto in1_handshake_cores = all_cores.intersection(in1_mcast_grid);
     const ttnn::kernel_lib::host::Mcast in1_mcast(
         *device,
-        ttnn::kernel_lib::host::McastConfig{.noc = reader_noc, .handshake_cores = mcast_receiver_cores},
+        ttnn::kernel_lib::host::McastConfig{.noc = reader_noc, .handshake_cores = in1_handshake_cores},
         in1_mcast_grid,
         /*receiver_group_size=*/in1_mcast_grid.num_cores(),
         ttnn::kernel_lib::host::McastSenderGridConfig{
