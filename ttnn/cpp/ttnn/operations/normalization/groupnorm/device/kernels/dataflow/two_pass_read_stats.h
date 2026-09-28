@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <type_traits>
 
 #include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -30,7 +29,7 @@ inline void read_two_pass_stats_block(
     constexpr std::uint32_t max_tiles_per_read_batch = 4;
 #endif
     bool read_contiguous = false;
-    if constexpr (TilesPerRow == 1 && std::is_base_of_v<InterleavedAddrGen<true>, Accessor>) {
+    if constexpr (TilesPerRow == 1 && Accessor::DSpec::is_interleaved && Accessor::DSpec::is_dram) {
         // Stepping by the bank count advances one physical page in the same bank.
         read_contiguous = row_stride == NUM_DRAM_BANKS && src.get_aligned_page_size() == TileBytes;
     }
