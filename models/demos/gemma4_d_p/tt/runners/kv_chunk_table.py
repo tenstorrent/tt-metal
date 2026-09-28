@@ -43,6 +43,8 @@ def _cache_chunk_runs(
     num_users: int,
     heads_per_device: int,
     local_head: int,
+    num_layers: int = 1,
+    layer_idx: int = 0,
 ):
     """Yield (cp_row, slot, first_position, first_shard, count) runs of consecutive 32-token blocks."""
     if not 0 <= local_head < heads_per_device:
@@ -55,7 +57,9 @@ def _cache_chunk_runs(
     for cp_row in range(cp):
         for slot in range(num_users):
             for prefill_chunk in range(seq_len // chunk_size):
-                shard = (slot * heads_per_device + local_head) * blocks_local + prefill_chunk * blocks_per_chunk
+                shard = (
+                    (slot * num_layers + layer_idx) * heads_per_device + local_head
+                ) * blocks_local + prefill_chunk * blocks_per_chunk
                 position = prefill_chunk * chunk_size + cp_row * local_chunk
                 yield cp_row, slot, position, shard, blocks_per_chunk
 
@@ -86,6 +90,8 @@ class _CacheStream(NamedTuple):
     heads_per_device: int
     local_head: int
     chunk_bytes: int
+    cache_num_layers: int = 1
+    cache_layer_idx: int = 0
 
 
 def _cache_streams(kv_caches):
@@ -101,6 +107,25 @@ def _cache_streams(kv_caches):
         for head in range(16):
             for config_id, tensor in ((4 + head, cache.k), (20 + head, cache.v)):
                 streams.append(_CacheStream(config_id, layer_idx, tensor, head // 4, 4, head % 4, SLIDING_CHUNK_BYTES))
+    draft = kv_caches.dflash
+    if draft is not None:
+        heads_per_device = draft.config.num_key_value_heads // kv_caches.tp
+        for kind_idx, tensor in enumerate((draft.k, draft.v)):
+            for layer in range(draft.config.num_hidden_layers):
+                for head in range(draft.config.num_key_value_heads):
+                    streams.append(
+                        _CacheStream(
+                            len(CONFIG_NAMES) + kind_idx * draft.config.num_key_value_heads + head,
+                            len(kv_caches) + layer,
+                            tensor,
+                            head // heads_per_device,
+                            heads_per_device,
+                            head % heads_per_device,
+                            draft.config.head_dim // ttnn.TILE_SIZE * _BFP8_TILE_BYTES,
+                            draft.config.num_hidden_layers,
+                            layer,
+                        )
+                    )
     for stream in streams:
         if stream.tensor.dtype != ttnn.bfloat8_b:
             raise ValueError(f"migration cache must be BFP8_B, got {stream.tensor.dtype}")
@@ -139,10 +164,21 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
         )
         for idx, name in enumerate(CONFIG_NAMES)
     }
+    draft = kv_caches.dflash
+    if draft is not None:
+        for kind in ("k", "v"):
+            for head in range(draft.config.num_key_value_heads):
+                configs[f"dflash_{kind}_h{head:02d}"] = _config(
+                    num_layers=num_layers + draft.config.num_hidden_layers,
+                    max_seq_len=draft.max_seq_len,
+                    num_users=draft.num_users,
+                    chunk_size_bytes=draft.config.head_dim // ttnn.TILE_SIZE * _BFP8_TILE_BYTES,
+                )
+    expected_names = tuple(configs)
     table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
     actual_names = tuple(table.config_name(i) for i in range(table.num_configs()))
-    if actual_names != CONFIG_NAMES:
-        raise RuntimeError(f"protobuf config ordering changed: expected {CONFIG_NAMES}, got {actual_names}")
+    if actual_names != expected_names:
+        raise RuntimeError(f"protobuf config ordering changed: expected {expected_names}, got {actual_names}")
 
     num_banks = get_num_dram_banks(mesh_device)
     mapped_hosts = set()
@@ -174,6 +210,8 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
             num_users=kv_caches.num_users,
             heads_per_device=stream.heads_per_device,
             local_head=stream.local_head,
+            num_layers=stream.cache_num_layers,
+            layer_idx=stream.cache_layer_idx,
         ):
             location.device_group_index = device_group(cp_row, stream.tp_column)
             for shard in range(first_shard, first_shard + count):
@@ -206,8 +244,21 @@ def kv_chunk_table_cache_key(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_si
         num_banks=get_num_dram_banks(mesh_device),
         host=worker_host_name(),
         nodes=nodes,
+        draft_geometry=(
+            (kv_caches.dflash.num_users, kv_caches.dflash.max_seq_len) if kv_caches.dflash is not None else None
+        ),
         streams=[
-            (s.config_id, s.layer, int(s.tensor.buffer_address()), s.tp_column, s.heads_per_device, s.local_head)
+            (
+                s.config_id,
+                s.layer,
+                int(s.tensor.buffer_address()),
+                s.tp_column,
+                s.heads_per_device,
+                s.local_head,
+                s.chunk_bytes,
+                s.cache_num_layers,
+                s.cache_layer_idx,
+            )
             for s in _cache_streams(kv_caches)
         ],
     )
