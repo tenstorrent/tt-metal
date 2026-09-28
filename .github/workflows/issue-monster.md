@@ -797,6 +797,19 @@ failures.
     retry heuristic fires; hard exclusion (also honoured if applied by hand).
   - `copilot-retry-approved` — maintainer override: skips the retry-block heuristic for
     that issue so one more Copilot attempt can be dispatched.
+  - `copilot-flow` — applied to the **PR** (not the issue) by `copilot-flow-ready.yaml`
+    once it has verified the PR's linked issue carried `copilot-ready`. It is the
+    provenance snapshot that `pr-sous-chef.md` scopes its nudges to.
+- **What happens after dispatch** (the rest of the loop, both plain to read):
+  `copilot-flow-ready.yaml` polls every 10 minutes, and when Copilot reports
+  `copilot_work_finished` on a flow PR it marks the draft ready for review (which is what
+  starts pr-gate, the Copilot code review and CODEOWNERS requests — Copilot cannot leave
+  draft on its own), labels it `copilot-flow`, or posts one notice if the session failed.
+  `pr-sous-chef.md` then nudges Copilot on stalled `copilot-flow` PRs (failed checks,
+  conflicts, unanswered review threads) until they are mergeable or handed off after 6
+  nudges. Flipping drafts to ready also releases this workflow's `skip-if-match`
+  back-pressure, which therefore counts only drafts Copilot is still working on or gave
+  up on.
 - **Retry-block recovery (what actually works)**: when two or more Copilot PRs on the
   same normalized title were closed unmerged in the last 90 days, the pre-activation
   script labels the issue `copilot-retry-blocked` and posts one checkpoint comment,
