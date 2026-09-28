@@ -1,0 +1,6 @@
+intake:
+  by: dnijemcevic
+  at: '2026-09-28T04:27:16'
+  files:
+    models/demos/mimo_v2_6_d_p_2x2/bringup/spec.yaml: 1f644c8262d314db6656d883db8dabc74571202ca38c61cbd98ae60da3e8b1af
+  note: 'owner approved 2026-09-28 (added rule 5: bring-up ops awareness)'

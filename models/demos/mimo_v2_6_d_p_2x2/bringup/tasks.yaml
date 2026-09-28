@@ -1,0 +1,110 @@
+model: XiaomiMiMo/MiMo-V2.6-Flash-RL
+target:
+  seq: 56320
+  chunk: 5120
+  dtype: bf16
+tasks:
+- id: R.1
+  title: Checkpoint, intake approval, canonical prompt
+  step: intake
+  deps: []
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+    metrics:
+      intake_approved: == 1
+      prompt_hash_ok: == 1
+      missing_tensors: == 0
+      shape_mismatches: == 0
+      count_mismatches: == 0
+      config_mismatches: == 0
+      checkpoint_tensors: '>= 1'
+  paths:
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/spec.yaml
+- id: R.2
+  title: HF sanity on the model's loader (revision, smoke, accuracy floor); reference matches HF per layer and on logits (fp32)
+  step: reference
+  deps:
+  - R.1
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf
+      --seq 2048
+    metrics:
+      revision_ok: == 1
+      text_top1_acc: '>= 0.4'
+      smoke_ok: == 1
+      pcc_hidden_L*: '>= 0.9999'
+      pcc_logits: '>= 0.9999'
+      top1_match_frac: '>= 0.99'
+  paths: &id001
+  - models/demos/mimo_v2_6_d_p_2x2/reference
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/hooks.py
+  - models/demos/mimo_v2_6_d_p_2x2/__init__.py
+- id: R.3
+  title: Reference chunked == one-shot (4096 in 2048) and block graphs replay exactly
+  step: reference
+  deps:
+  - R.2
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    metrics:
+      pcc_hidden: '>= 0.99999'
+      pcc_state_min: '>= 0.99999'
+      graph_errors: == 0
+      boundaries_missing: == 0
+      graph_replay_maxabs: <= 0
+  paths: *id001
+- id: G.s4096
+  title: 'Golden s4096: 4096 tokens in 2048-token chunks, full dumps'
+  step: goldens
+  deps:
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096
+    metrics:
+      golden_layers: == 6
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s16384
+  title: 'Golden s16384: 16384 tokens in 8192-token chunks'
+  step: goldens
+  deps:
+  - G.s4096
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s16384
+    metrics:
+      golden_layers: == 6
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s56320
+  title: 'Golden s56320: 56320 tokens in 5120-token chunks'
+  step: goldens
+  deps:
+  - G.s16384
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s56320
+    metrics:
+      golden_layers: == 6
+      golden_chunks: == 11
+      golden_hash_ok: == 1
+- id: B.1
+  title: 'Box: mesh opens with the spec''s device params, collectives are exact'
+  step: box
+  deps: []
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_box.py
+    metrics:
+      chips: == 4
+      all_gather_maxabs: == 0
+  device: true
+- id: PL.0
+  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs'
+  step: ledger
+  deps:
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.ledger_gen --extend
+    metrics:
+      ledger_errors: == 0
+      ledger_tasks: '>= 1'
+  paths:
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/tasks.yaml
