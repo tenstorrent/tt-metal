@@ -103,8 +103,8 @@ if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
-assert not (DFLASH_ENABLED and USE_TRACE), (
-    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
+assert not (DFLASH_ENABLED and USE_TRACE and not ADAPTER.supports_dflash_trace), (
+    f"PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1 for {ADAPTER.name}: its DFlash path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
 )
 

@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL
 from models.demos.gemma4_d_p.tt.model import Gemma4Model, prefill_chunk_geometry_error
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, resolve_cache_dir_from_tt_cache_path
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
@@ -50,6 +51,9 @@ def create_tt_model(
     ring_kv_caches=None,
     force_rebuild=False,
     tt_cache_path=None,
+    dflash_enabled=False,
+    dflash_checkpoint_path=DEFAULT_DFLASH_MODEL,
+    dflash_kv_cache=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -112,6 +116,9 @@ def create_tt_model(
         max_local_batch_size=max_batch_size,
         num_layers=num_layers,
         ring_kv_caches=ring_kv_caches,
+        dflash_enabled=dflash_enabled,
+        dflash_checkpoint_path=dflash_checkpoint_path,
+        dflash_kv_cache=dflash_kv_cache,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)

@@ -135,6 +135,7 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    supports_dflash_trace: bool = False
     # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
     # exactly one parent (tt_prefill_runtime asserts the match), so both belong to the model. Empty when the
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.

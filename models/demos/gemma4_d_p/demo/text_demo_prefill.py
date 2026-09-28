@@ -170,6 +170,7 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
         force_rebuild=_load_full_weights(),
         hf_model_id=hf_model_id,
         prefill_chunk_size=chunk_size,
+        dflash_enabled=os.environ.get("PREFILL_DFLASH", "0") == "1",
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
 

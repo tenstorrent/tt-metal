@@ -40,6 +40,8 @@ def iter_cache_chunk_locations(
     local_head: int,
     num_banks: int,
     chunk_size_bytes: int,
+    num_layers: int = 1,
+    layer_idx: int = 0,
 ):
     """Yield the ROUND_ROBIN_1D address walk for one head in one layer buffer."""
     if not 0 <= local_head < heads_per_device:
@@ -55,7 +57,7 @@ def iter_cache_chunk_locations(
             for prefill_chunk in range(seq_len // chunk_size):
                 for block_in_chunk in range(blocks_per_chunk):
                     shard = (
-                        (slot * heads_per_device + local_head) * blocks_local
+                        ((slot * num_layers + layer_idx) * heads_per_device + local_head) * blocks_local
                         + prefill_chunk * blocks_per_chunk
                         + block_in_chunk
                     )
@@ -92,10 +94,21 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
         )
         for idx, name in enumerate(CONFIG_NAMES)
     }
+    draft = kv_caches.dflash
+    if draft is not None:
+        for kind in ("k", "v"):
+            for head in range(draft.config.num_key_value_heads):
+                configs[f"dflash_{kind}_h{head:02d}"] = _config(
+                    num_layers=num_layers + draft.config.num_hidden_layers,
+                    max_seq_len=draft.max_seq_len,
+                    num_users=draft.num_users,
+                    chunk_size_bytes=draft.config.head_dim // ttnn.TILE_SIZE * _BFP8_TILE_BYTES,
+                )
+    expected_names = tuple(configs)
     table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
     actual_names = tuple(table.config_name(i) for i in range(table.num_configs()))
-    if actual_names != CONFIG_NAMES:
-        raise RuntimeError(f"protobuf config ordering changed: expected {CONFIG_NAMES}, got {actual_names}")
+    if actual_names != expected_names:
+        raise RuntimeError(f"protobuf config ordering changed: expected {expected_names}, got {actual_names}")
 
     num_banks = get_num_dram_banks(mesh_device)
     mapped_hosts = set()
@@ -115,7 +128,18 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
                 mapped_hosts.add(host_key)
         return group_cache[key]
 
-    def populate(*, config_id, semantic_layer, tensor, tp_column, heads_per_device, local_head, chunk_bytes):
+    def populate(
+        *,
+        config_id,
+        semantic_layer,
+        tensor,
+        tp_column,
+        heads_per_device,
+        local_head,
+        chunk_bytes,
+        cache_num_layers=1,
+        cache_layer_idx=0,
+    ):
         base_addr = int(tensor.buffer_address())
         if tensor.dtype != ttnn.bfloat8_b:
             raise ValueError(f"migration cache must be BFP8_B, got {tensor.dtype}")
@@ -128,6 +152,8 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
             local_head=local_head,
             num_banks=num_banks,
             chunk_size_bytes=chunk_bytes,
+            num_layers=cache_num_layers,
+            layer_idx=cache_layer_idx,
         ):
             location = ttnn.experimental.disaggregation.KvCacheLocation()
             location.noc_addr = bank_id << 32 | base_addr + bank_offset
@@ -162,6 +188,22 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
             )
             populate(config_id=4 + head, tensor=cache_k, **common)
             populate(config_id=20 + head, tensor=cache_v, **common)
+    if draft is not None:
+        heads_per_device = draft.config.num_key_value_heads // tp
+        for kind, tensor in (("k", draft.k), ("v", draft.v)):
+            for layer in range(draft.config.num_hidden_layers):
+                for head in range(draft.config.num_key_value_heads):
+                    populate(
+                        config_id=table.config_id_of(f"dflash_{kind}_h{head:02d}"),
+                        semantic_layer=num_layers + layer,
+                        tensor=tensor,
+                        tp_column=head // heads_per_device,
+                        heads_per_device=heads_per_device,
+                        local_head=head % heads_per_device,
+                        chunk_bytes=draft.config.head_dim // ttnn.TILE_SIZE * _BFP8_TILE_BYTES,
+                        cache_num_layers=draft.config.num_hidden_layers,
+                        cache_layer_idx=layer,
+                    )
     return table
 
 

@@ -8,6 +8,7 @@ import torch
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.common import create_tt_model
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL
 
 
 class Gemma4PrefillRuntime:
@@ -55,6 +56,9 @@ class Gemma4PrefillRuntime:
             max_batch_size=1,
             ring_kv_caches=kv_cache,
             tt_cache_path=self.tt_cache_path,
+            dflash_enabled=self.config.dflash_enabled,
+            dflash_checkpoint_path=self.config.dflash_checkpoint_path or DEFAULT_DFLASH_MODEL,
+            dflash_kv_cache=kv_cache.dflash,
         )
         self.input_tokens = self.make_chunk_input([0] * self.config.chunk_size)
         self.positions = self.make_chunk_input(range(self.config.chunk_size))
@@ -78,8 +82,16 @@ class Gemma4PrefillRuntime:
     def set_layer_completion_sink(self, sink):
         self.layer_completion_sink = sink
 
+    @property
+    def num_ack_layers(self):
+        return self.config.num_layers + (self.model.dflash.config.num_hidden_layers if self.model.dflash else 0)
+
+    def layer_ack_layers(self, global_count, local_count):
+        draft_layers = self.num_ack_layers - self.config.num_layers
+        return global_count + draft_layers, local_count + draft_layers
+
     def warmup_ack_count(self):
-        return self.config.num_layers if self.d2h_service is not None else 0
+        return self.num_ack_layers if self.d2h_service is not None else 0
 
     def capture_trace(self, kv_cache):
         self._check_cache(kv_cache)
@@ -97,6 +109,9 @@ class Gemma4PrefillRuntime:
             layer.self_attn.ring_kv_cache is not cache for layer, cache in zip(self.model.layers, kv_cache.layers)
         ):
             raise ValueError("The traced runtime requires the caches supplied to compile")
+        expected_draft = self.model.dflash.kv_cache if self.model.dflash is not None else None
+        if kv_cache.dflash is not expected_draft:
+            raise ValueError("The traced runtime requires the DFlash caches supplied to compile")
 
     def validate_chunk(self, slot_id, actual_start, actual_end):
         if not 0 <= slot_id < self.config.num_users:
@@ -137,7 +152,7 @@ class Gemma4PrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
         self.slot_ends[slot_id] = actual_end
         if self.layer_completion_sink is not None:
-            for layer_idx in range(self.config.num_layers):
+            for layer_idx in range(self.num_ack_layers):
                 self.layer_completion_sink(layer_idx, request_id)
         ttnn.deallocate(input_tensor)
         if metadata_msg is not None:
@@ -153,6 +168,12 @@ class Gemma4PrefillRuntime:
         for layer_idx, cache in enumerate(kv_cache.layers):
             tensors = (cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v)
             stages.extend(KvCacheStage(int(tensor.buffer_address()), layer_idx, 1) for tensor in tensors)
+        if kv_cache.dflash is not None:
+            draft = kv_cache.dflash
+            stages.extend(
+                KvCacheStage(int(tensor.buffer_address()), self.config.num_layers, draft.config.num_hidden_layers)
+                for tensor in (draft.k, draft.v)
+            )
         return stages
 
     def build_kv_chunk_table(self, kv_cache, path, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None):
