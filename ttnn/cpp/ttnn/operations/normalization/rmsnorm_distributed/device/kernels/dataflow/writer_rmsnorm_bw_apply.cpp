@@ -5,22 +5,33 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 // Copy row 0 of each src tile (two 64 B faces) into in-tile row `row` of the dest gather buffer.
 FORCE_INLINE void scatter_row(
-    uint32_t src_l1, uint32_t dst_l1, uint32_t dst_x, uint32_t dst_y, uint32_t row, uint32_t Wt, uint32_t page) {
+    const Noc& noc,
+    const CircularBuffer& src,
+    uint32_t dst_l1,
+    uint32_t dst_x,
+    uint32_t dst_y,
+    uint32_t row,
+    uint32_t Wt,
+    uint32_t page) {
+    const UnicastEndpoint dst;
     const uint32_t face_r = (row < 16u) ? 0u : 2u;
     const uint32_t in_face = (row & 15u) * 64u;
     for (uint32_t c = 0; c < Wt; ++c) {
-        const uint32_t s = src_l1 + c * page;
+        const uint32_t s = c * page;
         const uint32_t d = dst_l1 + c * page + face_r * 1024u + in_face;
-        noc_async_write(s, get_noc_addr(dst_x, dst_y, d), 64u);
-        noc_async_write(s + 1024u, get_noc_addr(dst_x, dst_y, d + 1024u), 64u);
+        noc.async_write(src, dst, 64u, {.offset_bytes = s}, {.noc_x = dst_x, .noc_y = dst_y, .addr = d});
+        noc.async_write(
+            src, dst, 64u, {.offset_bytes = s + 1024u}, {.noc_x = dst_x, .noc_y = dst_y, .addr = d + 1024u});
     }
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_out = 16, cb_acc = 17, cb_part = 18, cb_zero_done = 19, cb_go = 20;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t page = get_compile_time_arg_val(1);
     constexpr uint32_t with_dgamma = get_compile_time_arg_val(2);
@@ -51,24 +62,25 @@ void kernel_main() {
     const auto out_acc = TensorAccessor(out_args, out_addr, page);
     const auto dg_acc = TensorAccessor(dg_args, dg_addr, page);
 
+    const Noc noc;
+    CircularBuffer cb_out(16), cb_acc(17), cb_part(18), cb_zero_done(19), cb_go(20);
+
     for (uint32_t r = row_start; r < row_start + row_count; ++r) {
-        cb_wait_front(cb_out, Wt);
-        const uint32_t l1 = get_read_ptr(cb_out);
+        cb_out.wait_front(Wt);
         const uint32_t base = r * Wt;
         for (uint32_t c = 0; c < Wt; ++c) {
-            noc_async_write(l1 + c * page, out_acc.get_noc_addr(base + c), page);
+            noc.async_write(cb_out, out_acc, page, {.offset_bytes = c * page}, {.page_id = base + c});
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, Wt);
+        noc.async_write_barrier();
+        cb_out.pop_front(Wt);
     }
 
     if constexpr (with_dgamma) {
         Semaphore<> ready1(sem_ready1), arrive1(sem_arrive1), ready2(sem_ready2), arrive2(sem_arrive2);
-        Noc noc;
-        const uint32_t gather_l1 = get_write_ptr(cb_acc);
+        const uint32_t gather_l1 = cb_acc.get_write_ptr();
         auto open_and_signal = [&](Semaphore<>& ready, uint32_t n, uint32_t tab_off, bool along_x) {
-            cb_wait_front(cb_zero_done, 1);
-            cb_pop_front(cb_zero_done, 1);
+            cb_zero_done.wait_front(1);
+            cb_zero_done.pop_front(1);
             for (uint32_t i = 0; i < n; ++i) {
                 const uint32_t v = get_arg_val<uint32_t>(TAB + tab_off + i);
                 if (along_x) {
@@ -79,47 +91,45 @@ void kernel_main() {
             }
         };
         auto go = [&]() {
-            cb_reserve_back(cb_go, 1);
-            cb_push_back(cb_go, 1);
+            cb_go.reserve_back(1);
+            cb_go.push_back(1);
         };
 
-        cb_wait_front(cb_part, Wt);
+        cb_part.wait_front(Wt);
         if (role >= 1) {
             open_and_signal(ready1, row_cols, /*tab_off=*/0, /*along_x=*/true);
         }
         ready1.wait_min(1);
-        scatter_row(get_read_ptr(cb_part), gather_l1, leader_vx, leader_vy, my_col, Wt, page);
-        noc_async_write_barrier();
+        scatter_row(noc, cb_part, gather_l1, leader_vx, leader_vy, my_col, Wt, page);
+        noc.async_write_barrier();
         arrive1.up(noc, leader_vx, leader_vy, 1);
-        cb_pop_front(cb_part, Wt);
+        cb_part.pop_front(Wt);
 
         if (role >= 1) {
             arrive1.wait_min(row_cols);
             go();
-            cb_wait_front(cb_part, Wt);
+            cb_part.wait_front(Wt);
             if (role == 2) {
                 open_and_signal(ready2, n_leaders, /*tab_off=*/row_cols, /*along_x=*/false);
             }
             ready2.wait_min(1);
-            scatter_row(get_read_ptr(cb_part), gather_l1, root_vx, root_vy, my_row, Wt, page);
-            noc_async_write_barrier();
+            scatter_row(noc, cb_part, gather_l1, root_vx, root_vy, my_row, Wt, page);
+            noc.async_write_barrier();
             arrive2.up(noc, root_vx, root_vy, 1);
-            cb_pop_front(cb_part, Wt);
+            cb_part.pop_front(Wt);
         }
         if (role == 2) {
             arrive2.wait_min(n_leaders);
             go();
-            cb_wait_front(cb_part, Wt);
-            const uint32_t l1 = get_read_ptr(cb_part);
+            cb_part.wait_front(Wt);
             for (uint32_t c = 0; c < Wt; ++c) {
-                noc_async_write(l1 + c * page, dg_acc.get_noc_addr(c), page);
+                noc.async_write(cb_part, dg_acc, page, {.offset_bytes = c * page}, {.page_id = c});
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_part, Wt);
+            noc.async_write_barrier();
+            cb_part.pop_front(Wt);
         }
 
-        // Program-cache hits (and trace replay) reuse this program without re-running host
-        // semaphore init. wait_min does not decrement, so leave these at 0 for the next launch.
+        noc.async_atomic_barrier();
         ready1.set(0);
         arrive1.set(0);
         ready2.set(0);

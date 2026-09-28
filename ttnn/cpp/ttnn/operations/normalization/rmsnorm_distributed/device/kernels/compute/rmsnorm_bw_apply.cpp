@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     using namespace ckernel;
@@ -21,6 +22,9 @@ void kernel_main() {
     constexpr uint32_t neg_one_bits = get_compile_time_arg_val(1);
     constexpr uint32_t with_dgamma = get_compile_time_arg_val(2);
     const uint32_t row_count = get_arg_val<uint32_t>(0);
+
+    CircularBuffer dy_cb(cb_dy), x_cb(cb_x), inv_cb(cb_inv), d_cb(cb_d), out_cb(cb_out);
+    CircularBuffer acc_cb(cb_acc), part_cb(cb_part), zero_done_cb(cb_zero_done), go_cb(cb_go);
 
     if constexpr (with_dgamma) {
         compute_kernel_hw_startup(cb_dy, cb_gamma, cb_out);
@@ -43,16 +47,16 @@ void kernel_main() {
     };
 
     if constexpr (with_dgamma) {
-        cb_reserve_back(cb_acc, Wt);
+        acc_cb.reserve_back(Wt);
         zero_fill_acc();
     }
 
     for (uint32_t r = 0; r < row_count; ++r) {
-        cb_wait_front(cb_dy, Wt);
-        cb_wait_front(cb_x, Wt);
-        cb_wait_front(cb_inv, 1);
-        cb_wait_front(cb_d, 1);
-        cb_reserve_back(cb_out, Wt);
+        dy_cb.wait_front(Wt);
+        x_cb.wait_front(Wt);
+        inv_cb.wait_front(1);
+        d_cb.wait_front(1);
+        out_cb.reserve_back(Wt);
 
         for (uint32_t c = 0; c < Wt; ++c) {
             tile_regs_acquire();
@@ -100,11 +104,11 @@ void kernel_main() {
             }
         }
 
-        cb_push_back(cb_out, Wt);
-        cb_pop_front(cb_dy, Wt);
-        cb_pop_front(cb_x, Wt);
-        cb_pop_front(cb_inv, 1);
-        cb_pop_front(cb_d, 1);
+        out_cb.push_back(Wt);
+        dy_cb.pop_front(Wt);
+        x_cb.pop_front(Wt);
+        inv_cb.pop_front(1);
+        d_cb.pop_front(1);
     }
 
     if constexpr (with_dgamma) {
@@ -115,8 +119,8 @@ void kernel_main() {
         const uint32_t role = get_arg_val<uint32_t>(1);
 
         auto collapse_acc_to_part = [&]() {
-            cb_wait_front(cb_acc, Wt);
-            cb_reserve_back(cb_part, Wt);
+            acc_cb.wait_front(Wt);
+            part_cb.reserve_back(Wt);
             reconfig_data_format_srca(cb_acc);
             pack_reconfig_data_format(cb_part);
             copy_init(cb_acc);
@@ -130,22 +134,22 @@ void kernel_main() {
                 pack_tile(0, cb_part);
                 tile_regs_release();
             }
-            cb_push_back(cb_part, Wt);
-            cb_pop_front(cb_acc, Wt);
+            part_cb.push_back(Wt);
+            acc_cb.pop_front(Wt);
         };
         auto open_gather = [&]() {
-            cb_reserve_back(cb_acc, Wt);
+            acc_cb.reserve_back(Wt);
             zero_fill_acc();
-            cb_push_back(cb_acc, Wt);
-            cb_reserve_back(cb_zero_done, 1);
-            cb_push_back(cb_zero_done, 1);
+            acc_cb.push_back(Wt);
+            zero_done_cb.reserve_back(1);
+            zero_done_cb.push_back(1);
         };
         auto wait_go = [&]() {
-            cb_wait_front(cb_go, 1);
-            cb_pop_front(cb_go, 1);
+            go_cb.wait_front(1);
+            go_cb.pop_front(1);
         };
 
-        cb_push_back(cb_acc, Wt);
+        acc_cb.push_back(Wt);
         collapse_acc_to_part();
         for (uint32_t stage = 0; stage < role; ++stage) {
             open_gather();

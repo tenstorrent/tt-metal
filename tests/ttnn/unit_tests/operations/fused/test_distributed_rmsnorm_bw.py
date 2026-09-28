@@ -66,7 +66,32 @@ def _shard(device, torch_tensor, num_devices, ttnn_dtype):
     ]
 
 
-def _run_distributed_rms_norm_bw(device, batch, seq_len, hidden_dim_total, num_devices, with_weight, ttnn_dtype):
+def _fill_stats_scratch_columns(tt_stats, fill_value, ttnn_dtype):
+    """rms_norm_pre_all_gather only defines column 0 of each per-device tile; overwrite the rest."""
+    stats = ttnn.to_torch(tt_stats)
+    scratch = torch.ones(stats.shape[-1], dtype=torch.bool)
+    scratch[::32] = False
+    stats[..., scratch] = fill_value
+    return ttnn.from_torch(
+        stats,
+        dtype=ttnn_dtype,
+        device=tt_stats.device(),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _run_distributed_rms_norm_bw(
+    device,
+    batch,
+    seq_len,
+    hidden_dim_total,
+    num_devices,
+    with_weight,
+    ttnn_dtype,
+    pad_fill=None,
+    stats_scratch_fill=None,
+):
     assert hidden_dim_total % num_devices == 0
     hidden_per_dev = hidden_dim_total // num_devices
     torch_dtype = torch.bfloat16 if ttnn_dtype == ttnn.bfloat16 else torch.float32
@@ -86,11 +111,16 @@ def _run_distributed_rms_norm_bw(device, batch, seq_len, hidden_dim_total, num_d
         if with_weight
         else [None] * num_devices
     )
+    if pad_fill is not None:
+        tt_x = [ttnn.fill_implicit_tile_padding(t, pad_fill) for t in tt_x]
+        tt_dy = [ttnn.fill_implicit_tile_padding(t, pad_fill) for t in tt_dy]
 
     tt_stats_gathered = ttnn.concat(
         [ttnn.rms_norm_pre_all_gather(t, compute_kernel_config=compute_kernel_config, dtype=ttnn_dtype) for t in tt_x],
         dim=3,
     )
+    if stats_scratch_fill is not None:
+        tt_stats_gathered = _fill_stats_scratch_columns(tt_stats_gathered, stats_scratch_fill, ttnn_dtype)
     tt_bw_stats_gathered = ttnn.concat(
         [
             ttnn.rms_norm_pre_all_gather_bw(
@@ -156,6 +186,21 @@ def test_distributed_rms_norm_bw_single_device(
 ):
     _run_distributed_rms_norm_bw(
         device, batch, seq_len, hidden_dim_total, num_simulated_devices, with_weight, ttnn.bfloat16
+    )
+
+
+@pytest.mark.parametrize("batch, seq_len", [(1, 33), (2, 47)])
+def test_distributed_rms_norm_bw_non_tile_aligned_height(device, batch, seq_len):
+    """dgamma sums whole tiles, so NaN in the implicit height padding must not reach weight_grad."""
+    _run_distributed_rms_norm_bw(
+        device, batch, seq_len, 128, 2, with_weight=True, ttnn_dtype=ttnn.bfloat16, pad_fill=float("nan")
+    )
+
+
+def test_distributed_rms_norm_bw_ignores_stats_scratch_columns(device):
+    """Only column 0 of each forward stats tile is defined; the rest must not reach rms."""
+    _run_distributed_rms_norm_bw(
+        device, 1, 32, 128, 2, with_weight=True, ttnn_dtype=ttnn.bfloat16, stats_scratch_fill=float("nan")
     )
 
 

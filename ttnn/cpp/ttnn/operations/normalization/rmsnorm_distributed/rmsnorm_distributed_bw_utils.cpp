@@ -6,11 +6,13 @@
 
 #include <array>
 
+#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "device/rmsnorm_bw_apply_device_operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -52,6 +54,16 @@ void validate_bw_tensor(const Tensor& tensor, std::string_view tensor_name, std:
         tensor.dtype());
     TT_FATAL(
         !tensor.is_sharded(), "{}: sharded {} is not supported yet; pass an interleaved tensor", op_name, tensor_name);
+    const auto& tile = tensor.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "{}: {} must use {}x{} tiles, got {}x{}",
+        op_name,
+        tensor_name,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile.get_height(),
+        tile.get_width());
 }
 
 void validate_weight(const Tensor& weight, const Tensor& input, std::string_view op_name) {
@@ -96,11 +108,13 @@ void validate_bw_inputs(
     validate_bw_tensor(output_grad, "output_grad", op_name);
     TT_FATAL(input.device() == output_grad.device(), "{}: input and output_grad must be on the same device", op_name);
     TT_FATAL(
-        input.logical_shape() == output_grad.logical_shape(),
-        "{}: input and output_grad shapes must match, got {} vs {}",
+        input.logical_shape() == output_grad.logical_shape() && input.padded_shape() == output_grad.padded_shape(),
+        "{}: input and output_grad logical and padded shapes must match, got logical {} vs {}, padded {} vs {}",
         op_name,
         input.logical_shape(),
-        output_grad.logical_shape());
+        output_grad.logical_shape(),
+        input.padded_shape(),
+        output_grad.padded_shape());
     TT_FATAL(
         input.logical_shape().rank() == 4,
         "{}: input must be rank-4, got rank {}",
@@ -135,15 +149,19 @@ void validate_stats_tensor(
     // A stats tensor whose leading dims disagree with the shard would broadcast instead of failing,
     // turning a wiring mistake into silently wrong gradients.
     const auto& input_shape = input.logical_shape();
+    const auto& padded = stats.padded_shape();
+    const auto& input_padded = input.padded_shape();
     for (int dim = 0; dim < 3; ++dim) {
         TT_FATAL(
-            shape[dim] == input_shape[dim],
-            "{}: {} dim {} is {} but the input's is {}; {} must come from this shard's rows",
+            shape[dim] == input_shape[dim] && padded[dim] == input_padded[dim],
+            "{}: {} dim {} is {} (padded {}) but the input's is {} (padded {}); {} must come from this shard's rows",
             op_name,
             tensor_name,
             dim,
             shape[dim],
+            padded[dim],
             input_shape[dim],
+            input_padded[dim],
             tensor_name);
     }
 }
@@ -156,8 +174,17 @@ Tensor mean_from_gathered_stats(
     const Tensor& stats, uint32_t local_width, const DeviceComputeKernelConfig& compute_kernel_config) {
     TT_FATAL(local_width > 0, "local_width must be > 0, got {}", local_width);
     const float full_width = static_cast<float>(local_width) * static_cast<float>(num_devices_in_stats(stats));
-    auto summed = ttnn::sum(
+    // Only column 0 of each device's tile holds its partial sum; rms_norm_pre_all_gather leaves the
+    // other columns as undefined reduce scratch.
+    const auto& shape = stats.logical_shape();
+    const uint32_t tile_w = stats.tensor_spec().tile().get_width();
+    auto partials = ttnn::slice(
         to_fp32(stats),
+        std::array<uint32_t, 4>{0, 0, 0, 0},
+        std::array<uint32_t, 4>{shape[0], shape[1], shape[2], shape[3]},
+        std::array<uint32_t, 4>{1, 1, 1, tile_w});
+    auto summed = ttnn::sum(
+        partials,
         /*dim_arg=*/3,
         /*keep_dim=*/true,
         std::nullopt,
@@ -186,7 +213,7 @@ Tensor to_stats_layout(const Tensor& tensor) {
     }
     TT_FATAL(last < tile_w, "Cannot pad last dim {} down to tile width {}", last, tile_w);
 
-    // The consumer row-reduces the whole tile column, so the columns past the value have to be real zeros.
+    // One tile column per device, value in column 0, matching the forward stats layout.
     ttsl::SmallVector<std::array<uint32_t, 2>> padding(rank, std::array<uint32_t, 2>{0, 0});
     padding.back() = {0, tile_w - last};
     return ttnn::pad(tensor, padding, 0.0f);

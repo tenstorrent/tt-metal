@@ -25,6 +25,15 @@ void validate_fp32_tile(const Tensor& tensor, std::string_view name) {
         tensor.layout() == Layout::TILE, "rmsnorm_bw_apply: {} must have TILE layout, got {}", name, tensor.layout());
     TT_FATAL(tensor.dtype() == DataType::FLOAT32, "rmsnorm_bw_apply: {} must be FLOAT32, got {}", name, tensor.dtype());
     TT_FATAL(!tensor.is_sharded(), "rmsnorm_bw_apply: {} must be interleaved", name);
+    const auto& tile = tensor.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
+        "rmsnorm_bw_apply: {} must use {}x{} tiles, got {}x{}",
+        name,
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        tile.get_height(),
+        tile.get_width());
 }
 
 void validate_same_device(const Tensor& a, const Tensor& b, std::string_view a_name, std::string_view b_name) {
@@ -61,16 +70,22 @@ void RMSNormBwApplyOperation::validate_on_program_cache_miss(
     validate_same_device(tensor_args.x, tensor_args.inv_rms, "x", "inv_rms");
     validate_same_device(tensor_args.x, tensor_args.d, "x", "d");
     TT_FATAL(
-        tensor_args.x.logical_shape() == tensor_args.dy.logical_shape(),
-        "rmsnorm_bw_apply: x and dy shapes must match, got {} vs {}",
+        tensor_args.x.logical_shape() == tensor_args.dy.logical_shape() &&
+            tensor_args.x.padded_shape() == tensor_args.dy.padded_shape(),
+        "rmsnorm_bw_apply: x and dy logical and padded shapes must match, got logical {} vs {}, padded {} vs {}",
         tensor_args.x.logical_shape(),
-        tensor_args.dy.logical_shape());
+        tensor_args.dy.logical_shape(),
+        tensor_args.x.padded_shape(),
+        tensor_args.dy.padded_shape());
 
     const auto& x_shape = tensor_args.x.logical_shape();
+    const auto& x_padded = tensor_args.x.padded_shape();
     TT_FATAL(x_shape.rank() == 4, "rmsnorm_bw_apply: x must be rank-4, got rank {}", x_shape.rank());
-    const uint32_t tile_h = tensor_args.x.tensor_spec().tile().get_height();
-    const uint32_t tile_w = tensor_args.x.tensor_spec().tile().get_width();
-    TT_FATAL(tile_h == TILE_HEIGHT && tile_w == TILE_WIDTH, "rmsnorm_bw_apply: only 32x32 tiles are supported");
+    TT_FATAL(
+        x_padded[2] == tt::round_up(x_shape[2], TILE_HEIGHT),
+        "rmsnorm_bw_apply: x height padding must stay within one tile, got logical {} padded {}",
+        x_shape[2],
+        x_padded[2]);
 
     const auto occ = compute_apply_occupancy(tensor_args.x);
     TT_FATAL(occ.Wt > 0 && occ.num_rows > 0, "rmsnorm_bw_apply: empty tensor");
@@ -87,16 +102,19 @@ void RMSNormBwApplyOperation::validate_on_program_cache_miss(
 
     const auto validate_row_stats = [&](const Tensor& tensor, std::string_view name) {
         const auto& shape = tensor.logical_shape();
+        const auto& padded = tensor.padded_shape();
         TT_FATAL(shape.rank() == 4, "rmsnorm_bw_apply: {} must be rank-4, got rank {}", name, shape.rank());
         TT_FATAL(shape[3] == 1, "rmsnorm_bw_apply: {} last dim must be 1, got {}", name, shape[3]);
         for (int dim = 0; dim < 3; ++dim) {
             TT_FATAL(
-                shape[dim] == x_shape[dim],
-                "rmsnorm_bw_apply: {} dim {} is {} but x's is {}",
+                shape[dim] == x_shape[dim] && padded[dim] == x_padded[dim],
+                "rmsnorm_bw_apply: {} dim {} is {} (padded {}) but x's is {} (padded {})",
                 name,
                 dim,
                 shape[dim],
-                x_shape[dim]);
+                padded[dim],
+                x_shape[dim],
+                x_padded[dim]);
         }
     };
     validate_row_stats(tensor_args.inv_rms, "inv_rms");
