@@ -98,7 +98,8 @@ const D = /*__DATA__*/null;
 const W = 40, H = 24;
 const BLK = 0, RED = 1, GRN = 2, YEL = 3, BLU = 4, MAG = 5, CYN = 6, WHT = 7;
 const STAT = {PASS:[GRN,"PASS",0], FAIL:[RED,"FAIL",1], HANG:[RED,"HANG",1], RUNNING:[YEL,"RUN",1],
-  TODO:[CYN,"TODO",0], BLOCKED:[MAG,"BLKD",1], STOPPED:[MAG,"STOP",1]};
+  TODO:[CYN,"TODO",0], BLOCKED:[MAG,"BLKD",1], STOPPED:[MAG,"STOP",1], DEFERRED:[YEL,"DEFR",0]};
+const DONE = s => s === "PASS" || s === "DEFERRED";
 const st = s => STAT[s] || [WHT, String(s || "?").slice(0, 4), 0];
 const STEP_NAMES = {intake:"Intake", reference:"Reference + HF parity", goldens:"Goldens", box:"Box", ledger:"Ledger",
   plan:"Plan", implement:"Implement", integrate:"Integrate ladder", contract:"Serving contract", perf:"Performance", framework:"Framework"};
@@ -222,7 +223,7 @@ function hdrLine(text, right, bg = BLU, fg = YEL){ return {hdr:true, keep:1, dra
 /* ---------- pages ---------- */
 function statusCounts(){ const c = {}; D.tasks.forEach(t => c[t.status] = (c[t.status] || 0) + 1); return c; }
 function readyTasks(){ const s = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));
-  return D.tasks.filter(t => t.status !== "PASS" && t.status !== "STOPPED" && (t.deps || []).every(d => s[d] === "PASS")); }
+  return D.tasks.filter(t => !DONE(t.status) && t.status !== "STOPPED" && (t.deps || []).every(d => DONE(s[d]))); }
 function alertTasks(){ return D.tasks.filter(t => (t.waiting && t.status !== "PASS") || ["STOPPED","BLOCKED","FAIL","HANG"].includes(t.status)); }
 
 function pIndex(){
@@ -244,7 +245,7 @@ function pIndex(){
   const n = D.tasks.length, cnt = statusCounts(), pass = cnt.PASS || 0;
   b.dh.add(y); b.t(y, 0, "GATES", WHT); b.t(y, 6, `${pass}/${n}`, GRN); b.t(y, 14, "PASSED", WHT);
   b.tr(y, W - 1, `${n ? Math.round(100 * pass / n) : 0}%`, YEL); y += 2;
-  const order = ["PASS","RUNNING","FAIL","HANG","BLOCKED","STOPPED","TODO"].concat(Object.keys(cnt).filter(k => !STAT[k]));
+  const order = ["PASS","DEFERRED","RUNNING","FAIL","HANG","BLOCKED","STOPPED","TODO"].concat(Object.keys(cnt).filter(k => !STAT[k]));
   const slots = [], S = 2 * W;
   let acc = 0; order.forEach(k => { if (!cnt[k]) return; const a0 = Math.round(acc / n * S); acc += cnt[k]; const a1 = Math.round(acc / n * S);
     for (let i = a0; i < a1; i++) slots[i] = k; });
@@ -266,7 +267,8 @@ function pIndex(){
   if (now.length){ const sh = now.slice(0, 2); sh.forEach((t, i) => line(t, running.length ? " RUN " : " NOW ", YEL, !i, i === sh.length - 1 && now.length > 2 ? now.length - 2 : 0)); }
   else { b.t(y, 0, " NOW ", BLK, YEL); b.t(y, 6, "nothing ready", WHT); y++; }
   nxt.forEach((t, i) => line(t, " NEXT", CYN, !i));
-  const al = alertTasks();
+  const al = alertTasks(), DF = D.deferred || [];
+  if (DF.length){ b.t(y, 0, " CPU ", BLK, YEL); b.t(y, 6, trunc(`${DF.length} step${DF.length > 1 ? "s" : ""} deferred to op-gen (p108)`, W - 6), YEL); y++; }
   if (!al.length){ b.t(y, 0, " OK  ", BLK, GRN); b.t(y, 6, "nothing WAITING or STOPPED", GRN); y++; }
   else al.slice(0, 2).forEach((t, i) => { if (!i) b.t(y, 0, " ALRT", WHT, RED, 0); const [c, l, f] = st(t.status);
     const id = abbrId(t.id, 14); b.t(y, 6, id, WHT); b.t(y, 7 + id.length, t.waiting ? "WAIT" : l, t.waiting ? MAG : c, null, 1);
@@ -516,6 +518,19 @@ function pFindings(){
   return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Findings + gaps", BLU, YEL, i, a.length, RED); return b; });
 }
 
+function pDeferred(){
+  const F = D.deferred || [], lines = [];
+  lines.push(hdrLine("Deferred to op-gen", String(F.length), YEL, BLK));
+  lines.push({draw(b, r){ b.t(r, 1, "On the CPU bridge until op-gen", WHT); }});
+  lines.push({draw(b, r){ b.t(r, 1, "delivers the op. Results include them.", WHT); }});
+  F.forEach(f => { lines.push(gapLine);
+    lines.push({draw(b, r){ b.t(r, 0, abbrId(f.task, 22), WHT); b.tr(r, W - 1, A(f.status).toUpperCase(), f.status === "delivered" ? GRN : YEL); }});
+    lines.push({draw(b, r){ b.t(r, 1, trunc(`${f.op}  ${f.block_type}.${f.step} ${f.layers}`, W - 2), CYN); }});
+    wrap(`Tried: ${f.tried.join("; ") || "-"}`, 37).slice(0, 3).forEach(l => lines.push({draw(b, r){ b.t(r, 2, l, WHT); }}));
+    wrap(`Not a fork: ${f.why_not_fork || "-"}`, 37).slice(0, 3).forEach(l => lines.push({draw(b, r){ b.t(r, 2, l, WHT); }})); });
+  return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Deferred to op-gen", YEL, BLK, i, a.length, RED); return b; });
+}
+
 function pPrior(){
   const P = D.prior, lines = [], A = trunc(P.this.label, 7), B = trunc(P.prior.label, 7);
   const mk = () => { const b = new Buf(); b.t(3, 0, "THIS", CYN); b.t(3, 5, A.toUpperCase(), WHT); b.t(3, 13, "PRIOR", CYN); b.t(3, 19, B.toUpperCase(), WHT);
@@ -569,6 +584,7 @@ const PAGES = [
   {n:106, name:"Findings and gaps", short:"Finds", build:pFindings},
 ];
 if (D && D.prior) PAGES.push({n:107, name:"Versus prior", short:"Prior", build:pPrior});
+if (D && D.deferred && D.deferred.length) PAGES.push({n:108, name:"Deferred to op-gen", short:"OpGen", build:pDeferred});
 function buildAll(){ const out = {};
   for (const p of PAGES){ try { out[p.n] = p.build(); }
     catch (err){ const b = new Buf(); banner(b, p.name, RED, WHT, 0, 1); b.t(4, 0, "PAGE ERROR", RED, null, 1); wrap(String(err && err.message || err), 40).slice(0, 6).forEach((l, i) => b.t(6 + i, 0, l, WHT)); out[p.n] = [b]; } }
