@@ -217,13 +217,13 @@ void RingDistributedSdpaDeviceOperation::validate_on_program_cache_miss(
 
     // Chunk size compatibility
     TT_FATAL(
-        q_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "q_chunk_size must be divisible by TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
+        q_chunk_size > 0 && q_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "q_chunk_size must be a positive multiple of TILE_WIDTH. Got q_chunk_size: {}, TILE_WIDTH: {}",
         q_chunk_size,
         tt::constants::TILE_WIDTH);
     TT_FATAL(
-        k_chunk_size % tt::constants::TILE_WIDTH == 0,
-        "k_chunk_size must be divisible by TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
+        k_chunk_size > 0 && k_chunk_size % tt::constants::TILE_WIDTH == 0,
+        "k_chunk_size must be a positive multiple of TILE_WIDTH. Got k_chunk_size: {}, TILE_WIDTH: {}",
         k_chunk_size,
         tt::constants::TILE_WIDTH);
 
