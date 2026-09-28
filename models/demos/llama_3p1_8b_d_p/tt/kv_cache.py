@@ -148,6 +148,10 @@ def max_user_slots(
     """
     if type(slots_per_user) is not int or slots_per_user < 1:
         raise ValueError(f"slots_per_user must be a positive int, got {slots_per_user!r}")
+    # A float here would divide silently and hand back a count nothing rejects; a negative one would
+    # hand back more slots than there is DRAM, which only shows up as an allocation failure later.
+    if type(reserve_bytes) is not int or reserve_bytes < 0:
+        raise ValueError(f"reserve_bytes must be a nonnegative int, got {reserve_bytes!r}")
     view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
     banks = mesh_device.dram_grid_size().x
     usable_per_bank = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank)
@@ -193,14 +197,18 @@ def allocate_kv_cache(
             slots_per_user=slots_per_user,
         )
         if num_users < 1:
-            free_per_bank = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM).total_bytes_free_per_bank
-            free = free_per_bank * mesh_device.dram_grid_size().x
+            # Report the figure the count was actually derived from. Quoting the free total instead
+            # would overstate it in exactly the contiguity-limited case docs/kv-slot-capacity.md
+            # describes, telling someone more DRAM is usable than the allocator can place into.
+            view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+            usable_per_bank = min(view.total_bytes_free_per_bank, view.largest_contiguous_bytes_free_per_bank)
+            free = usable_per_bank * mesh_device.dram_grid_size().x
             want = "no KV slot fits" if slots_per_user == 1 else f"fewer than {slots_per_user} KV slots fit"
             raise RuntimeError(
                 f"{want}: a slot at max_seq_len={max_seq_len} costs "
                 f"{slot_bytes_per_chip(max_seq_len, cache_dtype) / 2**20:.1f} MiB per chip, and only "
-                f"{free / 2**30:.2f} GiB per chip is free before the {reserve_bytes / 2**30:.2f} GiB run "
-                f"reserve. Lower max_seq_len or free device memory."
+                f"{free / 2**30:.2f} GiB per chip is placeable before the {reserve_bytes / 2**30:.2f} GiB "
+                f"run reserve. Lower max_seq_len or free device memory."
             )
     _validate_target(
         mesh_device,

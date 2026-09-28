@@ -369,6 +369,42 @@ def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
     assert not live, "the K cache stayed allocated after the V cache failed"
 
 
+# The zero-slot message has to quote the figure the count was derived from. `max_user_slots` divides
+# the contiguous block per bank, so quoting the free total would overstate usable DRAM in exactly the
+# contiguity-limited case docs/kv-slot-capacity.md says fails first, and would send someone hunting
+# for tens of GiB the allocator was never going to place into. Mocked, because provoking real
+# fragmentation to order is not reproducible.
+def test_zero_slot_message_quotes_placeable_dram_not_the_free_total(monkeypatch, expect_error):
+    banks = 8
+    view = SimpleNamespace(
+        total_bytes_free_per_bank=64 * 1024**3 // banks,  # bytes are abundant
+        largest_contiguous_bytes_free_per_bank=1024**3 // banks,  # but placeable in one small run
+    )
+    mesh_device = SimpleNamespace(dram_grid_size=lambda: SimpleNamespace(x=banks))
+    monkeypatch.setattr(cache_module.ttnn, "get_memory_view", lambda device, buffer_type: view)
+
+    # The reserve consumes the whole placeable budget, so the shortfall is contiguity, not bytes.
+    with expect_error(RuntimeError, "no KV slot fits") as error:
+        allocate_kv_cache(mesh_device, object(), num_users="max", reserve_bytes=1024**3)
+    reported = str(error.value)
+    assert "1.00 GiB per chip is placeable" in reported, reported
+    assert "64.00" not in reported, f"quoted the free total instead of the placeable figure: {reported}"
+
+
+# reserve_bytes reaches arithmetic that would not complain: a float divides fine and yields a count
+# nothing downstream rejects, and a negative one hands back more slots than DRAM holds, surfacing
+# much later as an allocation failure with no hint of where the number came from.
+@pytest.mark.parametrize("bad", [1024.0, -1, True, None], ids=["float", "negative", "bool", "none"])
+def test_max_user_slots_rejects_a_reserve_that_is_not_a_nonnegative_int(monkeypatch, expect_error, bad):
+    monkeypatch.setattr(
+        cache_module.ttnn,
+        "get_memory_view",
+        lambda device, buffer_type: pytest.fail("reserve_bytes must be rejected before DRAM is read"),
+    )
+    with expect_error(ValueError, "reserve_bytes must be a nonnegative int"):
+        max_user_slots(object(), reserve_bytes=bad)
+
+
 # Allocate the exact 2-user/32-layer cache on the actual DRAM bank grid and read every chip; this
 # catches wrong batch packing, local sequence size, dtype, NdShard page geometry, or nonzero startup.
 @pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
