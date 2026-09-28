@@ -477,3 +477,59 @@ Drive this ledger with
   field and left 0 of 247 rows with timeline data while the alignment itself passed.
 - MiMo finding: every tensor of every op is DRAM interleaved (nothing in L1), a perf lead for the matmuls, norms and
   residual adds.
+
+## F46 (2026-09-28): defer a step to op-gen, keep it on the CPU, continue the bring-up
+- Owner: an implement agent that finds no proper TTNN op for a step (GLM-5.3's indexer key pooling) stopped the whole
+  run. Now it may defer the step: the step stays on the CPU reference through a bridge, the agent leaves a request for
+  the op code generator (op-gen, tt_metal/third_party/tt_ops_code_gen), and the rest of the bring-up continues.
+  Launching op-gen is always the owner's call; the framework never launches it or pushes.
+- Ledger: status DEFERRED counts like PASS for dependents (runnable, gate deps, resume point). A run whose only
+  unfinished tasks are DEFERRED ends DONE, "complete with N deferred". rerun keeps a downstream deferral DEFERRED (an
+  upstream change does not deliver the op; name it with --from to redo it); fork may start at a deferred task.
+- `plan/op_request.py`: `<bringup_dir>/op_requests/<op>/` = request.yaml (op, model, tasks, component, layers,
+  status draft|approved|exported|delivered, evidence searched/tried/why_not_fork, interface with per-device shapes
+  from each tensor's mesh placement and the chunk lengths, tolerance from the component gate, acceptance = the frozen
+  test and its golden), op_prompt.txt (op-gen's format, `# golden: <op>` first, `Import path:` last, `## Rules`),
+  feature_spec.py (single-value TARGET axes as strings, one INPUTS case per chunk length, INVALID = []),
+  reference.py (standalone `pytorch_<op>`, pure torch), bind.py (model side, not exported: the layer's weights and
+  scalars). `new` fills the mechanical parts from the spec, ledger, reference and component golden, and leaves
+  `<<AGENT` markers for the evidence, prose and the reference body. `check` rejects: missing files or fields, a
+  marker left, thin evidence (empty lists, short outcomes, a one-word why_not_fork), a bad op name or one TTNN has, a
+  task that is not a component task, a malformed prompt or feature spec, a reference that imports anything but
+  torch/math/numpy, and a reference that does not reproduce the model's CPU step on a random 32-row input (bind.py
+  supplies the weights; its shapes and params must match the interface).
+- Deviation from the spec as written: the generator cannot turn a reference step (usually a closure over the layer's
+  weights) into a standalone function mechanically, so it scaffolds reference.py with the step's source as a comment
+  and the checker proves the agent's function equivalent numerically. bind.py was added for the weights.
+- Orchestrator: after an implement attempt on a C task whose gate fails, a request naming the task that passes the
+  check makes it DEFERRED (reason = the evidence summary), and the request plus the task paths are committed as
+  `[tag][C.x] <title> (deferred to op-gen: <op>)`. A rejected request is a failed attempt; its errors go into the next
+  brief. After the debugger's attempts, one last implement attempt (brief .201) may defer instead of STOPPED
+  (policy `defer_after_debugger`, default on). Only the implement role of a component task may write op_requests/
+  (path check); the debugger's brief has no defer section. A step tagged OPGEN in components.yaml (needs `searched`,
+  block steps only) makes the implement brief say "defer it from the start". Every brief lists the deferred steps.
+- `testing/cpu_bridge.py`: `CpuBridge(mesh, spec, step, fn, inputs=[placements], output=placement)` gathers the device
+  inputs (replicate / shard:<dim> / shard2d:<r>,<c>) with get_device_tensors + to_torch, runs the reference step in
+  fp32, and places the output with from_torch and the matching mapper. Its transfers run inside
+  `host_transfers.bridged()` and count in `bridge_calls`, never in `total`, so `host_transfers_per_layer` stays 0.
+  ladder, profile and positions record `deferred_cpu_steps` and `deferred_cpu_ms`; the profile JSON lists
+  `bridged_steps`. `device_model_hybrid` is unchanged (the bridge is not the hybrid harness).
+- Harness: a DEFERRED step runs on the reference in the swap tests; its own component test fails in device mode
+  (while deferred, and whenever device_component returns a bridge), so a bridged step can never PASS its gate.
+- Approvals: `approve op-request <op>` hashes the request files with request.yaml minus status/exported/delivered.
+- `plan/op_export.py`: `op-export` (needs the approval) writes eval/prompts/<op>.txt and eval/golden_tests/<op>/
+  (feature_spec with ttnn enums, helpers with the request's reference verbatim plus INPUT_SPECS / PARAMS /
+  TOLERANCES and run_<op>, axes, test_golden, conftest, test_regression) and prints the owner's steps (submodule
+  commit, push, gitlink bump, push, run_eval.py). `op-ready <op>... --from` copies op-gen's
+  ttnn/ttnn/operations/<op> to ttnn/ttnn/bringup/<op> (imports and kernel paths moved), registers PYTHON_OPS,
+  writes CHANGELOG.md and an INDEX.md row, marks the request delivered, sets the task's brief details to "use
+  ttnn.bringup.<op> ...", and resets it and everything downstream with rerun_from. Configurable roots
+  (--codegen-root, --bringup-ops); selftests run on tmp copies only.
+- Dashboard (both styles): "Deferred to op-gen" section / teletext page 108, a banner that the results include N CPU
+  steps, OPGEN and DEFERRED tags, timing rows and profile sections marked where the bridge ran.
+- Overseer skill: a "Deferred steps and op-gen" section (plain-language phrases mapped to the commands, proactive
+  reports of pending requests, editing a request on the owner's word voids the approval), deferral review in the
+  cheating list. README steps and commands; docs/pipeline_design.html section "Steps TTNN cannot do yet".
+- Also: `stage_paths` skips a task path that is an empty folder (git add refused it; hit by a deferral with no code
+  yet), and knowledge/repo_map.md lost a brace path the format check rejected (the one selftest failing before F46).
+- Selftests: 155 passed + 1 failing before, 192 passed after (test_opgen.py adds 36).
