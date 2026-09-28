@@ -23,7 +23,10 @@ THROTTLE_LEVEL == 0 (same on Wormhole).
 
 import pytest
 import torch
-from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    get_valid_math_fidelities,
+)
 from helpers.data_format_inference import data_formats
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
@@ -36,7 +39,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
-    MathFidelity,
     Transpose,
     format_dict,
 )
@@ -73,20 +75,6 @@ NUM_FACES_PER_TILE = 4
 # The kernel drives DestSync.Half, matching test_matmul_custom.py. Full-sync only widens the dest
 # capacity; it does not touch the REPLAY/MVMUL issue path this test is about.
 DEST_SYNC_MODE = DestSync.Half
-
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
-
-
-def matmul_no_mop_math_fidelities(formats):
-    # Float16_b is full precision at LoFi; HiFi phases only touch mantissa bits it does not have.
-    if formats.input_format == DataFormat.Float16_b:
-        return [MathFidelity.LoFi]
-    return MATH_FIDELITIES
 
 
 # Plain (non-2x) formats out of Quasar's matmul set. MX formats are covered by the 2x test below,
@@ -250,7 +238,7 @@ def _run_matmul_custom_no_mop(
 
 @pytest.mark.quasar
 @parametrize(
-    math_fidelity=matmul_no_mop_math_fidelities,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     formats=MATMUL_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dimensions=runtime(
@@ -302,7 +290,7 @@ MATMUL_2X_DIMENSIONS = [
 
 @pytest.mark.quasar
 @parametrize(
-    math_fidelity=MATH_FIDELITIES,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     formats=MATMUL_2X_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     dimensions=MATMUL_2X_DIMENSIONS,
