@@ -24,7 +24,7 @@ struct BinaryBackwardKernelSpec {
     bool force_fp32_dest_acc = false;
     // Fused multiply+reduce compute kernel for broadcast cases. Empty here: broadcast rows
     // use the composite reduce_to_shape path in binary_backward.cpp; follow-up wires this.
-    std::string_view broadcast_reduce_kernel_path = {};
+    std::string_view broadcast_reduce_kernel_path;
 };
 
 const BinaryBackwardKernelSpec& kernel_spec(BinaryBackwardOpType op_type);
