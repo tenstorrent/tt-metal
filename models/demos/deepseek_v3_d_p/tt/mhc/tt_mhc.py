@@ -203,6 +203,8 @@ class TtMHCWrap(LightweightModule):
         self.norm_eps = float(cfg.norm_eps)
         self.ckc = _compute_kernel_config()
         # tp_axis is None on a single device, where nothing is sharded and no reduction is needed.
+        # fn_T is sharded along mesh axis 1 below, so that is the only TP axis supported.
+        assert tp_axis in (None, 1), f"tp_axis must be None or 1 (fn_T is sharded along mesh axis 1), got {tp_axis}"
         self.tp_axis = tp_axis
         self.num_links = num_links if num_links is not None else (2 if is_blackhole() else 1)
         self.topology = topology
