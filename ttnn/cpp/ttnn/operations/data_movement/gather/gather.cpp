@@ -11,6 +11,7 @@
 #include "device/gather_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -287,7 +288,12 @@ Tensor gather_dispatch(
             requested_mc =
                 tt::tt_metal::MemoryConfig(requested_mc.memory_layout(), requested_mc.buffer_type(), derived);
         }
-        return ttnn::to_memory_config(rm_out, requested_mc);
+        auto result = ttnn::to_memory_config(rm_out, requested_mc);
+        // This path allocates its own result; copy it into `out` if given.
+        if (optional_output_tensor.has_value() && result.buffer() != optional_output_tensor->buffer()) {
+            return ttnn::copy(result, optional_output_tensor.value());
+        }
+        return result;
     }
 
     // Normalize negative dimension to positive index with bounds check

@@ -831,6 +831,29 @@ def test_gather_rm_irregular_width_composite_arm_fires(device):
     )
 
 
+def test_gather_rm_irregular_width_composite_arm_writes_out(device):
+    # Regression: this path ignored `out=` and returned a new tensor.
+    shape = (1, 1, 32, 49)
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    idx = torch.randint(0, shape[-1], shape, dtype=torch.int64)
+    mc = _width_sharded(shape, device, num_cores=1, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=mc)
+    ttnn_idx = ttnn.from_torch(idx, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, device=device, memory_config=mc)
+    out = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=L1_INTERLEAVED,
+    )
+
+    ttnn.gather(ttnn_in, -1, index=ttnn_idx, memory_config=L1_INTERLEAVED, out=out)
+
+    assert_equal(torch.gather(x, -1, idx), ttnn.to_torch(out))
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # Group K: Multi-core RM sharded — RmSingleRowMultiCore on sharded buffers.
 # ────────────────────────────────────────────────────────────────────────────────
