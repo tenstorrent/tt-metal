@@ -237,7 +237,7 @@ def test_enrich_ops_from_perf_csv_still_asserts_on_a_replayed_trace_missing_one_
     device_rows = {0: {(10, 0, 1): _perf_row(10, 0, 1)}}
     trace_replays = {0: {0: [12345]}}
 
-    with pytest.raises(AssertionError, match="Op 11 not present"):
+    with pytest.raises(AssertionError, match="Op 11 not present"):  # allow-pytest.raises: runs with --noconftest
         process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
 
 
@@ -248,5 +248,5 @@ def test_enrich_ops_from_perf_csv_still_asserts_when_a_host_replayed_trace_has_n
     device_rows = {0: {(10, 0, 1): _perf_row(10, 0, 1)}}
     trace_replays = {0: {0: [12345], 1: [23456]}}
 
-    with pytest.raises(AssertionError, match="host replayed this trace"):
+    with pytest.raises(AssertionError, match="host replayed this trace"):  # allow-pytest.raises: runs with --noconftest
         process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, trace_replays)
