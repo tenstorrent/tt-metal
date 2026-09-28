@@ -56,6 +56,9 @@ GN_SHARDED_SHAPES = [
     (1, 1280, 1, 512, 32, 8, 8),  # block-sharded 8x8
     (2, 512, 32, 32, 32, 8, 8),  # block-sharded 8x8, batch 2 (C/grid_y = 64, tile-aligned)
     (1, 1280, 16, 16, 32, 4, 8),  # block-sharded 8x4
+    (2, 64, 1, 32, 2, 1, 1),  # single core height-sharded, 2 batches and 2 groups per core: tests
+    #   the case where the per-batch tile stride (block_ht * per_core_Nt) exceeds one group's tile
+    #   span (block_ht * block_wt), to validate batches are located by the stride.
 ]
 
 BLOCK_SHARDED_V2_8X4_SHAPES = [
@@ -173,6 +176,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 @pytest.mark.parametrize("specify_grid", [True])
@@ -2019,6 +2023,7 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("N, C, H, W, num_groups", OPTIONAL_WEIGHT_BIAS_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 @pytest.mark.parametrize(

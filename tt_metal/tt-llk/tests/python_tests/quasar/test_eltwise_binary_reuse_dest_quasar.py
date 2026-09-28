@@ -27,6 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -63,14 +64,8 @@ REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
-)
+) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -80,17 +75,11 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    if (
-        formats.input_format == DataFormat.MxFp8R
-        or formats.input_format == DataFormat.MxFp8P
-    ):
-        supported_mathops = [MathOperation.Elwadd, MathOperation.Elwsub]
-    else:
-        supported_mathops = [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-            MathOperation.Elwmul,
-        ]
+    supported_mathops = [
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+        MathOperation.Elwmul,
+    ]
     if is_perf:
         return [
             mathop

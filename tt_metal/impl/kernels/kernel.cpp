@@ -351,6 +351,13 @@ void Kernel::process_scratchpad_binding_handles(
     }
 }
 
+void Kernel::process_prefetcher_pipe_binding_handles(
+    std::function<void(const std::string& accessor_name, uint8_t prefetcher_pipe_id)> callback) const {
+    for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
+        callback(handle.accessor_name, handle.prefetcher_pipe_id);
+    }
+}
+
 void Kernel::process_tensor_binding_sequences(
     const std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)> callback)
     const {
@@ -608,6 +615,12 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+    }
+    // PrefetcherPipe binding handles: the slot id is baked into the generated `pipe::` token.
+    hasher.update(static_cast<uint64_t>(this->prefetcher_pipe_binding_handles_.size()));
+    for (const auto& handle : this->prefetcher_pipe_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.prefetcher_pipe_id));
     }
     // Tensor Binding Sequence: the ordering of the tensor binding matters here, 2 tensor bindings of
     // the same set of members but with different orderings are different tensor binding sequences.

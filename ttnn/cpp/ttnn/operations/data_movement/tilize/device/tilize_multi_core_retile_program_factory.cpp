@@ -192,7 +192,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
             .accessor_name = "src",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer: interleaved tiled pages.
@@ -211,7 +212,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
             .accessor_name = "dst",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Compute: retile. MID / MID_VIEW are self-loops (compute is the only toucher; MID_VIEW's read
@@ -224,6 +226,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
             compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
             compute_cfg.unpack_modes.emplace(MID_DFB, UnpackMode::UnpackToDest);
             compute_cfg.unpack_modes.emplace(MID_VIEW_DFB, UnpackMode::UnpackToDest);
+        }
+        // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+        // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+        ComputeHardwareConfig compute_hw = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config compute_cfg_gen2;
+            compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+            compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from Gen1
+            compute_hw = compute_cfg_gen2;
         }
         return KernelSpec{
             .unique_id = id,
@@ -268,7 +279,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
                  {"mid_page_size", mid_page_size}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_input_blocks", "num_real_input_rows", "num_real_output_rows"}},
-            .hw_config = ComputeHardwareConfig{compute_cfg},
+            .hw_config = std::move(compute_hw),
         };
     };
 

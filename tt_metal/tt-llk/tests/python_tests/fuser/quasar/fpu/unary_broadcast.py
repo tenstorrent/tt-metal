@@ -45,9 +45,10 @@ class UnaryBroadcastFpu(Fpu):
         stage = operation.stage_id
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
+        en_32bit_dest = config.dest_acc.cpp_enum_value
         return (
             f"// Operation {stage}: Unary Broadcast FPU\n"
-            f"_llk_math_eltwise_unary_broadcast_init_<{broadcast_type}, false>"
+            f"_llk_math_eltwise_unary_broadcast_init_<{broadcast_type}, {en_32bit_dest}, false>"
             f"({tensor_shape});\n"
         )
 
@@ -58,7 +59,7 @@ class UnaryBroadcastFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return f"_llk_math_eltwise_unary_broadcast_({block.tile_id_block});\n"
+        return f"_llk_math_eltwise_unary_broadcast_<false>({block.tile_id_block});\n"
 
     def uninit(
         self,

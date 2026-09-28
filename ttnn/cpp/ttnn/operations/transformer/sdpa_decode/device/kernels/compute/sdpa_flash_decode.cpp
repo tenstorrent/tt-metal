@@ -26,8 +26,6 @@
 #include "api/compute/pack_untilize.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
-#include "api/compute/pack_untilize.h"
-constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -47,28 +45,27 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(7);
     constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(8);
     constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(9);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(10);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(11);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(13);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(14);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(15);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(16);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(19);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(20);
+
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(12);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(13);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(14);
+
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(15);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(16);
 
     // Attention-specific parameters
-    constexpr bool is_causal = get_compile_time_arg_val(21) == 1;
-    constexpr bool use_attention_mask = get_compile_time_arg_val(22) == 1;
-    constexpr bool use_attention_sink = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(24);
-    constexpr bool tilize_q = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
-    constexpr bool use_half_tile = get_compile_time_arg_val(27);
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
-    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
-    constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
+    constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
+    constexpr bool use_attention_mask = get_compile_time_arg_val(18) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(20);
+    constexpr bool tilize_q = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(22);
+    constexpr bool use_half_tile = get_compile_time_arg_val(23);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(24);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(26);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
@@ -87,7 +84,6 @@ void kernel_main() {
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
     // #44366: compute reads cur_pos from c_15 (writer reads from c_8) — see reader_decode_all.cpp.
     constexpr uint32_t cb_cur_pos = tt::CBIndex::c_15;
@@ -113,19 +109,13 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool apply_mask_at_last_chunk = do_reduce && is_causal;
-    const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
-    const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // Tree reduction runtime arguments
     const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
     const bool has_parent = parent_core_in_group != UINT32_MAX;
 
     // Read children_per_round array
@@ -175,7 +165,6 @@ void kernel_main() {
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] =
         get_workload_for_core(
             cur_pos,
-            cur_batch,
             core_num_in_reduce,
             num_cores_per_head,
             k_chunk_size_dynamic,
@@ -256,7 +245,6 @@ void kernel_main() {
     const uint32_t qk_in0_num_subblocks_dynamic = 1;
     const uint32_t qk_in1_num_subblocks_dynamic = 1;
     const uint32_t out_in0_block_w_dynamic = Sk_chunk_t_dynamic;
-    const uint32_t out_num_blocks_dynamic = 1;
     const uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t_dynamic;
 #else
     constexpr uint32_t qk_subblock_h_dynamic = qk_subblock_h;
@@ -264,7 +252,6 @@ void kernel_main() {
     constexpr uint32_t qk_in0_num_subblocks_dynamic = qk_in0_num_subblocks;
     constexpr uint32_t qk_in1_num_subblocks_dynamic = qk_in1_num_subblocks;
     constexpr uint32_t out_in0_block_w_dynamic = out_in0_block_w;
-    constexpr uint32_t out_num_blocks_dynamic = out_num_blocks;
     constexpr uint32_t qk_chunk_tiles_dynamic = Sq_chunk_t * Sk_chunk_t;
 #endif
 
@@ -301,13 +288,11 @@ void kernel_main() {
          * @tparam qk_subblock_h - QK matmul subblock height (dynamic)
          * @tparam qk_in0_num_subblocks - QK input0 subblocks (dynamic)
          * @tparam qk_in1_num_subblocks - QK input1 subblocks (dynamic)
-         * @tparam qk_num_blocks - QK number of blocks
          * @tparam out_in0_block_w - Output matmul block width (dynamic)
          * @tparam out_subblock_w - Output matmul subblock width
          * @tparam out_subblock_h - Output matmul subblock height
          * @tparam out_in0_num_subblocks - Output input0 subblocks
          * @tparam out_in1_num_subblocks - Output input1 subblocks
-         * @tparam out_num_blocks - Output number of blocks (dynamic)
          * @tparam is_causal - Whether to use causal attention (if mask is applied)
          * @tparam use_attention_mask - Whether to use attention mask for non-causal attention
          *
@@ -370,7 +355,6 @@ void kernel_main() {
                     Sq_chunk_t,
                     Sk_chunk_t_dynamic,
                     DHt,
-                    qk_num_blocks,
                     qk_in0_num_subblocks_dynamic,
                     qk_in1_num_subblocks_dynamic,
                     qk_in0_block_w,
@@ -461,7 +445,6 @@ void kernel_main() {
                     Sq_chunk_t,
                     vDHt,
                     Sk_chunk_t_dynamic,
-                    out_num_blocks_dynamic,
                     out_in0_num_subblocks,
                     out_in1_num_subblocks,
                     out_in0_block_w_dynamic,
@@ -528,7 +511,7 @@ void kernel_main() {
         /**
          * Tree reduction reduces the online softmax results in O(log n) rounds.
          *
-         * For each round r (0 to my_active_rounds-1):
+         * For each round r (0 to num_active_rounds-1):
          *   - If children_per_round[r] != UINT32_MAX, receive from that child
          *   - Combine received data with local accumulator using softmax correction
          *

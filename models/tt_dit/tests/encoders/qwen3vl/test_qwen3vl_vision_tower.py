@@ -14,7 +14,12 @@ import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import (
+    Qwen3VlVisionModel,
+    fixed_length_cu_window,
+    pad_patches_for_sp,
+    vision_cu_seqlens,
+)
 from ....utils import tensor
 from ....utils.check import assert_quality
 from .common import (
@@ -98,9 +103,7 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
 # perf mode skips the quadratic CPU golden (shapes/finiteness only) and says nothing about accuracy
 _PERF_GRIDS = ("max_load", "ref_4to1", "ref_1to4", "image_and_video")
 assert all(name in GRIDS for name in _PERF_GRIDS)
-# The largest grids' check-mode CPU golden exceeds the default 300 s budget (measured at tp8_sp4:
-# ~492 s for the 65k single-block references, ~778 s for max_load's 168k rows). Per-grid timeout
-# headroom on the check cases only -- perf mode skips the golden. Sizes from 43682d4.
+# The largest grids' check-mode CPU golden exceeds the default 300 s pytest timeout.
 _TIMEOUTS = {"ref_4to1": 900, "ref_1to4": 900, "max_load": 1800}
 _CASES = [
     pytest.param(
@@ -135,36 +138,27 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
 
     tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
-    # `perf` runs the whole iteration twice: the first pass compiles/caches kernels, the second is the
-    # measured steady-state run. `check` runs once -- the golden PCC needs no warmup. Idiom:
-    # test_transformer_qwenimage.py. Each iteration is timed in two parts, split by a device sync:
-    #   prep = per-request host build (rope + position tables) + the host->device upload of every input
-    #   op   = the tower forward itself
-    # `patches` stays outside (it is the fixed test input feeding the golden, i.e. "pixels already in
-    # host memory"); everything else a real request rebuilds per call lives inside the timed region.
     n_iters = 1 if check_pcc else 2
     for iteration in range(n_iters):
         print(f"Tower Forward ({iteration + 1}/{n_iters})")
-        ttnn.synchronize_device(submesh)  # device idle before timing
+        ttnn.synchronize_device(submesh)
         t_start = time.time()
 
-        # --- prep: host build + host->device upload ---
         cos, sin = tower.prepare_rope(grid)
         pos = tower.prepare_pos_embeds(grid)
         tt_patches = sp_shard(patches, submesh, sp_axis)
         tt_pos = sp_shard(pos, submesh, sp_axis)
         tt_cos, tt_sin = sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)
-        ttnn.synchronize_device(submesh)  # uploads landed on device
+        ttnn.synchronize_device(submesh)
         t_prep_done = time.time()
 
-        # --- op: the tower forward ---
         tokens, deepstack = tower.forward(
             tt_patches,
             pos_embeds=tt_pos,
             rope=(tt_cos, tt_sin),
             cu_seqlens=cu_seqlens,
         )
-        ttnn.synchronize_device(submesh)  # forward complete
+        ttnn.synchronize_device(submesh)
         t_end = time.time()
 
         print(
@@ -198,8 +192,7 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         ), f"deepstack features {i} and {i + 1} are identical; layer routing is wrong"
 
 
-# 26,944 patches: 64 short of every SP alignment on this galaxy (%128 == %256 == 64), so both configs
-# below exercise pad_patches_for_sp rather than skipping. h/w stay even for the 2x2 merge.
+# 26,944 patches: misaligned for every SP factor here, so each config exercises pad_patches_for_sp.
 _MISALIGNED_GRID = [[1, 128, 128], [1, 110, 96]]
 
 
@@ -208,23 +201,12 @@ _MISALIGNED_GRID = [[1, 128, 128], [1, 110, 96]]
     [
         pytest.param((8, 4), (8, 4), 0, 1, 2, FABRIC, id="tp8_sp4"),
         pytest.param((4, 8), (4, 8), 0, 1, 2, FABRIC, id="tp4_sp8"),
-        # Quad galaxy: SP=32 moves the alignment to 1024, which this grid also misses (26,944 % 1024
-        # == 320 -> 704 pad rows, 864 tile-aligned rows/device). The (4, 8)/(8, 4) cases prove the
-        # logic; this one proves it at the 32-shard geometry (32 distinct Q offsets, 32-hop gathers).
         pytest.param((4, 32), (4, 32), 0, 1, 2, FABRIC, id="tp4_sp32"),
     ],
     indirect=["mesh_device", "device_params"],
 )
 def test_tower_sp_padding(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
-    """A patch count that does NOT divide `sp * 32` runs via [`pad_patches_for_sp`]: the pad rows ride
-    in a phantom attention window and the merged garbage is trimmed after the SP gather, so the output
-    matches the reference on the REAL patches exactly as if nothing was padded.
-
-    This is the multi-galaxy (e.g. 4x32, alignment 1024) enablement, tested on one galaxy: alignment
-    is a property of `total % (sp * 32)` alone, so a grid misaligned at sp=4/8 exercises the identical
-    path -- phantom window, isolated garbage rows, post-gather trim -- that two_refs (38,144 % 1024
-    != 0) hits at SP=32.
-    """
+    """A patch count not divisible by `sp * 32` runs via `pad_patches_for_sp` and still matches the reference."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     grid = torch.tensor(_MISALIGNED_GRID, dtype=torch.long)
     total = sum(t * h * w for t, h, w in _MISALIGNED_GRID)
@@ -253,14 +235,68 @@ def test_tower_sp_padding(reference, mesh_device, submesh_shape, tp_axis, sp_axi
         pos_embeds=sp_shard(p_pos, submesh, sp_axis),
         rope=(sp_shard(p_cos, submesh, sp_axis), sp_shard(p_sin, submesh, sp_axis)),
         cu_seqlens=p_cu,
-        logical_patches=logical,
     )
 
     merged = total // SPATIAL_MERGE_SIZE**2
+    padded = p_patches.shape[0] // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
-    assert actual_tokens.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
-    assert_quality(golden_tokens, actual_tokens, pcc=0.99)
+    assert actual_tokens.shape[-2:] == (padded, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
+    assert_quality(golden_tokens, actual_tokens[:merged], pcc=0.99)
     for golden_feature, feature_tt in zip(golden_deepstack, deepstack):
         feature = tensor.to_torch(feature_tt, mesh_axes=[None, None])
-        assert feature.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
-        assert_quality(golden_feature, feature, pcc=0.99)
+        assert feature.shape[-2:] == (padded, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
+        assert_quality(golden_feature, feature[:merged], pcc=0.99)
+
+
+def _host_patch_batch(total: int, windows: tuple[int, ...]):
+    patches, pos = torch.randn(total, 4), torch.randn(total, 3)
+    rope = (torch.randn(total, 2), torch.randn(total, 2))
+    return patches, pos, rope, (0, *windows)
+
+
+@pytest.mark.parametrize(
+    "total, pad_to, phantom",
+    [
+        (2112, 3072, (3072,)),
+        (3072, 3072, (3072,)),
+        (4032, 3072, (4096,)),
+        (3775, 5120, (4799, 5120)),
+        (2112, 5120, (3136, 4160, 5120)),
+    ],
+)
+def test_pad_patches_for_sp_pad_to_carves_the_pad_into_phantom_windows(total, pad_to, phantom):
+    patches, pos, rope, cu = _host_patch_batch(total, (total,))
+    p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+        patches, pos, rope, cu, sp_factor=32, pad_to=pad_to
+    )
+    padded = phantom[-1]
+    assert logical == total
+    assert p_patches.shape[0] == p_pos.shape[0] == p_cos.shape[0] == padded
+    assert p_cu == (*cu, *phantom)
+    assert torch.equal(p_patches[:total], patches)
+    assert torch.all(p_cos[total:] == 1) and torch.all(p_sin[total:] == 0)
+
+
+def test_pad_patches_for_sp_without_pad_to_keeps_an_aligned_batch_on_the_ring_path():
+    patches, pos, rope, cu = _host_patch_batch(3072, (3072,))
+    out = pad_patches_for_sp(patches, pos, rope, cu, sp_factor=32)
+    assert out[0] is patches and out[3] == cu and out[4] == 3072
+
+
+def test_pad_patches_for_sp_rejects_a_misaligned_pad_to(expect_error):
+    patches, pos, rope, cu = _host_patch_batch(2112, (2112,))
+    with expect_error(ValueError, "multiple of 1024"):
+        pad_patches_for_sp(patches, pos, rope, cu, sp_factor=32, pad_to=3000)
+
+
+def test_fixed_length_cu_window_repeats_the_last_boundary():
+    cu = (0, 2112, 3136, 4096)
+    out = fixed_length_cu_window(cu)
+    assert len(out) == 1024
+    assert out[: len(cu)] == cu
+    assert set(out[len(cu) :]) == {4096}
+
+
+def test_fixed_length_cu_window_rejects_more_than_one_tile(expect_error):
+    with expect_error(ValueError, "at most 1024"):
+        fixed_length_cu_window(tuple(range(1025)))

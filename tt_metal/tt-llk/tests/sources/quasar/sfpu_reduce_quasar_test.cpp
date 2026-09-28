@@ -59,17 +59,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
 
-        // Int32 needs Dest in int32 mode; floats follow is_fp32_dest_acc_en.
-        constexpr bool is_int_reduce = static_cast<DataFormat>(MATH_FORMAT) == DataFormat::Int32;
-        if constexpr (is_int_reduce)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-        }
-        else
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-        }
-
         // Where to read from: buffer_A in L1, holding unpack_A_src, with the harness's face geometry.
         // unpack_A_dst below is what it converts to on the way into Dest.
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(

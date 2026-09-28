@@ -25,6 +25,13 @@ struct ReduceAffineTransformsOperation {
 };
 
 std::pair<Tensor, Tensor> reduce_affine_transforms(
-    const Tensor&, const Tensor&, uint32_t, const tt::tt_metal::MemoryConfig&, const DeviceComputeKernelConfig&);
+    const Tensor&,
+    const Tensor&,
+    uint32_t,
+    const tt::tt_metal::MemoryConfig&,
+    const DeviceComputeKernelConfig&,
+    const Tensor&,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows);
 
 }  // namespace ttnn::experimental::prim

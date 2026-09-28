@@ -434,7 +434,8 @@ private:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator,
-        bool enable_blackhole_dram_programmable_cores);
+        bool enable_blackhole_dram_programmable_cores,
+        bool enable_aerisc_ptp_trace);
     void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
 
     // Functions where implementation varies by architecture
@@ -463,7 +464,8 @@ public:
         uint32_t profiler_dram_bank_size_per_risc_bytes,
         bool enable_dram_backed_cq,
         bool is_simulator = false,
-        bool enable_blackhole_dram_programmable_cores = false);
+        bool enable_blackhole_dram_programmable_cores = false,
+        bool enable_aerisc_ptp_trace = false);
 
     tt::ARCH get_arch() const { return arch_; }
 

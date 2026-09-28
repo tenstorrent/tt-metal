@@ -19,8 +19,9 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.policy import align_num_frames
 from ....utils.test import is_global_rank_zero
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES, MESH_4X8_RING

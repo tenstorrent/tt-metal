@@ -4,6 +4,7 @@
 """Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
 import ttnn
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
@@ -19,6 +20,9 @@ class MLP:
         self.ccl_manager = ccl_manager
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
+
+        grid = mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
         tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
@@ -78,13 +82,36 @@ class MLP:
 
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
-        gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
-        up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)
-        hidden = ttnn.mul(gate, up)
+        # All three intermediates are short-lived, deallocated in this call, and
+        # touch no SDPA input and no collective, so they are L1 candidates.
+        act_mc = prefill_short_lived_memcfg()
+
+        gate = ttnn.linear(
+            hidden_states,
+            self.gate_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            activation="gelu_tanh",
+            core_grid=self.core_grid,
+            memory_config=act_mc,
+        )
+        up = ttnn.linear(
+            hidden_states,
+            self.up_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
+            memory_config=act_mc,
+        )
+        hidden = ttnn.mul(gate, up, memory_config=act_mc)
         gate.deallocate(True)
         up.deallocate(True)
-        output = ttnn.linear(hidden, self.down_proj, compute_kernel_config=self.compute_kernel_config)
+        # Pack output to DRAM ahead of ccl_allreduce.
+        output = ttnn.linear(
+            hidden,
+            self.down_proj,
+            compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         hidden.deallocate(True)
         if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)

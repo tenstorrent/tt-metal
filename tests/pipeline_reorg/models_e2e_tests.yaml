@@ -1191,7 +1191,7 @@
     bh_quietbox_2:
       timeout: 20
       tier: 3
-  owner_id: D0B8130N4BW # Dalar Vartanians
+  owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
   budget_type: e2e
 
@@ -1716,12 +1716,21 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    # Keep five seeds and every frame. Appearance metrics use the original clips;
+    # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
+    export RUN_VBENCH=1 VBENCH_SEEDS=5 VBENCH_TEMPORAL_WIDTH=960
+    export VBENCH_EXPORT_DIR="${PIPELINE_DIR:?CI staging directory required}/vbench"
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
-      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0"
+      python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0" || exit $?
+    # Run in the worker's ML environment after pytest has closed the TT devices.
+    # A worker failure, missing seed, or failed mean threshold fails this same leg.
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      env OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=1 python3 -m models.tt_dit.utils.vbench_bundle evaluate \
+        --bundle "$VBENCH_EXPORT_DIR"
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
@@ -2045,8 +2054,8 @@
     '
   model: "[tt-train] tinyllama_1_1b_ddp32"
   skus:
-    bh_sc1:
-      timeout: 45
+    bh_sc1_high_power:
+      timeout: 40
       tier: 3
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
@@ -2079,8 +2088,8 @@
     '
   model: "[tt-train] qwen3_1_7b_ddp32_shakespeare"
   skus:
-    bh_sc1:
-      timeout: 20
+    bh_sc1_high_power:
+      timeout: 25
       tier: 3
       release_ready: false
   owner_id: U07K00A281X # Kevin Wu
@@ -2095,7 +2104,7 @@
     '
   model: "[tt-train] tiny_deepseek_v3_ddp32_char"
   skus:
-    bh_sc1:
+    bh_sc1_high_power:
       timeout: 75
       tier: 3
       release_ready: false

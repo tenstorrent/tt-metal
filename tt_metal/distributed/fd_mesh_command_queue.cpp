@@ -10,6 +10,7 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -377,7 +378,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             device->id(),
-            event.id(),
+            event.impl().id(),
             id_,
             mesh_device_->num_hw_cqs(),
             device->sysmem_manager(),
@@ -394,7 +395,9 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 
     // Block after clearing counter(s) on dispatcher
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+        std::in_place_type<MeshReadEventDescriptor>,
+        ReadEventDescriptor(event.impl().id()),
+        event.impl().device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     this->wait_for_outstanding_reads(lock);
@@ -979,7 +982,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         event_dispatch::issue_record_event_commands(
             mesh_device_,
             mesh_device_->impl().get_device(coord)->id(),
-            event.id(),
+            event.impl().id(),
             id_,
             mesh_device_->num_hw_cqs(),
             mesh_device_->impl().get_device(coord)->sysmem_manager(),
@@ -988,7 +991,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
             notify_host);
     };
 
-    for_each_local(mesh_device_, event.device_range(), [&](const auto& coord) {
+    for_each_local(mesh_device_, event.impl().device_range(), [&](const auto& coord) {
         dispatch_thread_pool_->enqueue(
             [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->impl().get_device(coord)->id());
     });
@@ -1004,7 +1007,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
+        sub_device_entry.recorded_event(event.impl().id(), event.impl().mesh_cq_id());
     }
     return event;
 }
@@ -1013,12 +1016,14 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+        std::in_place_type<MeshReadEventDescriptor>,
+        ReadEventDescriptor(event.impl().id()),
+        event.impl().device_range()));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
+        sub_device_entry.recorded_event(event.impl().id(), event.impl().mesh_cq_id());
     }
     return event;
 }
@@ -1033,13 +1038,16 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
-    for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
+    for_each_local(mesh_device_, sync_event.impl().device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
-            id_, sync_event.mesh_cq_id(), mesh_device_->impl().get_device(coord)->sysmem_manager(), sync_event.id());
+            id_,
+            sync_event.impl().mesh_cq_id(),
+            mesh_device_->impl().get_device(coord)->sysmem_manager(),
+            sync_event.impl().id());
     });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_entry : sub_device_cq_owner) {
-        sub_device_entry.waited_for_event(sync_event.id(), sync_event.mesh_cq_id(), this->id_);
+        sub_device_entry.waited_for_event(sync_event.impl().id(), sync_event.impl().mesh_cq_id(), this->id_);
     }
 }
 
@@ -1215,24 +1223,54 @@ void FDMeshCommandQueue::reset_worker_state(
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
-    for (auto* device : mesh_device_->get_devices()) {
+    const auto devices = mesh_device_->get_devices();
+    auto cached =
+        std::find_if(sub_device_setup_commands_.begin(), sub_device_setup_commands_.end(), [&](const auto& entry) {
+            return entry.devices == devices && entry.reset_launch_msg_state == reset_launch_msg_state &&
+                   std::equal(
+                       entry.workers.begin(),
+                       entry.workers.end(),
+                       workers_per_sub_device.begin(),
+                       workers_per_sub_device.end()) &&
+                   entry.noc_data == go_signal_noc_data && entry.core_mapping == core_go_message_mapping;
+        });
+    if (cached == sub_device_setup_commands_.end()) {
+        SubDeviceSetupCommands entry{
+            .devices = devices,
+            .workers = {workers_per_sub_device.begin(), workers_per_sub_device.end()},
+            .noc_data = go_signal_noc_data,
+            .core_mapping = core_go_message_mapping,
+            .reset_launch_msg_state = reset_launch_msg_state,
+            .device_batches = {}};
+        entry.device_batches.reserve(devices.size());
+        for (auto* device : devices) {
+            entry.device_batches.push_back(program_dispatch::build_sub_device_setup_commands(
+                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
+                id_,
+                workers_per_sub_device,
+                go_signal_noc_data,
+                core_go_message_mapping,
+                reset_launch_msg_state));
+        }
+        if (sub_device_setup_commands_.size() == max_sub_device_setup_cache_entries) {
+            sub_device_setup_commands_.pop_back();
+        }
+        sub_device_setup_commands_.push_back(std::move(entry));
+        cached = std::prev(sub_device_setup_commands_.end());
+    }
+    std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
+    cached = sub_device_setup_commands_.begin();
+    for (size_t i = 0; i < devices.size(); ++i) {
+        // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
+        // and retains all barriers; batching changes only host submission granularity.
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
-            device->sysmem_manager(),
+            devices[i]->sysmem_manager(),
             id_,
             this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
-            reset_launch_msg_state);
-        program_dispatch::set_num_worker_sems_on_dispatch(
-            device->sysmem_manager(), id_, num_sub_devices, workers_per_sub_device);
-        program_dispatch::set_go_signal_noc_data_on_dispatch(go_signal_noc_data, device->sysmem_manager(), id_);
-        if (reset_launch_msg_state) {
-            program_dispatch::set_core_go_message_mapping_on_device(
-                static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-                core_go_message_mapping,
-                device->sysmem_manager(),
-                id_);
-        }
+            reset_launch_msg_state,
+            cached->device_batches[i]);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -1745,7 +1783,8 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 id_,
                 this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
-                reset_launch_msg_state);
+                reset_launch_msg_state,
+                /*setup_commands=*/{});
         }
         program_dispatch::reset_config_buf_mgrs_and_expected_workers(
             MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),

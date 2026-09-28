@@ -29,13 +29,10 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.events import profiler_event_callback
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
+from ....pipelines.minimax_h3.policy import get_num_frames
 
-# Off by default: sanity, seam, CLIP, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
-# Asserts still run either way. Stage durations always log on the host rank.
-# ENABLE_USER_INPUT=1 turns the t2va perf test into a prompt/aspect/duration REPL after the
-# measured generation. Rank 0 is remote under tt-run, so the launch host relays /dev/tty
-# through cwd-relative `.h3_repl/journal` (append-only; NFS must not look up new ready.* names).
+# Truthy values for H3_LOG_QUALITY (quality logs) and ENABLE_USER_INPUT (post-perf prompt REPL).
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
 
 
@@ -250,7 +247,6 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
 
     silent = directory / f"{stem}_silent.mp4"
     if frames.ndim == 3:
-        # Planar yuv420p from vae_output_type="yuv420": (F, H*3//2, W) uint8.
         _, planar_height, width = frames.shape
         height = planar_height * 2 // 3
         pix_fmt = "yuv420p"
@@ -519,17 +515,7 @@ def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: flo
 
 
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
-    """A quiet compile pass then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
-
-    The compile pass runs a short 3-step schedule regardless of the measured step count: every program, conv3d
-    blocking and persistent buffer is keyed on the *padded sequence length*, not the number of steps,
-    so 3 steps compile and allocate exactly what the full run needs at a fraction of the cost, and the
-    denoise trace stays warm across step counts (its signature is shape + slot count) so the measured
-    full-step call still replays it.
-
-    `profiler`, when given, is a `BenchmarkProfiler`: only the measured call is wrapped in `"run"` and
-    receives `on_event`. The quiet compile pass is unprofiled.
-    """
+    """The timed generation; `profiler` (a `BenchmarkProfiler`), when given, wraps only this call in `"run"`."""
     # warmup_kwargs = {**gen_kwargs, "num_inference_steps": 3}
 
     # # The pipeline warms its whole bucket ladder at construction, so `last_seq_len` does not yet
@@ -676,6 +662,13 @@ def _parse_steps(text: str, default: int) -> int:
     return steps
 
 
+def _parse_seed(text: str, default: int) -> int:
+    text = text.strip()
+    if not text:
+        return int(default)
+    return int(text)
+
+
 def _repl_dir() -> Path:
     """Same directory the launch script uses: `$TT_METAL_HOME/.h3_repl` (NFS), not the pytest cwd."""
     return Path(os.environ.get("TT_METAL_HOME") or os.getcwd()) / ".h3_repl"
@@ -796,7 +789,7 @@ def _prompt_line(message: str, timeout: float | None = None) -> str:
 
 def pretest_user_repl(*, timeout: float = 1800, rounds: int = 3) -> None:
     """`rounds` TTY round-trips before pipeline init. Fails fast if the launch-host relay is not working."""
-    return  # skip this for now
+    return
     if not user_input_enabled():
         return
     flag = 0
@@ -824,28 +817,53 @@ def _read_optional_image_path(label: str) -> str | None:
         print(f"no such file: {raw}", file=sys.stderr)
 
 
+def _read_prompt() -> str | None:
+    """The prompt text, or a file's contents when the entry names an existing file. `q` quits; EOFError aborts."""
+    while True:
+        try:
+            text = _prompt_line("User prompt (prompt or file path; q to quit): ").strip()
+        except EOFError:
+            return None
+        if text.lower() == "q":
+            return None
+        if not text:
+            continue
+        return Path(text).read_text().strip() if os.path.isfile(text) else text
+
+
 def _read_user_spec(
-    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
-) -> tuple[str, tuple[int, int], float, int, str | None, str | None] | None:
-    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration, steps and optional fl2va keyframes."""
-    while True:
-        try:
-            prompt = _prompt_line("User prompt (q to quit): ").strip()
-        except EOFError:
-            return None
-        if prompt.lower() == "q":
-            return None
-        if prompt:
-            break
-    while True:
-        try:
-            raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
-            aspect = _parse_aspect(raw, default_aspect_ratio)
-            break
-        except EOFError:
-            return None
-        except ValueError:
-            print("expected W:H (e.g. 16:9)", file=sys.stderr)
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
+) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
+    """Host stdin: prompt (`q` quits), keyframes, then canvas/aspect (only without keyframes), duration, steps, seed."""
+    prompt = _read_prompt()
+    if prompt is None:
+        return None
+    try:
+        first_image = _read_optional_image_path("First image path (blank for none): ")
+        last_image = _read_optional_image_path("Last image path (blank for none): ")
+    except EOFError:
+        return None
+    width = height = None
+    aspect = default_aspect_ratio
+    if first_image is None and last_image is None:
+        while True:
+            try:
+                raw = _prompt_line("Width:Height (blank for none): ")
+                width, height = _parse_aspect(raw, (None, None))
+                break
+            except EOFError:
+                return None
+            except ValueError:
+                print("expected W:H (e.g. 1280:720)", file=sys.stderr)
+        while True:
+            try:
+                raw = _prompt_line(f"Aspect ratio [{default_aspect_ratio[0]}:{default_aspect_ratio[1]}]: ")
+                aspect = _parse_aspect(raw, default_aspect_ratio)
+                break
+            except EOFError:
+                return None
+            except ValueError:
+                print("expected W:H (e.g. 16:9)", file=sys.stderr)
     while True:
         try:
             raw = _prompt_line(f"Duration seconds [{default_duration_s:g}]: ")
@@ -864,34 +882,41 @@ def _read_user_spec(
             return None
         except ValueError:
             print("expected a positive integer", file=sys.stderr)
-    try:
-        first_image = _read_optional_image_path("First image path (blank for none): ")
-        last_image = _read_optional_image_path("Last image path (blank for none): ")
-    except EOFError:
-        return None
-    return prompt, aspect, duration_s, num_steps, first_image, last_image
+    while True:
+        try:
+            raw = _prompt_line(f"Seed [{default_seed}]: ")
+            seed = _parse_seed(raw, default_seed)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected an integer", file=sys.stderr)
+    return prompt, first_image, last_image, width, height, aspect, duration_s, num_steps, seed
 
 
 def _broadcast_user_spec(
-    spec: tuple[str, tuple[int, int], float, int, str | None, str | None] | None,
-) -> tuple[str, tuple[int, int], float, int, str | None, str | None] | None:
+    spec: tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None,
+) -> tuple[str, str | None, str | None, int | None, int | None, tuple[int, int], float, int, int] | None:
     """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
     if not ttnn.using_distributed_env():
         return spec
     seq = 0
     if is_host() and spec is not None:
         seq = _next_repl_seq()
-        prompt, aspect, duration_s, num_steps, first_image, last_image = spec
+        prompt, first_image, last_image, width, height, aspect, duration_s, num_steps, seed = spec
         _append_journal(
             seq,
             json.dumps(
                 {
                     "prompt": prompt,
+                    "first_image": first_image,
+                    "last_image": last_image,
+                    "width": width,
+                    "height": height,
                     "aspect": [int(aspect[0]), int(aspect[1])],
                     "duration_s": float(duration_s),
                     "num_steps": int(num_steps),
-                    "first_image": first_image,
-                    "last_image": last_image,
+                    "seed": int(seed),
                 }
             ),
         )
@@ -902,11 +927,14 @@ def _broadcast_user_spec(
         payload = json.loads(_wait_journal(seq))
         spec = (
             payload["prompt"],
+            payload["first_image"],
+            payload["last_image"],
+            payload["width"],
+            payload["height"],
             (int(payload["aspect"][0]), int(payload["aspect"][1])),
             float(payload["duration_s"]),
             int(payload["num_steps"]),
-            payload["first_image"],
-            payload["last_image"],
+            int(payload["seed"]),
         )
     ttnn.distributed_context_barrier()
     return spec
@@ -928,20 +956,10 @@ def _parse_reference_counts(text: str) -> tuple[int, int, int]:
 def _read_reference_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
 ) -> dict | None:
-    """Host stdin: a prompt, aspect, duration and steps (defaulting to the working point), a counts triple, then paths.
-
-    `q` at the prompt or counts step, or EOF anywhere, aborts (returns None). Paths are re-prompted
-    until the entered count matches and every path is an existing file, so a typo never reaches pipeline init.
-    """
-    while True:
-        try:
-            prompt = _prompt_line("User prompt (q to quit): ").strip()
-        except EOFError:
-            return None
-        if prompt.lower() == "q":
-            return None
-        if prompt:
-            break
+    """Host stdin: prompt, aspect, duration, steps, a counts triple, then paths; None on `q` or EOF."""
+    prompt = _read_prompt()
+    if prompt is None:
+        return None
 
     while True:
         try:
@@ -1034,11 +1052,9 @@ def _broadcast_reference_spec(spec: dict | None) -> dict | None:
 def read_user_reference_spec(
     default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
 ) -> dict | None:
-    """Collect a ref2va prompt, aspect/duration/steps and reference paths from the launch TTY and broadcast to every rank.
+    """Collect a ref2va prompt, settings and reference paths from the launch TTY and broadcast to every rank.
 
-    Returns `{"prompt": str, "aspect": [w, h], "duration_s": float, "num_steps": int, "image": [...],
-    "audio": [...], "video": [...]}` in packed order, or None when input is disabled or aborted. Media
-    itself is loaded per rank from the (shared) paths, not carried here.
+    Returns a spec dict, or None when input is disabled or aborted.
     """
     if not user_input_enabled():
         return None
@@ -1056,11 +1072,7 @@ def run_user_generations(
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
 ) -> None:
-    """Prompt/aspect/duration REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
-
-    Each entry is a fresh `BenchmarkProfiler` fed by `on_event` (no `run` wrap). Artifacts use the
-    perf-test stem plus a 0-based index. Admission errors log and the loop continues.
-    """
+    """Prompt/keyframes/canvas/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set."""
     if not user_input_enabled():
         return
     from PIL import Image
@@ -1068,17 +1080,18 @@ def run_user_generations(
     artifacts = artifact_dir(artifact_name)
     index = 0
     while True:
-        spec = _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps) if is_host() else None
+        spec = (
+            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed) if is_host() else None
+        )
         spec = _broadcast_user_spec(spec)
         if spec is None:
             return
-        prompt, aspect_ratio, duration_s, num_steps, first_image, last_image = spec
+        prompt, first_image, last_image, width, height, aspect_ratio, duration_s, num_steps, seed = spec
         image = Image.open(first_image).convert("RGB") if first_image else None
         last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
         try:
-            height, width = resolve_canvas_size(*aspect_ratio) if image is None else (None, None)
-            num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+            num_frames = get_num_frames(duration_s)
             with profiler("run", iteration=0):
                 output = pipeline(
                     prompt,
@@ -1101,24 +1114,26 @@ def run_user_generations(
         ttnn.synchronize_device(pipeline.mesh_device)
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
-        log_pipeline_perf(
-            profiler,
-            label=label,
-            pipeline=pipeline,
-            num_forwards=num_steps - 1,
-            width=width,
-            height=height,
-            num_frames=output.num_frames,
-            fps=MINIMAX_H3_FPS,
-            aspect_ratio=aspect_ratio,
-            num_inference_steps=num_steps,
-        )
         if is_host():
-            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
-            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{width}x{height}_{duration_tag}s_{index}"
-            write_artifacts(
-                frames_for_export(output), output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem
+            frames = frames_for_export(output)
+            canvas_height, canvas_width = (
+                (frames.shape[1] * 2 // 3, frames.shape[2]) if frames.ndim == 3 else (frames.shape[1], frames.shape[2])
             )
+            log_pipeline_perf(
+                profiler,
+                label=label,
+                pipeline=pipeline,
+                num_forwards=num_steps - 1,
+                width=canvas_width,
+                height=canvas_height,
+                num_frames=output.num_frames,
+                fps=MINIMAX_H3_FPS,
+                aspect_ratio=aspect_ratio,
+                num_inference_steps=num_steps,
+            )
+            duration_tag = int(duration_s) if float(duration_s).is_integer() else duration_s
+            stem = f"{label}_{aspect_ratio[0]}x{aspect_ratio[1]}_{canvas_width}x{canvas_height}_{duration_tag}s_{index}"
+            write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
         index += 1
 
 
@@ -1132,10 +1147,7 @@ def run_user_ref_generations(
 ) -> None:
     """ref2va prompt+reference REPL after the warm measured run. No-op unless ENABLE_USER_INPUT is set.
 
-    `request_provider()` returns one `(prompt, references, aspect_ratio, duration_s, num_steps)` per
-    iteration (None to stop), already broadcast to every rank. Each entry is a fresh `BenchmarkProfiler`
-    fed by `on_event`, and its artifacts are stemmed by the reference modalities plus a 0-based index.
-    Admission errors log and the loop continues.
+    `request_provider()` returns `(prompt, references, aspect_ratio, duration_s, num_steps)`, or None to stop.
     """
     if not user_input_enabled():
         return
@@ -1147,7 +1159,7 @@ def run_user_ref_generations(
             return
         prompt, references, aspect_ratio, duration_s, num_steps = request
         height, width = resolve_canvas_size(*aspect_ratio)
-        num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+        num_frames = get_num_frames(duration_s)
         profiler = BenchmarkProfiler()
         try:
             with profiler("run", iteration=0):

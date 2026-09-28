@@ -121,7 +121,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_rows", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_page_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -139,7 +140,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             .accessor_name = "dst",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {
@@ -148,6 +150,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
         if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
             compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
+        }
+        // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+        // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+        ComputeHardwareConfig compute_hw = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            ComputeGen2Config compute_cfg_gen2;
+            compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+            compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from Gen1
+            compute_hw = compute_cfg_gen2;
         }
         return KernelSpec{
             .unique_id = id,
@@ -166,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                  }},
             .compile_time_args =
                 {{"per_core_block_cnt", nblocks_per_core_arg}, {"per_core_block_tile_cnt", ntiles_per_block}},
-            .hw_config = ComputeHardwareConfig{compute_cfg},
+            .hw_config = std::move(compute_hw),
         };
     };
 

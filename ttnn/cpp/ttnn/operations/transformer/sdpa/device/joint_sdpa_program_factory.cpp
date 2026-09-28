@@ -81,14 +81,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     const uint32_t cat_Skt = cat_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
 
-    // Kernel will need to know the tile-based shapes of both sets of tensors
-    // to create a representation of the concatenated tensors.
-
-    // const std::vector<uint32_t> q_tile_shape = {B, NH, padded_Nqt, DHt};
-    // const std::vector<uint32_t> k_tile_shape = {B, NH, padded_Nkt, DHt};
-    // const std::vector<uint32_t> joint_q_tile_shape = {B, NH, padded_Lqt, DHt};
-    // const std::vector<uint32_t> joint_k_tile_shape = {B, NH, padded_Lkt, DHt};
-
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
     Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
@@ -215,7 +207,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
-    const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
@@ -224,7 +215,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
-    const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -233,26 +223,22 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
     log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
     log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    log_debug(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
     log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
     log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
     log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
     log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
     const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
@@ -278,7 +264,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         padded_Nkt,
         padded_Lqt,
         padded_Lkt,
-        num_cores,
     };
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -302,18 +287,13 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
-        k_num_chunks,
         valid_Nt,
         valid_Lt,
         padded_Nqt,
-        padded_Nkt,
         padded_Lqt,
-        padded_Lkt,
         N,
         L,
-        num_cores,
         packed_identity_scalar,
-        scale_packed,
         static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
@@ -322,8 +302,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
-        B,
-        NH,
         cat_Skt,
         DHt,
         Sq_chunk_t,
@@ -334,13 +312,11 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         qk_out_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_out_subblock_w,
         out_out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
@@ -350,7 +326,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);

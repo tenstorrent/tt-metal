@@ -131,6 +131,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = MEM_AERISC_FABRIC_ROUTER_COMMAND_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_PTP_TRACE)] = MEM_AERISC_PTP_TRACE_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
                                                                          offsetof(eth_live_status_t, rx_link_up);

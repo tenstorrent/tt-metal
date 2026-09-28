@@ -12,6 +12,103 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
+namespace {
+
+// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
+bool is_integer_dtype(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
+           dtype == DataType::UINT8;
+}
+
+bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
+bool is_uint32(DataType dtype) { return dtype == DataType::UINT32; }
+bool is_unsigned_int(DataType dtype) {
+    return dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8;
+}
+bool is_int32_uint32(DataType dtype) { return is_int32(dtype) || is_uint32(dtype); }
+bool is_int32_uint32_uint16(DataType dtype) { return is_int32_uint32(dtype) || dtype == DataType::UINT16; }
+bool is_relu_family_int(DataType dtype) { return is_int32(dtype) || is_unsigned_int(dtype); }
+
+// Integer dtypes that unary_op_utils.cpp maps to a distinct init/LLK (or a dtype-agnostic kernel).
+bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
+    switch (op_type) {
+        case UnaryOpType::ABS: return is_unsigned_int(dtype);
+        case UnaryOpType::ABS_INT32:
+        case UnaryOpType::CLAMP_TSS:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
+        case UnaryOpType::NEG:
+        case UnaryOpType::SIGNBIT: return is_int32(dtype);
+
+        case UnaryOpType::REMAINDER: return is_uint32(dtype);
+
+        case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
+
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::MAXIMUM:
+        case UnaryOpType::MINIMUM:
+        case UnaryOpType::RSUB:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::UNARY_EQ:
+        case UnaryOpType::UNARY_GE:
+        case UnaryOpType::UNARY_GT:
+        case UnaryOpType::UNARY_LE:
+        case UnaryOpType::UNARY_LT:
+        case UnaryOpType::UNARY_NE:
+        case UnaryOpType::WHERE_TSS: return is_int32_uint32(dtype);
+
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::EQZ:
+        case UnaryOpType::FILL:
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::LOGICAL_NOT_UNARY:
+        case UnaryOpType::NEZ:
+        case UnaryOpType::RIGHT_SHIFT:
+        case UnaryOpType::SQUARE: return is_int32_uint32_uint16(dtype);
+
+        case UnaryOpType::BITWISE_NOT: return is_int32_uint32(dtype);
+
+        case UnaryOpType::RELU:
+        case UnaryOpType::RELU6:
+        case UnaryOpType::RELU_MAX:
+        case UnaryOpType::RELU_MIN: return is_relu_family_int(dtype);
+
+        // Copy / typecast kernels; valid on integer tiles without a separate integer LLK.
+        case UnaryOpType::BITCAST:
+        case UnaryOpType::IDENTITY:
+        case UnaryOpType::TYPECAST: return true;
+
+        default: return false;
+    }
+}
+
+void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    if (!is_integer_dtype(input_dtype)) {
+        return;
+    }
+    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
+    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
+    if (op_chain.size() > 1) {
+        for (const auto& op : op_chain) {
+            if (op.type() == UnaryOpType::TYPECAST) {
+                return;
+            }
+        }
+    }
+    for (const auto& op : op_chain) {
+        TT_FATAL(
+            unary_op_supports_integer_dtype(op.type(), input_dtype),
+            "Unary: {} does not support integer input dtype {}",
+            op.type(),
+            input_dtype);
+    }
+}
+
+}  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     return ttsl::hash::hash_objects_with_default_seed(
@@ -43,6 +140,8 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.buffer() != nullptr,
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+
+    validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
@@ -133,11 +232,19 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
         const auto output_layout = tensor_args.input.layout();
         const auto& memory_layout = args.memory_config.memory_layout();
         const auto& buffer_type = args.memory_config.buffer_type();
+
+        // ND_SHARDED does not carry a 2D shard_spec to reconstruct from. Reusing it is safe and the input's
+        // ND distribution still describes the output.
+        if (!args.memory_config.shard_spec().has_value() && args.memory_config.nd_shard_spec().has_value()) {
+            return tt::tt_metal::TensorSpec(
+                output_shape, TensorLayout(args.output_dtype, PageConfig(output_layout), args.memory_config));
+        }
+
         auto shard_spec_opt = args.memory_config.shard_spec();
 
         if (!shard_spec_opt.has_value()) {
             const auto& padded_out_shape = tensor_args.input.padded_shape();
-            if (tensor_args.input.is_sharded()) {
+            if (tensor_args.input.memory_config().shard_spec().has_value()) {
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input.memory_config().shard_spec(),
                     tensor_args.input.padded_shape(),
@@ -192,25 +299,52 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
-    // different widths get separate cache entries. Consider hashing only the last
-    // dimension to allow cache reuse when only height differs
-    if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        return operation::hash_operation<UnaryDeviceOperation>(
-            attributes,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            input_tensor.memory_config(),
-            input_tensor.padded_shape(),
-            src_shard_vol,
-            dst_shard_vol);
-    }
+    // On cache hit, the descriptor is not rebuilt and no relaxation is applied. The dispatched
+    // tensor_layout must be the same as the one built for the cached program.  Anything omitted
+    // from this key can give different config and fail validation (wrong data now and a hard TT_FATAL
+    // once the Metal 2.0 port declares TensorParameter relaxations). The output layout needs its
+    // own term because compute_output_specs can hand back a caller-supplied preallocated spec and
+    // validation only compares its Layout enum against the input's.
+    //
+    // Hashing tensor_layout does not ignore shape. Alignment is part of tensor_layout and since
+    // legacyShapeToAlignment returns {padded_h, padded_w} for an overpadded TILE tensor instead of tile
+    // dims, differently padded H/W values produce different keys. Tile-aligned tensors are unaffected.
+    //
+    // Sharded distribution needs its own term. Since shape and shard squeeze together, one shard spec resolves
+    // per shape ({64,64} over two cores: [64,64] -> [4], [64,128] -> [2,2]) and GRID_2D trims the bank list
+    // from the unsqueezed shape ([64,128] and [64,192] over two and three banks). The accessor passes both as
+    // compile-time args. Use the Buffer's stored sharding_args since they describe the actual buffer layout
+    // used by the factory. A reshaped view keeps its parent tensor's sharding_args. A null buffer means the
+    // output has not been allocated yet and its buffer will come from output_spec.
+    //
+    // TODO(port): When TensorParameter replaces TensorAccessorArgs, TensorSpec becomes the authoritative source.
+    // Swap the Buffer branch for the spec on both sides since Metal 2.0 validation reads
+    // spec.compute_buffer_sharding_args().
+    const auto distribution_key = [](const tt::tt_metal::TensorSpec& spec,
+                                     const Tensor* tensor) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+        if (!spec.memory_config().is_sharded()) {
+            return std::nullopt;
+        }
+        const auto* buffer = tensor != nullptr && tensor->device() != nullptr ? tensor->buffer() : nullptr;
+        const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
+        const auto& distribution =
+            buffer != nullptr ? buffer->buffer_distribution_spec() : computed->buffer_distribution_spec();
+        if (!distribution.has_value()) {
+            return std::nullopt;
+        }
+        return std::pair{distribution->shard_shape_in_pages(), distribution->cores()};
+    };
 
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.memory_config(),
+        input_tensor.tensor_spec().tensor_layout(),
+        output_spec.tensor_layout(),
+        // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
+        // different widths get separate cache entries. Consider hashing only the last
+        // dimension to allow cache reuse when only height differs
+        input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
+        distribution_key(input_tensor.tensor_spec(), &input_tensor),
+        distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
         src_shard_vol,
         dst_shard_vol);
 }
@@ -242,11 +376,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input,
-        optional_output_tensor,
-        std::optional<MemoryConfig>(output_memory_config),
-        sub_core_grids,
-        mem_config_actual);
+        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,

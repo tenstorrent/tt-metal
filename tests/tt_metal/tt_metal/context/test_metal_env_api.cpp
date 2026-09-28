@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/device/mock_device_util.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -250,6 +251,61 @@ TEST(MetalEnv, ReconfigureFabricForDispatch) {
 
     auto& mesh_after = env.get_system_mesh();
     EXPECT_GT(mesh_after.shape().mesh_size(), 0);
+}
+
+// --- Context leaks on failed mesh device creation (#57286) ---
+
+namespace {
+
+// The lowest free slot is handed out first, so a leaked context shifts this upward.
+ContextId next_free_context_id(const std::string& mock_path) {
+    MetalEnv probe{MetalEnvDescriptor(mock_path)};
+    ContextId id = MetalContext::create_instance(probe);
+    MetalContext::destroy_instance(/*check_device_count=*/false, id);
+    return id;
+}
+
+}  // namespace
+
+TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env{MetalEnvDescriptor(mock_path)};
+        // Fatals inside MeshDeviceImpl::create, after the context exists and before ownership transfers.
+        EXPECT_THROW(
+            env.create_mesh_device(distributed::MeshDeviceConfig(
+                /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
+            std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+TEST(MetalEnv, FailedCreateUnitMeshDeviceDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env{MetalEnvDescriptor(mock_path)};
+        // Device 99 is not in the 1-chip mock cluster, so opening it fails.
+        EXPECT_THROW(env.create_unit_mesh_device(99), std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
+    auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
+    const ContextId baseline = next_free_context_id(mock_path);
+
+    for (int i = 0; i < 3; ++i) {
+        MetalEnv env{MetalEnvDescriptor(mock_path)};
+        EXPECT_THROW(env.create_unit_meshes({}), std::runtime_error);
+    }
+
+    EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
 }
 
 }  // namespace tt::tt_metal

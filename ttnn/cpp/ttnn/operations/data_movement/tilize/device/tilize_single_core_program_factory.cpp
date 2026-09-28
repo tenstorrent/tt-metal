@@ -130,7 +130,8 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_stick_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -148,7 +149,8 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
             .accessor_name = "dst",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     ComputeGen1Config compute_cfg;
@@ -158,6 +160,15 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         compute_cfg.unpack_modes.emplace(INPUT_DFB, UnpackMode::UnpackToDest);
     }
 
+    // Gen2 (Quasar) config: a KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1
+    // config on Quasar. Mirror the resolved Gen1 fields into a Gen2 config on Quasar; WH/BH keep Gen1.
+    ComputeHardwareConfig compute_hw = compute_cfg;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        ComputeGen2Config compute_cfg_gen2;
+        compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
+        compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from Gen1
+        compute_hw = compute_cfg_gen2;
+    }
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/kernel/compute/tilize_metal2.cpp",
@@ -175,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
              }},
         .compile_time_args =
             {{"per_core_block_cnt", num_tiles / num_tiles_per_block}, {"per_core_block_tile_cnt", num_tiles_per_block}},
-        .hw_config = ComputeHardwareConfig{compute_cfg},
+        .hw_config = std::move(compute_hw),
     };
 
     ProgramSpec spec{

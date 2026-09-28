@@ -263,9 +263,6 @@ class Vocoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        # H3 opt-ins; LTX leaves both False so its T-partition stays tile-aligned.
-        tight_t_align: bool = False,
-        local_tpad_tail: bool = False,
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",
         polyphase_ups: bool = False,
@@ -306,8 +303,6 @@ class Vocoder(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        self.tight_t_align = tight_t_align
-        self.local_tpad_tail = local_tpad_tail
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # Traced decode: _forward_device is @traced_function, keyed per input shape via
@@ -346,7 +341,6 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tight_t_align=tight_t_align,
                     polyphase=polyphase_ups,
                 )
                 for i in range(self.num_upsamples)
@@ -433,12 +427,6 @@ class Vocoder(Module):
         The same device graph as :meth:`forward`, minus the mel-specific input reshape.
         Used by MiniMax-H3's audio decoder, whose input is already channels-over-time.
         """
-        # H3 decodes eagerly while the DiT denoise runs as a replayed trace, and its tpad tail-set is
-        # keyed by audio length (t_pad = pad-to-1024 - num_latents), so no finite warmup covers the
-        # 5-15 s range. A length whose mask (and its suffix) first materialize at serve time lands in
-        # DRAM the denoise trace freed but still overwrites on replay, and a cached mask is then read
-        # back stomped. Rebuild both per call -- they are small constants -- so every decode restores
-        # correct values after the replay.
         self._tpad_mask_cache = {}
         return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
 

@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -459,16 +460,22 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
 
     // ---------------- Compute ----------------
 
-    // Legacy built a ComputeConfigDescriptor that set only fp32_dest_acc_en, leaving every other knob
-    // at its default even when the caller's compute_kernel_config specified one. ComputeGen1Config's
-    // defaults coincide with those, so setting only enable_32_bit_dest reproduces it exactly.
-    ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+    // Select the compute hardware-config generation for the target arch and map the caller's common
+    // knobs (leaving the per-DFB unpack_modes default for us to set below). Required on Quasar, where a
+    // KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1 config. Unlike the previous
+    // bare ComputeGen1Config (which set only enable_32_bit_dest and otherwise took the struct defaults,
+    // HiFi4/precise), this preserves the caller's compute_kernel_config — whose no-arg TTNN default maps
+    // to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx knobs, which do
+    // not affect this op: it untilizes cache/input, patches a row, and re-tilizes (data-format moves) —
+    // there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode is left default either way.
+    auto compute_hw_cfg = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute kernel
         // consumes. Legacy named none, which resolved to unpacking into SrcA/B.
+        auto& um = unpack_modes(compute_hw_cfg);
         const auto require_unpack_mode = [&](const DFBSpecName& dfb, tt::DataFormat format) {
             if (format == tt::DataFormat::Float32) {
-                compute_hw.unpack_modes.emplace(dfb, UnpackMode::UnpackToSrc);
+                um.emplace(dfb, UnpackMode::UnpackToSrc);
             }
         };
         require_unpack_mode(UC_CACHE_TILES, cache_dfb_data_format);
@@ -520,7 +527,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"Wt", Wt},
                 {"num_heads", num_heads},
             },
-        .hw_config = compute_hw,
+        .hw_config = compute_hw_cfg,
     };
 
     // ---------------- Tensor parameters ----------------

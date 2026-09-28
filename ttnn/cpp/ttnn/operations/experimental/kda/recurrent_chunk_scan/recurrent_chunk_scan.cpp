@@ -61,14 +61,18 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     const ttnn::Tensor& k_dec_t,
     const ttnn::Tensor& final_decay,
     const ttnn::Tensor& t_inv,
-    const ttnn::Tensor& initial_state,
+    const ttnn::Tensor& group_entry_states,
+    const ttnn::Tensor& actual_start,
+    const ttnn::Tensor& tail_entry_states,
+    uint32_t groups_per_head,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t sequence_parallel_axis) {
     using namespace ttnn::experimental::prim::kda_factory_detail;
     constexpr std::string_view operation_name = "recurrent_chunk_scan";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
-    check_allocated_device_tensor(initial_state, operation_name, "initial_state");
-    TT_FATAL(initial_state.logical_shape().rank() == 3, "{}: initial_state must be rank 3", operation_name);
+    check_allocated_device_tensor(group_entry_states, operation_name, "group_entry_states");
+    TT_FATAL(group_entry_states.logical_shape().rank() == 3, "{}: group_entry_states must be rank 3", operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
     check_output_interleaved(output_memory_config, operation_name);
     return ttnn::experimental::prim::recurrent_chunk_scan(
@@ -79,10 +83,15 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
         k_dec_t,
         final_decay,
         t_inv,
-        initial_state,
+        group_entry_states,
+        tail_entry_states,
         ttnn::experimental::prim::RecurrentChunkScanMode::RECURRENT,
+        groups_per_head,
+
         output_memory_config,
-        kernel_config);
+        kernel_config,
+        actual_start,
+        sequence_parallel_axis);
 }
 
 std::vector<ttnn::Tensor> summarize_chunk_recurrence(
@@ -93,8 +102,11 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const ttnn::Tensor& k_dec_t,
     const ttnn::Tensor& final_decay,
     const ttnn::Tensor& t_inv,
+    const ttnn::Tensor& actual_start,
+    uint32_t groups_per_head,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t sequence_parallel_axis) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
@@ -107,9 +119,14 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         final_decay,
         t_inv,
         std::nullopt,
+        std::nullopt,
         ttnn::experimental::prim::RecurrentChunkScanMode::SUMMARY,
+        groups_per_head,
+
         output_memory_config,
-        kernel_config);
+        kernel_config,
+        actual_start,
+        sequence_parallel_axis);
 }
 
 }  // namespace ttnn::experimental::kda

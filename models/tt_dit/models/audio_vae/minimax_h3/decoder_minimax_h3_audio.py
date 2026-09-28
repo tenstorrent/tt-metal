@@ -34,8 +34,6 @@ degrades spectral metrics through its 108-conv chain, and H3's is longer still.
 
 from __future__ import annotations
 
-import os
-
 import torch
 
 import ttnn
@@ -70,11 +68,6 @@ class MiniMaxH3AudioDecoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
-        # H3-only latency opt-ins, off by default pending wider coverage (channel-TP, other shard
-        # factors). Env-defaulted here specifically -- not as a module global in audio_ops.py, which
-        # is shared with LTX's Vocoder -- so this flag cannot silently change LTX's partitioning.
-        tight_t_align: bool = os.environ.get("MINIMAX_H3_AUDIO_TIGHT_T_ALIGN", "0") == "1",
-        local_tpad_tail: bool = os.environ.get("MINIMAX_H3_AUDIO_LOCAL_TPAD_TAIL", "0") == "1",
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",
         polyphase_ups: bool = True,
@@ -97,10 +90,6 @@ class MiniMaxH3AudioDecoder(Module):
         # (see compute_depthwise_conv1d.cpp).
         self.split_mode = split_mode
         self.max_c_in_block = max_c_in_block
-        # Layout/partitioning only -- unlike the levers above, these don't change which weight
-        # tensors exist, so they aren't part of the pipeline's `weights_variant` cache key.
-        self.tight_t_align = tight_t_align
-        self.local_tpad_tail = local_tpad_tail
         self.pack_bands = dict(pack_bands or {})
         self.act_mode = act_mode
         self.polyphase_ups = polyphase_ups
@@ -151,8 +140,6 @@ class MiniMaxH3AudioDecoder(Module):
             ccl_manager=ccl_manager,
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
-            tight_t_align=tight_t_align,
-            local_tpad_tail=local_tpad_tail,
             pack_bands=pack_bands,
             act_mode=act_mode,
             polyphase_ups=polyphase_ups,

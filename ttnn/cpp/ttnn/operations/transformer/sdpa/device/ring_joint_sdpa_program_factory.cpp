@@ -56,7 +56,6 @@ struct RingWorkMasks {
 
 struct RingWorkPlan {
     RingWorkMasks masks;
-    uint32_t last_active_ring_iter = 0;
 };
 
 struct KVPadQMapping {
@@ -342,7 +341,6 @@ RingWorkPlan build_ring_work_plan(
             !(derivation.kernel_is_causal && ring_write_plan.tensor_rank < ring_id && !is_balanced);
         if (ring_iter_does_work) {
             plan.masks.active_ring_iter_mask |= (1u << ring_iter);
-            plan.last_active_ring_iter = ring_iter;
         }
         if (valid_kv_chunks <= 1) {
             plan.masks.single_valid_kv_chunk_mask |= (1u << ring_iter);
@@ -1052,8 +1050,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
     const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
     const bool enable_kv_chains = !has_sliding_window;
-    // The supported sliding specialization always uses a compact neighbor-halo buffer.
-    const uint32_t padded_N = has_sliding_window ? global_padded_N : gathered_padded_N;
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
     // L / L_local resolved once in resolve_ring_joint_input_params (full vs per-device joint seq).
     const uint32_t L = joint_input_params.L;
@@ -1072,7 +1068,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
-    const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t gathered_padded_Nt = gathered_padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
@@ -1196,7 +1191,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Log padded dimensions
     log_debug(tt::LogOp, "q_local_padded_N: {}", q_local_padded_N);
     log_debug(tt::LogOp, "kv_local_padded_N: {}", kv_local_padded_N);
-    log_debug(tt::LogOp, "padded_N: {}", padded_N);
     log_debug(tt::LogOp, "L: {}", L);
 
     // Log tile dimensions
@@ -1204,7 +1198,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "vDHt: {}", vDHt);
     log_debug(tt::LogOp, "q_local_padded_Nt: {}", q_local_padded_Nt);
     log_debug(tt::LogOp, "kv_local_padded_Nt: {}", kv_local_padded_Nt);
-    log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
     log_debug(tt::LogOp, "Lt: {}", Lt);
 
     // Log chunking parameters
@@ -1347,11 +1340,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_h);
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
-    const uint32_t qk_num_blocks = DHt / qk_in0_block_w;
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
@@ -1429,19 +1420,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
     log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
     log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    log_debug(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
     log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
     log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
     log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
     log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
     // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
     // so the granularity must evenly divide both to avoid dropping tiles.
     uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
@@ -1453,7 +1441,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Log these
     log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
     log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
     log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
     log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
@@ -1477,12 +1464,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-iteration sync order described in RingWorkPlan.
     const RingWorkPlan& ring_work_plan = runtime_plan.ring_work_plan;
     const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
-    const uint32_t last_active_ring_iter = ring_work_plan.last_active_ring_iter;
     const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
-    const uint32_t compile_time_active_ring_iter_mask = kv_pad_rotation_enabled ? 0 : active_ring_iter_mask;
-    const uint32_t compile_time_last_active_ring_iter = kv_pad_rotation_enabled ? 0 : last_active_ring_iter;
-    const uint32_t compile_time_single_valid_kv_chunk_mask = kv_pad_rotation_enabled ? 0 : single_valid_kv_chunk_mask;
-    const KVPadQMapping compile_time_kv_pad_q_mapping = kv_pad_rotation_enabled ? KVPadQMapping{} : kv_pad_q_mapping;
     const auto& ag_attributes = args.all_gather_operation_attributes;
     const RingAttentionRankMapping rank_mapping{
         .full_mesh = ag_attributes.full_mesh,
@@ -1508,9 +1490,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         Sk_chunk_t,
         q_local_padded_Nt,
         kv_local_padded_Nt,
-        padded_Nt,
-        compile_time_logical_n,
-        compile_time_logical_nt,
         Lt,
         L,
         num_local_q_chunks,
@@ -1523,13 +1502,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        // Reader slot 24: chunked_enabled. Writer/compute use their corresponding slot for use_streaming_compute.
+        // Reader chunked-prefill control.
         static_cast<uint32_t>(kernel_chunked),
         num_active_cores,
         q_chunk_group_tile_count,
         static_cast<uint32_t>(indexed_kv_cache),
         static_cast<uint32_t>(kv_pad_rotation_enabled),
-        compile_time_active_ring_iter_mask,
         NHV,
         static_cast<uint32_t>(v_shares_k_buffer),
         static_cast<uint32_t>(use_attention_sink),
@@ -1537,24 +1515,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         gathered_padded_Nt,
         static_cast<uint32_t>(slot_from_metadata),
         static_cast<uint32_t>(kv_pad_from_metadata),
-        // Slots 37-38, sharded-joint path: Lt_local (Q-axis tile count = L_local/TILE_HEIGHT) and flag.
+        // Slots 33-34, sharded-joint path: Lt_local (Q-axis tile count = L_local/TILE_HEIGHT) and flag.
         Lt_local,
         static_cast<uint32_t>(joint_is_sharded),
-        // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
+        // Slot 35: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
         logical_lt,
-        // Slots 40-43: transport-to-tensor rank mapping.
+        // Slots 36-39: transport-to-tensor rank mapping.
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
-        // Slot 44: circular sliding KV slab count (0 = unbounded). Feeds the reader's
+        // Slot 40: circular sliding KV slab count (0 = unbounded). Feeds the reader's
         // build_sliding_q_work_plan so local slab addressing wraps identically to the host halo
         // layout and the compute kernel.
         circular_kv_slab_count,
-        // Slots 45-46: logical-length transport. The reader NoC-reads the live values, re-derives
+        // Slots 41-42: logical-length transport. The reader NoC-reads the live values, re-derives
         // logical_nt / logical_lt / the ring masks, and fans them to compute via cb_kv_pad_derived.
-        // Tensor accessors start at slot 47.
+        // Tensor accessors start at slot 43.
         static_cast<uint32_t>(has_logical_n_tensor),
         static_cast<uint32_t>(has_logical_l_tensor),
     };
@@ -1687,17 +1665,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
-        NHK,
         DHt,
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         q_local_padded_Nt,
         kv_local_padded_Nt,
-        padded_Nt,
         compile_time_logical_n,
-        compile_time_logical_nt,
-        Lt_local,  // slot 12: per-device joint tile count (Lt_local == Lt on replicated path)
+        Lt_local,  // slot 9: per-device joint tile count (Lt_local == Lt on replicated path)
         L,
         num_local_q_chunks,
         num_joint_q_chunks,
@@ -1716,25 +1691,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
-        compile_time_active_ring_iter_mask,
-        compile_time_last_active_ring_iter,
-        compile_time_single_valid_kv_chunk_mask,
         sliding_window_size,
-        // Slot 35: trace-safe KV-pad derivation -- the writer recomputes logical_nt + masks from
+        // Slot 29: trace-safe KV-pad derivation -- the writer recomputes logical_nt + masks from
         // metadata[1] on-device (it's dataflow).
         static_cast<uint32_t>(kv_pad_from_metadata),
-        // Slot 36: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
+        // Slot 30: sharded-joint flag. When true, one shard arrives per ring iteration.
         static_cast<uint32_t>(joint_is_sharded),
-        // Slot 37: true (unpadded) joint length in tiles (twins spatial logical_nt). Combined with
+        // Slot 31: true (unpadded) joint length in tiles (twins spatial logical_nt). Combined with
         // joint_l_partial_col it drives the joint mask-generation gate.
         logical_lt,
-        // Slots 38-41: transport-to-tensor rank mapping.
+        // Slots 32-35: transport-to-tensor rank mapping.
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
-        // Slots 42-43: logical-length transport. The writer is a dataflow kernel, so it NoC-reads the live
-        // values itself rather than sharing the reader's L1 mailbox. Output accessors start at slot 44.
+        // Slots 36-37: logical-length transport. The writer is a dataflow kernel, so it NoC-reads the live
+        // values itself rather than sharing the reader's L1 mailbox. Output accessors start at slot 38.
         static_cast<uint32_t>(has_logical_n_tensor),
         static_cast<uint32_t>(has_logical_l_tensor),
     };
@@ -1753,22 +1725,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
 
     std::vector<uint32_t> compute_compile_time_args = {
-        B,
         NH,
-        NHK,
         DHt,
         vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         q_local_padded_Nt,
         kv_local_padded_Nt,
-        padded_Nt,
         compile_time_logical_n,
         compile_time_logical_nt,
         Lt,
         L,
         num_local_q_chunks,
-        num_joint_q_chunks,
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
@@ -1778,13 +1746,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_out_subblock_w,
         out_out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
         scale_packed,
         static_cast<std::uint32_t>(use_streaming_compute),
         compile_time_global_n_partial_col,
@@ -1795,41 +1761,34 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(kernel_chunked),
         q_chunk_group_tile_count,
         static_cast<uint32_t>(kv_pad_rotation_enabled),
-        compile_time_kv_pad_q_mapping.q_pre_wrap_start_tile,
-        compile_time_kv_pad_q_mapping.q_pre_wrap_tile_count,
-        compile_time_kv_pad_q_mapping.q_post_wrap_start_tile,
-        compile_time_kv_pad_q_mapping.q_valid_tile_count,
-        compile_time_active_ring_iter_mask,
-        compile_time_last_active_ring_iter,
         static_cast<uint32_t>(v_shares_k_buffer),
         static_cast<uint32_t>(use_attention_sink),
         sliding_window_size,
-        // Slot 51: trace-safe KV-pad derivation. When set, compute reads logical_nt / q-mapping /
+        // Slot 39: trace-safe KV-pad derivation. When set, compute reads logical_nt / q-mapping /
         // active_ring_iter_mask from cb_kv_pad_derived (produced by the reader) instead of its runtime
         // args, so a captured trace replays across chunks.
         static_cast<uint32_t>(kv_pad_from_metadata),
-        // Slot 52: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
+        // Slot 40: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
-        // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
+        // Slot 41: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
         // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
         logical_lt,
-        // Slots 54-57: transport-to-tensor rank mapping.
+        // Slots 42-45: transport-to-tensor rank mapping.
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
-        // Slot 58: circular sliding KV slab count (0 = unbounded). Feeds the compute-side
+        // Slot 46: circular sliding KV slab count (0 = unbounded). Feeds the compute-side
         // build_sliding_q_work_plan so it stays in lockstep with the reader.
         circular_kv_slab_count,
-        // Slots 59-60: logical-length transport. Compute cannot NoC-read DRAM, so it takes the live values
-        // from cb_kv_pad_derived, which the reader fills. CB block starts at 61.
+        // Slots 47-48: logical-length transport. Compute cannot NoC-read DRAM, so it takes the live values
+        // from cb_kv_pad_derived, which the reader fills. CB block starts at 49.
         static_cast<uint32_t>(has_logical_n_tensor),
         static_cast<uint32_t>(has_logical_l_tensor)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);

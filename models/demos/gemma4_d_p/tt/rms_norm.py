@@ -47,10 +47,11 @@ class RMSNorm(nn.Module):
             packer_l1_acc=False,
         )
 
-    def forward(self, x):
+    def forward(self, x, memory_config=None):
         return ttnn.rms_norm(
             x,
             weight=self.tt_weight,
             epsilon=self.eps,
+            memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config,
         )

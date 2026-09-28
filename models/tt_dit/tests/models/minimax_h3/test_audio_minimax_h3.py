@@ -259,8 +259,6 @@ def _tt_encoder(config: dict, mesh_device, split_mode: str = "full"):
 
 @pytest.mark.parametrize(
     "split_mode",
-    # "full" is the accurate constructor default; "weight" is what the pipeline ships for ref2va
-    # (565 vs 796 ms at 5.17 s, mean PCC 99.978% vs 99.999% -- both far inside the bars below).
     [pytest.param("full", id="full"), pytest.param("weight", id="weight_production")],
 )
 @pytest.mark.parametrize("num_latent_frames", PRODUCTION_LATENT_FRAMES)
@@ -287,13 +285,7 @@ def test_encode(mesh_device, num_latent_frames, split_mode):
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_encode_pad_to_max_then_trim(mesh_device):
-    """Pad-to-604-hops-then-trim equals the direct encode.
-
-    Gates the right-pad invariance (per-op tail re-zeroing in the symmetric trunk, causal
-    ``pre_block``) that `references.encode_references` relies on: it pads every soundtrack to
-    `MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS` hops so the encoder runs one fixed shape, then trims
-    the pad latents. A failure here means silence latents leak into ref2va conditioning.
-    """
+    """Pad-to-604-hops-then-trim equals the direct encode (the invariance `encode_references` relies on)."""
     from ....pipelines.minimax_h3.references import MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS, pad_waveform_to_max_duration
 
     reference, config = _build_reference()
@@ -735,11 +727,7 @@ def test_audio_decode_t_parallel(mesh_device, num_latent_frames):
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_encode_stereo_split(mesh_device):
-    """Stereo L/R batch split vs the unsharded baseline: same computation, different devices.
-
-    CCL-free by construction (batch items are independent through the whole encoder), so the
-    bar is tight: the split result must match the baseline to fp32 kernel reproducibility,
-    not merely to a PSNR floor."""
+    """Stereo L/R batch split vs the unsharded baseline; CCL-free, so the bar is tight."""
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
@@ -793,12 +781,7 @@ def test_audio_encode_stereo_split(mesh_device):
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_encode_t_parallel(mesh_device):
-    """T-sharded encode vs the unsharded device baseline, same FACTORS discipline as decode.
-
-    The baseline runs no shard-alignment pad at all, so this comparison also gates the pad-tail
-    masking: without the per-op tail re-zeroing the appended pad perturbs the last ~11 latents
-    (tail-20 PCC 97.5% measured on the CPU reference) and the PSNR bar below fails loudly.
-    """
+    """T-sharded encode vs the unsharded device baseline; also gates the shard-alignment pad-tail masking."""
     weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
         pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
@@ -819,11 +802,6 @@ def test_audio_encode_t_parallel(mesh_device):
     torch.manual_seed(2)
     waveform = torch.randn(2, 1, NUM_LATENT_FRAMES * HOP_LENGTH) * 0.1
 
-    # Unlike decode's FACTORS, no (4, axis 0) case: on bh-glx-120-c03u08 the sharded encode at
-    # (4, 0) hangs after its first sharded op even under Linear topology (three attempts, each a
-    # different input-path fix; unresolved), and axis 0 also has no wrap cabling for ring
-    # collectives. (8, axis 1) is the configuration the pipeline wires, on the axis whose ring
-    # exists (fabric realizes TORUS_Y here).
     encode_factors = [(1, 1), (8, 1)]
 
     baseline = None

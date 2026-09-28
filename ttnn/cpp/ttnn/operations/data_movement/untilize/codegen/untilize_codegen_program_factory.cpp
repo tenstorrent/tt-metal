@@ -6,9 +6,7 @@
 
 #include <algorithm>
 #include <optional>
-#include <type_traits>
 #include <utility>
-#include <variant>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -20,8 +18,6 @@
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
 #include "untilize_codegen_cb_plan.hpp"
 #include "untilize_codegen_device_operation.hpp"
 #include "untilize_codegen_supported.hpp"
@@ -408,69 +404,16 @@ std::optional<ProgramDescriptor> build_with_unpadding(
     return desc;
 }
 
-// Native untilize factories, used when no codegen CB plan fits live L1 (see kUsableL1Note).
-ProgramDescriptor build_native_equivalent(
-    const UntilizeCodegenOperationAttributes& operation_attributes, const Tensor& input, const Tensor& output) {
-    namespace dm = ttnn::operations::data_movement;
-
-    // Several native factories take `UntilizeTensorReturnValue&` (non-const). A Tensor is a
-    // shallow, refcounted handle, so this copy aliases the same buffer the op allocated.
-    Tensor out = output;
-
-    const bool fp32_dest_acc_en = input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32 ||
-                                  input.dtype() == DataType::FLOAT32;
-    auto in_fmt = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tile_size(in_fmt);
-    uint32_t num_tiles_per_row = input.padded_shape()[-1] / TILE_WIDTH;
-    // Same derivation the native free functions do before calling their prim; note this is itself
-    // a live-L1 query (get_max_l1_space), consistent with the snapshot taken in create_descriptor.
-    const bool enough_space_height =
-        dm::is_enough_space(input, single_tile_size, single_tile_size, num_tiles_per_row);
-
-    const auto& logical_shape = input.logical_shape();
-    const bool tile_aligned = logical_shape[-2] % TILE_HEIGHT == 0 && logical_shape[-1] % TILE_WIDTH == 0;
-
-    if (!tile_aligned) {
-        ttnn::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(logical_shape.rank(), 0));
-        int logical_rank = static_cast<int>(logical_shape.rank());
-        for (int index = -1; index >= -logical_rank; --index) {
-            output_tensor_end[index] = logical_shape[index] - 1;
-        }
-        UntilizeWithUnpaddingParams params{
-            .output_tensor_end = output_tensor_end,
-            .output_mem_config = operation_attributes.output_mem_config,
-            .use_multicore = true,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .enough_space_height = enough_space_height,
-            .sub_core_grids = std::nullopt};
-        auto pf = UntilizeWithUnpaddingDeviceOperation::select_program_factory(params, input);
-        return std::visit(
-            [&](auto&& factory) { return std::decay_t<decltype(factory)>::create_descriptor(params, input, out); }, pf);
-    }
-
-    UntilizeOperationAttributes attrs{
-        .output_mem_config = operation_attributes.output_mem_config,
-        .use_multicore = true,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .sub_core_grids = std::nullopt,
-        .enough_space_height = enough_space_height,
-        // supported_by_codegen() rejects sharded output, so the sharded pf_type branches are
-        // unreachable here; pass false to match what untilize_native would compute.
-        .pf_type = dm::get_pf_type(/*output_is_sharded=*/false, input)};
-    UntilizeTensorArgs args{.input = input};
-    auto pf = UntilizeDeviceOperation::select_program_factory(attrs, args);
-    return std::visit(
-        [&](auto&& factory) -> ProgramDescriptor {
-            using Factory = std::decay_t<decltype(factory)>;
-            if constexpr (requires { Factory::create_descriptor(attrs, args, out); }) {
-                return Factory::create_descriptor(attrs, args, out);
-            } else {
-                TT_THROW(
-                    "untilize codegen: native fallback selected a program factory without descriptor support; "
-                    "the live-L1 fallback must select a descriptor-backed multicore factory");
-            }
-        },
-        pf);
+// No codegen CB plan fits the L1 that is free right now. ttnn::untilize runs the same chooser
+// (codegen_cb_plan_fits_live_l1) before dispatching and routes such a case to the native prim as a
+// whole, so this factory never builds anything but a codegen program; reaching here means L1
+// occupancy moved between routing and program build, or the codegen prim was forced
+// (untilize_force_codegen, which by design never falls back to native).
+[[noreturn]] void throw_no_codegen_cb_plan(uint64_t usable_l1) {
+    TT_THROW(
+        "untilize codegen: no codegen CB plan fits the {} B of L1 free on this device right now; ttnn::untilize "
+        "routes such a case to the native untilize prim before dispatch",
+        usable_l1);
 }
 
 }  // namespace
@@ -499,8 +442,10 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     // kUsableL1Note: live-L1 is sampled here on a cache MISS so every builder plans against one
     // snapshot (get_max_l1_space: lowest_occupied_compute_l1_address ?: l1_size_per_core, minus
     // allocator base). The SAME chooser (choose_codegen_cb_plan) also runs on every dispatch from
-    // compute_program_hash, so a later occupancy change that crosses a CB tier (or Native
-    // block-split) is a new cache key rather than a hit with a frozen plan.
+    // compute_program_hash, so a later occupancy change that crosses a CB tier is a new cache key
+    // rather than a hit with a frozen plan. Both of those run after the output tensor has been
+    // allocated; ttnn::untilize ran the chooser once more before that, with the output's pending
+    // L1 footprint reserved, and only dispatched here because some codegen tier fit.
     //
     // get_max_l1_space is therefore on the untilize-codegen hot path (hash), not miss-only: it
     // takes the allocator mutex and walks the L1 free list per sub-device. create_descriptor
@@ -510,7 +455,7 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
 
     auto chosen = untilize_codegen_detail::choose_codegen_cb_plan(operation_attributes, tensor_args);
     if (chosen.tier == untilize_codegen_detail::CodegenCbPlan::Native) {
-        return build_native_equivalent(operation_attributes, input, output);
+        throw_no_codegen_cb_plan(a.usable_l1);
     }
 
     // Wt/Ht/NC are derived from the PADDED (physical, tile-aligned) shape, which the reader/
@@ -528,13 +473,14 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     uint32_t ht = h / TILE_HEIGHT;
     uint32_t total_tile_rows = nc * ht;
 
-    // Each branch below picks the codegen builder this shape belongs to, exactly as before. The
-    // only new behaviour is that a builder may decline (nullopt) when its CB plan does not fit the
-    // L1 that is free right now, in which case we emit the native-equivalent program instead of
-    // failing the op. Under the opt-in ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK build this function
-    // is re-invoked on cache hits and diffed against the cached descriptor; if L1 occupancy has
-    // changed enough since the miss to flip a tier, that check can report a spurious mismatch.
-    // That build is a debug aid (OFF by default) and never runs in production dispatch.
+    // Each branch below picks the codegen builder this shape belongs to. A builder declines
+    // (nullopt) when its CB plan does not fit the L1 that is free right now; choose_codegen_cb_plan
+    // above mirrors each builder's plan against the same snapshot, so a decline here is the same
+    // hard error as the Native tier above. Under the opt-in ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK
+    // build this function is re-invoked on cache hits and diffed against the cached descriptor; if
+    // L1 occupancy has changed enough since the miss to flip a tier, that check can report a
+    // spurious mismatch. That build is a debug aid (OFF by default) and never runs in production
+    // dispatch.
 
     // Non-tile-aligned logical shapes (bf16 only -- see supported_by_codegen) route through the
     // with-unpadding builder instead of build_untilize_tile's variants. h == ht * TILE_HEIGHT
@@ -546,14 +492,14 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
         if (auto desc = build_with_unpadding(a, wt, total_tile_rows, logical_shape[-2], logical_shape[-1], h)) {
             return std::move(*desc);
         }
-        return build_native_equivalent(operation_attributes, input, output);
+        throw_no_codegen_cb_plan(a.usable_l1);
     }
 
     if (total_tile_rows == 1 && wt > 1) {
         if (auto desc = build_column_parallel(a, wt)) {
             return std::move(*desc);
         }
-        return build_native_equivalent(operation_attributes, input, output);
+        throw_no_codegen_cb_plan(a.usable_l1);
     }
 
     auto grid = a.device->compute_with_storage_grid_size();
@@ -564,13 +510,13 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
             if (auto desc = build_2d_column(a, wt, total_tile_rows, ncol)) {
                 return std::move(*desc);
             }
-            return build_native_equivalent(operation_attributes, input, output);
+            throw_no_codegen_cb_plan(a.usable_l1);
         }
     }
     if (auto desc = build_main_split(a, wt, total_tile_rows)) {
         return std::move(*desc);
     }
-    return build_native_equivalent(operation_attributes, input, output);
+    throw_no_codegen_cb_plan(a.usable_l1);
 }
 
 }  // namespace ttnn::prim

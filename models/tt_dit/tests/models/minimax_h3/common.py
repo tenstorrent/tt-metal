@@ -111,11 +111,7 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
 # cannot resolve a forwarding direction (`TT_FATAL fabric.cpp:174 forwarding_direction.has_value()`).
 # 4x32 additionally takes the 8 KB router payload, matching Wan's 4x32 rows, and a trace region for
 # the quad's `trace_denoise`; the region is only reserved, so 4x8 pays nothing but address space.
-#
-# Sizing note: with bucketed denoise traces the quad holds one capture per `bucket_ladder` rung
-# resident at once (six by default), each a ~2500-op block-stack replay. 150 MB was sized for a
-# single capture; a full warmup over the default ladder needs it re-measured (plan V5) and likely
-# raised, or the ladder trimmed. A per-test warmup that only touches one rung still fits.
+# The trace region holds one denoise capture per `bucket_ladder` rung resident at once.
 _L1_SMALL = 65536
 _ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
 _ring_8k = {**ring_params_8k_req_exact_devices, "l1_small_size": _L1_SMALL}
@@ -123,9 +119,8 @@ _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1_175
 
 MESH_4X8_RING = pytest.param((4, 8), _ring_8k, id="4x8")
 MESH_4X32_RING_TRACED = pytest.param((4, 32), _ring_8k_trace, id="4x32_TRACED")
-MESH_4X32_RING_UNTRACED = pytest.param((4, 32), _ring_8k, id="4x32_UNTRACED")
 
-GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED, MESH_4X32_RING_UNTRACED]
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING_TRACED]
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:

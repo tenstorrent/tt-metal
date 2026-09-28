@@ -151,7 +151,7 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction)."""
     return MiniMaxH3Pipeline.create_pipeline(
-        vae_output_type="float",  # this gate reads the (1, 3, F, H, W) float contract; yuv420 is the deployment default
+        vae_output_type="float",
         mesh_device=mesh_device,
         weights_dir=weights_dir("transformer_ref"),
         task="ref2va",
@@ -159,9 +159,6 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
 
 
 # Per-case padded sequence length, asserted so a case cannot silently drift off its probed shape.
-# `one_image` / `mixed` drop 6144 rows vs the old 2048-short-edge encode: match keeps the 1024
-# fractal at 1024. `video_with_sound` is unchanged. If a case's assert trips, its message prints
-# the actual length.
 _EXPECTED_PADDED_LEN = {"one_image": 39936, "video_with_sound": 81664, "mixed": 83968}
 
 

@@ -25,7 +25,7 @@ in the same file, sharing its module-level parametrize constants:
 
 ```
 tests/models/minimax_h3/
-├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT, Tracy block device-perf
+├── test_transformer_minimax_h3.py    # attention, one block, token refiner, whole DiT, Tracy block device-perf
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
 ├── test_audio_minimax_h3.py          # weight-norm conversion, decode (accurate defaults), encode, traced

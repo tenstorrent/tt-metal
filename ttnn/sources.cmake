@@ -116,6 +116,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
+    cpp/ttnn-nanobind/prefetcher_pipe.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
@@ -162,6 +163,7 @@ set(TTNN_CORE_JIT_API_HEADERS
     cpp/ttnn/kernel/compute/tilize.cpp
     cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/compute/transpose_wh_metal2.cpp
     cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp

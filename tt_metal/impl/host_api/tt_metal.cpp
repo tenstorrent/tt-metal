@@ -15,6 +15,7 @@
 #include "host_api/helpers.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
 #include <host_api.hpp>
 #include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
@@ -75,7 +76,7 @@
 #include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
-#include "impl/emulation/emulated_program_runner.hpp"
+#include "emulated_program_runner.hpp"
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
@@ -1858,17 +1859,7 @@ uint32_t CreateSemaphore(
 
 GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type);
-}
-
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
@@ -2049,22 +2040,6 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 }
 
 namespace experimental {
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    distributed::MeshDevice& device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
-
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
-}
 
 CBHandle CreateCircularBuffer(
     Program& program,

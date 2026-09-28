@@ -82,6 +82,9 @@ class PrefillRunParams:
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
+    # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
+    # rather than re-read from the env downstream so one resolution decides which drafter gets built.
+    dflash_checkpoint_path: str = ""
 
     @property
     def sp_factor(self) -> int:
@@ -131,6 +134,21 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
+    # exactly one parent (tt_prefill_runtime asserts the match), so both belong to the model. Empty when the
+    # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
+    dflash_model_default: str = ""
+    dflash_golden_default: str = ""
+
+    def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
+        """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
+
+        One for every model whose cross-rank state is just the hidden activation. A model that also
+        carries per-token state produced by EARLIER layers overrides this: the receiving rank cannot
+        recompute what it does not hold, and the payload is the only channel. The count must be a
+        function of the boundary alone, so the transfer keeps a static shape and stays trace-capturable.
+        """
+        return 1
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -282,19 +300,21 @@ class PrefillModelAdapter(ABC):
 DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
-    "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
+    "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
+    "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
-    # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
-    "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
-    # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
-    "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
-    "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
+    "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
+    "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
+    "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
+    "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

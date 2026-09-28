@@ -57,9 +57,11 @@
 #include "ckernel_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_copy_dest_values.h"
 #include "ckernel_sfpu_reduce.h"
 #endif
 #define MATH(...) __VA_ARGS__

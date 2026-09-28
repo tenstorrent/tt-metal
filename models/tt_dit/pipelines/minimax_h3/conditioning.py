@@ -48,11 +48,7 @@ def normalize_keyframe_pixels(image, device: torch.device | str | None = None) -
 
 
 def raw_keyframe_pixels(image, device: torch.device | str | None = None) -> torch.Tensor:
-    """PIL keyframe to ``(1, 3, 1, H, W)`` raw **uint8** pixels.
-
-    For an encoder built with ``pixel_norm`` -- the normalization above is folded into its
-    ``conv_in``, so the bytes cross PCIe at a quarter of fp32 and the host runs no float pass.
-    """
+    """PIL keyframe to ``(1, 3, 1, H, W)`` raw **uint8** pixels, for an encoder built with ``pixel_norm``."""
     return torch.from_numpy(np.array(image)).to(device).permute(2, 0, 1)[None, :, None]
 
 
@@ -105,8 +101,7 @@ def encode_keyframes(
     17-frame temporal chunking never applies -- the spatial encoder alone is what
     the released model conditions on.
 
-    ``raw_pixels`` hands ``encode_clip`` raw uint8 instead: only for a device VAE
-    built with ``pixel_norm``, whose conv_in carries the normalization itself.
+    ``raw_pixels`` hands ``encode_clip`` raw uint8, for a VAE built with ``pixel_norm``.
     """
     to_pixels = raw_keyframe_pixels if raw_pixels else normalize_keyframe_pixels
     rows = [

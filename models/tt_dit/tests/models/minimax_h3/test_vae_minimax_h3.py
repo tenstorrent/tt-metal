@@ -142,11 +142,7 @@ def test_encode_clip_tiled(mesh_device):
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_encode_tiled(mesh_device):
-    """Tiled ``encode`` of one 17-frame clip vs the reference's chunked ``_encode``.
-
-    The production taps=3 path: fp32, no pixel-norm fold. ``encode_clip`` is T=1 only;
-    this is the gate the clip-length case of the former ``test_encode_clip_tiled`` covered.
-    """
+    """Tiled ``encode`` of one 17-frame clip vs the reference's chunked ``_encode``."""
     weights_dir = _weights_dir()
     reference, config = _build_reference(weights_dir)
     torch.manual_seed(4)
@@ -167,14 +163,7 @@ def test_encode_tiled(mesh_device):
 @pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_fl2va_conditioning_rows_proxy(mesh_device, dtype):
-    """E2E proxy for the fl2va conditioning stage: the packed rows the pipeline prepends.
-
-    Runs `encode_keyframes` exactly as production does -- raw uint8 pixels into a pixel_norm
-    device VAE -- against the same helper on the diffusers reference with normalized fp32,
-    i.e. the released model's path. The seed-42 posterior draw is shared, so everything from
-    pixels to packed rows (tiling, sampling, the fp16 round trip, latent normalization,
-    packing) must agree. This is the gate the full fl2va e2e would provide for the encode
-    stage, without a mesh-sized generation or media on disk."""
+    """E2E proxy for the fl2va conditioning stage: device `encode_keyframes` rows vs the reference's."""
     from PIL import Image
 
     from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD, encode_keyframes
@@ -207,12 +196,7 @@ def test_fl2va_conditioning_rows_proxy(mesh_device, dtype):
 @pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_encode_video_uint8_pixel_norm(mesh_device, dtype):
-    """E2E proxy for the ref2va video-reference encode: chunked `encode` on raw uint8.
-
-    22 frames (17 + 5) pad to two 17-frame clips, so this exercises what the single-clip
-    gate cannot: the uint8 final-frame repeat, per-clip tiling across a multi-clip stream,
-    the folded conv_in's `255 * mean` causal front-pad on every clip, the stitch, and the
-    trailing `token_drop`. Reference is the diffusers chunked `_encode` on normalized fp32."""
+    """E2E proxy for the ref2va video-reference encode: chunked `encode` on raw uint8, two clips."""
     from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD
 
     weights_dir = _weights_dir()
@@ -243,11 +227,7 @@ def test_encode_video_uint8_pixel_norm(mesh_device, dtype):
 @pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_encode_clip_uint8_pixel_norm(mesh_device, dtype):
-    """The `pixel_norm` fold: raw uint8 pixels into a folded encoder vs the reference on
-    normalized fp32. Gates the conv_in weight/bias fold and the uint8 -> typecast -> pad
-    upload chain on the keyframe path. The taps=3 causal-pad values are gated by
-    ``test_encode_tiled`` (plain fp32) and ``test_encode_video_uint8_pixel_norm`` (uint8).
-    """
+    """The `pixel_norm` fold: raw uint8 pixels into a folded encoder vs the reference on normalized fp32."""
     from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD
 
     weights_dir = _weights_dir()

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,10 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -27,13 +30,30 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
-using tt::tt_metal::ComputeConfigDescriptor;
-using tt::tt_metal::DataMovementConfigDescriptor;
-using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::MeshTensor;
-using tt::tt_metal::ProgramDescriptor;
+
+using tt::tt_metal::KernelBuildOptLevel;
+using tt::tt_metal::experimental::AddRuntimeArgsForNode;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DFBBinding;
+using tt::tt_metal::experimental::DFBEndpointType;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::double_buffer_dest;
+using tt::tt_metal::experimental::Group;
+using tt::tt_metal::experimental::KernelRunArgs;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::ProgramRunArgs;
+using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::SemaphoreBinding;
+using tt::tt_metal::experimental::SemaphoreSpec;
+using tt::tt_metal::experimental::SemaphoreSpecName;
+using tt::tt_metal::experimental::TensorBinding;
+using tt::tt_metal::experimental::TensorParameter;
+using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::unpack_modes;
+using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
 
@@ -3138,15 +3158,14 @@ void override_program_parameters(
     }
 }
 
-static ProgramDescriptor create_program_mcast_in0_descriptor(
+static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const ttnn::Tensor& a,
     tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
-    bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t in0_B,
     uint32_t in1_B,
     uint32_t M,
@@ -3209,23 +3228,23 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
     // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
     // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
-    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
-    // tensor buffer and keep their natural page size.
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded buffers are backed by the
+    // tensor buffer and keep their natural entry size.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
-    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // Bias buffer entries must be padded to the DRAM alignment so the reader's L1 write stride
     // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
     // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
-    // natural page size. No-op on Wormhole and for tiles already >= dram_alignment.
+    // natural entry size. No-op on Wormhole and for tiles already >= dram_alignment.
     uint32_t bias_aligned_tile_size =
         bias_is_sharded ? bias_single_tile_size : tt::align(bias_single_tile_size, dram_alignment);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    bool do_not_inplace_interm0_out_dfb = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3235,11 +3254,11 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     uint32_t out_num_blocks_y = in0_num_blocks_y;
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles;
+    uint32_t in0_dfb_tiles = in0_block_tiles;
     if (in0_B * num_blocks > 1) {
-        in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in0_dfb_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
+    uint32_t in0_dfb_size = in0_dfb_tiles * in0_aligned_tile_size;
 
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -3249,34 +3268,34 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
-    uint32_t in2_CB_tiles = in2_block_tiles;
-    uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
+    uint32_t in2_dfb_tiles = in2_block_tiles;
+    uint32_t in2_dfb_size = in2_dfb_tiles * in0_single_tile_size;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
-    uint32_t in1_CB_tiles = in1_block_tiles;
+    uint32_t in1_dfb_tiles = in1_block_tiles;
     if (in1_B * num_blocks > 1) {
-        in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
+        in1_dfb_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     if (in1_is_sharded) {
         uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
-        in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
+        in1_dfb_tiles = per_core_N * in1_shard_height_in_tiles;
     }
 
-    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
+    uint32_t in1_dfb_size = in1_dfb_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
-    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t out_dfb_tiles = out_block_tiles;  // No double buffer
     if (output_is_sharded) {
-        out_CB_tiles = out_shard_tiles;
+        out_dfb_tiles = out_shard_tiles;
     }
-    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
-    uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
-    uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
+    uint32_t out_dfb_size = out_dfb_tiles * output_single_tile_size;
+    uint32_t interm0_dfb_tiles = out_block_tiles;  // No double buffer
+    uint32_t interm0_dfb_size = interm0_dfb_tiles * interm0_single_tile_size;
 
     uint32_t in3_block_tiles = out_block_w;
-    uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
+    uint32_t in3_dfb_tiles = in3_block_tiles;  // No double buffer
+    uint32_t in3_dfb_size = in3_dfb_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -3379,10 +3398,6 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
@@ -3417,155 +3432,65 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
-    std::vector<uint32_t> in0_sender_compile_time_args;
-    if (in0_is_sharded) {
-        in0_sender_compile_time_args = {
-            (std::uint32_t)1,  // core_has_output_block_work
-            (std::uint32_t)1,  // core_in_in0_receiver_mcast_grid
+    // create_program_artifacts always passes std::nullopt for the fused-op signaler, so the CCL
+    // fused-op path is unreachable here. The Metal 2.0 kernel forks do not carry it: MatmulOpReceiver
+    // and OpSignaler read positional runtime args from outside this op's directory, which named
+    // arguments cannot supply. Fail loudly rather than silently building a program without it.
+    TT_FATAL(!fuse_op, "matmul_multicore_reuse_mcast_1d: the Metal 2.0 path does not support fused CCL ops");
 
-            (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
-            (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-            (std::uint32_t)in0_last_ktile_w,
-            (std::uint32_t)in0_last_ktile_h,
+    // ------------------------------------------------------------------
+    // Spec-scope resource names. Declared function-local rather than at file scope: the matmul
+    // factory .cpp files share one unity-build target, so file-scope constants with these names
+    // would collide as sibling factories are ported.
+    // ------------------------------------------------------------------
+    const KernelSpecName IN0_SENDER{"in0_sender"};
+    const KernelSpecName IN0_NO_WORK_IN_RECV{"in0_no_work_in_receiver"};
+    const KernelSpecName IN0_NO_WORK_NOT_IN_RECV{"in0_no_work_not_in_receiver"};
+    const KernelSpecName IN0_RECEIVER{"in0_receiver"};
+    const KernelSpecName IN1_SENDER_WRITER{"in1_sender_writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-            // in0/in1 common args
-            (std::uint32_t)num_blocks,        // num_blocks
-            (std::uint32_t)out_num_blocks_x,  // num_blocks_x
-            (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_num_dests,  // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores,  // in0_mcast_num_cores
-            (std::uint32_t)(in0_mcast_sender_cores_grid.x),
-            (std::uint32_t)(in0_mcast_sender_cores_grid.y),
-            (std::uint32_t)(false),
-            (std::uint32_t)(in0_shard_width_in_tiles),
-            (std::uint32_t)(in0_shard_height_in_tiles),
-            (std::uint32_t)(in0_block_w),
-            (std::uint32_t)in0_block_h,  // in0_block_h
+    const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName IN0_RELAY_DFB{"in0_relay"};
+    const DFBSpecName IN1_DFB{"in1"};
+    const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
+    const DFBSpecName OUT_DFB{"out"};
+    const DFBSpecName INTERM0_DFB{"intermed0"};
+    const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
+    const DFBSpecName BIAS_DFB{"bias"};
+    const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
 
-            // batch args
-            (std::uint32_t)in0_B  // batch
-        };
-    } else {
-        in0_sender_compile_time_args = {
-            // in0 tensor args
-            (std::uint32_t)in0_tensor_stride_w,
-            (std::uint32_t)in0_tensor_stride_h,
-            (std::uint32_t)in0_tensor_next_block_stride,
-            (std::uint32_t)in0_tensor_next_h_dim_block_stride,
-            // in0 block args
-            (std::uint32_t)in0_block_w,          // in0_block_w
-            (std::uint32_t)in0_block_h,          // in0_block_h
-            (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-            (std::uint32_t)in0_last_ktile_w,
-            (std::uint32_t)in0_last_ktile_h,
-            (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
-            (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
-            (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
-            // in0/in1 common args
-            (std::uint32_t)num_blocks,        // num_blocks
-            (std::uint32_t)out_num_blocks_x,  // num_blocks_x
-            (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
-            // batch args
-            (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)in0_B,  // batch
-            (std::uint32_t)in1_B,  // batch
-            (std::uint32_t)false,  // reuse_in0_in_CB
-            // sparsity args
-            (std::uint32_t)0,     // batchB
-            (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
-            (std::uint32_t)true,  // bcast_A
-            (std::uint32_t)false  // get_batch_from_reader
-        };
-    }
-    in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
-    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
+    const TensorParamName IN0{"in0"};
+    const TensorParamName IN1{"in1"};
+    const TensorParamName OUTPUT{"output"};
+    const TensorParamName BIAS{"bias"};
 
-    std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        // READER
-        // in1 tensor args
-        (std::uint32_t)in1_tensor_stride_w,
-        (std::uint32_t)in1_tensor_stride_h,
-        (std::uint32_t)in1_tensor_next_block_stride,
-        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
-        // in1 block args
-        (std::uint32_t)in1_block_w,                // in1_block_w
-        (std::uint32_t)in0_block_w,                // in1_block_h
-        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,  // in1_mcast_num_dests
-        (std::uint32_t)0,  // in1_mcast_num_cores
-        // batch args
-        (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)in0_B,        // batch
-        (std::uint32_t)bcast_batch,  // bcast_B
-        // sparsity args
-        (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
+    const SemaphoreSpecName SENDER_SEM{"in0_mcast_sender"};
+    const SemaphoreSpecName RECEIVER_SEM{"in0_mcast_receiver"};
 
-        // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
-        // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        // batch args
-        (std::uint32_t)M * N  // MtNt
-    };
-    if (bias_tensor.has_value()) {
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
-    } else {
-        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
+    // ------------------------------------------------------------------
+    // Compute-kernel derived sizes (unchanged from the legacy factory)
+    // ------------------------------------------------------------------
+    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
 
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
+    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
+    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
 
-    // Append TensorAccessorArgs
-    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for sparsity
-    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_sender_writer_compile_time_args);
-    if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
-    }
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    std::vector<uint32_t> in0_receiver_compile_time_args = {
-        // in0 block args
-        (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        // batch args
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)false   // get_batch_from_reader
-    };
+    // The fused bias add reads the partials buffer as an FPU operand (SrcA), so UnpackToDestFp32
+    // cannot be set on it directly when bias is present. In that case the cross-block reload instead
+    // copies through a second buffer aliasing the same SRAM that does carry UnpackToDestFp32, while
+    // the bias add keeps reading the partials buffer via SrcA. The alias is handed to the compute
+    // kernel as the MM_PARTIALS_RELOAD_ALIAS define plus its own binding, which selects the alias
+    // reload path there. Without bias the reload reads the partials buffer and the flag is set on it.
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
 
+    // ------------------------------------------------------------------
+    // Defines
+    // ------------------------------------------------------------------
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
@@ -3588,6 +3513,16 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
+    // in0_transpose_tile selects which buffer the compute kernel matmuls from. It arrives as a
+    // define rather than a compile-time arg because the in0_transposed buffer is only bound when
+    // the transpose is wanted, and a ternary over the two buffer names would name-look-up the
+    // unbound one.
+    if (in0_transpose_tile) {
+        mm_kernel_defines["IN0_TRANSPOSE_TILE"] = "1";
+    }
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
@@ -3615,407 +3550,734 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
-    // Intermediate CB read
-
-    // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
-    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
-        KernelDescriptor::Defines result;
-        result.reserve(m.size());
-        for (const auto& [k, v] : m) {
-            result.emplace_back(k, v);
-        }
-        return result;
-    };
-
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build Kernel Descriptors
+    //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor in0_sender_kernel_desc;
-    KernelDescriptor in0_no_work_in_receiver_kernel_desc;
-    bool has_in0_no_work_in_receiver_kernel = false;
-    KernelDescriptor in0_no_work_not_in_receiver_kernel_desc;
-    bool has_in0_no_work_not_in_receiver_kernel = false;
-    KernelDescriptor in0_receiver_kernel_desc;
-    bool has_in0_receiver_kernel = false;
-    KernelDescriptor in1_sender_writer_kernel_desc;
-    KernelDescriptor compute_kernel_desc;
+    // The output and partials buffers share one L1 region unless the shapes or formats force them
+    // apart; when they share, they are aliases of each other rather than independent buffers.
+    const bool separate_out_and_interm0 = do_not_inplace_interm0_out_dfb ||
+                                          (interm0_data_format != output_data_format) ||
+                                          (untilize_out && (in1_num_subblocks > 1));
+    // Every member of an alias group must have the same total backing size, so the partials buffer
+    // (and its alias) are sized against whichever region they actually sit in.
+    const uint32_t interm0_total_size = separate_out_and_interm0 ? interm0_dfb_size : out_dfb_size;
 
-    in0_sender_kernel_desc.kernel_source =
-        in0_is_sharded
-            ? "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-              "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp"
-            : "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp";
-    in0_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in0_sender_kernel_desc.core_ranges = in0_mcast_cores_with_work_and_in_receiver_grid;
-    in0_sender_kernel_desc.compile_time_args = in0_sender_compile_time_args;
-    in0_sender_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
-    if (in0_is_sharded) {
-        in0_sender_kernel_desc.named_compile_time_args = {
-            {"cb_in0", tt::CBIndex::c_0},
-            {"cb_in0_sharded", tt::CBIndex::c_2},
-            {"cb_l1_array", tt::CBIndex::c_6},
-            {"cb_sparsity", tt::CBIndex::c_6},
-            // Indexed/gather mode: sparse_matmul only (0 = disabled). Passed on both branches so the
-            // arg does not depend on which reader was selected above; the block-sharded one ignores it.
-            {"num_active", 0},
-        };
-    } else {
-        in0_sender_kernel_desc.named_compile_time_args = {
-            {"cb_in0", tt::CBIndex::c_0},
-            {"cb_in0_sharded", tt::CBIndex::c_2},
-            {"cb_sparsity", tt::CBIndex::c_6},
-            {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
-        };
+    Group<DataflowBufferSpec> dataflow_buffers;
+
+    // The alias group: {partials, partials alias?} when the output has its own region, otherwise
+    // {output, partials, partials alias?} because all of them sit on the one region.
+    Group<DFBSpecName> alias_group;
+    if (!separate_out_and_interm0) {
+        alias_group.push_back(OUT_DFB);
     }
-    in0_sender_kernel_desc.config =
-        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-
-    if (in0_is_sharded) {
-        if (in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0) {
-            has_in0_no_work_in_receiver_kernel = true;
-            auto no_work_ct_args = in0_sender_compile_time_args;
-            no_work_ct_args[0] = 0;  // core_has_output_block_work
-            no_work_ct_args[1] = 1;  // core_in_in0_receiver_mcast_grid
-            in0_no_work_in_receiver_kernel_desc.kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
-            in0_no_work_in_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            in0_no_work_in_receiver_kernel_desc.core_ranges = in0_mcast_cores_without_work_and_in_receiver_grid;
-            in0_no_work_in_receiver_kernel_desc.compile_time_args = no_work_ct_args;
-            in0_no_work_in_receiver_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
-            in0_no_work_in_receiver_kernel_desc.named_compile_time_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in0_sharded", tt::CBIndex::c_2},
-                {"cb_l1_array", tt::CBIndex::c_6},
-            };
-            in0_no_work_in_receiver_kernel_desc.config =
-                DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-        }
-        if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
-            has_in0_no_work_not_in_receiver_kernel = true;
-            auto no_work_ct_args = in0_sender_compile_time_args;
-            no_work_ct_args[0] = 0;  // core_has_output_block_work
-            no_work_ct_args[1] = 0;  // core_in_in0_receiver_mcast_grid
-            in0_no_work_not_in_receiver_kernel_desc.kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
-            in0_no_work_not_in_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            in0_no_work_not_in_receiver_kernel_desc.core_ranges = in0_mcast_cores_without_work_and_not_in_receiver_grid;
-            in0_no_work_not_in_receiver_kernel_desc.compile_time_args = no_work_ct_args;
-            in0_no_work_not_in_receiver_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_writer_defines);
-            in0_no_work_not_in_receiver_kernel_desc.named_compile_time_args = {
-                {"cb_in0", tt::CBIndex::c_0},
-                {"cb_in0_sharded", tt::CBIndex::c_2},
-                {"cb_l1_array", tt::CBIndex::c_6},
-            };
-            in0_no_work_not_in_receiver_kernel_desc.config =
-                DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-        }
-    }
-
-    if (!in0_is_sharded && in0_mcast_receivers.num_cores() > 0) {
-        has_in0_receiver_kernel = true;
-        in0_receiver_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
-        in0_receiver_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        in0_receiver_kernel_desc.core_ranges = in0_mcast_receivers;
-        in0_receiver_kernel_desc.compile_time_args = in0_receiver_compile_time_args;
-        in0_receiver_kernel_desc.named_compile_time_args = {
-            {"cb_in0", tt::CBIndex::c_0},
-        };
-        in0_receiver_kernel_desc.config =
-            DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
-    }
-
-    in1_sender_writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
-    in1_sender_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in1_sender_writer_kernel_desc.core_ranges = all_cores_with_work;
-    in1_sender_writer_kernel_desc.compile_time_args = in1_sender_writer_compile_time_args;
-    in1_sender_writer_kernel_desc.defines = map_to_defines(mm_kernel_in1_sender_writer_defines);
-    in1_sender_writer_kernel_desc.named_compile_time_args = {
-        {"cb_in1", tt::CBIndex::c_1},
-        {"cb_bias", tt::CBIndex::c_3},
-        {"cb_out", tt::CBIndex::c_4},
-        {"cb_sparsity", tt::CBIndex::c_7},
-        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
-    };
-    in1_sender_writer_kernel_desc.config =
-        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
-
-    // Compute kernel compile time args
-    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
-
-    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
-    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
-    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
-
-    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
-
-    std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
-
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
-
-        num_blocks,        // num_blocks
-        out_num_blocks_x,  // out_num_blocks_x
-        out_num_blocks_y,  // out_num_blocks_y
-
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        in0_B,                   // batch
-        out_block_tiles,         // out_block_num_tiles
-
-        untilize_out,  // untilize_out
-        false,         // get_batch_from_reader
-        in0_transpose_tile,
-    };
-    if (bias_tensor.has_value()) {
-        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
-    }
-
-    compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores_with_work;
-    compute_kernel_desc.compile_time_args = compute_kernel_args;
-    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
-    // The fused bias add reads the partials CB as an FPU operand (SrcA), so UnpackToDestFp32 cannot be
-    // set on cb_intermed0 directly when bias is present. In that case the cross-block reload instead
-    // copies through cb_intermed0_alias, a second buffer index over the same SRAM carrying
-    // UnpackToDestFp32, while the bias add keeps reading cb_intermed0 via SrcA. The alias index is
-    // handed to the compute kernel through the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the
-    // alias reload path there. Without bias the reload reads cb_intermed0 and the flag is set on it.
-    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
-    const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    alias_group.push_back(INTERM0_DFB);
     if (bias_reload_alias) {
-        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+        alias_group.push_back(INTERM0_ALIAS_DFB);
     }
-    compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
+    // A single-member "group" is not aliasing at all.
+    const bool has_alias_group = alias_group.size() > 1;
+    // Legacy put every shared index on ONE CBDescriptor whose single `tensor` field backed the whole
+    // region, so when the partials share the output's region and the output is sharded, they are
+    // backed by the output tensor too. The alias legality rule wants the same thing: either no member
+    // of a group borrows, or all of them borrow from the same TensorParameter.
+    const std::optional<TensorParamName> alias_group_borrow =
+        (!separate_out_and_interm0 && output_is_sharded) ? std::optional<TensorParamName>(OUTPUT) : std::nullopt;
+    auto alias_with_others = [&](const DFBSpecName& self) {
+        Group<DFBSpecName> others;
+        // A DFB that is not a member of the group aliases nothing. The output is exactly that case
+        // when it has its own region: filtering only `self` would hand it the partials as aliases
+        // while the partials never name it back, and the transitivity rule rejects a group whose
+        // members disagree on their membership.
+        const bool self_in_group = std::find(alias_group.begin(), alias_group.end(), self) != alias_group.end();
+        if (has_alias_group && self_in_group) {
+            for (const auto& name : alias_group) {
+                if (name != self) {
+                    others.push_back(name);
+                }
+            }
+        }
+        return others;
+    };
+
+    // Which in0 senders land on nodes that own a shard but produce no output block. Computed here
+    // because the relay buffer below is conditional on it; reused at the kernel-spec sites.
+    const bool has_in0_no_work_in_receiver_kernel =
+        in0_is_sharded && in0_mcast_cores_without_work_and_in_receiver_grid.num_cores() > 0;
+    const bool has_in0_no_work_not_in_receiver_kernel =
+        in0_is_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0;
+    const bool has_in0_relay_dfb = has_in0_no_work_in_receiver_kernel || has_in0_no_work_not_in_receiver_kernel;
+
+    // in0
+    DataflowBufferSpec in0_dfb_spec{
+        .unique_id = IN0_DFB,
+        .entry_size = in0_aligned_tile_size,
+        .num_entries = in0_dfb_size / in0_aligned_tile_size,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    };
+
+    // The in0 multicast relay buffer.
+    //
+    // in0 is a plain per-node FIFO: the sender fills a slot (the payload arrives by NoC, from this
+    // node or a peer) and compute drains it. The nodes that own a K-slice but no output block have
+    // no compute, so they are not part of that FIFO -- yet they still multicast into it, and a
+    // multicast writes one L1 offset on every destination. The sender derives that offset from a
+    // local cursor it advances in step with the receivers, so its buffer must sit at in0's offset.
+    // Hence a second DFB, self-looped by the senders on those nodes, with in0's geometry.
+    //
+    // The two offsets coincide because this pair is declared before any other DFB, so each starts at
+    // its own allocator's base. That is the allocator's behaviour, not a declared property --
+    // inserting any DFB on the work nodes ahead of in0 would part them by that DFB's size. Metal 2.0
+    // cannot state the requirement yet (alias_with is the mechanism, but it requires members to
+    // cover identical nodes; #56887 lifts that); until it can, KEEP THIS PAIR FIRST.
+    //
+    // Both no-work senders share this one relay: they run the same source on disjoint node sets, so
+    // its producer and consumer sets are equal and every node still hosts exactly one of each.
+    DataflowBufferSpec in0_relay_dfb_spec{
+        .unique_id = IN0_RELAY_DFB,
+        .entry_size = in0_dfb_spec.entry_size,
+        .num_entries = in0_dfb_spec.num_entries,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    };
+    dataflow_buffers.push_back(std::move(in0_dfb_spec));
+    if (has_in0_relay_dfb) {
+        dataflow_buffers.push_back(std::move(in0_relay_dfb_spec));
+    }
+
+    TT_FATAL(
+        dataflow_buffers.front().unique_id == IN0_DFB && dataflow_buffers.size() == (has_in0_relay_dfb ? 2u : 1u),
+        "in0{} must be the first DataflowBufferSpec(s) declared, so that each starts at its own "
+        "allocator's base and the two share an L1 offset; got {} spec(s) with '{}' first",
+        has_in0_relay_dfb ? " and its multicast relay" : "",
+        dataflow_buffers.size(),
+        dataflow_buffers.front().unique_id.get());
+
+    // in1
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN1_DFB,
+        .entry_size = in1_aligned_tile_size,
+        .num_entries = in1_dfb_size / in1_aligned_tile_size,
+        .data_format_metadata = in1_data_format,
+        .tile_format_metadata = in1_tile,
+        .borrowed_from = in1_is_sharded ? std::optional<TensorParamName>(IN1) : std::nullopt,
+    });
+
+    // in0 sharded: the resident in0 shard the block-sharded sender multicasts out of.
+    if (in0_is_sharded) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN0_SHARDED_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = in2_dfb_size / in0_single_tile_size,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+            .borrowed_from = IN0,
+        });
+    }
+
+    // Legacy also allocated a 64-byte "local L1 to store temp vars" buffer here (CB index 6) and
+    // handed its index to the block-sharded readers. No kernel ever read it, so it has no endpoints
+    // and no behaviour; it is dropped rather than translated.
+
+    // output
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = out_dfb_size / output_single_tile_size,
+        .data_format_metadata = output_data_format,
+        .tile_format_metadata = output_tile,
+        .borrowed_from = output_is_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
+        .advanced_options = {.alias_with = alias_with_others(OUT_DFB)},
+    });
+
+    // partials
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INTERM0_DFB,
+        .entry_size = interm0_single_tile_size,
+        .num_entries = interm0_total_size / interm0_single_tile_size,
+        .data_format_metadata = interm0_data_format,
+        .tile_format_metadata = output_tile,
+        .borrowed_from = alias_group_borrow,
+        .advanced_options = {.alias_with = alias_with_others(INTERM0_DFB)},
+    });
+
+    // partials alias over the same SRAM, marked UnpackToDest, for the bias reload (see above).
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INTERM0_ALIAS_DFB,
+            .entry_size = interm0_single_tile_size,
+            .num_entries = interm0_total_size / interm0_single_tile_size,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile,
+            .borrowed_from = alias_group_borrow,
+            .advanced_options = {.alias_with = alias_with_others(INTERM0_ALIAS_DFB)},
+        });
+    }
+
+    // bias
+    if (bias_tensor.has_value()) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = BIAS_DFB,
+            .entry_size = bias_aligned_tile_size,
+            .num_entries = in3_dfb_size / bias_aligned_tile_size,
+            .data_format_metadata = bias_data_format,
+            .tile_format_metadata = bias_tile,
+            .borrowed_from = bias_is_sharded ? std::optional<TensorParamName>(BIAS) : std::nullopt,
+        });
+    }
+
+    // in0 transposed
+    if (in0_transpose_tile) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN0_TRANSPOSED_DFB,
+            .entry_size = in0_aligned_tile_size,
+            .num_entries = in0_dfb_size / in0_aligned_tile_size,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Semaphores
+    ////////////////////////////////////////////////////////////////////////////
+    Group<SemaphoreSpec> semaphores = {
+        SemaphoreSpec{.unique_id = SENDER_SEM, .target_nodes = all_cores},
+        SemaphoreSpec{.unique_id = RECEIVER_SEM, .target_nodes = all_cores},
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    const auto in0_sender_hw_config =
+        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+    const auto in1_sender_hw_config =
+        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+
+    Group<KernelSpec> kernels;
+
+    // ---- in0 sender ------------------------------------------------------
+    // Two different sources, selected by whether in0 is sharded; both fill the in0 buffer and
+    // multicast it to the receiver grid.
+    const std::string in0_sender_source =
+        in0_is_sharded ? "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                         "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp"
+                       : "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                         "reader_bmm_tile_layout_in0_sender_padding_metal2.cpp";
+
+    // Common bindings for every instance of the in0 sender. in0_dfb is the multicast staging buffer
+    // this instance works through: in0 itself on the nodes that feed compute, the co-located relay on
+    // the nodes that only send. The accessor name is "in0" either way, so the kernel source does not
+    // distinguish them.
+    auto in0_sender_dfb_bindings = [&](bool core_has_output_block_work, const DFBSpecName& in0_dfb) {
+        Group<DFBBinding> b = {
+            DFBBinding{
+                .dfb_spec_name = in0_dfb,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+        };
+        if (!core_has_output_block_work) {
+            // These nodes run no compute and no writer, so nothing downstream drains the buffer. The
+            // sender pops its own tiles instead (the `if constexpr (!core_has_output_block_work)` pop
+            // at the bottom of the block loop), which keeps the write pointer in lockstep with the
+            // cores that do have work -- the multicast depends on every participant agreeing on it.
+            // One toucher doing both halves is a self-loop, which is why this is the relay buffer and
+            // not in0: in0's consumer is compute, and a role cannot mix kernel kinds.
+            b.push_back(DFBBinding{
+                .dfb_spec_name = in0_dfb,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        if (in0_is_sharded) {
+            // The resident shard is read through a raw pointer, never through the FIFO, so the one
+            // kernel that touches it carries both endpoints.
+            b.push_back(DFBBinding{
+                .dfb_spec_name = IN0_SHARDED_DFB,
+                .accessor_name = "in0_sharded",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            b.push_back(DFBBinding{
+                .dfb_spec_name = IN0_SHARDED_DFB,
+                .accessor_name = "in0_sharded",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        return b;
+    };
+    const Group<SemaphoreBinding> in0_mcast_sem_bindings = {
+        SemaphoreBinding{.semaphore_spec_name = SENDER_SEM, .accessor_name = "in0_mcast_sender"},
+        SemaphoreBinding{.semaphore_spec_name = RECEIVER_SEM, .accessor_name = "in0_mcast_receiver"},
+    };
+
+    // The block-sharded sender walks per-sender mcast NOC coordinate lists whose lengths are
+    // compile-time args rather than source literals, so the lists stay runtime varargs: the num_x
+    // x-coordinates first, then the num_y y-coordinates.
+    const uint32_t in0_sender_num_varargs =
+        in0_is_sharded ? static_cast<uint32_t>(in0_mcast_noc_x.size() + in0_mcast_noc_y.size()) : 0u;
+
+    // Per-instance compile-time args. The block-sharded source is instantiated three times over
+    // disjoint core sets, differing only on the two flags below.
+    auto make_in0_sender_cta = [&](bool core_has_output_block_work, bool core_in_receiver_grid) {
+        KernelSpec::CompileTimeArgs cta;
+        if (in0_is_sharded) {
+            cta = {
+                {"core_has_output_block_work", static_cast<uint32_t>(core_has_output_block_work)},
+                {"core_in_in0_receiver_mcast_grid", static_cast<uint32_t>(core_in_receiver_grid)},
+                {"in0_block_num_tiles", in0_block_num_tiles},
+                {"in0_block_size_bytes", in0_block_num_tiles * in0_single_tile_size},
+                {"in0_last_ktile_w", static_cast<uint32_t>(in0_last_ktile_w)},
+                {"in0_last_ktile_h", static_cast<uint32_t>(in0_last_ktile_h)},
+                {"num_blocks_inner_dim", num_blocks},
+                {"num_blocks_w_dim", out_num_blocks_x},
+                {"num_blocks_h_dim", out_num_blocks_y},
+                {"in0_mcast_num_dests", in0_mcast_receiver_num_dests},
+                {"in0_mcast_num_cores", in0_mcast_receiver_num_cores},
+                {"num_x", static_cast<uint32_t>(in0_mcast_sender_cores_grid.x)},
+                {"num_y", static_cast<uint32_t>(in0_mcast_sender_cores_grid.y)},
+                {"transpose_mcast", 0u},
+                {"shard_width_in_tiles", in0_shard_width_in_tiles},
+                {"shard_height_in_tiles", in0_shard_height_in_tiles},
+                {"in0_block_w", in0_block_w},
+                {"in0_block_h", in0_block_h},
+                {"batch", in0_B},
+            };
+        } else {
+            cta = {
+                {"in0_tensor_stride_w", static_cast<uint32_t>(in0_tensor_stride_w)},
+                {"in0_tensor_stride_h", static_cast<uint32_t>(in0_tensor_stride_h)},
+                {"in0_tensor_next_inner_dim_block_stride", static_cast<uint32_t>(in0_tensor_next_block_stride)},
+                {"in0_tensor_next_h_dim_block_stride", static_cast<uint32_t>(in0_tensor_next_h_dim_block_stride)},
+                {"in0_block_w", in0_block_w},
+                {"in0_block_h", in0_block_h},
+                {"in0_block_num_tiles", in0_block_num_tiles},
+                {"in0_last_ktile_w", static_cast<uint32_t>(in0_last_ktile_w)},
+                {"in0_last_ktile_h", static_cast<uint32_t>(in0_last_ktile_h)},
+                {"shard_width_in_tiles", 0u},
+                {"shard_height_in_tiles", 0u},
+                {"num_blocks_inner_dim", num_blocks},
+                {"num_blocks_w_dim", out_num_blocks_x},
+                {"num_blocks_h_dim", out_num_blocks_y},
+                {"in0_mcast_num_dests", num_cores - 1},
+                {"in0_mcast_num_cores", in0_mcast_receiver_num_cores - 1},
+                {"MtKt", M * K},
+                {"in0_B", in0_B},
+                {"in1_B", in1_B},
+                {"in0_reuse_in_dfb", 0u},
+                {"batchB", 0u},
+                {"bcast_A", 1u},
+                {"get_batch_from_reader", 0u},
+                {"num_active", 0u},
+            };
+        }
+        return cta;
+    };
+
+    // The block-sharded source reads shard_width/height and the mcast lists; the interleaved one
+    // reads the in0 tensor. Only the interleaved source binds a tensor accessor.
+    auto make_in0_sender_spec = [&](const KernelSpecName& unique_id,
+                                    bool core_has_output_block_work,
+                                    bool core_in_receiver_grid,
+                                    const DFBSpecName& in0_dfb) {
+            KernelSpec k{
+                .unique_id = unique_id,
+                .source = in0_sender_source,
+                .compiler_options =
+                    {
+                        .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_sender_writer_defines),
+                    },
+                .dfb_bindings = in0_sender_dfb_bindings(core_has_output_block_work, in0_dfb),
+                .semaphore_bindings = in0_mcast_sem_bindings,
+                .compile_time_args = make_in0_sender_cta(core_has_output_block_work, core_in_receiver_grid),
+                .hw_config = in0_sender_hw_config,
+            };
+            if (in0_is_sharded) {
+                k.runtime_arg_schema = {
+                    .runtime_arg_names =
+                        {"sender_id",
+                         "in0_mcast_dest_noc_start_x",
+                         "in0_mcast_dest_noc_start_y",
+                         "in0_mcast_dest_noc_end_x",
+                         "in0_mcast_dest_noc_end_y"},
+                };
+                k.advanced_options.num_runtime_varargs = in0_sender_num_varargs;
+            } else {
+                k.tensor_bindings = {
+                    TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
+                };
+                k.runtime_arg_schema = {
+                    .runtime_arg_names =
+                        {"in0_tensor_start_tile_id",
+                         "in0_mcast_dest_noc_start_x",
+                         "in0_mcast_dest_noc_start_y",
+                         "in0_mcast_dest_noc_end_x",
+                         "in0_mcast_dest_noc_end_y",
+                         "last_block_h"},
+                };
+            }
+            return k;
+        };
+
+    kernels.push_back(make_in0_sender_spec(IN0_SENDER, true, true, IN0_DFB));
+
+    // Both no-work senders work the relay buffer, not in0 (see its declaration above).
+    if (has_in0_no_work_in_receiver_kernel) {
+        kernels.push_back(make_in0_sender_spec(IN0_NO_WORK_IN_RECV, false, true, IN0_RELAY_DFB));
+    }
+    if (has_in0_no_work_not_in_receiver_kernel) {
+        kernels.push_back(make_in0_sender_spec(IN0_NO_WORK_NOT_IN_RECV, false, false, IN0_RELAY_DFB));
+    }
+
+    // ---- in0 receiver ----------------------------------------------------
+    const bool has_in0_receiver_kernel = !in0_is_sharded && in0_mcast_receivers.num_cores() > 0;
+    if (has_in0_receiver_kernel) {
+        kernels.push_back(KernelSpec{
+            .unique_id = IN0_RECEIVER,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                      "reader_bmm_tile_layout_in0_receiver_metal2.cpp",
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN0_DFB,
+                        .accessor_name = "in0",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                },
+            .semaphore_bindings = in0_mcast_sem_bindings,
+            .compile_time_args =
+                {
+                    {"in0_block_num_tiles", in0_block_num_tiles},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"batch", in0_B},
+                    {"get_batch_from_reader", 0u},
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"},
+                },
+            .hw_config = in0_sender_hw_config,
+        });
+    }
+
+    // ---- in1 sender / output writer --------------------------------------
+    // On this path the in1 multicast is skipped entirely (SKIP_MCAST), so the kernel's semaphore
+    // objects are constructed but never used; they are still bound because the kernel constructs
+    // them unconditionally.
     {
-        KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
-            {"cb_in0", tt::CBIndex::c_0},
-            {"cb_in1", tt::CBIndex::c_1},
-            {"cb_bias", tt::CBIndex::c_3},
-            {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", cb_intermed0},
-            {"cb_in0_transposed", tt::CBIndex::c_10},
+        KernelSpec in1_sender{
+            .unique_id = IN1_SENDER_WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in1_sender_writer_defines),
+                },
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN1_DFB,
+                        .accessor_name = "in1",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = OUT_DFB,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .semaphore_bindings =
+                {
+                    SemaphoreBinding{.semaphore_spec_name = SENDER_SEM, .accessor_name = "in1_mcast_sender"},
+                    SemaphoreBinding{.semaphore_spec_name = RECEIVER_SEM, .accessor_name = "in1_mcast_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = IN1, .accessor_name = "in1"},
+                    TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"},
+                },
+            .compile_time_args =
+                {
+                    {"in1_tensor_stride_w", static_cast<uint32_t>(in1_tensor_stride_w)},
+                    {"in1_tensor_stride_h", static_cast<uint32_t>(in1_tensor_stride_h)},
+                    {"in1_tensor_next_block_stride", static_cast<uint32_t>(in1_tensor_next_block_stride)},
+                    {"in1_tensor_next_w_dim_block_stride", static_cast<uint32_t>(in1_tensor_next_w_dim_block_stride)},
+                    {"in1_block_w", in1_block_w},
+                    {"in1_block_h", in0_block_w},
+                    {"in1_block_num_tiles", in1_block_w * in0_block_w},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"in1_mcast_num_dests", 0u},
+                    {"in1_mcast_num_cores", 0u},
+                    {"KtNt", K * N},
+                    {"batch", in0_B},
+                    {"bcast_B", static_cast<uint32_t>(bcast_batch)},
+                    {"batchB", 0u},
+                    {"out_tensor_stride_w", 1u},
+                    {"out_tensor_stride_h", N},
+                    {"out_tensor_next_subblock_stride_w", out_subblock_w},
+                    {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
+                    {"out_tensor_next_w_dim_block_stride", out_block_w},
+                    {"out_tensor_next_h_dim_block_stride", out_block_h * N},
+                    {"out_subblock_w", out_subblock_w},
+                    {"out_subblock_h", out_subblock_h},
+                    {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
+                    {"MtNt", M * N},
+                    {"compact_output", 0u},
+                    {"num_active", 0u},
+                },
+            .hw_config = in1_sender_hw_config,
+        };
+
+        Group<std::string> in1_sender_rta_names = {
+            "in1_tensor_start_tile_id",
+            "in1_mcast_dest_noc_start_x",
+            "in1_mcast_dest_noc_start_y",
+            "in1_mcast_dest_noc_end_x",
+            "in1_mcast_dest_noc_end_y",
+            "out_tensor_start_tile_id",
+            "last_block_w",
+            "out_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (bias_tensor.has_value()) {
+            in1_sender.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BIAS_DFB,
+                .accessor_name = "bias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            in1_sender.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
+            in1_sender.compile_time_args.insert({"in3_tensor_stride_w", 1u});
+            in1_sender_rta_names.push_back("in3_tensor_start_tile_id");
+        }
+        if (!output_is_sharded) {
+            in1_sender_rta_names.push_back("last_num_blocks_w_dim");
+        }
+        in1_sender.runtime_arg_schema = {.runtime_arg_names = std::move(in1_sender_rta_names)};
+        kernels.push_back(std::move(in1_sender));
+    }
+
+    // ---- compute ----------------------------------------------------------
+    {
+        // The op resolves a TTNN ComputeKernelConfig, so translate that rather than building a Metal
+        // config by hand.
+        auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+        // The legacy factory resolves dst_full_sync_en but never passes it to either descriptor
+        // builder, so the descriptor default applied and this op has always ignored the knob. The
+        // TTNN helper reads the resolved config and would hand the caller's value back, which would
+        // change behaviour, so pin the legacy-default result. Preserved deliberately, not a fix.
+        double_buffer_dest(compute_hw) = true;
+
+        // When accumulating in fp32 with the K reduction split across blocks, the partials buffer
+        // holds Float32 and is reloaded into DEST between blocks. Unless the reload's view is marked
+        // UnpackToDest, that reload is routed through SrcA and rounded to TF32 (10 mantissa bits), so
+        // the fp32 partial loses precision on every block boundary and accuracy degrades as the
+        // number of K-blocks grows. The flag goes on the alias when bias forces a separate SrcA view
+        // of the partials buffer (see above), else on the partials buffer itself. Metal 2.0 also
+        // *requires* an explicit entry for a Float32 buffer a compute kernel consumes with
+        // enable_32_bit_dest on, which is exactly this case.
+        //
+        // That requirement covers EVERY Float32 buffer this kernel consumes, not just the partials:
+        // omitting one is a TT_FATAL at program build, where legacy defaulted silently. Legacy held
+        // Default (= UnpackToSrc) everywhere except the partials view marked below, so reproduce
+        // that -- one UnpackToDest, UnpackToSrc for the rest. The entries must track the bindings
+        // below: add a Float32 buffer to the compute kernel and it needs one here too.
+        if (fp32_dest_acc_en) {
+            const DFBSpecName marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
+            const bool mark = interm0_data_format == tt::DataFormat::Float32;
+            auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
+                if (fmt != tt::DataFormat::Float32) {
+                    return;
+                }
+                unpack_modes(compute_hw).emplace(
+                    name,
+                    (mark && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                             : tt::tt_metal::UnpackMode::UnpackToSrc);
+            };
+            add_if_float32(IN0_DFB, in0_data_format);
+            add_if_float32(IN1_DFB, in1_data_format);
+            add_if_float32(INTERM0_DFB, interm0_data_format);
+            if (bias_reload_alias) {
+                add_if_float32(INTERM0_ALIAS_DFB, interm0_data_format);
+            }
+            if (bias_tensor.has_value()) {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
+            if (in0_transpose_tile) {
+                add_if_float32(IN0_TRANSPOSED_DFB, in0_data_format);
+            }
+        }
+
+        Group<DFBBinding> compute_dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = IN0_DFB,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+            DFBBinding{
+                .dfb_spec_name = IN1_DFB,
+                .accessor_name = "in1",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+            DFBBinding{
+                .dfb_spec_name = OUT_DFB,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            // The partials buffer is filled and re-read by this kernel alone.
+            DFBBinding{
+                .dfb_spec_name = INTERM0_DFB,
+                .accessor_name = "intermed0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = INTERM0_DFB,
+                .accessor_name = "intermed0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+        };
+        if (bias_reload_alias) {
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERM0_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERM0_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        if (bias_tensor.has_value()) {
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BIAS_DFB,
+                .accessor_name = "bias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        if (in0_transpose_tile) {
+            // in0 is read from the in0 buffer, transposed, and written into the transposed buffer,
+            // which this same kernel then matmuls from.
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = IN0_TRANSPOSED_DFB,
+                .accessor_name = "in0_transposed",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = IN0_TRANSPOSED_DFB,
+                .accessor_name = "in0_transposed",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+
+        KernelSpec::CompileTimeArgs compute_cta = {
+            {"in0_block_w", in0_block_w},
+            {"in0_num_subblocks", in0_num_subblocks},
+            {"in0_block_num_tiles", in0_block_num_tiles},
+            {"in0_subblock_num_tiles", in0_subblock_num_tiles},
+            {"in1_num_subblocks", in1_num_subblocks},
+            {"in1_block_num_tiles", in1_block_num_tiles},
+            {"in1_block_w", in1_per_core_w},
+            {"num_blocks_inner_dim", num_blocks},
+            {"num_blocks_w_dim", out_num_blocks_x},
+            {"num_blocks_h_dim", out_num_blocks_y},
+            {"out_subblock_h", out_subblock_h},
+            {"out_subblock_w", out_subblock_w},
+            {"out_subblock_num_tiles", out_subblock_num_tiles},
+            {"batch", in0_B},
+            {"out_block_num_tiles", out_block_tiles},
+            {"untilize_out", static_cast<uint32_t>(untilize_out)},
+            {"get_batch_from_reader", 0u},
             {"bias_ntiles", in1_per_core_w},
         };
+        if (bias_tensor.has_value()) {
+            // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles.
+            compute_cta.insert({"row_broadcast_bias", static_cast<uint32_t>(row_broadcast_bias ? 1u : 0u)});
+        }
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;
             const auto params = get_activation_params(fused_activation.value());
-            named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
-            named_compile_args.push_back({"activation_param0", params.param0});
-            named_compile_args.push_back({"activation_param1", params.param1});
-            named_compile_args.push_back({"activation_param2", params.param2});
+            compute_cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
+            compute_cta.insert({"activation_param0", params.param0});
+            compute_cta.insert({"activation_param1", params.param1});
+            compute_cta.insert({"activation_param2", params.param2});
         }
-        compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
+
+        kernels.push_back(KernelSpec{
+            .unique_id = COMPUTE,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
+                      "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    // A legacy ComputeConfigDescriptor with no opt_level resolves to O3; Metal 2.0's
+                    // CompilerOptions defaults to O2, so it has to be stated.
+                    .opt_level = KernelBuildOptLevel::O3,
+                },
+            .dfb_bindings = std::move(compute_dfb_bindings),
+            .compile_time_args = std::move(compute_cta),
+            .hw_config = compute_hw,
+        });
     }
-    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
-    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
-    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
-    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
-    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
-    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        const uint32_t cb_to_mark =
-            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
-        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
+    //                      Work units
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor desc;
-
-    tt::tt_metal::TileDescriptor in0_tile_desc{in0_tile};
-    tt::tt_metal::TileDescriptor in1_tile_desc{in1_tile};
-    tt::tt_metal::TileDescriptor bias_tile_desc{bias_tile};
-    tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
-
-    // CB 0: in0
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_0,
-            .data_format = in0_data_format,
-            .page_size = in0_aligned_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
+    Group<WorkUnitSpec> work_units;
+    work_units.push_back(WorkUnitSpec{
+        .name = "in0_senders_with_work",
+        .kernels = {IN0_SENDER, IN1_SENDER_WRITER, COMPUTE},
+        .target_nodes = in0_mcast_cores_with_work_and_in_receiver_grid,
+    });
+    if (has_in0_no_work_in_receiver_kernel) {
+        work_units.push_back(WorkUnitSpec{
+            .name = "in0_senders_no_work_in_receiver_grid",
+            .kernels = {IN0_NO_WORK_IN_RECV},
+            .target_nodes = in0_mcast_cores_without_work_and_in_receiver_grid,
+        });
+    }
+    if (has_in0_no_work_not_in_receiver_kernel) {
+        work_units.push_back(WorkUnitSpec{
+            .name = "in0_senders_no_work_outside_receiver_grid",
+            .kernels = {IN0_NO_WORK_NOT_IN_RECV},
+            .target_nodes = in0_mcast_cores_without_work_and_not_in_receiver_grid,
+        });
+    }
+    if (has_in0_receiver_kernel) {
+        work_units.push_back(WorkUnitSpec{
+            .name = "in0_receivers",
+            .kernels = {IN0_RECEIVER, IN1_SENDER_WRITER, COMPUTE},
+            .target_nodes = in0_mcast_receivers,
+        });
     }
 
-    // CB 1: in1
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in1_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_1,
-            .data_format = in1_data_format,
-            .page_size = in1_aligned_tile_size,
-            .tile = in1_tile_desc});
-        if (in1_is_sharded) {
-            cb_desc.tensor = &in1_tensor;
-        }
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB 2: in0 sharded
-    if (in0_is_sharded) {
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = in2_CB_size;
-            cb_desc.core_ranges = all_cores;
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = tt::CBIndex::c_2,
-                .data_format = in0_data_format,
-                .page_size = in0_single_tile_size,
-                .tile = in0_tile_desc});
-            cb_desc.tensor = &in0_tensor;
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-
-        // Local L1 to store temp vars
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = 32 * 2;
-            cb_desc.core_ranges = all_cores;
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = tt::CBIndex::c_6, .data_format = tt::DataFormat::Float16_b, .page_size = 32 * 2});
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-    }
-
-    // CB 4 and CB 5: output and intermediate
-    if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
-        (untilize_out && (in1_num_subblocks > 1))) {
-        // Separate output and intermediate CBs
-        // output
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = out_CB_size;
-            cb_desc.core_ranges = all_cores;
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = tt::CBIndex::c_4,
-                .data_format = output_data_format,
-                .page_size = output_single_tile_size,
-                .tile = output_tile_desc});
-            if (output_is_sharded) {
-                cb_desc.tensor = &out_tensor;
-            }
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-        // interm0
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = interm0_CB_size;
-            cb_desc.core_ranges = CoreRangeSet({all_cores});
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = tt::CBIndex::c_5,
-                .data_format = interm0_data_format,
-                .page_size = interm0_single_tile_size,
-                .tile = output_tile_desc});
-            // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
-            if (bias_reload_alias) {
-                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                    .buffer_index = cb_intermed0_alias,
-                    .data_format = interm0_data_format,
-                    .page_size = interm0_single_tile_size,
-                    .tile = output_tile_desc});
-            }
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-    } else {
-        // share buffer
-        CBDescriptor cb_desc;
-        cb_desc.total_size = out_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_4,
-            .data_format = output_data_format,
-            .page_size = output_single_tile_size,
-            .tile = output_tile_desc});
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_5,
-            .data_format = interm0_data_format,
-            .page_size = interm0_single_tile_size,
-            .tile = output_tile_desc});
-        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
-        if (bias_reload_alias) {
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = cb_intermed0_alias,
-                .data_format = interm0_data_format,
-                .page_size = interm0_single_tile_size,
-                .tile = output_tile_desc});
-        }
-        if (output_is_sharded) {
-            cb_desc.tensor = &out_tensor;
-        }
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB for bias
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = IN0, .spec = in0_tensor.tensor_spec()},
+        TensorParameter{.unique_id = IN1, .spec = in1_tensor.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT, .spec = out_tensor.tensor_spec()},
+    };
     if (bias_tensor.has_value()) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in3_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_3,
-            .data_format = bias_data_format,
-            .page_size = bias_aligned_tile_size,
-            .tile = bias_tile_desc});
-        if (bias_is_sharded) {
-            cb_desc.tensor = &*bias_tensor;
-        }
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // Intermediate CB read
-
-    // Transpose CB for input0
-    if (in0_transpose_tile) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_10,
-            .data_format = in0_data_format,
-            .page_size = in0_aligned_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
+        tensor_parameters.push_back(TensorParameter{.unique_id = BIAS, .spec = bias_tensor->tensor_spec()});
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Semaphore Descriptors
-    ////////////////////////////////////////////////////////////////////////////
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in0_mcast_sender_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in0_mcast_receiver_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Runtime Args (per-core loop)
+    //                      Runtime args (per-core loop)
     ////////////////////////////////////////////////////////////////////////////
     // Parameters for last row, col, or block. mcast_in0 replicates M across all cores
     // (num_blocks_y == 1), so any M-direction padding lives entirely within a single h-block.
@@ -4047,6 +4309,12 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         std::swap(start_core_noc, end_core_noc);
     }
 
+    KernelRunArgs in0_sender_run_args{.kernel = IN0_SENDER};
+    KernelRunArgs in0_no_work_in_recv_run_args{.kernel = IN0_NO_WORK_IN_RECV};
+    KernelRunArgs in0_no_work_not_in_recv_run_args{.kernel = IN0_NO_WORK_NOT_IN_RECV};
+    KernelRunArgs in0_receiver_run_args{.kernel = IN0_RECEIVER};
+    KernelRunArgs in1_sender_run_args{.kernel = IN1_SENDER_WRITER};
+
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
@@ -4054,175 +4322,126 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
-            std::vector<uint32_t> mm_in0_sender_args;
-            mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
-            mm_in0_sender_args.push_back(i);
-            mm_in0_sender_args.push_back(start_core_noc.x);
-            mm_in0_sender_args.push_back(start_core_noc.y);
-            mm_in0_sender_args.push_back(end_core_noc.x);
-            mm_in0_sender_args.push_back(end_core_noc.y);
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+            std::vector<uint32_t> varargs;
+            varargs.reserve(in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
+            varargs.insert(varargs.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
+            varargs.insert(varargs.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
 
-            if (fuse_op && fused_op_signaler->is_all_gather()) {
-                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
-            }
-
-            if (i < num_cores_with_work) {
-                in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
-            } else if (i < in0_mcast_receiver_num_dests) {
-                in0_no_work_in_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
-            } else {
-                in0_no_work_not_in_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
-            }
+            auto& dst = (i < num_cores_with_work)            ? in0_sender_run_args
+                        : (i < in0_mcast_receiver_num_dests) ? in0_no_work_in_recv_run_args
+                                                             : in0_no_work_not_in_recv_run_args;
+            AddRuntimeArgsForNode(
+                dst.runtime_arg_values,
+                core,
+                {{"sender_id", i},
+                 {"in0_mcast_dest_noc_start_x", static_cast<uint32_t>(start_core_noc.x)},
+                 {"in0_mcast_dest_noc_start_y", static_cast<uint32_t>(start_core_noc.y)},
+                 {"in0_mcast_dest_noc_end_x", static_cast<uint32_t>(end_core_noc.x)},
+                 {"in0_mcast_dest_noc_end_y", static_cast<uint32_t>(end_core_noc.y)}});
+            dst.advanced_options.runtime_varargs[core] = std::move(varargs);
         }
         // in0 sender and in1 sender
         else if (core == start_core) {
-            std::vector<uint32_t> mm_in0_sender_args = {
-                // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
-                (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
-                // in0 mcast args
-                (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)end_core_noc.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
-
-                // padding args
-                (std::uint32_t)in0_last_out_block_h,  // last_block_h
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
-            };
-
-            if (fuse_op && fused_op_signaler->is_all_gather()) {
-                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
-            }
-
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
-                    mm_in0_sender_args.begin(), mm_in0_sender_args.end());
-                in0_sender_variant[0] = in0_tensor;
-                in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
-            }
+            AddRuntimeArgsForNode(
+                in0_sender_run_args.runtime_arg_values,
+                core,
+                {{"in0_tensor_start_tile_id", static_cast<uint32_t>(in0_tensor_start_tile_id_stride * output_idx_y)},
+                 {"in0_mcast_dest_noc_start_x", static_cast<uint32_t>(start_core_noc.x)},
+                 {"in0_mcast_dest_noc_start_y", static_cast<uint32_t>(start_core_noc.y)},
+                 {"in0_mcast_dest_noc_end_x", static_cast<uint32_t>(end_core_noc.x)},
+                 {"in0_mcast_dest_noc_end_y", static_cast<uint32_t>(end_core_noc.y)},
+                 {"last_block_h", in0_last_out_block_h}});
         }
-        // in0 receiver and in 1 sender
+        // in0 receiver and in1 sender
         else {
-            std::vector<uint32_t> mm_in0_receiver_args = {
-                // in0 mcast args
-                (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
-            };
-            in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
+            AddRuntimeArgsForNode(
+                in0_receiver_run_args.runtime_arg_values,
+                core,
+                {{"in0_mcast_sender_noc_x", static_cast<uint32_t>(top_left_core_physical.x)},
+                 {"in0_mcast_sender_noc_y", static_cast<uint32_t>(top_left_core_physical.y)}});
         }
+
         if (i < num_cores_with_work) {
-            std::vector<uint32_t> mm_in1_sender_writer_args = {
-                // READER
-                // in1 tensor args
-                (std::uint32_t)in1_tensor.address(),
-                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
-                // in1 mcast args
-                (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
-                (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
-                (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
-                (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
-
-                // WRITER
-                // out tensor args
-                (std::uint32_t)out_tensor.address(),
-                ((std::uint32_t)output_idx_x * per_core_N) +
-                    (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
-            };
-
-            if (output_idx_x == num_blocks_x - 1) {
-                // padding args (READER)
-                mm_in1_sender_writer_args.push_back(last_out_block_w);
-
-                // padding args (WRITER)
-                mm_in1_sender_writer_args.push_back(in0_last_block_num_nonzero_subblocks_h);
-                mm_in1_sender_writer_args.push_back(in0_last_subblock_of_last_block_h);
-                mm_in1_sender_writer_args.push_back(in0_last_block_padded_block_tiles_h_skip);
-                mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);  // out_num_nonzero_subblocks_w
-                mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
-                mm_in1_sender_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
-                mm_in1_sender_writer_args.push_back(last_block_padded_block_tiles_w_skip);
-            } else {
-                // padding args (READER)
-                mm_in1_sender_writer_args.push_back(out_block_w);
-
-                // padding args (WRITER)
-                mm_in1_sender_writer_args.push_back(in0_last_block_num_nonzero_subblocks_h);
-                mm_in1_sender_writer_args.push_back(in0_last_subblock_of_last_block_h);
-                mm_in1_sender_writer_args.push_back(in0_last_block_padded_block_tiles_h_skip);
-                mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);  // out_num_nonzero_subblocks_w
-                mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_sender_writer_args.push_back(out_subblock_w);
-                mm_in1_sender_writer_args.push_back(0);
-                mm_in1_sender_writer_args.push_back(0);
+            const bool last_x = (output_idx_x == num_blocks_x - 1);
+            AddRuntimeArgsForNode(
+                in1_sender_run_args.runtime_arg_values,
+                core,
+                {{"in1_tensor_start_tile_id", static_cast<uint32_t>(in1_tensor_start_tile_id_stride * output_idx_x)},
+                 {"in1_mcast_dest_noc_start_x", 0u},
+                 {"in1_mcast_dest_noc_start_y", 0u},
+                 {"in1_mcast_dest_noc_end_x", 0u},
+                 {"in1_mcast_dest_noc_end_y", 0u},
+                 {"out_tensor_start_tile_id", (output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                 // padding args (READER)
+                 {"last_block_w", last_x ? last_out_block_w : out_block_w},
+                 // padding args (WRITER)
+                 {"out_num_nonzero_subblocks_h", in0_last_block_num_nonzero_subblocks_h},
+                 {"out_last_subblock_h", in0_last_subblock_of_last_block_h},
+                 {"padded_block_tiles_h_skip", in0_last_block_padded_block_tiles_h_skip},
+                 {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                 {"out_last_num_nonzero_subblocks_w",
+                  last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
+                 {"out_last_subblock_w", last_x ? last_subblock_of_last_block_w : out_subblock_w},
+                 {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u},
+                 {"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u}});
+            if (bias_tensor.has_value()) {
+                in1_sender_run_args.runtime_arg_values["in3_tensor_start_tile_id"][core] = per_core_N * output_idx_x;
             }
-
-            // Bias base address placeholder; rebound to a tensor binding via in1_sender_variant[18] below.
-            mm_in1_sender_writer_args.push_back(
-                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
-            mm_in1_sender_writer_args.push_back(
-                bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
-                if (output_idx_x == num_blocks_x - 1) {
-                    mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
-                } else {
-                    mm_in1_sender_writer_args.push_back(out_num_blocks_x);
-                }
-            }
-
-            if (fuse_op && fused_op_signaler->is_all_gather()) {
-                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
-            }
-
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_sender_variant(
-                    mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
-                in1_sender_variant[0] = in1_tensor;
-                in1_sender_variant[7] = out_tensor;
-                if (bias_tensor.has_value()) {
-                    in1_sender_variant[18] = *bias_tensor;
-                }
-                in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+                in1_sender_run_args.runtime_arg_values["last_num_blocks_w_dim"][core] =
+                    last_x ? last_out_num_blocks_w : out_num_blocks_x;
             }
         }
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Push kernels to descriptor
+    //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
-    desc.kernels.push_back(std::move(in0_sender_kernel_desc));
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(in0_sender_run_args));
     if (has_in0_no_work_in_receiver_kernel) {
-        desc.kernels.push_back(std::move(in0_no_work_in_receiver_kernel_desc));
+        run_args.kernel_run_args.push_back(std::move(in0_no_work_in_recv_run_args));
     }
     if (has_in0_no_work_not_in_receiver_kernel) {
-        desc.kernels.push_back(std::move(in0_no_work_not_in_receiver_kernel_desc));
+        run_args.kernel_run_args.push_back(std::move(in0_no_work_not_in_recv_run_args));
     }
     if (has_in0_receiver_kernel) {
-        desc.kernels.push_back(std::move(in0_receiver_kernel_desc));
+        run_args.kernel_run_args.push_back(std::move(in0_receiver_run_args));
     }
-    desc.kernels.push_back(std::move(in1_sender_writer_kernel_desc));
-    desc.kernels.push_back(std::move(compute_kernel_desc));
+    run_args.kernel_run_args.push_back(std::move(in1_sender_run_args));
 
-    return desc;
+    run_args.tensor_args = {
+        {IN0, in0_tensor},
+        {IN1, in1_tensor},
+        {OUTPUT, out_tensor},
+    };
+    if (bias_tensor.has_value()) {
+        run_args.tensor_args.emplace(BIAS, *bias_tensor);
+    }
+
+    ProgramSpec spec{
+        .name = "matmul_multi_core_reuse_mcast_1d_in0",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
-static ProgramDescriptor create_program_mcast_in1_descriptor(
+static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     const ttnn::Tensor& a,
     tt_metal::IDevice* device,
-    MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
-    bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t in0_B,
     uint32_t in1_B,
     uint32_t M,
@@ -4282,13 +4501,13 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
     // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
     // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
-    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
-    // tensor buffer and keep their natural page size.
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded buffers are backed by the
+    // tensor buffer and keep their natural entry size.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
-    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // Bias buffer entries must be padded to the DRAM alignment so the reader's L1 write stride
     // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
     // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
     // tiles already >= dram_alignment.
@@ -4296,7 +4515,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    bool do_not_inplace_interm0_out_dfb = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4306,16 +4525,16 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t out_num_blocks_y = in0_num_blocks_y;
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles;
+    uint32_t in0_dfb_tiles = in0_block_tiles;
 
     if (in0_B == 1 && in1_B > 1) {
-        in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
+        in0_dfb_tiles = per_core_M * num_blocks * in0_block_w;
     } else if (in0_is_sharded) {
-        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
+        in0_dfb_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
     } else if (in0_B * num_blocks > 1) {
-        in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
+        in0_dfb_tiles = in0_dfb_tiles * 2;  // double buffer
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
+    uint32_t in0_dfb_size = in0_dfb_tiles * in0_aligned_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
@@ -4332,35 +4551,35 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (in0_is_sharded) {
         in0_shard_height_in_tiles = in0_tensor.shard_spec()->shape[0] / in0_tile.get_height();
         in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
-        // Do a real per-block copy (not point cb_in0 at L1) when K needs splitting, or when there's more
+        // Do a real per-block copy (not point the in0 buffer at L1) when K needs splitting, or when there's more
         // than 1 row-block AND col-block: a row-block's data is needed twice, but advancing lands on the wrong one.
         if (in0_shard_width_in_tiles / in0_block_w > 1 || (in0_num_blocks_y > 1 && in1_num_blocks_x > 1)) {
             extract_shard_sub_blocks = true;
         }
     }
-    uint32_t in2_CB_tiles = in0_block_tiles;
-    uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
+    uint32_t in2_dfb_tiles = in0_block_tiles;
+    uint32_t in2_dfb_size = in2_dfb_tiles * in0_single_tile_size;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
-    uint32_t in1_CB_tiles = in1_block_tiles;
+    uint32_t in1_dfb_tiles = in1_block_tiles;
     if (in1_B * num_blocks > 1) {
-        in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
+        in1_dfb_tiles = in1_dfb_tiles * 2;  // double buffer
     }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
+    uint32_t in1_dfb_size = in1_dfb_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
-    uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
+    uint32_t out_dfb_tiles = out_block_tiles;  // No double buffer
     if (output_is_sharded) {
-        out_CB_tiles = out_shard_tiles;
+        out_dfb_tiles = out_shard_tiles;
     }
-    uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
-    uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
-    uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
+    uint32_t out_dfb_size = out_dfb_tiles * output_single_tile_size;
+    uint32_t interm0_dfb_tiles = out_block_tiles;  // No double buffer
+    uint32_t interm0_dfb_size = interm0_dfb_tiles * interm0_single_tile_size;
 
     uint32_t in3_block_tiles = out_block_w;
-    uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
+    uint32_t in3_dfb_tiles = in3_block_tiles;  // No double buffer
+    uint32_t in3_dfb_size = in3_dfb_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -4422,10 +4641,6 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    uint32_t in1_mcast_sender_semaphore_id = 0;
-    uint32_t in1_mcast_receiver_semaphore_id = 1;
-
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
@@ -4445,151 +4660,65 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
-    const bool reuse_in0_in_CB = (in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
-                                 !fused_activation.has_value();
+    const bool reuse_in0_in_dfb = (in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+                                  !fused_activation.has_value();
 
-    std::vector<uint32_t> in0_sender_compile_time_args = {
-        // in0 tensor args
-        (std::uint32_t)in0_tensor_stride_w,
-        (std::uint32_t)in0_tensor_stride_h,
-        (std::uint32_t)in0_tensor_next_block_stride,
-        (std::uint32_t)in0_tensor_next_h_dim_block_stride,
-        // in0 block args
-        (std::uint32_t)in0_block_w,                // in0_block_w
-        (std::uint32_t)in0_block_h,                // in0_block_h
-        (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
-        (std::uint32_t)in0_last_ktile_w,
-        (std::uint32_t)in0_last_ktile_h,
+    // create_program_artifacts always passes std::nullopt for the fused-op signaler, so the CCL
+    // fused-op path is unreachable here. The Metal 2.0 kernel forks do not carry it: MatmulOpReceiver
+    // and OpSignaler read positional runtime args from outside this op's directory, which named
+    // arguments cannot supply. Fail loudly rather than silently building a program without it.
+    TT_FATAL(!fuse_op, "matmul_multicore_reuse_mcast_1d: the Metal 2.0 path does not support fused CCL ops");
 
-        (std::uint32_t)extract_shard_sub_blocks,
-        (std::uint32_t)in0_shard_width_in_tiles,
-        (std::uint32_t)in0_shard_height_in_tiles,
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,  // in0_mcast_num_dests
-        (std::uint32_t)0,  // in0_mcast_num_cores
-        // batch args
-        (std::uint32_t)M * K,            // MtKt
-        (std::uint32_t)in0_B,            // batch
-        (std::uint32_t)in1_B,            // batch
-        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
+    // ------------------------------------------------------------------
+    // Spec-scope resource names. Declared function-local rather than at file scope: the matmul
+    // factory .cpp files share one unity-build target, so file-scope constants with these names
+    // would collide as sibling factories are ported.
+    // ------------------------------------------------------------------
+    const KernelSpecName IN0_SENDER{"in0_sender"};
+    const KernelSpecName IN1_SENDER_WRITER{"in1_sender_writer"};
+    const KernelSpecName IN1_RECEIVER_WRITER{"in1_receiver_writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-        // sparsity args
-        (std::uint32_t)0,     // batchB
-        (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
-        (std::uint32_t)true,  // bcast_A
-        (std::uint32_t)false  // get_batch_from_reader
-    };
-    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
-    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
-    in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
+    const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName IN1_DFB{"in1"};
+    const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
+    const DFBSpecName OUT_DFB{"out"};
+    const DFBSpecName INTERM0_DFB{"intermed0"};
+    const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
+    const DFBSpecName BIAS_DFB{"bias"};
+    const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
 
-    std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        // READER
-        // in1 tensor args
-        (std::uint32_t)in1_tensor_stride_w,
-        (std::uint32_t)in1_tensor_stride_h,
-        (std::uint32_t)in1_tensor_next_block_stride,
-        (std::uint32_t)in1_tensor_next_w_dim_block_stride,
-        // in1 block args
-        (std::uint32_t)in1_block_w,                // in1_block_w
-        (std::uint32_t)in0_block_w,                // in1_block_h
-        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore_id,
-        (std::uint32_t)in1_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
-        (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
-        // batch args
-        (std::uint32_t)K * N,                              // KtNt
-        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
-        (std::uint32_t)bcast_batch,                        // bcast_B
-        // sparsity args
-        (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
+    const TensorParamName IN0{"in0"};
+    const TensorParamName IN1{"in1"};
+    const TensorParamName OUTPUT{"output"};
+    const TensorParamName BIAS{"bias"};
 
-        // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
-        // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        // batch args
-        (std::uint32_t)M * N  // MtNt
-    };
+    const SemaphoreSpecName SENDER_SEM{"in1_mcast_sender"};
+    const SemaphoreSpecName RECEIVER_SEM{"in1_mcast_receiver"};
 
-    if (bias_tensor.has_value()) {
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
-    } else {
-        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
+    // ------------------------------------------------------------------
+    // Compute-kernel derived sizes (unchanged from the legacy factory)
+    // ------------------------------------------------------------------
+    uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
+    uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
+    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
 
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
+    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
+    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
 
-    // Append TensorAccessorArgs
-    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for sparsity
-    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_sender_writer_compile_time_args);
-    if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_sender_writer_compile_time_args);
-    }
+    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
-        // READER
-        // in1 block args
-        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore_id,
-        (std::uint32_t)in1_mcast_receiver_semaphore_id,
-        // batch args
-        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch (must match in1 sender)
+    // See create_program_mcast_in0_artifacts: the fused bias add reads the partials buffer via SrcA,
+    // so when bias is present the reload copies through an alias view of the same SRAM that carries
+    // UnpackToDest, while the bias add keeps reading the partials buffer. The alias reaches the
+    // compute kernel as the MM_PARTIALS_RELOAD_ALIAS define plus its own binding.
+    const bool bias_reload_alias =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
 
-        // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
-        // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        // batch args
-        (std::uint32_t)M * N  // MtNt
-    };
-
-    if (bias_tensor.has_value()) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
-    } else {
-        in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
-    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
-    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
-
+    // ------------------------------------------------------------------
+    // Defines
+    // ------------------------------------------------------------------
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_defines;
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
@@ -4615,6 +4744,14 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
+    // in0_transpose_tile selects which buffer the compute kernel matmuls from; it arrives as a
+    // define because the in0_transposed buffer is only bound when the transpose is wanted.
+    if (in0_transpose_tile) {
+        mm_kernel_defines["IN0_TRANSPOSE_TILE"] = "1";
+    }
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
+    }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
@@ -4623,6 +4760,11 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
+        // Whether the sender extracts sub-blocks out of the resident shard selects which buffer it
+        // reads from, so it gates a binding and must be a define rather than a compile-time arg.
+        if (extract_shard_sub_blocks) {
+            mm_kernel_in0_sender_defines["EXTRACT_SHARD_SUB_BLOCKS"] = "1";
+        }
     }
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
@@ -4635,333 +4777,612 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 
-    // Intermediate CB read
-
-    // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
-    auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
-        KernelDescriptor::Defines result;
-        result.reserve(m.size());
-        for (const auto& [k, v] : m) {
-            result.emplace_back(k, v);
-        }
-        return result;
-    };
-
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build Kernel Descriptors
+    //                      Dataflow buffers
     ////////////////////////////////////////////////////////////////////////////
-    KernelDescriptor in0_sender_kernel_desc;
-    KernelDescriptor in1_sender_writer_kernel_desc;
-    KernelDescriptor in1_receiver_writer_kernel_desc;
-    bool has_in1_receiver_writer_kernel = false;
-    KernelDescriptor compute_kernel_desc;
+    const bool separate_out_and_interm0 = do_not_inplace_interm0_out_dfb ||
+                                          (interm0_data_format != output_data_format) ||
+                                          (untilize_out && (in1_num_subblocks > 1));
+    const uint32_t interm0_total_size = separate_out_and_interm0 ? interm0_dfb_size : out_dfb_size;
 
-    in0_sender_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp";
-    in0_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in0_sender_kernel_desc.core_ranges = all_cores;
-    in0_sender_kernel_desc.compile_time_args = in0_sender_compile_time_args;
-    in0_sender_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_defines);
-    in0_sender_kernel_desc.named_compile_time_args = {
-        {"cb_in0", tt::CBIndex::c_0},
-        {"cb_in0_sharded", tt::CBIndex::c_2},
-        {"cb_sparsity", tt::CBIndex::c_6},
-        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
-    };
-    in0_sender_kernel_desc.config =
-        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+    Group<DataflowBufferSpec> dataflow_buffers;
 
-    in1_sender_writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
-    in1_sender_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in1_sender_writer_kernel_desc.core_ranges = CoreRangeSet(in1_mcast_sender);
-    in1_sender_writer_kernel_desc.compile_time_args = in1_sender_writer_compile_time_args;
-    in1_sender_writer_kernel_desc.defines = map_to_defines(mm_kernel_in1_sender_writer_defines);
-    in1_sender_writer_kernel_desc.named_compile_time_args = {
-        {"cb_in1", tt::CBIndex::c_1},
-        {"cb_bias", tt::CBIndex::c_3},
-        {"cb_out", tt::CBIndex::c_4},
-        {"cb_sparsity", tt::CBIndex::c_7},
-        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
-    };
-    in1_sender_writer_kernel_desc.config =
-        DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
-
-    if (in1_mcast_receivers.num_cores() > 0) {
-        has_in1_receiver_writer_kernel = true;
-        in1_receiver_writer_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp";
-        in1_receiver_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        in1_receiver_writer_kernel_desc.core_ranges = in1_mcast_receivers;
-        in1_receiver_writer_kernel_desc.compile_time_args = in1_receiver_writer_compile_time_args;
-        in1_receiver_writer_kernel_desc.defines = map_to_defines(mm_kernel_in1_receiver_writer_defines);
-        in1_receiver_writer_kernel_desc.named_compile_time_args = {
-            {"cb_in1", tt::CBIndex::c_1},
-            {"cb_bias", tt::CBIndex::c_3},
-            {"cb_out", tt::CBIndex::c_4},
-        };
-        in1_receiver_writer_kernel_desc.config =
-            DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+    Group<DFBSpecName> alias_group;
+    if (!separate_out_and_interm0) {
+        alias_group.push_back(OUT_DFB);
     }
-
-    // Compute kernel compile time args
-    uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
-    uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
-
-    uint32_t in1_num_subblocks = (out_block_w / out_subblock_w);
-    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
-    uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
-
-    uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
-
-    std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
-
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
-
-        num_blocks,        // num_blocks
-        out_num_blocks_x,  // out_num_blocks_x
-        out_num_blocks_y,  // out_num_blocks_y
-
-        out_subblock_h,                   // out_subblock_h
-        out_subblock_w,                   // out_subblock_w
-        out_subblock_num_tiles,           // out_subblock_num_tiles
-        reuse_in0_in_CB ? in1_B : in0_B,  // batch
-        out_block_tiles,                  // out_block_num_tiles
-
-        untilize_out,  // untilize_out
-        false,         // get_batch_from_reader
-        in0_transpose_tile,
-    };
-    if (bias_tensor.has_value()) {
-        compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
-    }
-
-    compute_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_kernel_desc.core_ranges = all_cores;
-    compute_kernel_desc.compile_time_args = compute_kernel_args;
-    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
-    // See create_program_mcast_in0_descriptor: the fused bias add reads the partials CB via SrcA, so
-    // when bias is present the reload copies through cb_intermed0_alias (an UnpackToDestFp32 view of
-    // the same SRAM) while the bias add keeps reading cb_intermed0. The alias index reaches the compute
-    // kernel via the MM_PARTIALS_RELOAD_ALIAS_CB define, which selects the alias reload path there.
-    constexpr auto cb_intermed0_alias = tt::CBIndex::c_7;
-    const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    alias_group.push_back(INTERM0_DFB);
     if (bias_reload_alias) {
-        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS_CB"] = std::to_string(static_cast<uint32_t>(cb_intermed0_alias));
+        alias_group.push_back(INTERM0_ALIAS_DFB);
     }
-    compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
+    const bool has_alias_group = alias_group.size() > 1;
+    // Legacy put every shared index on ONE CBDescriptor whose single `tensor` field backed the whole
+    // region, so when the partials share the output's region and the output is sharded, they are
+    // backed by the output tensor too. The alias legality rule wants the same thing: either no member
+    // of a group borrows, or all of them borrow from the same TensorParameter.
+    const std::optional<TensorParamName> alias_group_borrow =
+        (!separate_out_and_interm0 && output_is_sharded) ? std::optional<TensorParamName>(OUTPUT) : std::nullopt;
+    auto alias_with_others = [&](const DFBSpecName& self) {
+        Group<DFBSpecName> others;
+        // A DFB that is not a member of the group aliases nothing. The output is exactly that case
+        // when it has its own region: filtering only `self` would hand it the partials as aliases
+        // while the partials never name it back, and the transitivity rule rejects a group whose
+        // members disagree on their membership.
+        const bool self_in_group = std::find(alias_group.begin(), alias_group.end(), self) != alias_group.end();
+        if (has_alias_group && self_in_group) {
+            for (const auto& name : alias_group) {
+                if (name != self) {
+                    others.push_back(name);
+                }
+            }
+        }
+        return others;
+    };
+
+    // in0. When in0 is sharded and the sender does NOT extract sub-blocks, the sender multicasts
+    // straight out of the resident shard, so this buffer is borrowed onto the in0 tensor.
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN0_DFB,
+        .entry_size = in0_aligned_tile_size,
+        .num_entries = in0_dfb_size / in0_aligned_tile_size,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+        .borrowed_from =
+            (in0_is_sharded && !extract_shard_sub_blocks) ? std::optional<TensorParamName>(IN0) : std::nullopt,
+    });
+
+    // in0 sharded: only present when the sender extracts sub-blocks out of the resident shard.
+    if (in0_is_sharded && extract_shard_sub_blocks) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN0_SHARDED_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = in2_dfb_size / in0_single_tile_size,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+            .borrowed_from = IN0,
+        });
+    }
+
+    // in1
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN1_DFB,
+        .entry_size = in1_aligned_tile_size,
+        .num_entries = in1_dfb_size / in1_aligned_tile_size,
+        .data_format_metadata = in1_data_format,
+        .tile_format_metadata = in1_tile,
+    });
+
+    // output
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_single_tile_size,
+        .num_entries = out_dfb_size / output_single_tile_size,
+        .data_format_metadata = output_data_format,
+        .tile_format_metadata = output_tile,
+        .borrowed_from = output_is_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
+        .advanced_options = {.alias_with = alias_with_others(OUT_DFB)},
+    });
+
+    // partials
+    dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INTERM0_DFB,
+        .entry_size = interm0_single_tile_size,
+        .num_entries = interm0_total_size / interm0_single_tile_size,
+        .data_format_metadata = interm0_data_format,
+        .tile_format_metadata = output_tile,
+        .borrowed_from = alias_group_borrow,
+        .advanced_options = {.alias_with = alias_with_others(INTERM0_DFB)},
+    });
+
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INTERM0_ALIAS_DFB,
+            .entry_size = interm0_single_tile_size,
+            .num_entries = interm0_total_size / interm0_single_tile_size,
+            .data_format_metadata = interm0_data_format,
+            .tile_format_metadata = output_tile,
+            .borrowed_from = alias_group_borrow,
+            .advanced_options = {.alias_with = alias_with_others(INTERM0_ALIAS_DFB)},
+        });
+    }
+
+    // bias
+    if (bias_tensor.has_value()) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = BIAS_DFB,
+            .entry_size = bias_aligned_tile_size,
+            .num_entries = in3_dfb_size / bias_aligned_tile_size,
+            .data_format_metadata = bias_data_format,
+            .tile_format_metadata = bias_tile,
+        });
+    }
+
+    // in0 transposed
+    if (in0_transpose_tile) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = IN0_TRANSPOSED_DFB,
+            .entry_size = in0_aligned_tile_size,
+            .num_entries = in0_dfb_size / in0_aligned_tile_size,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Semaphores
+    ////////////////////////////////////////////////////////////////////////////
+    Group<SemaphoreSpec> semaphores = {
+        SemaphoreSpec{.unique_id = SENDER_SEM, .target_nodes = all_cores},
+        SemaphoreSpec{.unique_id = RECEIVER_SEM, .target_nodes = all_cores},
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Kernels
+    ////////////////////////////////////////////////////////////////////////////
+    const auto in0_sender_hw_config =
+        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+    const auto in1_writer_hw_config =
+        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+
+    Group<KernelSpec> kernels;
+
+    // ---- in0 sender (runs on every core; the in0 multicast is skipped here) ----
     {
-        KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
-            {"cb_in0", tt::CBIndex::c_0},
-            {"cb_in1", tt::CBIndex::c_1},
-            {"cb_bias", tt::CBIndex::c_3},
-            {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", cb_intermed0},
-            {"cb_in0_transposed", tt::CBIndex::c_10},
+        KernelSpec in0_sender{
+            .unique_id = IN0_SENDER,
+            .source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in0_sender_padding_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in0_sender_defines),
+                },
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN0_DFB,
+                        .accessor_name = "in0",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                },
+            .semaphore_bindings =
+                {
+                    SemaphoreBinding{.semaphore_spec_name = SENDER_SEM, .accessor_name = "in0_mcast_sender"},
+                    SemaphoreBinding{.semaphore_spec_name = RECEIVER_SEM, .accessor_name = "in0_mcast_receiver"},
+                },
+            .compile_time_args =
+                {
+                    {"in0_tensor_stride_w", static_cast<uint32_t>(in0_tensor_stride_w)},
+                    {"in0_tensor_stride_h", static_cast<uint32_t>(in0_tensor_stride_h)},
+                    {"in0_tensor_next_inner_dim_block_stride", static_cast<uint32_t>(in0_tensor_next_block_stride)},
+                    {"in0_tensor_next_h_dim_block_stride", static_cast<uint32_t>(in0_tensor_next_h_dim_block_stride)},
+                    {"in0_block_w", in0_block_w},
+                    {"in0_block_h", in0_block_h},
+                    {"in0_block_num_tiles", in0_block_w * in0_block_h},
+                    {"in0_last_ktile_w", static_cast<uint32_t>(in0_last_ktile_w)},
+                    {"in0_last_ktile_h", static_cast<uint32_t>(in0_last_ktile_h)},
+                    {"shard_width_in_tiles", in0_shard_width_in_tiles},
+                    {"shard_height_in_tiles", in0_shard_height_in_tiles},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"in0_mcast_num_dests", 0u},
+                    {"in0_mcast_num_cores", 0u},
+                    {"MtKt", M * K},
+                    {"in0_B", in0_B},
+                    {"in1_B", in1_B},
+                    {"in0_reuse_in_dfb", static_cast<uint32_t>(reuse_in0_in_dfb)},
+                    {"batchB", 0u},
+                    {"bcast_A", 1u},
+                    {"get_batch_from_reader", 0u},
+                    {"num_active", 0u},
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names =
+                        {"in0_tensor_start_tile_id",
+                         "in0_mcast_dest_noc_start_x",
+                         "in0_mcast_dest_noc_start_y",
+                         "in0_mcast_dest_noc_end_x",
+                         "in0_mcast_dest_noc_end_y",
+                         "last_block_h"},
+                },
+            .hw_config = in0_sender_hw_config,
+        };
+        // The interleaved path reads in0 through an accessor; when in0 is sharded the data is
+        // already resident and reached through the borrowed buffer instead.
+        if (!in0_is_sharded) {
+            in0_sender.tensor_bindings = {
+                TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
+            };
+        }
+        if (in0_is_sharded && extract_shard_sub_blocks) {
+            // The resident shard is read through a raw pointer, never through the FIFO, so the one
+            // kernel that touches it carries both endpoints.
+            in0_sender.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = IN0_SHARDED_DFB,
+                .accessor_name = "in0_sharded",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            in0_sender.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = IN0_SHARDED_DFB,
+                .accessor_name = "in0_sharded",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        kernels.push_back(std::move(in0_sender));
+    }
+
+    // ---- in1 sender / output writer (start core only) ----------------------
+    {
+        KernelSpec in1_sender{
+            .unique_id = IN1_SENDER_WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in1_sender_writer_padding_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in1_sender_writer_defines),
+                },
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN1_DFB,
+                        .accessor_name = "in1",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = OUT_DFB,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .semaphore_bindings =
+                {
+                    SemaphoreBinding{.semaphore_spec_name = SENDER_SEM, .accessor_name = "in1_mcast_sender"},
+                    SemaphoreBinding{.semaphore_spec_name = RECEIVER_SEM, .accessor_name = "in1_mcast_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = IN1, .accessor_name = "in1"},
+                    TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"},
+                },
+            .compile_time_args =
+                {
+                    {"in1_tensor_stride_w", static_cast<uint32_t>(in1_tensor_stride_w)},
+                    {"in1_tensor_stride_h", static_cast<uint32_t>(in1_tensor_stride_h)},
+                    {"in1_tensor_next_block_stride", static_cast<uint32_t>(in1_tensor_next_block_stride)},
+                    {"in1_tensor_next_w_dim_block_stride", static_cast<uint32_t>(in1_tensor_next_w_dim_block_stride)},
+                    {"in1_block_w", in1_block_w},
+                    {"in1_block_h", in0_block_w},
+                    {"in1_block_num_tiles", in1_block_w * in0_block_w},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"in1_mcast_num_dests", num_cores - 1},
+                    {"in1_mcast_num_cores", in1_mcast_receiver_num_cores - 1},
+                    {"KtNt", K * N},
+                    {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+                    {"bcast_B", static_cast<uint32_t>(bcast_batch)},
+                    {"batchB", 0u},
+                    {"out_tensor_stride_w", 1u},
+                    {"out_tensor_stride_h", N},
+                    {"out_tensor_next_subblock_stride_w", out_subblock_w},
+                    {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
+                    {"out_tensor_next_w_dim_block_stride", out_block_w},
+                    {"out_tensor_next_h_dim_block_stride", out_block_h * N},
+                    {"out_subblock_w", out_subblock_w},
+                    {"out_subblock_h", out_subblock_h},
+                    {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
+                    {"MtNt", M * N},
+                    {"compact_output", 0u},
+                    {"num_active", 0u},
+                },
+            .hw_config = in1_writer_hw_config,
+        };
+
+        Group<std::string> in1_sender_rta_names = {
+            "in1_tensor_start_tile_id",
+            "in1_mcast_dest_noc_start_x",
+            "in1_mcast_dest_noc_start_y",
+            "in1_mcast_dest_noc_end_x",
+            "in1_mcast_dest_noc_end_y",
+            "out_tensor_start_tile_id",
+            "last_block_w",
+            "out_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (bias_tensor.has_value()) {
+            in1_sender.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BIAS_DFB,
+                .accessor_name = "bias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            in1_sender.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
+            in1_sender.compile_time_args.insert({"in3_tensor_stride_w", 1u});
+            in1_sender_rta_names.push_back("in3_tensor_start_tile_id");
+        }
+        if (!output_is_sharded) {
+            in1_sender_rta_names.push_back("last_num_blocks_w_dim");
+        }
+        in1_sender.runtime_arg_schema = {.runtime_arg_names = std::move(in1_sender_rta_names)};
+        kernels.push_back(std::move(in1_sender));
+    }
+
+    // ---- in1 receiver / output writer -------------------------------------
+    const bool has_in1_receiver_writer_kernel = in1_mcast_receivers.num_cores() > 0;
+    if (has_in1_receiver_writer_kernel) {
+        KernelSpec in1_receiver{
+            .unique_id = IN1_RECEIVER_WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_in1_receiver_writer_defines),
+                },
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN1_DFB,
+                        .accessor_name = "in1",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = OUT_DFB,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                },
+            .semaphore_bindings =
+                {
+                    SemaphoreBinding{.semaphore_spec_name = SENDER_SEM, .accessor_name = "in1_mcast_sender"},
+                    SemaphoreBinding{.semaphore_spec_name = RECEIVER_SEM, .accessor_name = "in1_mcast_receiver"},
+                },
+            .tensor_bindings =
+                {
+                    TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"},
+                },
+            .compile_time_args =
+                {
+                    {"in1_block_num_tiles", in1_block_w * in0_block_w},
+                    {"num_blocks_inner_dim", num_blocks},
+                    {"num_blocks_w_dim", out_num_blocks_x},
+                    {"num_blocks_h_dim", out_num_blocks_y},
+                    {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+                    {"out_tensor_stride_w", 1u},
+                    {"out_tensor_stride_h", N},
+                    {"out_tensor_next_subblock_stride_w", out_subblock_w},
+                    {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
+                    {"out_tensor_next_w_dim_block_stride", out_block_w},
+                    {"out_tensor_next_h_dim_block_stride", out_block_h * N},
+                    {"out_subblock_w", out_subblock_w},
+                    {"out_subblock_h", out_subblock_h},
+                    {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
+                    {"MtNt", M * N},
+                },
+            .hw_config = in1_writer_hw_config,
+        };
+
+        Group<std::string> in1_receiver_rta_names = {
+            "in1_mcast_sender_noc_x",
+            "in1_mcast_sender_noc_y",
+            "out_tensor_start_tile_id",
+            "out_num_nonzero_subblocks_h",
+            "out_last_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (bias_tensor.has_value()) {
+            in1_receiver.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BIAS_DFB,
+                .accessor_name = "bias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            in1_receiver.compile_time_args.insert({"in3_block_w", in1_block_w});
+        }
+        if (!output_is_sharded) {
+            in1_receiver_rta_names.push_back("last_num_blocks_h_dim");
+            in1_receiver_rta_names.push_back("last_num_blocks_w_dim");
+        }
+        in1_receiver.runtime_arg_schema = {.runtime_arg_names = std::move(in1_receiver_rta_names)};
+        kernels.push_back(std::move(in1_receiver));
+    }
+
+    // ---- compute ----------------------------------------------------------
+    {
+        auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+        // The legacy factory resolves dst_full_sync_en but never passes it to either descriptor
+        // builder, so the descriptor default applied and this op has always ignored the knob. Pin the
+        // legacy-default result rather than letting the TTNN helper hand the caller's value back.
+        // Preserved deliberately, not a fix.
+        double_buffer_dest(compute_hw) = true;
+
+        // See create_program_mcast_in0_artifacts for why the fp32 partials reload needs UnpackToDest,
+        // why the flag goes on the alias when bias is fused, and why every Float32 buffer this kernel
+        // consumes needs an entry -- not just the partials.
+        if (fp32_dest_acc_en) {
+            const DFBSpecName marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
+            const bool mark = interm0_data_format == tt::DataFormat::Float32;
+            auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
+                if (fmt != tt::DataFormat::Float32) {
+                    return;
+                }
+                unpack_modes(compute_hw).emplace(
+                    name,
+                    (mark && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                             : tt::tt_metal::UnpackMode::UnpackToSrc);
+            };
+            add_if_float32(IN0_DFB, in0_data_format);
+            add_if_float32(IN1_DFB, in1_data_format);
+            add_if_float32(INTERM0_DFB, interm0_data_format);
+            if (bias_reload_alias) {
+                add_if_float32(INTERM0_ALIAS_DFB, interm0_data_format);
+            }
+            if (bias_tensor.has_value()) {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
+            if (in0_transpose_tile) {
+                add_if_float32(IN0_TRANSPOSED_DFB, in0_data_format);
+            }
+        }
+
+        Group<DFBBinding> compute_dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = IN0_DFB,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+            DFBBinding{
+                .dfb_spec_name = IN1_DFB,
+                .accessor_name = "in1",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+            DFBBinding{
+                .dfb_spec_name = OUT_DFB,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            // The partials buffer is filled and re-read by this kernel alone.
+            DFBBinding{
+                .dfb_spec_name = INTERM0_DFB,
+                .accessor_name = "intermed0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = INTERM0_DFB,
+                .accessor_name = "intermed0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+        };
+        if (bias_reload_alias) {
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERM0_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERM0_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        if (bias_tensor.has_value()) {
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = BIAS_DFB,
+                .accessor_name = "bias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        if (in0_transpose_tile) {
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = IN0_TRANSPOSED_DFB,
+                .accessor_name = "in0_transposed",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute_dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = IN0_TRANSPOSED_DFB,
+                .accessor_name = "in0_transposed",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+
+        KernelSpec::CompileTimeArgs compute_cta = {
+            {"in0_block_w", in0_block_w},
+            {"in0_num_subblocks", in0_num_subblocks},
+            {"in0_block_num_tiles", in0_block_num_tiles},
+            {"in0_subblock_num_tiles", in0_subblock_num_tiles},
+            {"in1_num_subblocks", in1_num_subblocks},
+            {"in1_block_num_tiles", in1_block_num_tiles},
+            {"in1_block_w", in1_per_core_w},
+            {"num_blocks_inner_dim", num_blocks},
+            {"num_blocks_w_dim", out_num_blocks_x},
+            {"num_blocks_h_dim", out_num_blocks_y},
+            {"out_subblock_h", out_subblock_h},
+            {"out_subblock_w", out_subblock_w},
+            {"out_subblock_num_tiles", out_subblock_num_tiles},
+            {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+            {"out_block_num_tiles", out_block_tiles},
+            {"untilize_out", static_cast<uint32_t>(untilize_out)},
+            {"get_batch_from_reader", 0u},
             {"bias_ntiles", in1_per_core_w},
         };
+        if (bias_tensor.has_value()) {
+            // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles.
+            compute_cta.insert({"row_broadcast_bias", static_cast<uint32_t>(row_broadcast_bias ? 1u : 0u)});
+        }
         if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
             using ttnn::operations::matmul::utilities::get_activation_params;
             const auto params = get_activation_params(fused_activation.value());
-            named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
-            named_compile_args.push_back({"activation_param0", params.param0});
-            named_compile_args.push_back({"activation_param1", params.param1});
-            named_compile_args.push_back({"activation_param2", params.param2});
+            compute_cta.insert({"activation_type", static_cast<uint32_t>(params.type)});
+            compute_cta.insert({"activation_param0", params.param0});
+            compute_cta.insert({"activation_param1", params.param1});
+            compute_cta.insert({"activation_param2", params.param2});
         }
-        compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
+
+        kernels.push_back(KernelSpec{
+            .unique_id = COMPUTE,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
+                      "bmm_large_block_zm_fused_bias_activation_metal2.cpp",
+            .compiler_options =
+                {
+                    .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                    // A legacy ComputeConfigDescriptor with no opt_level resolves to O3; Metal 2.0's
+                    // CompilerOptions defaults to O2, so it has to be stated.
+                    .opt_level = KernelBuildOptLevel::O3,
+                },
+            .dfb_bindings = std::move(compute_dfb_bindings),
+            .compile_time_args = std::move(compute_cta),
+            .hw_config = compute_hw,
+        });
     }
-    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
-    // partials CB holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
-    // Unless the reload's CB view is marked UnpackToDestFp32, that reload is routed through SrcA and
-    // rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary
-    // and accuracy degrades as the number of K-blocks grows. The flag is set on the alias when bias
-    // forces a separate SrcA view of cb_intermed0 (see above), else on cb_intermed0 itself.
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        const uint32_t cb_to_mark =
-            bias_reload_alias ? static_cast<uint32_t>(cb_intermed0_alias) : static_cast<uint32_t>(cb_intermed0);
-        unpack_to_dest_mode[cb_to_mark] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-    compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Build CBDescriptors
+    //                      Work units
     ////////////////////////////////////////////////////////////////////////////
-    ProgramDescriptor desc;
-
-    tt::tt_metal::TileDescriptor in0_tile_desc{in0_tile};
-    tt::tt_metal::TileDescriptor in1_tile_desc{in1_tile};
-    tt::tt_metal::TileDescriptor bias_tile_desc{bias_tile};
-    tt::tt_metal::TileDescriptor output_tile_desc{output_tile};
-
-    // CB 0: in0
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_0,
-            .data_format = in0_data_format,
-            .page_size = in0_aligned_tile_size,
-            .tile = in0_tile_desc});
-        if (in0_is_sharded && !extract_shard_sub_blocks) {
-            cb_desc.tensor = &in0_tensor;
-        }
-        desc.cbs.push_back(std::move(cb_desc));
+    Group<WorkUnitSpec> work_units;
+    work_units.push_back(WorkUnitSpec{
+        .name = "in1_sender",
+        .kernels = {IN0_SENDER, IN1_SENDER_WRITER, COMPUTE},
+        .target_nodes = CoreRangeSet(in1_mcast_sender),
+    });
+    if (has_in1_receiver_writer_kernel) {
+        work_units.push_back(WorkUnitSpec{
+            .name = "in1_receivers",
+            .kernels = {IN0_SENDER, IN1_RECEIVER_WRITER, COMPUTE},
+            .target_nodes = in1_mcast_receivers,
+        });
     }
 
-    // CB 2: in0 sharded (only for extract_shard_sub_blocks)
-    if (in0_is_sharded && extract_shard_sub_blocks) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in2_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_2,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-            .tile = in0_tile_desc});
-        cb_desc.tensor = &in0_tensor;
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB 1: in1
-    {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in1_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_1,
-            .data_format = in1_data_format,
-            .page_size = in1_aligned_tile_size,
-            .tile = in1_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB 4 and CB 5: output and intermediate
-    if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
-        (untilize_out && (in1_num_subblocks > 1))) {
-        // Separate output and intermediate CBs
-        // output
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = out_CB_size;
-            cb_desc.core_ranges = all_cores;
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = tt::CBIndex::c_4,
-                .data_format = output_data_format,
-                .page_size = output_single_tile_size,
-                .tile = output_tile_desc});
-            if (output_is_sharded) {
-                cb_desc.tensor = &out_tensor;
-            }
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-        // interm0
-        {
-            CBDescriptor cb_desc;
-            cb_desc.total_size = interm0_CB_size;
-            cb_desc.core_ranges = CoreRangeSet({all_cores});
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = tt::CBIndex::c_5,
-                .data_format = interm0_data_format,
-                .page_size = interm0_single_tile_size,
-                .tile = output_tile_desc});
-            // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
-            if (bias_reload_alias) {
-                cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                    .buffer_index = cb_intermed0_alias,
-                    .data_format = interm0_data_format,
-                    .page_size = interm0_single_tile_size,
-                    .tile = output_tile_desc});
-            }
-            desc.cbs.push_back(std::move(cb_desc));
-        }
-    } else {
-        // share buffer
-        CBDescriptor cb_desc;
-        cb_desc.total_size = out_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_4,
-            .data_format = output_data_format,
-            .page_size = output_single_tile_size,
-            .tile = output_tile_desc});
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_5,
-            .data_format = interm0_data_format,
-            .page_size = interm0_single_tile_size,
-            .tile = output_tile_desc});
-        // Alias over the same SRAM, marked UnpackToDestFp32, for the bias reload (see above).
-        if (bias_reload_alias) {
-            cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-                .buffer_index = cb_intermed0_alias,
-                .data_format = interm0_data_format,
-                .page_size = interm0_single_tile_size,
-                .tile = output_tile_desc});
-        }
-        if (output_is_sharded) {
-            cb_desc.tensor = &out_tensor;
-        }
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // CB for bias
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Tensor parameters
+    ////////////////////////////////////////////////////////////////////////////
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = IN0, .spec = in0_tensor.tensor_spec()},
+        TensorParameter{.unique_id = IN1, .spec = in1_tensor.tensor_spec()},
+        TensorParameter{.unique_id = OUTPUT, .spec = out_tensor.tensor_spec()},
+    };
     if (bias_tensor.has_value()) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in3_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_3,
-            .data_format = bias_data_format,
-            .page_size = bias_aligned_tile_size,
-            .tile = bias_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-
-    // Intermediate CB read
-
-    if (in0_transpose_tile) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_CB_size;
-        cb_desc.core_ranges = all_cores;
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_10,
-            .data_format = in0_data_format,
-            .page_size = in0_aligned_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
+        tensor_parameters.push_back(TensorParameter{.unique_id = BIAS, .spec = bias_tensor->tensor_spec()});
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Semaphore Descriptors
-    ////////////////////////////////////////////////////////////////////////////
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in1_mcast_sender_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in1_mcast_receiver_semaphore_id, .core_ranges = all_cores, .initial_value = INVALID});
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Runtime Args (per-core loop)
+    //                      Runtime args (per-core loop)
     ////////////////////////////////////////////////////////////////////////////
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
@@ -4974,11 +5395,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     // W-dim padding parameters for the last block in X. Mirrors the mcast_in0
-    // factory (see `process_mcast_in0_program_and_create_override_variables`).
-    // Without these, the receiver-writer emits full per_core_N-wide writes for
-    // the last X block even when N is not divisible by per_core_N, sending
-    // pages past the tensor's logical extent and producing OOB writes past the
-    // L1 allocation on the far banks.
+    // factory. Without these, the receiver-writer emits full per_core_N-wide
+    // writes for the last X block even when N is not divisible by per_core_N,
+    // sending pages past the tensor's logical extent and producing OOB writes
+    // past the L1 allocation on the far banks.
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
     uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
@@ -4996,155 +5416,125 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         std::swap(start_core_noc, end_core_noc);
     }
 
+    KernelRunArgs in0_sender_run_args{.kernel = IN0_SENDER};
+    KernelRunArgs in1_sender_run_args{.kernel = IN1_SENDER_WRITER};
+    KernelRunArgs in1_receiver_run_args{.kernel = IN1_RECEIVER_WRITER};
+
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t output_idx_x = i / num_blocks_y;
         uint32_t output_idx_y = i % num_blocks_y;
 
+        // The sender can independently be the last block in either dimension.
+        const bool last_y = (output_idx_y == num_blocks_y - 1);
+        const bool last_x = (output_idx_x == num_blocks_x - 1);
+
         // in0 sender and in1 sender
         if (core == start_core) {
-            // The sender can independently be the last block in either dimension.
-            bool last_y = (output_idx_y == num_blocks_y - 1);
-            bool last_x = (output_idx_x == num_blocks_x - 1);
-            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_sender_writer_args = {
-                // READER
-                // in1 tensor args
-                in1_tensor,
-                (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
-                // in1 mcast args
-                (std::uint32_t)start_core_noc.x,  // in1_mcast_dest_noc_start_x
-                (std::uint32_t)start_core_noc.y,  // in1_mcast_dest_noc_start_y
-                (std::uint32_t)end_core_noc.x,    // in1_mcast_dest_noc_end_x
-                (std::uint32_t)end_core_noc.y,    // in1_mcast_dest_noc_end_y
-
-                // sparsity args
-                (std::uint32_t)0,  // sparsity_addr
-
-                // WRITER
-                // out tensor args
-                out_tensor,
-                ((std::uint32_t)output_idx_x * per_core_N) +
-                    (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
-
-                // padding args (READER)
-                (std::uint32_t)(last_x ? last_out_block_w : out_block_w),  // last_block_w
-                // padding args (WRITER)
-                (std::uint32_t)(last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h),
-                (std::uint32_t)(last_y ? last_subblock_of_last_block_h : out_subblock_h),
-                (std::uint32_t)(last_y ? last_block_padded_block_tiles_h_skip : 0),
-                (std::uint32_t)out_block_w / out_subblock_w,
-                (std::uint32_t)(last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w),
-                (std::uint32_t)(last_x ? last_subblock_of_last_block_w : out_subblock_w),
-                (std::uint32_t)(last_x ? last_block_padded_subblock_tiles_addr_skip : 0),
-                (std::uint32_t)(last_x ? last_block_padded_block_tiles_w_skip : 0)};
-
+            AddRuntimeArgsForNode(
+                in1_sender_run_args.runtime_arg_values,
+                core,
+                {{"in1_tensor_start_tile_id", static_cast<uint32_t>(in1_tensor_start_tile_id_stride * output_idx_x)},
+                 {"in1_mcast_dest_noc_start_x", static_cast<uint32_t>(start_core_noc.x)},
+                 {"in1_mcast_dest_noc_start_y", static_cast<uint32_t>(start_core_noc.y)},
+                 {"in1_mcast_dest_noc_end_x", static_cast<uint32_t>(end_core_noc.x)},
+                 {"in1_mcast_dest_noc_end_y", static_cast<uint32_t>(end_core_noc.y)},
+                 {"out_tensor_start_tile_id", (output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                 // padding args (READER)
+                 {"last_block_w", last_x ? last_out_block_w : out_block_w},
+                 // padding args (WRITER)
+                 {"out_num_nonzero_subblocks_h",
+                  last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h},
+                 {"out_last_subblock_h", last_y ? last_subblock_of_last_block_h : out_subblock_h},
+                 {"padded_block_tiles_h_skip", last_y ? last_block_padded_block_tiles_h_skip : 0u},
+                 {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                 {"out_last_num_nonzero_subblocks_w",
+                  last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
+                 {"out_last_subblock_w", last_x ? last_subblock_of_last_block_w : out_subblock_w},
+                 {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u},
+                 {"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u}});
             if (bias_tensor.has_value()) {
-                mm_in1_sender_writer_args.push_back(*bias_tensor);
-                mm_in1_sender_writer_args.push_back(
-                    (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
-            } else {
-                mm_in1_sender_writer_args.push_back(0u);
-                mm_in1_sender_writer_args.push_back(0u);
+                in1_sender_run_args.runtime_arg_values["in3_tensor_start_tile_id"][core] = per_core_N * output_idx_x;
             }
             if (!output_is_sharded) {
-                mm_in1_sender_writer_args.push_back(last_x ? last_out_num_blocks_w : out_num_blocks_x);
-            }
-
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_sender_variant(
-                    mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
-                in1_sender_variant[0] = in1_tensor;
-                in1_sender_variant[7] = out_tensor;
-                if (bias_tensor.has_value()) {
-                    in1_sender_variant[18] = *bias_tensor;
-                }
-                in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
+                in1_sender_run_args.runtime_arg_values["last_num_blocks_w_dim"][core] =
+                    last_x ? last_out_num_blocks_w : out_num_blocks_x;
             }
         }
         // in0 sender and in1 receiver
         else {
-            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in1_receiver_writer_args =
-                {
-                    // READER
-                    // in1 mcast args
-                    (std::uint32_t)top_left_core_physical.x,  // in1_mcast_sender_noc_x
-                    (std::uint32_t)top_left_core_physical.y,  // in1_mcast_sender_noc_y
-
-                    // WRITER
-                    // out tensor args
-                    out_tensor,  // out_tensor_addr
-                    ((std::uint32_t)output_idx_x * per_core_N) +
-                        (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
-                };
-
-            {
-                // padding args (WRITER): H-dim tail depends on output_idx_y ==
-                // num_blocks_y - 1; W-dim tail depends on output_idx_x ==
-                // num_blocks_x - 1. The two dimensions are independent.
-                bool last_y = (output_idx_y == num_blocks_y - 1);
-                bool last_x = (output_idx_x == num_blocks_x - 1);
-                mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(
-                    last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(last_y ? last_subblock_of_last_block_h : out_subblock_h);
-                mm_in1_receiver_writer_args.push_back(last_y ? last_block_padded_block_tiles_h_skip : 0);
-                mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(
-                    last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(last_x ? last_subblock_of_last_block_w : out_subblock_w);
-                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_subblock_tiles_addr_skip : 0u);
-                mm_in1_receiver_writer_args.push_back(last_x ? last_block_padded_block_tiles_w_skip : 0u);
-            }
+            // padding args (WRITER): H-dim tail depends on output_idx_y == num_blocks_y - 1;
+            // W-dim tail depends on output_idx_x == num_blocks_x - 1. The two dimensions are
+            // independent.
+            AddRuntimeArgsForNode(
+                in1_receiver_run_args.runtime_arg_values,
+                core,
+                {{"in1_mcast_sender_noc_x", static_cast<uint32_t>(top_left_core_physical.x)},
+                 {"in1_mcast_sender_noc_y", static_cast<uint32_t>(top_left_core_physical.y)},
+                 {"out_tensor_start_tile_id", (output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
+                 {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                 {"out_last_num_nonzero_subblocks_h",
+                  last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h},
+                 {"out_last_subblock_h", last_y ? last_subblock_of_last_block_h : out_subblock_h},
+                 {"padded_block_tiles_h_skip", last_y ? last_block_padded_block_tiles_h_skip : 0u},
+                 {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                 {"out_last_num_nonzero_subblocks_w",
+                  last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
+                 {"out_last_subblock_w", last_x ? last_subblock_of_last_block_w : out_subblock_w},
+                 {"padded_subblock_tiles_addr_skip", last_x ? last_block_padded_subblock_tiles_addr_skip : 0u},
+                 {"padded_block_tiles_w_skip", last_x ? last_block_padded_block_tiles_w_skip : 0u}});
             if (!output_is_sharded) {
-                mm_in1_receiver_writer_args.push_back(
-                    output_idx_y == num_blocks_y - 1 ? last_out_num_blocks_h : out_num_blocks_y);
-                mm_in1_receiver_writer_args.push_back(
-                    output_idx_x == num_blocks_x - 1 ? last_out_num_blocks_w : out_num_blocks_x);
-            }
-
-            {
-                std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_recv_variant(
-                    mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
-                in1_recv_variant[2] = out_tensor;
-                in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
+                in1_receiver_run_args.runtime_arg_values["last_num_blocks_h_dim"][core] =
+                    last_y ? last_out_num_blocks_h : out_num_blocks_y;
+                in1_receiver_run_args.runtime_arg_values["last_num_blocks_w_dim"][core] =
+                    last_x ? last_out_num_blocks_w : out_num_blocks_x;
             }
         }
-        std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> mm_in0_sender_args = {
-            // in0 tensor args
-            in0_tensor,
-            (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
-            // in0 mcast args
-            (std::uint32_t)0,  // in0_mcast_dest_noc_start_x
-            (std::uint32_t)0,  // in0_mcast_dest_noc_start_y
-            (std::uint32_t)0,  // in0_mcast_dest_noc_end_x
-            (std::uint32_t)0,  // in0_mcast_dest_noc_end_y
 
-            // padding args
-            (std::uint32_t)per_core_M,  // last_block_h
-
-            // sparsity args
-            (std::uint32_t)0,  // sparsity_addr
-        };
-        {
-            std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
-                mm_in0_sender_args.begin(), mm_in0_sender_args.end());
-            in0_sender_variant[0] = in0_tensor;
-            in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
-        }
+        AddRuntimeArgsForNode(
+            in0_sender_run_args.runtime_arg_values,
+            core,
+            {{"in0_tensor_start_tile_id", static_cast<uint32_t>(in0_tensor_start_tile_id_stride * output_idx_y)},
+             {"in0_mcast_dest_noc_start_x", 0u},
+             {"in0_mcast_dest_noc_start_y", 0u},
+             {"in0_mcast_dest_noc_end_x", 0u},
+             {"in0_mcast_dest_noc_end_y", 0u},
+             {"last_block_h", per_core_M}});
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Push kernels to descriptor
+    //                      Assemble
     ////////////////////////////////////////////////////////////////////////////
-    desc.kernels.push_back(std::move(in0_sender_kernel_desc));
-    desc.kernels.push_back(std::move(in1_sender_writer_kernel_desc));
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(in0_sender_run_args));
+    run_args.kernel_run_args.push_back(std::move(in1_sender_run_args));
     if (has_in1_receiver_writer_kernel) {
-        desc.kernels.push_back(std::move(in1_receiver_writer_kernel_desc));
+        run_args.kernel_run_args.push_back(std::move(in1_receiver_run_args));
     }
-    desc.kernels.push_back(std::move(compute_kernel_desc));
 
-    return desc;
+    run_args.tensor_args = {
+        {IN0, in0_tensor},
+        {IN1, in1_tensor},
+        {OUTPUT, out_tensor},
+    };
+    if (bias_tensor.has_value()) {
+        run_args.tensor_args.emplace(BIAS, *bias_tensor);
+    }
+
+    ProgramSpec spec{
+        .name = "matmul_multi_core_reuse_mcast_1d_in1",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace reuse_mcast_1d_optimized_helpers
@@ -5489,11 +5879,10 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
         shared_variables, operation_attributes.global_cb, program, tensor_args, tensor_return_value);
 }
 
-ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     using namespace tt;
     using namespace operations::matmul::utilities;
 
@@ -5522,7 +5911,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     auto mcast_in0 = program_config.mcast_in0;
     auto gather_in0 = program_config.gather_in0;
 
-    TT_FATAL(!gather_in0, "create_descriptor does not support gather_in0 mode");
+    TT_FATAL(!gather_in0, "create_program_artifacts does not support gather_in0 mode");
 
     TT_FATAL(
         operation_attributes.compute_kernel_config.has_value(),
@@ -5538,7 +5927,7 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     // cannot use the output tensor tile directly as that might be changed by user override
     const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
-    // CB dataformats
+    // Buffer dataformats
     const MeshTensor& in0_tensor = a.mesh_tensor();
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(in0_tensor.dtype());
     const MeshTensor& in1_tensor = b.mesh_tensor();
@@ -5570,8 +5959,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     if (!program_config.allowed_worker_cores.has_value()) {
         log_warning(
             tt::LogOp,
-            "MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor: program_config.allowed_worker_cores not "
-            "populated; auto-populating from compute_with_storage_grid_size. Callers that bypass "
+            "MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts: program_config.allowed_worker_cores "
+            "not populated; auto-populating from compute_with_storage_grid_size. Callers that bypass "
             "ttnn::prim::matmul() should invoke ttnn::operations::matmul::normalize_program_config() on the "
             "program config first. This will become a hard error in a future release.");
         program_config.allowed_worker_cores = CoreRangeSet(CoreRange(
@@ -5609,15 +5998,14 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> fused_op_signaler = std::nullopt;
 
     if (mcast_in0) {
-        return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0_descriptor(
+        return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0_artifacts(
             a,
             device,
-            math_fidelity,
             fp32_dest_acc_en,
-            math_approx_mode,
             packer_l1_acc,
             grid_size,
             ttnn::get_throttle_level(compute_kernel_config),
+            compute_kernel_config,
             in0_B,
             in1_B,
             Mt,
@@ -5655,15 +6043,14 @@ ProgramDescriptor MatmulMultiCoreReuseMcast1DProgramFactory::create_descriptor(
             fused_matmul_bias_row_broadcastable(bias),
             sub_device_start_core);
     }
-    return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_descriptor(
+    return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1_artifacts(
         a,
         device,
-        math_fidelity,
         fp32_dest_acc_en,
-        math_approx_mode,
         packer_l1_acc,
         grid_size,
         ttnn::get_throttle_level(compute_kernel_config),
+        compute_kernel_config,
         in0_B,
         in1_B,
         Mt,

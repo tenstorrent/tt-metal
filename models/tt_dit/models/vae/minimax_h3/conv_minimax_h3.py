@@ -75,7 +75,6 @@ _H3_ENCODER_BLOCKINGS = {
 _H3_BLOCKING_ENTRIES = {
     (in_c, out_c, kernel): blocking
     for (in_c, out_c), blocking in _H3_ENCODER_BLOCKINGS.items()
-    # kernel (1, 1, 1) is deliberately absent here; the k1 shortcuts get their own entries below.
     for kernel in ((3, 3, 3), (1, 3, 3))
 }
 
@@ -87,24 +86,9 @@ register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 for _key, _blocking in _H3_BLOCKING_ENTRIES.items():
     _FP32_BLOCKINGS.setdefault(_key, _blocking)
 
-# k1 shortcut convs, **bf16 only**. These were originally left on the fallback on the
-# assumption that a 1x1x1 conv is a matmul and cheap either way -- false at block1's
-# resolution, where the (32, 32, 1, 1, 1) fallback forces one output pixel of M per work
-# unit: 182 ms measured under trace against ~0.95 ms here, and 36 ms inside the eager
-# encoder. Swept with T_out_block ranging (the stock combo builder pins T to 1 for kT = 1
-# kernels, which is how the shape was missed), then **correctness-checked against torch
-# conv3d** -- which the sweep does not do, and which matters: the raw sweep winner
-# (128, 256, 17, 2, 8) is marginally faster but SILENTLY WRONG (PCC 0.4% at T = 17, NaN at
-# T = 1; its 17 * 2 * 8 = 272-patch M block is not tile-aligned). This entry is the fastest
-# blocking that scores PCC 99.999% at both shapes the encoder runs it at, T = 17 (clip,
-# 0.95 ms) and T = 1 (keyframe, 0.32 ms vs the fallback's 10.4 ms): M = 16 * 1 * 32 = 512
-# patches, exactly 16 tiles, whole 128-channel K in one block.
-#
-# Deliberately NOT seeded into _FP32_BLOCKINGS: the k1 sweep and the correctness check ran
-# bf16 alone, and a k1 sweep blocking at fp32 (doubled circular buffers) hung the device --
-# fp32 keeps the default it always had. The b3/b5 shortcuts also keep the default
-# everywhere: at 32^2 and 16^2 spatial they measure 1-2 ms and are not worth a table row.
-register_conv3d_configs({(128, 256, (1, 1, 1)): (128, 256, 16, 1, 32)})  # b1_res0 conv_shortcut
+# b1_res0 k1 conv_shortcut, bf16 only (the fallback is ~190x slower; an fp32 k1 blocking hung the device).
+# The M block must stay tile-aligned: faster non-aligned sweep winners are silently wrong.
+register_conv3d_configs({(128, 256, (1, 1, 1)): (128, 256, 16, 1, 32)})
 
 
 class MiniMaxH3CausalConv3d(Module):
@@ -175,11 +159,6 @@ class MiniMaxH3CausalConv3d(Module):
         # sharded, so this stays a local concat of zeros.
         self.time_pad = 0 if self.collapse_temporal else self.kernel_size[0] - 1
 
-        # ``pixel_norm`` folds `(x/255 - mean)/std` into this conv (see _prepare_torch_state),
-        # so the input is the decoder's raw uint8 pixels as floats. The causal front-pad must
-        # then carry the raw value that normalizes to ZERO -- `255 * mean` per channel -- or
-        # the first output frame of every clip diverges from the reference's zero-padded
-        # normalized input. taps=1 collapses the pad away, so keyframes never hit this.
         self.pixel_norm = pixel_norm
         self.causal_pad_values: tuple[float, ...] | None = None
         if pixel_norm is not None:
@@ -264,12 +243,6 @@ class MiniMaxH3CausalConv3d(Module):
             weight = weight[:, :, -1:].contiguous()
 
         if self.pixel_norm is not None:
-            # Fold `(x/255 - mean)/std` into the weight and bias, so raw uint8 pixels (as
-            # floats) enter this conv directly: `conv((ax + d)) = conv_scaled(x) + bias_shift`
-            # with per-channel `a = 1/(255 std)`, `d = -mean/std`. AFTER the collapse slice,
-            # because the bias shift sums `W * d` over exactly the taps this conv applies --
-            # a taps=1 keyframe conv must not carry the two sliced-away taps' shift. The
-            # taps=3 causal front-pad is handled by `causal_pad_values` above.
             mean, std = self.pixel_norm
             scale = torch.tensor([1.0 / (255.0 * s) for s in std], dtype=weight.dtype).view(1, -1, 1, 1, 1)
             shift = torch.tensor([-m / s for m, s in zip(mean, std)], dtype=weight.dtype).view(1, -1, 1, 1, 1)
@@ -377,9 +350,7 @@ def causal_pad_t(
 ) -> ttnn.Tensor:
     """Prepend ``pad`` constant frames on T. Nothing is appended -- that is the causality.
 
-    ``values`` is the per-channel fill, zeros by default; a pixel-norm-folded ``conv_in``
-    passes ``255 * mean`` so the pad normalizes to the reference's zero (channels past
-    ``len(values)`` -- the tile-alignment pad -- stay zero, their weights are zero anyway).
+    ``values`` is the per-channel fill (zeros by default).
 
     ``cache`` holds the block across calls. Without it this allocates and **writes**
     a fresh tensor on every convolution -- 34 MB at block 0, thirteen times per unit --

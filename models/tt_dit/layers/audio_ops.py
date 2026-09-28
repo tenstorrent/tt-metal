@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Sequence
 
 import torch
@@ -19,6 +18,7 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.matmul import log_warning
 from ..utils.tap_filter_configs import (
     applicable_formulations,
     format_formulation_row,
@@ -32,21 +32,9 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
-# TODO: Cleanup and centralize logging.
 # Dedup noisy construction / fallback warnings across every call in this process.
 _ONCE_WARNINGS: set = set()
 _TAP_WARNED = _ONCE_WARNINGS  # name used by tests/unit/test_audio_tap_path.py
-_ENABLE_MM_LOG = os.environ.get("TT_DIT_ENABLE_MM_LOG", "true").lower() in ("1", "true")
-
-
-def log_warning(message):
-    if _ENABLE_MM_LOG:
-        logger.warning(message)
-
-
-def log_info(message):
-    if _ENABLE_MM_LOG:
-        logger.info(message)
 
 
 def _warn_once(key, message: str) -> None:
@@ -476,7 +464,6 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         try:
             out = run(formulation, slice_config)
         except RuntimeError as exc:
-            # Message only: to prevent desynchronisation of the ranks' allocators on a multi-host mesh.
             reason = str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__
             last_exc = RuntimeError(f"tap filter: {formulation!r} failed at {shape}: {reason}")
             del exc
@@ -488,9 +475,6 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
                 )
             continue
         cache[shape_key] = (formulation, slice_config)
-        # logger.debug(
-        #     f"tap filter plan: {shape} -> {formulation!r} / {slice_signature(slice_config) or 'auto'} ({source})"
-        # )
         if source == "trial":
             if formulation == "mac":
                 _warn_once(
@@ -712,7 +696,7 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
     return ttnn.concat(pieces, dim=1)
 
 
-def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache, *, tight_t_align=False):
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
     """Cached T-sharded validity mask ``M`` (1.0 real, 0.0 on trailing ``tpad_image`` rows) and its complement ``inv``."""
     key = (global_T, tpad_image, dtype)
     cached = cache.get(key)
@@ -1360,7 +1344,6 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tight_t_align: bool = False,
         polyphase: bool = False,
     ) -> None:
         super().__init__()
@@ -1373,7 +1356,6 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        self.tight_t_align = tight_t_align
         # Polyphase: a stride-1 "same" conv with s*out_channels outputs and K' taps over the UNSTUFFED rows, whose
         # (T, s*out) rows reshape to (s*T, out); the packed weight is read off the transposed conv's impulse responses.
         self.polyphase = polyphase
