@@ -130,16 +130,18 @@ def resume_point(ledger: Ledger) -> str | None:
 
 
 def rerun_from(ledger: Ledger, tid: str) -> list[str]:
-    """Mark tid and everything downstream TODO; earlier steps keep their verdicts."""
-    tids = ledger.downstream(tid)
+    """Mark tid and everything downstream TODO; earlier steps keep their verdicts. A downstream task deferred to op-gen
+    stays DEFERRED (an upstream change does not deliver its op); name it with --from to redo it."""
+    state = ledger.state()
+    tids = [t for t in ledger.downstream(tid) if t == tid or state.get(t, {}).get("status") != "DEFERRED"]
     ledger.reset(tids)
     return tids
 
 
 def fork(spec: Spec, ledger: Ledger, tid: str, name: str) -> Spec:
     """New branch + worktree at tid's passing commit, a spec copy pointing at it, downstream verdicts reset."""
-    if ledger.status(tid) != "PASS":
-        raise RuntimeError(f"can only fork from a passed task; {tid} is {ledger.status(tid)}")
+    if ledger.status(tid) not in ("PASS", "DEFERRED"):
+        raise RuntimeError(f"can only fork from a passed task (or a deferred one); {tid} is {ledger.status(tid)}")
     sha = task_commit(spec, tid)
     if not sha:
         raise RuntimeError(f"no commit tagged [{spec.tag}][{tid}]")

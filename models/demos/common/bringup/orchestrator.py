@@ -16,13 +16,20 @@ Per task:
                                                            (TTNN only) with the WIP sha, logs and triage; other roles
                                                            (reference, plan, contract, test): STOPPED for a person
   still failing                                            the task becomes STOPPED and the run stops (exit 1)
+  deferral (F46; component tasks, implement role only)     an implement attempt whose gate fails but which wrote a
+                                                           valid op request (plan/op_request.py check) makes the task
+                                                           DEFERRED: the request and the bridge wiring are committed,
+                                                           dependents run, the step stays on the CPU bridge. A rejected
+                                                           request is a failed attempt. After the debugger's attempts,
+                                                           one last implement attempt may still defer instead of STOPPED
   approval needed (plan) or opportunity list written       the run stops for a person (exit 3)
 
 After every agent step: the tree diff must stay inside the paths the brief allowed, no command may reach the device
 except through the safe runners, and the knowledge files must keep their format. A violation fails the attempt.
 Each agent run is recorded in state.json under the task: role, attempt, session id, model, agent-definition hashes.
 
-BRINGUP_AGENT_CMD replaces the ``claude`` executable (tests use a mock agent). Exit codes: 0 done, 1 stopped on a
+BRINGUP_AGENT_CMD replaces the ``claude`` executable (tests use a mock agent). Exit codes: 0 done (possibly "complete
+with N deferred": those steps run on the CPU until op-gen delivers their ops; ``op-ready`` brings them in), 1 stopped on a
 failure (including a box that fails at device open: reset it, then resume), 3 waiting for a person, 4 paused
 (``pause`` asks a running orchestrator to stop before its next task; edit the framework only while paused).
 """
@@ -47,16 +54,19 @@ from models.demos.common.bringup.core.gate import (
     _is_direct_pytest,
     _program,
     _segments,
+    format_paths,
     git_commit,
     log_dir,
     run_gate,
     run_name,
+    stage_paths,
 )
-from models.demos.common.bringup.core.ledger import Ledger
+from models.demos.common.bringup.core.ledger import Ledger, satisfied
 from models.demos.common.bringup.core.runs import FreezeError, agent_hashes, freeze_task
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.plan import approvals
+from models.demos.common.bringup.plan import op_request as OR
 
 HERE = Path(__file__).resolve().parent
 AGENT_DEF = HERE / "agents" / "bringup-engineer.md"
@@ -67,7 +77,9 @@ DEBUGGER_DEF = CODE_ROOT / ".claude" / "agents" / f"{DEBUGGER}.md"
 # Everything else (reference, plan, contract, test, fix after a CPU gate) stops for a person with the logs.
 # The spec overrides per role: agents.policy.<role>: {attempts, escalate: debugger | stop, debugger_attempts}.
 DEFAULT_POLICY = {
-    "implement": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
+    # defer_after_debugger: once the debugger is out of attempts, one last implement attempt may defer a component
+    # step to op-gen (F46) instead of stopping.
+    "implement": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3, "defer_after_debugger": True},
     "fix": {"attempts": 3, "escalate": "debugger", "debugger_attempts": 3},
     "reference": {"attempts": 3, "escalate": "stop"},
     "plan": {"attempts": 3, "escalate": "stop"},
@@ -342,10 +354,14 @@ class Orchestrator:
         if task.get("step") == "contract":
             extra.append(CONTRACT_SHARED)  # the engine's producer and registry learn each new model's layout
         extra.append(BRINGUP_OPS)
+        if role == "implement" and OR.deferrable(task):
+            extra.append(rel(self.spec, OR.root(self.spec)))  # an op request, if the agent defers the step (F46)
         return list(task.get("paths") or []) + extra + self.common_paths()
 
     # ---- briefs
-    def brief(self, task: dict, role: str, attempt: int, previous: str = "", extra_read: list[str] = ()) -> Path:
+    def brief(
+        self, task: dict, role: str, attempt: int, previous: str = "", extra_read: list[str] = (), defer: bool = True
+    ) -> Path:
         s, b = self.spec, self.spec.bringup_dir
         brief = task.get("brief") or {}
         comp = self._component_entry(brief)
@@ -379,6 +395,9 @@ class Orchestrator:
             "repo": str(s.repo),
             "breadcrumbs": f"{rel(s, b)}/BREADCRUMBS.md",
         }
+        can_defer = defer and role == "implement" and OR.deferrable(task)  # never the debugger (it cannot defer)
+        vals["defer"] = self.defer_text(task, comp, vals) if can_defer else ""
+        vals["deferred"] = self.deferred_text()
         vals["role_text"] = Template(self.roles[role]).safe_substitute(vals)
         # spec agents.read.<role>: files every brief of that role lists (e.g. the HF modeling code for the reference role)
         reads = list(task.get("tests") or []) + list(extra_read) + list(brief.get("read") or [])
@@ -404,10 +423,96 @@ class Orchestrator:
             "\n".join(f"- `{k}` {v}" for k, v in (task["gate"].get("metrics") or {}).items()) or "- (exit code only)"
         )
         vals["previous"] = f"## Previous attempt failed\n```\n{previous[-6000:]}\n```\n" if previous else ""
+
         text = Template((HERE / "briefs" / "brief.md").read_text()).safe_substitute(vals)
         p = self.run_dir / "briefs" / f"{task['id']}.{role}.{attempt}.md"
         p.write_text(text)
         return p
+
+    def defer_text(self, task: dict, comp: dict | None, vals: dict) -> str:
+        """How an implement agent defers a component step to op-gen (F46); the plan's OPGEN tag makes it the task."""
+        head = (
+            "The plan tagged this step OPGEN (components entry above): TTNN has no proper op for it. Do not implement "
+            "it on the device; defer it from the start, as below. The plan's `searched` is where your evidence starts."
+            if comp and comp.get("tag") == "OPGEN"
+            else "If TTNN has no proper op for this step (no fork of an existing op fits and no composition of TTNN ops "
+            "works), you may defer it instead of implementing it, on any attempt. Deferring to skip a hard step is "
+            "cheating: the overseer reviews every deferral like a gate commit and reverts a thin one."
+        )
+        cmd = "python -m models.demos.common.bringup.plan.op_request"
+        return (
+            f"## Deferring this step to op-gen\n{head}\n\n"
+            f"1. `{cmd} new <op> --task {task['id']} --spec {vals['spec_path']}` writes "
+            f"`{vals['bringup_dir']}/{OR.REQUESTS}/<op>/` (one snake_case op name): request.yaml, op_prompt.txt, "
+            "feature_spec.py, reference.py, bind.py, with the shapes, tolerance and acceptance test filled in.\n"
+            f"2. Replace every `{OR.MARK}` marker. request.yaml `evidence`: `searched` (the repo map rows and greps you "
+            "checked), `tried` (each op, composition or fork you tried, with the gate or test outcome quoted), "
+            '`why_not_fork`. op_prompt.txt: the math, the signature, and `## Rules` lines ("When X: MUST / MUST NOT '
+            '..."). reference.py: `pytorch_<op>`, the step as standalone pure torch (no model imports). bind.py: the '
+            "layer's weights and scalars it takes beyond the step's inputs (list them in request.yaml too). Set each "
+            f"tensor's mesh `placement` in request.yaml, then `{cmd} refresh <dir> --spec {vals['spec_path']}`.\n"
+            f"3. `{cmd} check <dir> --spec {vals['spec_path']}` must print `valid`.\n"
+            "4. The step stays on the CPU. The swap tests run a deferred step on the reference by themselves; a device "
+            "model calls it through `CpuBridge` (`models/demos/common/bringup/testing/cpu_bridge.py`), never through "
+            "host code of its own.\n"
+            "When this attempt's gate fails and the check passes, the orchestrator marks the task DEFERRED and commits "
+            "the request; a request the check rejects counts as a failed attempt. Launching op-gen is the owner's call.\n"
+        )
+
+    def deferred_text(self) -> str:
+        state, tasks = self.led.state(), self.led.tasks()
+        rows = []
+        for tid in self.led.deferred():
+            b, d = tasks[tid].get("brief") or {}, state[tid].get("deferred") or {}
+            rows.append(f"- {tid}: `{b.get('block_type')}.{b.get('step')}`, op request `{d.get('request')}`")
+        if not rows:
+            return ""
+        return (
+            "## Steps deferred to op-gen (on the CPU bridge)\nTTNN has no op for these yet; they stay on the CPU "
+            "reference until op-gen delivers one. Do not implement them yourself. A device model calls each through "
+            "`CpuBridge` (`models/demos/common/bringup/testing/cpu_bridge.py`): inputs to the host per their mesh "
+            "placement, the reference step, the output back with the placement the next step expects. Its transfers are "
+            "not counted in `host_transfers_per_layer`; its host time is `deferred_cpu_ms`.\n" + "\n".join(rows) + "\n"
+        )
+
+    def try_defer(self, task: dict) -> tuple[bool, str]:
+        """(deferred, why not). A valid op request naming this task defers it: DEFERRED, request and bridge committed."""
+        tid = task["id"]
+        dirs = OR.for_task(self.spec, tid)
+        if not dirs:
+            return False, ""
+        if len(dirs) > 1:
+            return False, f"more than one op request names {tid}: {[rel(self.spec, d) for d in dirs]}"
+        d = dirs[0]
+        format_paths(
+            self.spec.repo, [rel(self.spec, d)] + [p for p in task.get("paths") or [] if (self.spec.repo / p).exists()]
+        )
+        errs = OR.check(self.spec, d)
+        if errs:
+            self.echo(f"  [{tid}] deferral rejected ({len(errs)} problems): {errs[0]}")
+            self.led.update(tid, history_add={"t": now(), "status": "DEFER_REJECTED", "why": errs})
+            return False, f"op request {rel(self.spec, d)} rejected by the checker:\n" + "\n".join(
+                f"- {e}" for e in errs
+            )
+        req = OR.load(d)
+        why = f"deferred to op-gen: {req['op']} (request {rel(self.spec, d)}); {OR.evidence_summary(req)}"
+        self.led.update(
+            tid,
+            status="DEFERRED",
+            deferred={"op": req["op"], "request": rel(self.spec, d), "at": now()},
+            reason=[why],
+            waiting=None,
+            history_add={"t": now(), "status": "DEFERRED"},
+        )
+        with self.led.locked():
+            sha = git_commit(
+                self.spec,
+                stage_paths(self.spec, self.led, task) + [rel(self.spec, d)],
+                f"[{self.spec.tag}][{tid}] {task['title']} (deferred to op-gen: {req['op']})",
+                f"Deferred: the step stays on the CPU bridge until op-gen delivers {req['op']}.\n{why}",
+            )
+        self.echo(f"  [{tid}] DEFERRED to op-gen: {req['op']} ({rel(self.spec, d)})" + (f" -> {sha}" if sha else ""))
+        return True, ""
 
     def _component_entry(self, brief: dict) -> dict | None:
         from models.demos.common.bringup.plan.components import load
@@ -550,13 +655,19 @@ class Orchestrator:
             if task.get("approval") and not problems and self.needs_human(task):
                 return True  # the plan exists; the gate needs the approval next
             res = self.gate(task["id"])
-            if res.verdict == "PASS" and not [p for p in problems if p.startswith("changed files outside")]:
+            outside = [p for p in problems if p.startswith("changed files outside")]
+            if res.verdict == "PASS" and not outside:
                 # A passing gate is not redone for a command problem; the overseer reviews it (state: review).
                 if problems:
                     self.led.update(task["id"], review=problems)
                     self.echo(f"  [{task['id']}] passed with problems for review: {len(problems)}")
                 return True
-            previous = "\n".join(problems + [self.failure_text(res)])
+            rejected = ""
+            if role == "implement" and OR.deferrable(task) and not outside:
+                deferred, rejected = self.try_defer(task)
+                if deferred:
+                    return True
+            previous = "\n".join(problems + ([rejected] if rejected else []) + [self.failure_text(res)])
         if pol["escalate"] == "debugger":
             return self.debug(task, previous, pol["attempts"], pol.get("debugger_attempts", 3))
         why = f"{role} failed {pol['attempts']} attempts; waiting for a person (logs in {self.run_dir / 'agents'})"
@@ -583,7 +694,12 @@ class Orchestrator:
                 f"the logs are in {self.run_dir / 'agents'} and {log_dir(self.spec, self.led)}.\n{previous}"
             )
             brief = self.brief(
-                task, "fix" if task.get("step") not in ("implement",) else "implement", 100 + attempt, text, extra
+                task,
+                "fix" if task.get("step") not in ("implement",) else "implement",
+                100 + attempt,
+                text,
+                extra,
+                False,
             )
             problems = self.run_agent(task, "debug", attempt, brief, agent=DEBUGGER)
             entry = self.led.state().get(tid, {})
@@ -592,6 +708,8 @@ class Orchestrator:
             if res.verdict == "PASS" and not problems:
                 return True
             previous = "\n".join(problems + [self.failure_text(res)])
+        if self.last_chance_defer(task, previous, attempts, debugger_attempts):
+            return True
         self.led.update(
             tid,
             status="STOPPED",
@@ -599,6 +717,24 @@ class Orchestrator:
             history_add={"t": now(), "status": "STOPPED"},
         )
         return False
+
+    def last_chance_defer(self, task: dict, previous: str, attempts: int, debugger_attempts: int) -> bool:
+        """After the debugger: one implement attempt that may defer the step (F46) instead of stopping the run."""
+        if not OR.deferrable(task) or not self.policy(task, "implement").get("defer_after_debugger", True):
+            return False
+        text = (
+            f"The implementer failed {attempts} attempts and {DEBUGGER} {debugger_attempts}. This attempt is only for a "
+            "deferral: if TTNN has no proper op for this step, defer it (section 'Deferring this step to op-gen'), "
+            "with the evidence from those attempts. If it does have one, change nothing: the task then stops for a "
+            f"person.\n{previous}"
+        )
+        problems = self.run_agent(task, "implement", 201, self.brief(task, "implement", 201, text))
+        if [p for p in problems if p.startswith("changed files outside")]:
+            return False
+        deferred, why = self.try_defer(task)
+        if why:
+            self.led.update(task["id"], reason=[why])
+        return deferred
 
     def infra_failure(self, res) -> str | None:
         text = res.log.read_text(errors="replace") if res and res.log and res.log.exists() else ""
@@ -648,7 +784,7 @@ class Orchestrator:
                 return STOPPED
         if self.needs_human(task):
             return self._human(task, self.needs_human(task))
-        return self._after(task) if self.led.status(tid) == "PASS" else STOPPED
+        return self._after(task) if satisfied(self.led.status(tid)) else STOPPED
 
     def _after(self, task: dict) -> int:
         picked = any(  # a pick is an agent's perf task after X.2 (the final X.3 is scripted)
@@ -683,6 +819,13 @@ class Orchestrator:
                     self.echo(f"stopped tasks: {stopped} (fix, then `resume`)")
                     return STOPPED
                 self.echo("nothing left to run" + (f" before {until}" if until else ""))
+                deferred = self.led.deferred()
+                if deferred:
+                    ops = [f"{t} ({(state.get(t, {}).get('deferred') or {}).get('op')})" for t in deferred]
+                    self.echo(
+                        f"complete with {len(deferred)} deferred: {', '.join(ops)}; these steps run on the CPU bridge "
+                        f"until op-gen delivers their ops (op requests in {rel(self.spec, OR.root(self.spec))})"
+                    )
                 return DONE
             if self.pause_file.exists():
                 self.echo(f"paused before {runnable[0]} ({self.pause_file}); `resume` continues")
