@@ -56,14 +56,6 @@ bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfi
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 
-bool is_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords);
-
-void split_and_form_rectangle_grids(
-    std::vector<tt::tt_metal::CoreCoord>& group,
-    std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,
-    std::vector<tt::tt_metal::CoreCoord>& mcast_group_mid,
-    std::vector<tt::tt_metal::CoreCoord>& mcast_group_last);
-
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width = 32);
 
 // Tiles the row-major path keeps resident in c_17 for one per-core group.

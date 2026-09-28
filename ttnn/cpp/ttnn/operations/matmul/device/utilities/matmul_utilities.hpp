@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <algorithm>
+#include <iterator>
+#include <limits>
 #include <bit>
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -16,6 +21,39 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::matmul::utilities {
+
+// Operation prefixes are complete before this call. Pad per kernel, append the
+// bound multicast channel, and install the initial runtime args on every core.
+template <typename McastType, typename Placement>
+tt::tt_metal::KernelHandle create_mcast_dataflow_kernel(
+    tt::tt_metal::Program& program,
+    const McastType* mcast,
+    const std::string& prefix,
+    std::vector<std::pair<tt::tt_metal::CoreCoord, std::vector<uint32_t>>>& runtime_args,
+    const std::string& source,
+    const Placement& placement,
+    tt::tt_metal::DataMovementConfig config) {
+    auto ct_offset = config.compile_args.size();
+    size_t rt_offset = 0;
+    if (mcast) {
+        const auto offsets =
+            mcast->append_kernel_args_to(config.compile_args, runtime_args, tt::tt_metal::CoreRangeSet(placement));
+        ct_offset = offsets.compile_time;
+        rt_offset = offsets.runtime;
+    } else {
+        ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(config.compile_args);
+    }
+    TT_FATAL(
+        ct_offset <= std::numeric_limits<uint32_t>::max() && rt_offset <= std::numeric_limits<uint32_t>::max(),
+        "Multicast argument offset overflow");
+    config.named_compile_args.emplace(prefix + "_ct_offset", static_cast<uint32_t>(ct_offset));
+    config.named_compile_args.emplace(prefix + "_rt_offset", static_cast<uint32_t>(rt_offset));
+    const auto kernel = tt::tt_metal::CreateKernel(program, source, placement, config);
+    for (const auto& [core, args] : runtime_args) {
+        tt::tt_metal::SetRuntimeArgs(program, kernel, core, args);
+    }
+    return kernel;
+}
 
 // Define the buffering depth for input CBs (0 and 1) for mcast variants.
 // 2 = double buffer, 3 = triple buffer, etc.

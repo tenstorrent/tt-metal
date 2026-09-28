@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -149,6 +151,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const std::uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     const auto* device = &input_tensor.mutable_device();
+    auto* physical_device = device->get_devices().at(0);
 
     const auto input_shape = input_tensor.padded_shape();
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -388,20 +391,22 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     });
 
     // Semaphore-based flow control for coordinating data transfer between local and final cores
-    const std::uint32_t sender_semaphore_id = 0;    // Tracks data transmission completion
-    const std::uint32_t receiver_semaphore_id = 1;  // Signals readiness to receive data
+    const std::uint32_t arrival_counter_semaphore_id = 0;
     desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = sender_semaphore_id,
+        .id = arrival_counter_semaphore_id,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = all_cores_range_set,
         .initial_value = INVALID,
     });
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = receiver_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = all_cores_range_set,
-        .initial_value = INVALID,
-    });
+
+    // The final core multicasts readiness to local workers.
+    const ttnn::kernel_lib::host::Mcast final_readiness_mcast(
+        *physical_device,
+        ttnn::kernel_lib::host::McastConfig{
+            .handshake = false, .data_ready = dataflow_kernel_lib::DataReadySignal::Flag},
+        local_cores_range_set,
+        /*receiver_group_size=*/local_cores_range_set.num_cores(),
+        ttnn::kernel_lib::host::McastExplicitSenderConfig{{{final_core}}});
 
     // Local reader - Data Input and Index Generation/Reading
     // Responsibility: Stream input tensor data from DRAM to local cores
@@ -433,20 +438,12 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Final reader - Local TopK Results Aggregation Coordinator
     // Responsibility: Coordinate reception of TopK results from all local cores
     // Uses semaphore protocol to synchronize with multiple sender cores
-    CoreCoord local_cores_physical_start = device->worker_core_from_logical_core(local_cores.at(0));
-    CoreCoord local_cores_physical_end = device->worker_core_from_logical_core(local_cores.at(num_cores - 2u));
-    const std::vector<std::uint32_t> reader_final_compile_time_args = {
-        static_cast<std::uint32_t>(receiver_semaphore_id),         // Semaphore for coordinating data reception
-        static_cast<std::uint32_t>(sender_semaphore_id),           // Semaphore for tracking transmission completion
-        static_cast<std::uint32_t>(local_cores_physical_start.x),  // NoC coordinates of local core range
-        static_cast<std::uint32_t>(local_cores_physical_start.y),
-        static_cast<std::uint32_t>(local_cores_physical_end.x),
-        static_cast<std::uint32_t>(local_cores_physical_end.y),
-        static_cast<std::uint32_t>(Ht),             // Height tiles to process
-        static_cast<std::uint32_t>(Wt_final),       // Total aggregated width tiles
-        static_cast<std::uint32_t>(num_cores - 1),  // Number of local cores sending data
-        gathered_values_cb_index,                   // Final TopK values destination
-        gathered_indices_cb_index                   // Final TopK indices destination
+    std::vector<std::uint32_t> reader_final_compile_time_args = {
+        static_cast<std::uint32_t>(arrival_counter_semaphore_id),
+        static_cast<std::uint32_t>(Ht),        // Height tiles to process
+        static_cast<std::uint32_t>(Wt_final),  // Total aggregated width tiles
+        gathered_values_cb_index,              // Final TopK values destination
+        gathered_indices_cb_index              // Final TopK indices destination
     };
 
     // Dataflow kernels only: in fused mode the index CBs are not created on the cores these run on
@@ -470,9 +467,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Responsibility: Send local TopK results from each core to final aggregation core
     // Implements sender side of semaphore-based synchronization protocol
     const CoreCoord final_cores_physical = device->worker_core_from_logical_core(final_core);
-    const std::vector<std::uint32_t> writer_local_compile_time_args = {
-        static_cast<std::uint32_t>(receiver_semaphore_id),   // Semaphore to check final core readiness
-        static_cast<std::uint32_t>(sender_semaphore_id),     // Semaphore to signal transmission completion
+    std::vector<std::uint32_t> writer_local_compile_time_args = {
+        static_cast<std::uint32_t>(arrival_counter_semaphore_id),
         static_cast<std::uint32_t>(final_cores_physical.x),  // Target final core NoC coordinates
         static_cast<std::uint32_t>(final_cores_physical.y),
         Ht,                          // Height tiles to send
@@ -633,11 +629,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             });
 
         // Local writer
-        writer_local_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                core_id,  // Width position for placement in final aggregation buffer
-            });
+        // Width position for placement in the final aggregation buffer.
+        writer_local_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{core_id});
 
         // Local compute
         compute_local_desc.runtime_args.emplace_back(
@@ -658,6 +651,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             index_tensor,  // DRAM address for TopK indices output tensor
         });
 
+    const std::array kernels{std::ref(reader_final_desc), std::ref(writer_local_desc)};
+    final_readiness_mcast.attach(desc, "readiness_mcast", kernels);
     desc.kernels.push_back(std::move(reader_local_desc));
     desc.kernels.push_back(std::move(reader_final_desc));
     desc.kernels.push_back(std::move(writer_local_desc));

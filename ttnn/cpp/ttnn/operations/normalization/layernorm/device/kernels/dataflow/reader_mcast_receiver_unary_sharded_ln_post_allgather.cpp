@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -20,11 +21,12 @@ void kernel_main() {
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
-    Semaphore reduce_sender_sem(sem::reduce_sender);
+    Noc noc;
+    constexpr auto final_statistics = MCAST_SPEC_ARGS(final_statistics);
+    auto final_statistics_pipe = final_statistics.receiver(noc);
     DataflowBuffer dfb_ex_global_obj(dfb::ex_global);
 
-    reduce_sender_sem.set(INVALID);
     dfb_ex_global_obj.reserve_back(stats_tiles * block_h);
-    reduce_sender_sem.wait(VALID);
+    final_statistics_pipe.receive();
     dfb_ex_global_obj.push_back(stats_tiles * block_h);
 }
