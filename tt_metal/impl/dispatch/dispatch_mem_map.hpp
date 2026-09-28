@@ -47,6 +47,15 @@ public:
 
     uint32_t prefetch_q_entry_size_bytes() const;
 
+    // Distance between consecutive fetch queue entries. Greater than the entry size when entries are
+    // padded to 16B for snooped host writes.
+    uint32_t prefetch_q_entry_stride_bytes() const;
+
+    // True on Quasar when the host writes fetch queue entries with the NOC snoop bit set, which lets the
+    // prefetcher poll them through its cache. Entries then carry a per-lap phase bit and are never cleared.
+    // Only the RTL simulator's UMD window can carry the snoop bit today, so ttsim and silicon poll uncached.
+    bool prefetch_q_snoop() const;
+
     uint32_t prefetch_q_size() const;
 
     uint32_t max_prefetch_command_size() const;
@@ -118,6 +127,8 @@ private:
     std::vector<uint32_t> device_cq_addrs_;
 
     DispatchSettings settings;
+
+    bool prefetch_q_snoop_ = false;
 
     uint32_t num_cqs_per_core_ = 0;
     uint32_t cq_zone_stride_ = 0;

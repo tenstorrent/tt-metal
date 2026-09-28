@@ -135,6 +135,8 @@ private:
     std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
+    // Phase bit value for the current lap of each fetch queue, used when entries are snooped.
+    std::vector<uint32_t> prefetch_q_phases;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;

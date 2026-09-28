@@ -127,7 +127,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     cq_to_event_locks(num_hw_cqs),
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
-    prefetch_q_dev_fences(num_hw_cqs) {
+    prefetch_q_dev_fences(num_hw_cqs),
+    // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
+    prefetch_q_phases(num_hw_cqs, 1) {
     this->prefetch_q_windows.reserve(num_hw_cqs);
     this->completion_q_windows.reserve(num_hw_cqs);
 
@@ -265,7 +267,10 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             prefetcher_core.chip,
             prefetcher_translated,
             /*addr=*/0,
-            {.size = prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes()}));
+            {.size = prefetch_q_base + mem_map.prefetch_q_size()},
+            tt::umd::IoOrdering::Strict,
+            /*core_end=*/std::nullopt,
+            mem_map.prefetch_q_snoop() ? tt::umd::WindowFlags::Snoop : tt::umd::WindowFlags::None));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -305,8 +310,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->cq_to_event.push_back(0);
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        this->prefetch_q_dev_fences[cq_id] =
-            prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
+        this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + mem_map.prefetch_q_size();
     }
 }
 
@@ -752,10 +756,12 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     // Wrap FetchQ if possible
     const auto& mem_map = ctx.dispatch_mem_map();
     uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
-    uint32_t prefetch_q_limit =
-        prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
+    uint32_t prefetch_q_limit = prefetch_q_base + mem_map.prefetch_q_size();
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
+        if (mem_map.prefetch_q_snoop()) {
+            this->prefetch_q_phases[cq_id] ^= 1U;
+        }
         wait_for_fetch_q_space();
     }
 }
@@ -887,13 +893,22 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         entry_val |= 1u << shift_for_msb;
     }
 
+    if (dispatch_mem_map.prefetch_q_snoop()) {
+        constexpr uint32_t phase_bit = PrefetchConstants::PREFETCH_Q_PHASE_BIT;
+        TT_ASSERT(entry_bytes == 4, "Snooped fetch queue entries must be 4 bytes");
+        TT_ASSERT(
+            (command_size_B >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < (1u << phase_bit),
+            "FetchQ command too large to leave room for the phase bit");
+        entry_val |= this->prefetch_q_phases[cq_id] << phase_bit;
+    }
+
     if (entry_bytes == 2) {
         this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], static_cast<uint16_t>(entry_val));
     } else {
         TT_ASSERT(entry_bytes == 4);
         this->prefetch_q_windows[cq_id]->write32(this->prefetch_q_dev_ptrs[cq_id], entry_val);
     }
-    this->prefetch_q_dev_ptrs[cq_id] += entry_bytes;
+    this->prefetch_q_dev_ptrs[cq_id] += dispatch_mem_map.prefetch_q_entry_stride_bytes();
 }
 
 bool SystemMemoryManager::is_dram_backed() const {
