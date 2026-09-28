@@ -186,32 +186,49 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
 // intermediates were packed to scratch and re-unpacked; here the FPU op lands in DST and the rest of
 // the chain runs on the SFPU (DST <-> DST) before one pack. fp32 CBs only.
 
-// decay = tril @ g (col form, Ct tiles) and decay_exp = exp(decay), both from one DST pass per tile:
-// the matmul lands in DST0 and again in DST1, exp runs on DST1, both are packed.
-inline void decay_and_exp(uint32_t tril, uint32_t g, uint32_t o_decay, uint32_t o_exp, uint32_t Ct) {
+// decay = tril @ g (col form), decay_exp = exp(decay), decayfac = exp(g_sum - decay) with g_sum = ones @ g, and
+// dl = exp(g_sum) = decayfac_i * decay_exp_i, all from ONE DST pass per tile: the matmuls land in DST0 (decay,
+// packed as is), DST3 (decay again, for the exp) and DST1 (g_sum); then SFPU: DST1 -= DST0, exp on DST1 and
+// DST3, and DST2 = DST1 * DST3 -- dl as the exact fp32 product of the two exps, not the broadcast product whose
+// rounded factors cost ~1e-3 on the value that decays the state every chunk. Packs: decay -> o_decay[i],
+// decay_exp -> o_exp[i], decayfac -> o_fac[i], dl -> o_fac[Ct] (from tile 0's window; every row holds g_sum).
+inline void decay_all(
+    uint32_t tril, uint32_t ones, uint32_t g, uint32_t o_decay, uint32_t o_exp, uint32_t o_fac, uint32_t Ct) {
     cb_reserve_back(o_decay, Ct);
     cb_reserve_back(o_exp, Ct);
-    pack_reconfig_data_format(o_decay);  // o_exp has the same (fp32) format
-    reconfig_data_format(g, tril);       // matmul(tril, g): tril->srcB, g->srcA
+    cb_reserve_back(o_fac, Ct + 1);
+    pack_reconfig_data_format(o_decay);  // all fp32
+    reconfig_data_format(g, tril);       // matmul(tril|ones, g): in0->srcB, g->srcA
     matmul_init(tril, g, 0);
     for (uint32_t i = 0; i < Ct; i++) {
         tile_regs_acquire();
         for (uint32_t j = 0; j < Ct; j++) {
-            matmul_tiles(tril, g, i * Ct + j, j, 0);
+            matmul_tiles(tril, g, i * Ct + j, j, 0);  // DST0 = decay_i
+            matmul_tiles(tril, g, i * Ct + j, j, 3);  // DST3 = decay_i (exp'd below)
+            matmul_tiles(ones, g, i * Ct + j, j, 1);  // DST1 = g_sum
         }
-        for (uint32_t j = 0; j < Ct; j++) {
-            matmul_tiles(tril, g, i * Ct + j, j, 1);
-        }
+        sub_binary_tile_init();
+        sfpu_sub_dst(1, 0, 1);  // g_sum - decay_i
         exp_tile_init();
-        sfpu_exp_dst(1);
+        sfpu_exp_dst(1);  // decayfac_i
+        sfpu_exp_dst(3);  // decay_exp_i
+        if (i == 0) {
+            mul_binary_tile_init();
+            sfpu_mul_dst(1, 3, 2);  // dl = decayfac_i * decay_exp_i = exp(g_sum)
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o_decay, i);
-        pack_tile(1, o_exp, i);
+        pack_tile(3, o_exp, i);
+        pack_tile(1, o_fac, i);
+        if (i == 0) {
+            pack_tile(2, o_fac, Ct);
+        }
         tile_regs_release();
     }
     cb_push_back(o_decay, Ct);
     cb_push_back(o_exp, Ct);
+    cb_push_back(o_fac, Ct + 1);
 }
 
 // L_mask[i,j] = tril * exp(decay_i - decay_j), one DST pass per output tile: decay_i (col broadcast of
@@ -244,43 +261,6 @@ inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint3
         }
     }
     cb_push_back(o, Ct * Ct);
-}
-
-// decayfac_i = exp(g_sum - decay_i) (col form, tiles 0..Ct-1 of `o`) and dl = exp(g_sum) (tile Ct of `o`, dl in
-// every row of column 0), one DST pass per tile: g_sum = ones @ g lands in DST0 and decay = tril @ g in DST1 (both
-// straight from the matmul, no packed intermediate and no datacopy rounding), then SFPU: DST0 -= DST1, exp. dl comes
-// from its own exp of the accumulated g_sum -- not from the product decayfac_0 * decay_exp_0, whose two rounded
-// factors cost ~1e-3 of relative error on the value that decays the state every chunk.
-inline void decayfac_fused(uint32_t ones, uint32_t tril, uint32_t g, uint32_t o, uint32_t Ct) {
-    cb_reserve_back(o, Ct + 1);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(g, ones);  // matmul(ones|tril, g): in0->srcB, g->srcA (all fp32)
-    matmul_init(ones, g, 0);
-    for (uint32_t i = 0; i < Ct; i++) {
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < Ct; j++) {
-            matmul_tiles(ones, g, i * Ct + j, j, 0);  // DST0 = g_sum
-            matmul_tiles(tril, g, i * Ct + j, j, 1);  // DST1 = decay_i
-        }
-        sub_binary_tile_init();
-        sfpu_sub_dst(0, 1, 0);
-        exp_tile_init();
-        sfpu_exp_dst(0);
-        if (i == 0) {
-            for (uint32_t j = 0; j < Ct; j++) {
-                matmul_tiles(ones, g, j, j, 2);  // DST2 = g_sum (row block 0 suffices: every row holds it)
-            }
-            sfpu_exp_dst(2);  // dl
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, i);
-        if (i == 0) {
-            pack_tile(2, o, Ct);
-        }
-        tile_regs_release();
-    }
-    cb_push_back(o, Ct + 1);
 }
 
 // dl*I: the identity tile scaled by column 0 of tile `col_tile` of `col` (dl in every row).
@@ -318,6 +298,68 @@ inline void bcast_cols_mul_neg(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt
         }
     }
     cb_push_back(o, Mt * Nt);
+}
+
+// negN = -strictly_lower(kk * L_mask), kk = k_beta @ k^T, one DST pass per output tile: kk lands in
+// DST0 (Kt products, in1 transposed), L_mask is copied to DST1 and multiplied in; the constant (I - 1)
+// -- 0 on the diagonal, -1 elsewhere -- is formed in DST2 from the eye tile and multiplied in, which drops the
+// diagonal and flips the sign of the strictly-lower part exactly (the upper triangle is already zero from
+// L_mask).
+inline void negn_fused(uint32_t kbeta, uint32_t k, uint32_t lmask, uint32_t eye, uint32_t o, uint32_t Ct, uint32_t Kt) {
+    cb_reserve_back(o, Ct * Ct);
+    pack_reconfig_data_format(o);
+    for (uint32_t mi = 0; mi < Ct; mi++) {
+        for (uint32_t ni = 0; ni < Ct; ni++) {
+            tile_regs_acquire();
+            reconfig_data_format(k, kbeta);  // matmul(kbeta, k): kbeta->srcB, k->srcA
+            matmul_init(kbeta, k, 1);
+            for (uint32_t ki = 0; ki < Kt; ki++) {
+                matmul_tiles(kbeta, k, mi * Kt + ki, ni * Kt + ki, 0);  // DST0 = kk tile
+            }
+            reconfig_data_format_srca(lmask);
+            copy_init(lmask);
+            copy_tile(lmask, mi * Ct + ni, 1);
+            mul_binary_tile_init();
+            sfpu_mul_dst(0, 1, 0);  // kk * L_mask
+            copy_init(eye);
+            copy_tile(eye, mi * Ct + ni, 2);
+            binop_with_scalar_tile_init();
+            add_unary_tile(2, 0xBF800000u);  // I - 1  (-1.0f)
+            sfpu_mul_dst(0, 2, 0);           // negN
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, o, mi * Ct + ni);
+            tile_regs_release();
+        }
+    }
+    cb_push_back(o, Ct * Ct);
+}
+
+// intra = (q @ k^T) * L_mask, one DST pass per output tile: qk in DST0 (Kt products), L_mask copied to
+// DST1 and multiplied in on the SFPU.
+inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint32_t Ct, uint32_t Kt) {
+    cb_reserve_back(o, Ct * Ct);
+    pack_reconfig_data_format(o);
+    for (uint32_t mi = 0; mi < Ct; mi++) {
+        for (uint32_t ni = 0; ni < Ct; ni++) {
+            tile_regs_acquire();
+            reconfig_data_format(k, q);  // matmul(q, k): q->srcB, k->srcA (bf16 when the reader's raw q/k are used)
+            matmul_init(q, k, 1);
+            for (uint32_t ki = 0; ki < Kt; ki++) {
+                matmul_tiles(q, k, mi * Kt + ki, ni * Kt + ki, 0);
+            }
+            reconfig_data_format_srca(lmask);
+            copy_init(lmask);
+            copy_tile(lmask, mi * Ct + ni, 1);
+            mul_binary_tile_init();
+            sfpu_mul_dst(0, 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, o, mi * Ct + ni);
+            tile_regs_release();
+        }
+    }
+    cb_push_back(o, Ct * Ct);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
@@ -693,10 +735,13 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 
     {
         GDN_ZONE("pp_decay");
-        // ---- P2: decay = tril@g and decay_exp = exp(decay) in one DST pass, decay_row ----
-        decay_and_exp(cb.tril, cb.g, cb.decay, cb.decay_exp, ct);
+        // ---- P2: decay = tril@g, decay_exp, decayfac = exp(g_sum - decay), dl = exp(g_sum): one DST pass;
+        // then decay_row ----
+        decay_all(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
         WAIT(cb.decay, Ct);
         WAIT(cb.decay_exp, Ct);
+        WAIT(cb.decayfac, Ct + 1);
+        POP(cb.g, Ct);
         transpose_col(cb.decay, cb.scr1, ct);  // decay_row in scr1
         WAIT(cb.scr1, Ct);
     }
@@ -707,14 +752,6 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         lmask_fused(cb.ones, cb.decay, cb.scr1, cb.tril, cb.lmask, ct);
         WAIT(cb.lmask, cc);
         POP(cb.scr1, Ct);  // decay_row done
-    }
-
-    {
-        GDN_ZONE("pp_decayfac");
-        // ---- decayfac = exp(g_sum - decay) (tiles 0..Ct-1) and dl = exp(g_sum) (tile Ct), one DST pass ----
-        decayfac_fused(cb.ones, cb.tril, cb.g, cb.decayfac, ct);
-        WAIT(cb.decayfac, Ct + 1);
-        POP(cb.g, Ct);
         POP(cb.decay, Ct);
     }
 
@@ -725,18 +762,10 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // 32x32 tile into 16-quadrants), invert the small diagonal blocks with bounded Horners, and
         // merge off-diagonal blocks exactly. This keeps every intermediate bounded, unlike a single
         // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
-        mm(cb.kbeta, Kk, cb.scr1, ct, Kt, ct, true);  // kk = k_beta @ k^T (Kk = normalized k)
-        WAIT(cb.scr1, cc);
-        ew(cb.scr1, cb.lmask, cb.scr2, cc_rt, EwOp::Mul);  // kk_masked = kk * L_mask
-        WAIT(cb.scr2, cc);
-        POP(cb.scr1, cc);
-        ew(cb.scr2, cb.eye, cb.scr1, cc_rt, EwOp::Mul);  // diag(kk_masked)
-        WAIT(cb.scr1, cc);
-        // negN = diag - kk_masked = -(strictly_lower(kk_masked))  (= -A_strict, kept in cb.scr3)
-        ew(cb.scr1, cb.scr2, cb.scr3, cc_rt, EwOp::Sub);
+        // negN = -(strictly_lower(kk * L_mask)) = -A_strict, kept in cb.scr3: one DST pass per tile (kk from the
+        // matmul, L_mask and the (I - 1) mask applied on the SFPU) instead of four packed blocks.
+        negn_fused(cb.kbeta, Kk, cb.lmask, cb.eye, cb.scr3, ct, Kt);
         WAIT(cb.scr3, cc);
-        POP(cb.scr1, cc);
-        POP(cb.scr2, cc);
     }
 
     {
@@ -827,11 +856,8 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_intra");
         // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
-        mm(Q, Kk, cb.scr1, ct, Kt, ct, true);  // qk = q @ k^T (Q/Kk = normalized q,k)
-        WAIT(cb.scr1, cc);
-        ew(cb.scr1, cb.lmask, cb.intra, cc_rt, EwOp::Mul);
+        intra_fused(Q, Kk, cb.lmask, cb.intra, ct, Kt);  // intra = (q @ k^T) * L_mask, one DST pass per tile
         WAIT(cb.intra, cc);
-        POP(cb.scr1, cc);
         POP(cb.lmask, cc);
     }
     {
