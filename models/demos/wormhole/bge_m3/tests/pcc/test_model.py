@@ -9,6 +9,7 @@ import ttnn
 from models.demos.wormhole.bge_m3.tests.test_utils import (
     SEQUENCE_LENGTHS,
     assert_pcc,
+    pcc_threshold,
     require_single_device,
     to_torch,
     to_ttnn_ids,
@@ -16,9 +17,8 @@ from models.demos.wormhole.bge_m3.tests.test_utils import (
 from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
 MODEL_ID = "BAAI/bge-m3"
-PCC_THRESHOLD = 0.93
 
-# bf8_b holds the 0.93 PCC gate at every sequence length on Blackhole. On
+# bf8_b holds the 0.94 PCC gate at every sequence length on Blackhole. On
 # Wormhole the SDPA reduction over very long sequences (S8192) accumulates more
 # bf8 quantization error and falls below the gate (~0.90), so fall back to bf16
 # there. Blackhole keeps bf8_b everywhere; Wormhole uses bf8_b up to 4096.
@@ -49,7 +49,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
     """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len).
 
     bf8_b on Blackhole at every length; on Wormhole bf8_b up to S4096 and bf16
-    beyond (see _dtype_for). Gated at PCC_THRESHOLD=0.93.
+    beyond (see _dtype_for). Gated at pcc_threshold (0.94; 0.93 for B8/B16 at S512).
     """
     require_single_device(device)
     backbone, state_dict, model_id_or_path = model_artifacts
@@ -88,7 +88,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
     )
     tt_output_torch = to_torch(tt_output, expected_shape=(batch_size, 1, seq_len, model_args.dim))
 
-    assert_pcc(reference_output, tt_output_torch, PCC_THRESHOLD)
+    assert_pcc(reference_output, tt_output_torch, pcc_threshold(batch_size, seq_len))
 
 
 @pytest.mark.slow
@@ -98,7 +98,7 @@ def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
 
     This is the CI-facing variant: batch 1 only (9 runs) to stay within the CI
     time budget. The larger-batch sweep lives in
-    `test_model_full_end_to_end_multibatch`. Gated at PCC_THRESHOLD=0.93.
+    `test_model_full_end_to_end_multibatch`. Gated at PCC_THRESHOLD=0.94.
     Filter combos with -k, e.g. `-k "S512"`.
     """
     _run_full_end_to_end(device, model_artifacts, batch_size=1, seq_len=seq_len)
