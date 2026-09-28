@@ -363,7 +363,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <li><b>Only prefill work counts.</b> Useful tokens exclude cached tokens and decode. For a fixed traffic mix, useful tok/s is proportional to requests served per second.</li>
       <li><b>At an SLO, not at peak.</b> In a closed-loop replay, throughput first rises with concurrency and then collapses. More live sessions stop fitting in the KV cache, evictions turn into re-prefill, TTFT grows to hundreds of seconds, and idle KV then gets evicted even faster (the "cache cliff"). The SLO picks an operating point a real deployment could run at.</li>
       <li><b>The SLO is loose on purpose</b> (p90 ≤ 10 s; today's single-request TTFT is about 1-2 s) because throughput is the priority. p90 is used rather than the median because p90 sees the queueing blow-up earlier. The collapse is sharp, so the best SLO-free throughput is almost identical to goodput (see the sensitivity table), and the ranking does not depend on the exact SLO. You can change the SLO on the Explore tab.</li>
-      <li><b>Interpolation.</b> Goodput is linearly interpolated between the last passing and the first failing concurrency, so it does not jump with the grid spacing.</li>
+      <li><b>Finding the cliff.</b> The throughput-vs-concurrency curve is steep near the cliff: two neighbouring grid points can differ by 10% or more. After the grid sweep, the simulator therefore bisects (in log concurrency) between the best point that meets the SLO and the next one that fails it, 4 more runs, which locates the cliff to about 1% in concurrency. If the failing point still has higher throughput, goodput is also interpolated to the SLO crossing. The page and the Roadmap study use the same rule.</li>
     </ul>
 
     <h2 id="m-glossary">Glossary</h2>
@@ -596,14 +596,29 @@ function slim(r, c) {
 onmessage = (e) => {
   const m = e.data;
   if (m.init) { TR = M3SIM.loadTraffic(m.buf, m.header); CAL = m.cal; postMessage({ ready: true }); return; }
-  const j = m.job; let over = 0, prevU = -1;
-  for (const c of j.concs) {
+  const j = m.job; let over = 0, prevU = -1; const pts = [];
+  const one = (c, refine) => {
     let r; try { r = M3SIM.simulate(TR, CAL, Object.assign({}, j.cfg, { concurrency: c })); } catch (err) { r = { error: String(err) }; }
-    const p = slim(r, c); postMessage({ id: j.id, point: p });
+    const p = slim(r, c); pts.push(p); postMessage({ id: j.id, point: p, refine: !!refine }); return p;
+  };
+  for (const c of j.concs) {
+    const p = one(c);
     if (p.error) break;
     if (p.ttftP90 > 4 * j.slo && p.usefulTps <= prevU * 1.02) over++; else over = 0;
     prevU = Math.max(prevU, p.usefulTps);
     if (over >= 2) break;
+  }
+  // bisect in log concurrency between the best point that meets the SLO and the next one that fails it
+  // (same rule as lib/pool.js refineCliff): the cache cliff is steep, grid spacing alone can miss ~10%
+  const ok = (p) => !p.error && p.ttftP90 <= j.slo;
+  for (let i = 0; i < 4; i++) {
+    const s = pts.filter((p) => !p.error).sort((a, b) => a.conc - b.conc);
+    let lo = null; for (const p of s) if (ok(p) && (!lo || p.usefulTps >= lo.usefulTps)) lo = p;
+    if (!lo) break;
+    const hi = s.find((p) => p.conc > lo.conc && !ok(p)); if (!hi) break;
+    const mid = Math.round(Math.sqrt(lo.conc * hi.conc) / 8) * 8;
+    if (mid <= lo.conc || mid >= hi.conc) break;
+    if (one(mid, true).error) break;
   }
   postMessage({ id: j.id, done: true });
 };`;
@@ -826,14 +841,14 @@ function startRun() {
   const jobs = [{ id: 'real', cfg }];
   if ($('compareInf').checked && cfg.cache !== 'inf') jobs.push({ id: 'inf', cfg: Object.assign({}, cfg, { cache: 'inf', hostTier: false }) });
   $('runBtn').disabled = true; $('runBtn').dataset.busy = '1'; $('pinBtn').disabled = true;
-  let pending = jobs.length; const total = concs.length * jobs.length; let got = 0; const t0 = performance.now();
+  let pending = jobs.length; const total = (concs.length + 4) * jobs.length; let got = 0; const t0 = performance.now();
   $('statusTxt').textContent = 'Simulating…'; $('progBar').style.width = '0%';
   $('resTitle').textContent = 'Results: ' + name;
   jobs.forEach((j, i) => {
     const w = workers[i] || (workers[i] = mkWorker());
     w.onmessage = (e) => {
       const m = e.data; if (m.ready) return;
-      if (m.point) { run[m.id].push(m.point); got++; $('progBar').style.width = (100 * got / total) + '%'; render(); }
+      if (m.point) { run[m.id].push(m.point); run[m.id].sort((a, b) => a.conc - b.conc); got++; $('progBar').style.width = Math.min(100, 100 * got / total) + '%'; if (m.refine) $('statusTxt').textContent = 'Refining the cliff…'; render(); }
       if (m.done) { if (--pending === 0) { $('runBtn').dataset.busy = '0'; $('runBtn').disabled = false; $('pinBtn').disabled = false; $('progBar').style.width = '100%'; $('statusTxt').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(1)} s`; render(); } }
     };
     w.postMessage({ job: { id: j.id, cfg: j.cfg, concs, slo } });

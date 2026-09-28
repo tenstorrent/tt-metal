@@ -10,7 +10,7 @@ on realistic traffic, not by single-cell benchmarks.
 
 ## Metric
 
-**Goodput = useful tok/s at p90 TTFT ≤ 10 s**, maximised over concurrency, interpolated at the SLO crossing.
+**Goodput = useful tok/s at p90 TTFT ≤ 10 s**, maximised over concurrency. The cache cliff is steep (neighbouring grid points can differ by 10%+), so after the grid sweep `refineCliff` (lib/pool.js, same rule in the artifact worker) bisects 4 times in log concurrency between the best passing and the next failing point. When the failing point has higher throughput, goodput is also interpolated to the SLO crossing.
 *Useful* tokens are the tokens an infinite prefix cache would still have to prefill (`in - 64·lcp_best`). Re-prefilled tokens
 (evicted, misaligned, never materialised) and padding count as processed but not useful. Each result also reports the same
 configuration with an infinite cache, TTFT p50/p90, the hit rate against the ∞-cache hit rate, and the split of processed
@@ -113,19 +113,24 @@ KV capacity is the minimum over stages. At 4 galaxies with bf16 index_k replicat
 * **`paging`**: an ideal paged kernel (no lanes, no copies).
 * **`inf`**: infinite cache.
 
-## Findings (study of Sep 28 2026, decode 180 tok/s, `results/study.json`)
+## Findings (study of Sep 28 2026, decode 180 tok/s, cliff-refined sweep, `results/study.json`)
 
 Goodput in useful tok/s at p90 TTFT ≤ 10 s. "Today" = 16×[2,4] (or 32×[2,4]), chunk 2048, auto split, static 1M slots.
-The earlier decode-60 study is kept as `results/study_decode60.json`; the ranking is the same.
+Earlier variants are kept in `results/`: `study_decode60.json` (decode 60 tok/s) and `study_decode180_norefine.json` (no cliff refinement). The ranking is the same in all of them.
+The tables below are printed by `node tools/feature_table.js`.
 
-| scenario | today | greedy full stack | best grid config | same with ∞ cache |
+| scenario | today | greedy full stack | best grid config | best config with ∞ cache |
 |---|---|---|---|---|
-| 4 gx, today's kernels | 2.4k | 37.2k | **40.8k** (16×[4,2], 4 lanes, budget 16k) | 57.9k |
-| 4 gx, roofline kernels | 4.0k | 74.6k | **78.3k** (16×[4,2], 2M arena, budget 32k) | 208k |
-| 8 gx, today's kernels | 4.1k | 89.4k | **95.9k** (32×[4,2], 2M arena, budget 8k) | 131k |
-| 8 gx, roofline kernels | 14.4k | 155.5k | **161.1k** (32×[4,2], 2M arena, budget 8k) | 373k |
+| 4 galaxies, today's kernels | 2.4k | 38.2k | **43.5k** (16×[4,2], 2M arena, budget 16k) | 62.5k |
+| 4 galaxies, roofline kernels | 4.6k | 77.2k | **80.2k** (16×[4,2], 2M arena, budget 16k) | 198k |
+| 8 galaxies, today's kernels | 4.2k | 89.5k | **96.5k** (32×[4,2], 2M arena, budget 16k) | 146k |
+| 8 galaxies, roofline kernels | 14.4k | 157k | **162k** (32×[4,2], 2M arena, budget 8k) | 374k |
 
-Each cell below is "G / LOO". G is the gain at the greedy step where the feature was added. LOO is the leave-one-out loss when the feature is removed from the full stack.
+Each cell below is "G #step / LOO":
+* **G** is the gain at the greedy step where the feature was added (the step number is the build order);
+* **LOO** is the leave-one-out loss when the feature is removed from the full stack.
+
+Tier = the larger of the two, maximised over the four scenarios: P0 ≥ 1.25, P1 ≥ 1.07.
 
 Complexity is a rough judgement of how much of the stack a feature touches:
 * **low**: one op or the scheduler, plus validation;
@@ -136,35 +141,40 @@ It is not a time estimate and has not been checked with the code owners.
 
 | tier | feature | 4gx today | 4gx roofline | 8gx today | 8gx roofline | complexity |
 |---|---|---|---|---|---|---|
-| P0 | slot lanes + paged pool | ×2.98 / ×6.9 | ×4.17 / ×6.4 | ×2.12 / ×5.5 | ×3.02 / ×6.0 | high |
-| P0 | host-DRAM KV tier (1 TB/gx) | ×1.47 / ×2.0 | ×1.85 / ×1.7 | ×1.48 / ×1.6 | ×1.38 / ×1.6 | high |
-| P0 | bounded dense gather (while lanes are 1M) | ×1.66 / ×1.00 | ×1.00 / ×1.00 | ×3.32 / ×1.00 | ×0.99 / ×0.99 | low |
-| P0 | async stage handoff | ×1.12 / ×1.13 | ×1.31 / ×1.32 | ×1.20 / ×1.25 | ×1.49 / ×1.51 | med |
-| P0 | multi-request batching (8–32k budget) | ×1.20 / ×1.30 | ×1.22 / ×1.33 | ×1.16 / ×1.20 | ×1.08 / ×1.23 | high |
-| P0 | index_k stored once (not ×TP) | ×1.18 / ×1.23 | ×1.20 / ×1.24 | ×1.17 / ×1.18 | ×1.22 / ×1.27 | med |
-| P1 | variable chunk (a2a KV write) | ×1.18 / ×1.08 | ×1.09 / ×1.01 | ×1.14 / ×1.08 | ×1.14 / ×1.09 | high |
-| P1 | index_k bf8 | ×1.07 / ×1.08 | ×1.13 / ×1.04 | ×1.04 / ×1.07 | ×1.05 / ×1.10 | low (PCC) |
-| P1 | shortest-first scheduling | ×1.03 / ×1.02 | ×1.00 / ×1.00 | ×1.03 / ×1.06 | ×1.04 / ×1.10 | low |
-| P2 | MSA SP-local indexer | ×1.03 / ×1.03 | ×1.01 / ×1.00 | ×1.02 / ×1.02 | ×1.00 / ×1.00 | high |
-| P2 | variable-size lane arena | ×0.99 / ×0.99 | ×1.00 / ×1.00 | ×1.02 / ×1.01 | ×1.03 / ×1.03 | med |
-| P2 | fused multi-user attention | ×1.01 / ×1.01 | ×1.00 / ×1.00 | ×1.01 / ×1.01 | ×1.02 / ×1.02 | high |
-| P2 | unaligned resume (subsumed by var) | ×1.00 (up to ×1.14 before var) | ×1.00 | ×1.00 | ×1.00 | low |
+| P0 | slot lanes + paged KV pool | ×3.15 #1 / ×6.58 | ×3.38 #1 / ×5.48 | ×2.03 #1 / ×5.51 | ×3.20 #1 / ×5.59 | high |
+| P0 | bounded dense gather | ×0.99 #13 / ×0.99 | ×1.00 #11 / ×1.00 | ×3.50 #2 / ×1.00 | ×1.00 #12 / ×1.00 | low |
+| P0 | host-DRAM KV tier (1 TB/gx) | ×1.43 #3 / ×2.09 | ×2.05 #2 / ×1.67 | ×1.45 #3 / ×1.57 | ×1.31 #2 / ×1.61 | high |
+| P0 | variable-size lanes (arena) | ×1.71 #2 / ×0.99 | ×1.00 #12 / ×1.00 | ×1.01 #11 / ×1.01 | ×1.01 #9 / ×1.00 | med |
+| P0 | async stage handoff | ×1.13 #7 / ×1.16 | ×1.30 #3 / ×1.35 | ×1.22 #4 / ×1.23 | ×1.52 #3 / ×1.51 | med |
+| P0 | multi-request batching | ×1.20 #5 / ×1.29 | ×1.26 #5 / ×1.35 | ×1.17 #6 / ×1.20 | ×1.13 #5 / ×1.18 | high |
+| P0 | index_k stored once (not ×TP) | ×1.14 #4 / ×1.29 | ×1.19 #4 / ×1.20 | ×1.14 #5 / ×1.16 | ×1.20 #4 / ×1.20 | med |
+| P1 | variable chunk (a2a KV write) | ×1.17 #6 / ×1.04 | ×1.12 #6 / ×1.03 | ×1.13 #7 / ×1.05 | ×1.10 #6 / ×1.04 | high |
+| P1 | index_k bf8 | ×1.08 #8 / ×1.10 | ×1.08 #7 / ×1.08 | ×1.06 #8 / ×1.06 | ×1.05 #8 / ×1.05 | low (PCC) |
+| P1 | shortest-first scheduling | ×1.02 #10 / ×1.03 | ×1.01 #8 / ×1.02 | ×1.03 #9 / ×1.06 | ×1.07 #7 / ×1.06 | low |
+| P2 | MSA SP-local indexer | ×1.02 #9 / ×1.01 | ×1.02 #9 / ×1.02 | ×1.01 #10 / ×1.03 | ×1.01 #10 / ×1.01 | high |
+| P2 | fused multi-user attention | ×1.01 #11 / ×1.01 | ×1.00 #13 / ×1.00 | ×1.01 #12 / ×1.01 | ×1.00 #11 / ×1.00 | high |
+| P2 | unaligned resume (subsumed by var; up to ×1.18 before var) | ×1.00 #12 / ×1.00 | ×1.00 #10 / ×1.00 | ×1.00 #13 / ×1.00 | ×1.00 #13 / ×1.00 | low |
 
 Takeaways:
-1. **On AgentX, KV capacity sets the throughput, not compute.** Even the best stacks reach only 38–73% of their own ∞-cache goodput.
+1. **On AgentX, KV capacity sets the throughput, not compute.** Even the best stacks reach only 41–70% of their own ∞-cache goodput.
    * The pool (vs static 1M slots), the host tier and index_k de-replication are strong in every scenario.
-   * Host DRAM size matters much more than PCIe bandwidth: 0.5 → 2 TB/galaxy moves 4-gx goodput 33.7k → 51.2k (today's kernels) and 62k → 103k (roofline kernels). 16 → 256 GB/s moves it by at most 7%.
-2. **Bounded dense gather is P0 while lanes are 1M slots:** ×1.7 at 4 gx, ×3.3 at 8 gx with today's kernels. Every chunk scans the whole lane, about 100 ms per dense layer with today's kernel, which caps run-C-like pipelines at about 18k processed tok/s. A request-sized arena removes the same cost, so do one or the other. With roofline kernels the scan is link-rate and cheap.
-3. **Batching is P0/P1: ×1.08–1.33.** It pays once capacity is fixed, and more with roofline kernels (bigger MoE token counts). Sequential per-request attention is as good as fused, so the proposed plan (batch the MoE, attention per request) is the right one; fused attention is not worth building. Best budget: 8k at 8 gx, 16k (today's kernels) / 32k (roofline kernels) at 4 gx.
-4. **Async stage handoff grows with pipeline depth and kernel speed:** ×1.12 at 4 gx with today's kernels, ×1.49 at 8 gx with roofline kernels. The measured blocking send is 7.5–18 ms per chunk per stage.
-5. **Variable chunk / a2a KV write is worth 1–18%.** It removes padding (15% of processed tokens at chunk 2048) and alignment loss; the modelled a2a cost is small (about 0.1 ms per layer).
+   * Host DRAM size matters much more than PCIe bandwidth: 0.5 → 2 TB/galaxy moves 4-gx goodput 34.9k → 52.8k (today's kernels) and 66k → 104k (roofline kernels). 16 → 256 GB/s moves it by at most 7%.
+2. **Remove the whole-lane dense scan with today's kernels:** ×1.7 at 4 gx and ×3.5 at 8 gx. Every chunk scans the whole 1M lane, about 100 ms per dense layer with today's kernel, which caps run-C-like pipelines at about 18k processed tok/s.
+   * Either **bounded dense gather** (low complexity) or **request-sized arena lanes** (med) removes it; they are substitutes, so do one. The greedy search happened to pick the arena first at 4 gx and bounded gather at 8 gx.
+   * With roofline kernels the scan is link-rate and cheap.
+3. **Batching: ×1.13–1.35.** It pays once capacity is fixed, and more with roofline kernels (bigger MoE token counts).
+   * Sequential per-request attention is as good as fused, so the proposed plan (batch the MoE, attention per request) is the right one; fused attention is not worth building.
+   * Best budget: 16k, except 8k at 8 gx with roofline kernels.
+4. **Async stage handoff grows with pipeline depth and kernel speed:** ×1.13 at 4 gx with today's kernels, ×1.52 at 8 gx with roofline kernels. The measured blocking send is 7.5–18 ms per chunk per stage.
+5. **Variable chunk / a2a KV write is worth 3–17%.** It removes padding (15% of processed tokens at chunk 2048) and alignment loss; the modelled a2a cost is small (about 0.1 ms per layer).
 6. **Topology.**
-   * 8 gx: one 32-stage pipeline beats 2×16.
-   * [4,2] beats [2,4] by 3–9%; it needs KV heads sharded 2 per chip.
+   * 8 gx: one 32-stage pipeline beats 2×16 (96.5k vs 78.0k today, 162k vs 150k roofline).
+   * [4,2] beats [2,4] by 2–9%; it needs KV heads sharded 2 per chip.
    * [4,4] and [8,4] stages lose.
    * Auto-split keeps the three dense layers on single-layer stages.
-7. **Faster decode raises prefill goodput** (90 → 360 tok/s: 38.4k → 43.8k at 4 gx) because it shrinks the live KV working set per unit of load.
-8. **Paging vs pool.** Full paging with the same host tier beats slot lanes + pool only slightly (for example 37.0k vs 36.2k useful tok/s at C=512, 4 gx), because 4 fixed 1M lanes cost 4M of the 21M-token capacity. The pool captures almost all of the benefit of paging.
+7. **Faster decode raises prefill goodput** (90 → 360 tok/s: 40.1k → 44.4k at 4 gx) because it shrinks the live KV working set per unit of load.
+8. **Paging vs pool.** Full paging with the same host tier is only slightly better than slot lanes + pool (about 2% at 4 gx), because 4 fixed 1M lanes cost 4M of the 21M-token capacity. The pool captures almost all of the benefit of paging.
+9. **The cliff is steep.** Goodput can change by 10% between neighbouring concurrency points, so the sweep bisects the SLO crossing; without refinement the same configurations read 1–10% lower.
 
 ## Assumptions to revisit
 

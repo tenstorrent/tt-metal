@@ -17,7 +17,7 @@ module.exports = {
   },
   host: {
     what: 'A second KV tier in the host servers\' RAM behind the device pool. Pages the device evicts are written to host RAM instead of dropped. When a request hits a host-resident prefix, those pages are copied back over PCIe into its lane while the request waits in the queue.',
-    why: 'M3 KV is about 127 KB per token today (73 KB with the index-cache fixes). 4 galaxies hold about 21M tokens on device, but the live working set of AgentX near the throughput limit is several times larger, so the device pool alone still evicts conversations that come back minutes later. 1 TB of host RAM per galaxy adds about 32M tokens (56M with the index fixes). A host hit costs a PCIe copy: a 150k-token prefix is about 19 GB, about 75 ms over 4 × 64 GB/s, small next to TTFT and done while the request is queued. In the simulation host RAM size matters a lot (0.5 → 2 TB per galaxy: 33.7k → 51.2k goodput at 4 galaxies with today\'s kernels) and PCIe bandwidth barely does (16 → 256 GB/s changes it by at most 7%).',
+    why: 'M3 KV is about 127 KB per token today (73 KB with the index-cache fixes). 4 galaxies hold about 21M tokens on device, but the live working set of AgentX near the throughput limit is several times larger, so the device pool alone still evicts conversations that come back minutes later. 1 TB of host RAM per galaxy adds about 32M tokens (56M with the index fixes). A host hit costs a PCIe copy: a 150k-token prefix is about 19 GB, about 75 ms over 4 × 64 GB/s, small next to TTFT and done while the request is queued. In the simulation host RAM size matters a lot (0.5 → 2 TB per galaxy: 34.9k → 52.8k goodput at 4 galaxies with today\'s kernels) and PCIe bandwidth barely does (16 → 256 GB/s changes it by at most 7%).',
     todo: [
       'Host page store in pinned memory with its own LRU.',
       'Asynchronous device→host write-back on eviction and host→device fetch before admission, using PCIe DMA from the host runtime.',
@@ -38,7 +38,7 @@ module.exports = {
   },
   idxdedup: {
     what: 'The index-key cache used by the MSA indexer (one 128-wide key per token per layer, bf16) is stored on all 4 TP columns. That is 1024 of the 2112 bytes per token per layer: 48% of all KV memory. Store it once per SP row and gather it inside the indexer. The dense layers also allocate a zero-filled index cache, which can be dropped.',
-    why: 'KV per token per layer drops from 2112 to 1344 bytes (−36%), so the same memory holds 57% more tokens. KV capacity is what limits goodput on this traffic, so the gain is ×1.17-1.27 in every scenario.',
+    why: 'KV per token per layer drops from 2112 to 1344 bytes (−36%), so the same memory holds 57% more tokens. KV capacity is what limits goodput on this traffic, so the gain is ×1.14-1.29 in every scenario.',
     todo: [
       'Allocate index_k sharded over TP (by token blocks) or on one TP column, instead of replicated.',
       'In the indexer, all-gather index keys over TP before scoring, or score per TP shard and merge top-k. The extra traffic is small next to the K/V gather.',
@@ -49,7 +49,7 @@ module.exports = {
   },
   idxbf8: {
     what: 'Store the index-key cache in bf8 (1.0625 B per value) instead of bf16 (2 B).',
-    why: 'KV per token per layer drops from 2112 to 1632 bytes (from 1344 to 1224 with de-replication): about 10-30% more capacity, for ×1.04-1.13 goodput.',
+    why: 'KV per token per layer drops from 2112 to 1632 bytes (from 1344 to 1224 with de-replication): about 10-30% more capacity, for ×1.05-1.10 goodput.',
     todo: [
       'bf8 is already the runner\'s default; the measured runs opt into bf16 with M3_INDEX_CACHE_BF16=1.',
       'Validate that top-k block selection and end-to-end PCC hold at long contexts with bf8 index keys.',
@@ -58,7 +58,7 @@ module.exports = {
   },
   async: {
     what: 'Today each stage receives a chunk, computes it, then sends the activation to the next stage (about 63 MB for a 5120-token chunk), and the send blocks the stage. Measured: about 18 ms per chunk at 5120 (7.5 ms at 2048) of blocking send, plus 14-16 ms of hop latency. With async handoff the send overlaps with computing the next chunk.',
-    why: 'The blocking send adds 10-35% to the pipeline period. Its share grows with more stages (fewer layers per stage) and with faster kernels: ×1.12 at 4 galaxies with today\'s kernels, ×1.49 at 8 galaxies with roofline kernels. It also cuts TTFT, since 32 hops × 15 ms is about 0.5 s.',
+    why: 'The blocking send adds 10-35% to the pipeline period. Its share grows with more stages (fewer layers per stage) and with faster kernels: ×1.13 at 4 galaxies with today\'s kernels, ×1.52 at 8 galaxies with roofline kernels. It also cuts TTFT, since 32 hops × 15 ms is about 0.5 s.',
     todo: [
       'Double-buffered D2D send/receive: post the send and start the next chunk immediately; the receiver pre-posts buffers.',
       'Make sure the transfer uses enough links (the activation is spread over the stage\'s chips).',
@@ -68,7 +68,7 @@ module.exports = {
   },
   batch: {
     what: 'Put several requests\' new tokens into one chunk, up to a token budget (8-16k works best). Projections, norms and the whole MoE run on the concatenated tokens; attention runs per request (sequential).',
-    why: 'Most AgentX requests are small (median 1600 new tokens), so most chunks are small. An MoE layer has a large per-chunk cost that does not depend on tokens: expert weights (16 experts × 32 MB per chip per layer at [2,4]) and about 10 collectives per layer with ~40 µs latency each. More tokens per chunk amortise it. At chunk 2048 each expert sees only about 64 tokens (T×4/128), far below the 260-460 tokens per expert where the matmuls become compute-bound. Measured: ×1.08-1.33, larger with roofline kernels, at slightly higher TTFT. With sequential attention it does not matter which requests share a chunk.',
+    why: 'Most AgentX requests are small (median 1600 new tokens), so most chunks are small. An MoE layer has a large per-chunk cost that does not depend on tokens: expert weights (16 experts × 32 MB per chip per layer at [2,4]) and about 10 collectives per layer with ~40 µs latency each. More tokens per chunk amortise it. At chunk 2048 each expert sees only about 64 tokens (T×4/128), far below the 260-460 tokens per expert where the matmuls become compute-bound. Measured: ×1.13-1.35, larger with roofline kernels, at slightly higher TTFT. With sequential attention it does not matter which requests share a chunk.',
     todo: [
       'Chunk metadata per segment: lane/slot, start position, length.',
       'An attention loop over segments; each segment\'s KV is read and written in its own lane.',
@@ -91,13 +91,13 @@ module.exports = {
   },
   unaligned: {
     what: 'Resume a conversation at any 32-token boundary instead of rounding the cached prefix down to a chunk multiple. PR #57636, in review.',
-    why: 'With chunk 2048 the rounding throws away 1024 cached tokens per request on average, which is a large fraction of a typical 1600-token turn. up to ×1.14 when added before the variable layout.',
+    why: 'With chunk 2048 the rounding throws away 1024 cached tokens per request on average, which is a large fraction of a typical 1600-token turn. up to ×1.18 when added before the variable layout.',
     todo: ['Land PR #57636 and run the two-turn 60-layer PCC check.'],
     notes: 'The variable layout includes it, which is why it shows ×1.00 in the full stack.',
   },
   arena: {
     what: 'Instead of fixed 1M lanes, give each request a lane of its actual length from one contiguous arena per stage (2-8M tokens).',
-    why: 'Frees the memory that fixed lanes reserve (4 × 1M tokens per stage) for the pool. Makes the dense scan request-sized, a substitute for bounded dense gather. Lets many small requests be in flight at once for batching. Measured ×0.99-1.03 once the other features are on (up to ×3.1 when it replaces a missing bounded dense gather), because they already cover these effects.',
+    why: 'Frees the memory that fixed lanes reserve (4 × 1M tokens per stage) for the pool. Makes the dense scan request-sized, a substitute for bounded dense gather. Lets many small requests be in flight at once for batching. Measured ×0.99-1.03 once the other features are on (×1.7 at 4 galaxies and ×3.3 at 8 galaxies with today\'s kernels when it stands in for a missing bounded dense gather; the two are substitutes, and whichever is added first gets the credit), because they already cover these effects.',
     todo: [
       'Kernels take a base offset + length instead of a slot index.',
       'An allocator with fragmentation handling (compaction, or size classes).',
@@ -106,7 +106,7 @@ module.exports = {
   },
   msa: {
     what: 'Today every MSA layer all-gathers the whole cached K/V and index keys over SP for each request (ag_kv / ag_index_k). Instead, each SP rank scores its own index keys, a small top-k merge picks the 16 blocks per query, and only those blocks are fetched.',
-    why: 'The gather grows with context: at [2,4] about 0.007 ms per 1k cached tokens per layer, so about 1 ms per layer at 140k, against an 18 ms layer today. The gain is at most ×1.07 once the pool is in and ×1.00-1.03 in the full stack at SP=2; it would matter more with larger SP or much faster kernels.',
+    why: 'The gather grows with context: at [2,4] about 0.007 ms per 1k cached tokens per layer, so about 1 ms per layer at 140k, against an 18 ms layer today. The gain is ×1.01-1.03 in the full stack at SP=2; one early greedy step shows ×1.20, but that is a configuration still dominated by cache thrashing; it would matter more with larger SP or much faster kernels.',
     todo: [
       'A distributed top-k merge.',
       'A block-fetch op for the selected K/V blocks.',
@@ -122,7 +122,7 @@ module.exports = {
   },
   srpt: {
     what: 'Order the queue by new tokens (shortest first), with 30 s aging so long requests are not starved.',
-    why: 'Short requests stop waiting behind 50k-token prefills, so p90 TTFT drops and more load fits under the SLO: ×1.00-1.11.',
+    why: 'Short requests stop waiting behind 50k-token prefills, so p90 TTFT drops and more load fits under the SLO: ×1.01-1.07.',
     todo: ['Scheduler-only change.'],
     notes: 'Cheap; its gain grows near saturation.',
   },

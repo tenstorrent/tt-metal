@@ -29,6 +29,25 @@ function summarize(points, slo) {
   return { goodput: g, at: best, peak };
 }
 
+// The cache cliff is steep: goodput can change 10% between neighbouring grid points. Bisect (in log concurrency)
+// between the highest-throughput point that meets the SLO and the next point that fails it. `run(c)` simulates
+// concurrency c, appends it to `points` and returns it. The same rule runs in the artifact's worker.
+function refineCliff(points, slo, steps, run) {
+  const ok = (p) => !p.error && p.ttftP90 <= slo;
+  for (let i = 0; i < steps; i++) {
+    const pts = points.filter((p) => !p.error).sort((a, b) => a.conc - b.conc);
+    let lo = null;
+    for (const p of pts) if (ok(p) && (!lo || p.usefulTps >= lo.usefulTps)) lo = p;
+    if (!lo) return;
+    const hi = pts.find((p) => p.conc > lo.conc && !ok(p));
+    if (!hi) return;
+    const mid = Math.round(Math.sqrt(lo.conc * hi.conc) / 8) * 8;
+    if (mid <= lo.conc || mid >= hi.conc) return;
+    const m = run(mid);
+    if (m.error) return;
+  }
+}
+
 class Pool {
   constructor(n, data) {
     this.n = n || Math.min(32, os.cpus().length); this.data = data || '/data/philei/m3_traffic_sim/data';
@@ -54,22 +73,27 @@ if (!isMainThread) {
   parentPort.on('message', (job) => {
     const pts = []; let over = 0, prevU = -1;
     const t0 = Date.now();
-    for (const c of job.concs) {
+    const one = (c) => {
       let r;
       try { r = SIM.simulate(TR, cal, Object.assign({}, job.cfg, { concurrency: c })); } catch (e) { r = { error: String(e && e.stack || e) }; }
       const m = { conc: c };
       for (const k of KEEP) if (r[k] !== undefined) m[k] = typeof r[k] === 'number' ? +r[k].toPrecision(5) : r[k];
       pts.push(m);
-      if (r.error) break;
+      return m;
+    };
+    for (const c of job.concs) {
+      const m = one(c);
+      if (m.error) break;
       // stop once well past the knee: p90 far above the SLO and throughput no longer growing
       if (m.ttftP90 > job.stopFactor * job.slo && m.usefulTps <= prevU * 1.02) over++; else over = 0;
       prevU = Math.max(prevU, m.usefulTps);
       if (over >= 2) break;
     }
+    refineCliff(pts, job.slo, job.refine === undefined ? 4 : job.refine, one);
     const plan = SIM.planSummary(SIM.makePlan(job.cfg, cal));
     parentPort.postMessage({ id: job.id, cfg: job.cfg, points: pts, plan, wallMs: Date.now() - t0 });
   });
   parentPort.postMessage({ ready: true });
 }
 
-module.exports = { Pool, summarize };
+module.exports = { Pool, summarize, refineCliff };
