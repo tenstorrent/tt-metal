@@ -21,7 +21,7 @@ for _name in ("tokenizer", "hf_model", "hf_layers"):
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
     "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
-    "sliding_moe": {"attention", "router"},
+    "sliding_moe": {"attention", "router", "experts"},
     "full_moe": set(),
 }
 
@@ -150,6 +150,33 @@ def _router_host_fn(mesh, module):
     return fn
 
 
+def _experts_module(mesh, spec, layer, loader=None, cfg=None):
+    """TtExperts (2x2 DeepSeek 2D EP: row-half split, 2-chip fabric dispatch per column, unified_routed_expert_moe
+    high_precision at HiFi4, combine, all_reduce axis 1, all_gather axis 0) for one MoE layer."""
+    from models.demos.mimo_v2_6_d_p_2x2.tt.model import build_experts
+
+    loader = loader or _loader(spec)
+    cfg = cfg or _cfg(loader)
+    return build_experts(mesh, loader, cfg, layer, _max_chunk(spec))
+
+
+def _experts_host_fn(mesh, module):
+    """fn(ctx, ffn_norm_host [S, H], dense_routing_host [S, E]) -> experts_out host [S, H]."""
+    import ttnn
+    from models.demos.mimo_v2_6_d_p_2x2.tt.rms_norm import replicated_to_host, to_device_replicated
+
+    def fn(ctx, x, r):
+        xd = to_device_replicated(mesh, x)
+        rd = to_device_replicated(mesh, r)
+        yd = module(xd, dense=rd)
+        y = replicated_to_host(yd)
+        for t in (xd, rd, yd):
+            ttnn.deallocate(t)
+        return y.to(x.dtype)
+
+    return fn
+
+
 def _new_kv_cache(mesh, cfg, layer, max_seq):
     from models.demos.mimo_v2_6_d_p_2x2.tt.model import new_kv_cache
 
@@ -199,6 +226,8 @@ def device_component(mesh, spec, layer, step):
         return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     if step == "router":
         return _router_host_fn(mesh, _router_module(mesh, spec, layer))
+    if step == "experts":
+        return _experts_host_fn(mesh, _experts_module(mesh, spec, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -249,6 +278,8 @@ class HybridDeviceModel:
                 ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             if "router" in steps:
                 ov["router"] = _router_host_fn(mesh, _router_module(mesh, spec, i, loader, self.cfg))
+            if "experts" in steps:
+                ov["experts"] = _experts_host_fn(mesh, _experts_module(mesh, spec, i, loader, self.cfg))
             self.overrides[i] = ov
         self.load_seconds = time.time() - t0
 
