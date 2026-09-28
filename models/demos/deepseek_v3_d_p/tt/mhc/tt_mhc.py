@@ -252,12 +252,8 @@ class TtMHCWrap(LightweightModule):
         tp_sum = self._tp_sum if self.tp_factor > 1 else None
         return _project(x, self.fn_T, self.norm_eps, self.ckc, tp_sum, self.tp_factor)
 
-    def hc_pre(self, x):
-        """[1,1,T,n*C] -> (y [1,1,T,C], post [1,1,T,n], comb [1,1,T,n*n]).
-
-        y = sum_i pre_i * x_i is the single stream handed to F. The reduction uses the raw
-        stream values; only the projection input is normalised.
-        """
+    def split(self, x):
+        """[1,1,T,n*C] -> (pre [1,1,T,n], post [1,1,T,n], comb [1,1,T,n*n]) computed from ``x``."""
         T = x.shape[-2]
         mixes = self.project(x)
         pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
@@ -265,7 +261,23 @@ class TtMHCWrap(LightweightModule):
         )
         # the kernel emits rank 2, [T,k]; prepending unit dims is a view, not data movement
         r4 = lambda t: ttnn.reshape(t, [1, 1, T, t.shape[-1]])
-        return _mix(_streams(x, self.n), _cols(r4(pre), self.n)), r4(post), r4(comb)
+        return r4(pre), r4(post), r4(comb)
+
+    def collapse(self, x, pre):
+        """[1,1,T,n*C] weighted by ``pre`` [1,1,T,n] -> [1,1,T,C]: y = sum_i pre_i * x_i.
+
+        DeepSeek-V4 collapses with the ``pre`` split from the same ``x``; V4.1 with the one the previous
+        sublayer produced."""
+        return _mix(_streams(x, self.n), _cols(pre, self.n))
+
+    def hc_pre(self, x):
+        """[1,1,T,n*C] -> (y [1,1,T,C], post [1,1,T,n], comb [1,1,T,n*n]).
+
+        y = sum_i pre_i * x_i is the single stream handed to F. The reduction uses the raw
+        stream values; only the projection input is normalised.
+        """
+        pre, post, comb = self.split(x)
+        return self.collapse(x, pre), post, comb
 
     def hc_post(self, x, residual, post, comb):
         """x: F's output [1,1,T,C]; residual: [1,1,T,n*C] -> [1,1,T,n*C].
