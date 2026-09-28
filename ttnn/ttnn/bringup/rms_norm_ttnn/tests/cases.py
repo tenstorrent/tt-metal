@@ -66,4 +66,59 @@ CASES = [
         "atol": 0.005,
         "rtol": 0.012,
     },
+    {
+        # MiMo-V2.6 input / post-attention RMSNorm on a 5120-token prefill chunk, replicated on a 2x2 mesh.
+        "id": "mimo_v2_6_d_p_2x2-2x2-s5120-h4096-bf16-w-eps1e-6",
+        "model": "mimo_v2_6_d_p_2x2",
+        "task": "O.1",
+        "sig": "fdbf629524",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        # input [1, 1, 5120, 4096] bf16 TILE DRAM interleaved (per device)
+        "input": {"shape": [1, 1, 5120, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        # weight [1, 1, 1, 4096] bf16 TILE DRAM interleaved
+        "weight": {"shape": [1, 1, 1, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 0,
+        # Same op arguments as the 1x4 case, on 4 chips of a 2x2 mesh; limits as the 1x4 case. Measured (seed 0, 4 chips): pcc
+        # 0.9999972, max abs err 0.054, max rel err 0.0093.
+        "pcc": 0.9999,
+        "atol": 0.005,
+        "rtol": 0.008,
+    },
+    {
+        # MiMo-V2.6 fused residual add + RMSNorm on a 5120-token prefill chunk, 2x2 mesh: t = x + residual is
+        # returned too (return_residual_sum), both DRAM interleaved.
+        "id": "mimo_v2_6_d_p_2x2-2x2-s5120-h4096-bf16-w-res-sum-eps1e-6",
+        "model": "mimo_v2_6_d_p_2x2",
+        "task": "O.1",
+        "sig": "ab56dee4d6",
+        "mesh": [2, 2],
+        "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+        "input": {"shape": [1, 1, 5120, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "residual": {"shape": [1, 1, 5120, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 4096], "dtype": "BFLOAT16", "layout": "TILE"},
+        "return_residual_sum": True,  # residual_sum_memory_config = DRAM interleaved
+        "epsilon": 1e-06,
+        "compute_kernel_config": {
+            "math_fidelity": "HiFi4",
+            "math_approx_mode": False,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "dst_full_sync_en": False,
+        },
+        "seed": 1,
+        # y vs the float64 reference on t = x + residual; t bit-exact vs ttnn.add. Measured (seed 1, 4
+        # chips): pcc 0.9999985, max abs err 0.044, max rel err 0.0062; limits as the 1x4 case.
+        "pcc": 0.9999,
+        "atol": 0.005,
+        "rtol": 0.012,
+    },
 ]
