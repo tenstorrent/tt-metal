@@ -5,7 +5,7 @@
 The Gemma 4 counterpart of models/tt_transformers/tests/test_optimizer_perf.py: the same stages,
 signposts and printed lines, through gemma4's own Generator (Gemma4Generator.from_pretrained ->
 warmup_model_prefill -> prefill_forward_text -> decode_forward, as demo/text_demo_v2.py drives it),
-with on-device greedy sampling and device-resident decode (read_from_device=False).
+with on-device greedy sampling; each decode step's token comes back to the host, as in the demo.
 
   TT_PERF_OSL_TOKENS   output length (default 256: 255 timed decode steps)
   TT_PERF_TRACE=0      eager instead of trace; the device profiler also disables trace
@@ -261,7 +261,9 @@ def test_optimizer_gemma4_perf(monkeypatch):
             elif not profiling:
                 print(f"FORWARD_WALL_MS={wall_ms:.6f}", flush=True)
         finally:
-            generator = None
+            # Drop every reference to device tensors before the mesh closes: the model, the
+            # sampling parameters and the KV cache, not only the generator.
+            generator = model = sampling_params = None
             tt_kv_cache = None
             gc.collect()
             if mesh_device is not None:
