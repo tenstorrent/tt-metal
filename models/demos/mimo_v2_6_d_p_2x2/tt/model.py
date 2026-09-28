@@ -81,3 +81,24 @@ def build_router(mesh, loader, cfg, layer: int, max_chunk: int):
     rs = cfg.routed_scaling_factor if cfg.routed_scaling_factor is not None else 1.0
     mode = os.environ.get("MIMO_ROUTER_MODE", "fp32")
     return TtRouter(mesh, w, b, max_chunk, top_k=cfg.num_experts_per_tok, route_scale=rs, mode=mode)
+
+
+def build_experts(mesh, loader, cfg, layer: int, max_chunk: int):
+    """TtExperts (2x2: dispatch axis 0 with 2 chips per group, 2 groups = columns, 64 experts per chip, bfp8).
+    Default mode 'unified' (ttnn.bringup.unified_routed_expert_moe, high_precision, HiFi4 + fp32 dest);
+    MIMO_EXPERTS_MODE=loop selects the per-expert ttnn.linear path, unified_lofi the op without high_precision."""
+    import os
+
+    from models.demos.mimo_v2_6_d_p_2x2.tt.experts import LazyExpertWeights, TtExperts
+
+    weights = LazyExpertWeights(loader, f"model.layers.{layer}.mlp.experts.", cfg.n_routed_experts)
+    return TtExperts(
+        mesh,
+        layer,
+        weights,
+        emb_dim=cfg.hidden_size,
+        hidden_dim=cfg.moe_intermediate_size,
+        top_k=cfg.num_experts_per_tok,
+        max_seq_len=max_chunk,
+        mode=os.environ.get("MIMO_EXPERTS_MODE", "unified"),
+    )
