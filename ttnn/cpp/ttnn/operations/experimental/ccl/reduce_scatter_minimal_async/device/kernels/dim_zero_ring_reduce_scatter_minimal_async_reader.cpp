@@ -10,12 +10,14 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
+namespace sched = ttnn::ccl::schedule;  // the dim-zero ring schedule shared with the writer + compute kernel
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -44,7 +46,7 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
-    const int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 0;
@@ -61,51 +63,37 @@ void kernel_main() {
 
     uint32_t sem_target = 0;
 
-    int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
+    // The dim-zero ring schedule — the neighbour-first slice walk, the interleaved own/other chunk
+    // pairing (a zero-tile own chunk still runs the full CB protocol), and the chunks-per-sync wait
+    // cadence — comes from the shared header, so this reader, the compute kernel and the writer
+    // walk ONE definition instead of three hand-maintained copies of the interleave.
+    auto slice_cursor = sched::RingSliceCursor::starting_at(
+        sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
+    sched::DimZeroChunkWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read, direction);
+    sched::SyncCadence cadence(chunks_per_sync);
+
     for (uint32_t i = 0; i < ring_size; ++i) {
         const bool do_reduce = i != 0;
         CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
-
-        uint32_t actual_slice_idx;
-        if (direction) {
-            actual_slice_idx = slice_idx < 0 ? slice_idx + ring_size : slice_idx;
-        } else {
-            actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
-        }
+        const uint32_t actual_slice_idx = slice_cursor.wrap();
 
         uint32_t tile_id_start = actual_slice_idx * output_num_pages;
 
-        uint32_t chunk_count = 0;
-        for (uint32_t b = 0; b < slice_B; ++b) {
-            uint32_t tiles_read = start_tiles_read;
-            uint32_t tiles_to_read = start_tiles_to_read;
-
-            if (!direction) {
-                uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                tiles_read += backwards_offset;
-            }
-
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-
-                if (do_reduce && (chunk_count % chunks_per_sync == 0)) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                    sem_target++;
+        cadence.reset();
+        walk.reset();
+        while (walk.next_batch()) {
+            while (walk.next_chunk()) {
+                if (do_reduce && cadence.wait_due()) {
+                    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                 }
-                chunk_count++;
+                cadence.advance();
 
-                uint32_t tiles_to_read_in_current_direction = 0;
-                if (direction) {
-                    tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                } else {
-                    tiles_to_read_in_current_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                }
+                const uint32_t tiles_this_chunk = walk.tiles_this_chunk();
 
                 cb_in0.reserve_back(tile_granularity);
                 uint32_t l1_write_offset = 0;
-                for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                    uint32_t input_tile_id = tile_id_start + tiles_read + j;
+                for (uint32_t j = 0; j < tiles_this_chunk; ++j) {
+                    uint32_t input_tile_id = tile_id_start + walk.position() + j;
                     noc_obj.async_read(
                         input_tensor_addrgen,
                         cb_in0,
@@ -119,8 +107,8 @@ void kernel_main() {
                     // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                     cb_intermediate.reserve_back(tile_granularity);
                     uint32_t intermediate_l1_write_offset = 0;
-                    for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                        uint32_t intermediate_tile_id = tile_id_start + tiles_read + j;
+                    for (uint32_t j = 0; j < tiles_this_chunk; ++j) {
+                        uint32_t intermediate_tile_id = tile_id_start + walk.position() + j;
                         noc_obj.async_read(
                             intermediate_tensor_addrgen,
                             cb_intermediate,
@@ -134,31 +122,13 @@ void kernel_main() {
                     cb_intermediate.push_back(tile_granularity);
                 }
 
-                tiles_read += tiles_to_read_in_current_direction;
                 noc_obj.async_read_barrier();
                 cb_in0.push_back(tile_granularity);
-
-                // Skip the tiles going the other direction
-                tiles_remaining_to_read = tiles_to_read - tiles_read;
-                if (tiles_remaining_to_read > 0) {
-                    uint32_t tiles_to_read_in_other_direction = 0;
-                    if (!direction) {
-                        tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                    } else {
-                        tiles_to_read_in_other_direction = std::min(tiles_remaining_to_read, tile_granularity);
-                    }
-                    tiles_read += tiles_to_read_in_other_direction;
-                }
             }
             tile_id_start += batch_num_pages;
         }
 
-        // Next slice idx
-        if (direction) {
-            slice_idx--;
-        } else {
-            slice_idx++;
-        }
+        slice_cursor.advance();
 
         if (do_reduce && (i == (ring_size - 1))) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);

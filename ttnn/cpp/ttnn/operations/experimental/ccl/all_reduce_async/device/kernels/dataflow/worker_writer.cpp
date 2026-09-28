@@ -8,14 +8,14 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
-#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp"
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
+using namespace dataflow_kernel_lib::ccl;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -58,7 +58,10 @@ void kernel_main() {
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    // The packet headers now come from PacketHeaderPool (owned by the stream below), so the op's
+    // reserved_packet_header_cb_id / num_packet_headers_storable compile-time args are dead. They
+    // are left in place so the host factory's arg indices are untouched; removing the CB and those
+    // two args is a follow-up host-side cleanup.
     CircularBuffer cb0(cb0_id);
 
     // Set up for mcasting to reduction workers
@@ -79,34 +82,21 @@ void kernel_main() {
     tt_l1_ptr uint32_t* mcast_dest_noc_end_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_mcast_ranges;
 
-    size_t arg_for_fab = arg_idx;
-    // Open the fabric connection at the same time we build but only start the "open" process and don't
-    // require it to finish before exiting because open_finish requires a barrier which can impact performance
-    // We do open_finish later - deferred as late as possible
-    auto fabric_connection =
-        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
-            arg_idx);
+    // Build the DUPLEX egress: this worker drives both the forward and the backward direction of one
+    // fabric connection. The build only STARTS the open (open_finish carries a barrier, so it is
+    // deferred as late as possible — sender.open() below does it), exactly as before.
+    FabricDuplexSender<> sender(arg_idx, /*alignment=*/1);
 
-    // packet header cb
-    cb_packet_header.reserve_back(1);
-    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
-    cb_packet_header.push_back(1);
-    cb_packet_header.reserve_back(1);
-    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
-    cb_packet_header.push_back(1);
-    cb_packet_header.reserve_back(1);
-
-    // pre-populate packet headers
-    volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
-    volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_forward, forward_multicast_route_info);
-    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_backward, backward_multicast_route_info);
-
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open_finish();
-    }
+    // Open the duplex egress, binding BOTH directions' MULTICAST routes at once — the route-pair type
+    // selects the chip-level cast, so this is a Cast::Multicast stream and every issue below fans out
+    // to whichever directions this worker actually has wired (an end-of-line worker has one).
+    auto stream = sender.open(forward_multicast_route_info, backward_multicast_route_info);
+    // Arm once, issue many. Both channels draw their own per-direction pooled headers. The armed size
+    // is the maximum packet; each issue below carries its own size because the last packet of a shard
+    // is short.
+    const uint32_t max_payload_size_bytes = packet_size_in_pages * tensor0_page_size;
+    auto writer = stream.arm_write(max_payload_size_bytes);
+    auto fused = stream.arm_fused_write_inc(max_payload_size_bytes, /*val=*/1, /*flush=*/false);
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
@@ -128,28 +118,20 @@ void kernel_main() {
         // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
-        // This issues a flush barrier
+        const uint32_t payload_size_bytes = num_tiles_to_read_this_core * tensor0_page_size;
+
+        // Last packet of this shard (or of this worker's whole range): fold the receiver's semaphore
+        // bump into the same packet, so the reduction worker learns the slice landed without a second
+        // packet. Otherwise it is a plain payload write. Both mirror the payload locally as well as
+        // forwarding it, and both fan out over every connected direction.
         if (shard_tile_id + num_tiles_to_read_this_core >= num_tiles_per_core ||
             tiles_read + num_tiles_to_read_this_core >= num_tiles_to_read) {
-            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                num_tiles_to_read_this_core * tensor0_page_size,
-                sema_noc_addr,
-                static_cast<uint32_t>(1),
-                false);
+            fused.write_fused_with_local_copy(noc0_dest_noc_addr, l1_read_addr, sema_noc_addr, payload_size_bytes);
+            // The fused issue deliberately does not flush (it pairs with this op's semaphore
+            // protocol), so the flush barrier stays here exactly as before.
             noc_obj.async_writes_flushed();
         } else {
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                num_tiles_to_read_this_core * tensor0_page_size);
+            writer.write_with_local_copy(noc0_dest_noc_addr, l1_read_addr, payload_size_bytes);
         }
 
         tiles_read += num_tiles_to_read_this_core;
@@ -167,12 +149,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < core_id; i++) {
         noc_semaphore_inc(safe_get_noc_addr(core_noc_x[i], core_noc_y[i], out_ready_sem_bank_addr), 1);
     }
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close_start();
-    }
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close_finish();
-    }
+
+    // close() drains (write + atomic barriers) then closes both directions — the close_start /
+    // close_finish pair and their is_logically_connected gating are handled inside. The stream dtor
+    // would also close; this is idempotent.
+    stream.close();
 
     noc_obj.async_write_barrier();
 }
