@@ -43,6 +43,28 @@
   "started": "2026-09-28T04:41:03",
   "status": "PASS"
  },
+ "G.s56320": {
+  "attempts": 0,
+  "duration_s": 7.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T04:41:24"
+   }
+  ],
+  "last_run": "2026-09-28T04:41:24",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/G.s56320.log",
+  "metrics": {
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 6,
+   "golden_reused": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T04:41:16",
+  "status": "PASS"
+ },
  "R.1": {
   "attempts": 0,
   "duration_s": 8.0,
