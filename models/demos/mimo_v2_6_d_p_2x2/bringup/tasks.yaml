@@ -351,6 +351,13 @@ tasks:
     - attn_residual
     - ffn_norm
     layer: 0
+  frozen:
+    at: '2026-09-28T05:20:57'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_04_ffn_norm.py: c93096e8a48620e1264476fe6aaa988585ced48acc981876278e34a726a9b218
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.full_dense.mlp
   title: full_dense mlp (mlp) on device, layer 0
   step: implement
