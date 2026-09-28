@@ -341,3 +341,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate (device): pcc_swap_out 0.999992, out rel 0.0040 / first rows 0.0030; experts pcc 0.99984, rel 0.0181 golden /
   0.0054 iso, ratio [0.9946, 1.0055], worst row 0.015; attention rel 0.0193. 1 passed.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_06_experts.py`
+
+## C.sliding_moe.ffn_residual.test.1 (2026-09-28)
+- Replaced the rendered test with the prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_residual.py` (same golden). Added the SPDX header and one docstring line saying it was adopted. Every check runs on the gathered [2048, 4096] output, so none depends on the mesh shape.
+- Checks: PCC >= 0.99 (gated), numel, finite, rel L2 <= 0.01, per-token norm ratio [0.99, 1.01]; on delta = out - h_mid: experts coefficient in [0.97, 1.03], rel vs experts_out <= 0.1. These catch a dropped or halved experts_out, 2x, a shifted row and a zeroed last row, which PCC alone lets through (see the prior docstring).
+- BRINGUP_IMPL=reference: pcc 0.999997, rel 0.0024, ratio [0.9991, 1.0010], coef 1.0, rel 0.0: PASS. BRINGUP_IMPL=stub: pcc 0.0: FAIL.
+- Default gate already passes (a device add is resolved for this step): pcc 0.999996, rel 0.0029, ratio [0.9993, 1.0016], coef 1.0014, experts rel 0.0114. 1 passed.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_residual.py`
