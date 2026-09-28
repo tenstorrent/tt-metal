@@ -1183,8 +1183,9 @@
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
-    export PREFILL_TRACE_DIR=/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240
+    export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3/
+    export TT_CACHE_PATH=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     export EXPERT_DTYPE=bf4
     export PREFILL_CHUNKED=1
@@ -1205,8 +1206,11 @@
       # 18L weight load + 2-bucket compile sweep + eager reference pass + capture + 3 traced passes +
       # two 2-slot readbacks (eager reference, traced). Cold weight-cache build will exceed this.
       timeout: 45
+      tier: 2
+      release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
+  budget_type: demo
   sp_config: sc1
 
 # ===== Mistral-Small-4-119B ============================================================================
