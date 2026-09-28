@@ -4,7 +4,7 @@
 - Source SHA: `99f7e834cea8bc42f0b478b9cc59a7b89f2f9c1a`
 - Python: `ttnn.bringup.*` (was `ttnn.transformer.*`)
 - Forked for: mimo_v2_6_d_p attention V head dim 128 (non-MLA GQA)
-- Used by: none yet (mimo_v2_6_d_p will switch to it)
+- Used by: mimo_v2_6_d_p (tt/attention.py: full and sliding layers, V 128)
 
 Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_sdpa`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
 
@@ -64,5 +64,6 @@ Build fixes after fork_op.py (no behaviour change):
   fp32 dest on (non-streaming) and off (streaming), each against a torch reference and bit-identical to the padded
   source op; V == K bit-identical to the source; the program cache; refusals (V 112, V 224). With arg 23 reverted to
   `use_mla` (the reader addressing V at K's width) all 11 narrow-V cases fail (PCC 0.16-0.83).
-- Needed by: mimo_v2_6_d_p (attention V head dim 128; the model still calls ttnn.transformer with padded V)
+- Needed by: mimo_v2_6_d_p (attention V head dim 128; the model calls the fork with V 128 since commit
+  "Attention V at its real head dim 128", MIMO_V_PAD=1 restores ttnn.transformer with padded V)
 - Files: `device/sdpa_program_factory.cpp`, `device/sdpa_device_operation.cpp`, `tests/unit/`
