@@ -110,11 +110,17 @@ inline void tanh_derivative_init() {
 // Performance: ~16 ops (vs ~28 for _sfpu_exp_f32_accurate_)
 // Accuracy: < 1 ULP for the exp, combined with asymptotic formula gives Max ULP = 1
 // =============================================================================
-sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
+// Cody-Waite constants of the tail exp; tanh_derivative_sech2_init parks them in vConstFloatPrgm0/1/2.
+constexpr float SECH2_TAIL_INV_LN2 = 1.4426950408889634f;
+constexpr float SECH2_TAIL_LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
+constexpr float SECH2_TAIL_LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
+
+// The three Cody-Waite constants come from the caller: vConstFloatPrgmN programmed by the init, or an
+// sfpi::vFloat / float literal. (sfpi 7.83.0 never lifts a literal out of a loop by itself, so as literals
+// they cost an SFPLOADI pair each per row.)
+template <typename K, typename HI, typename LO>
+sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a, K inv_ln2, HI ln2_hi, LO ln2_lo) {
     constexpr float LN4 = 1.3862943611198906f;
-    constexpr float INV_LN2 = 1.4426950408889634f;
-    constexpr float LN2_HI = -0.6931152343750000f;  // -ln(2) high bits (exact in float)
-    constexpr float LN2_LO = -3.19461832987e-05f;   // -ln(2) low bits
 
     // Taylor coefficients for exp(r), |r| < ln(2)/2 ≈ 0.347
     // Degree-4 is sufficient: the degree-5 term contributes < 0.0001 BF16 ULP
@@ -128,12 +134,12 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     sfpi::vFloat t = a * (-2.0f) + LN4;
 
     // Cody-Waite range reduction: t = k·ln(2) + r
-    sfpi::vFloat z = t * INV_LN2;
+    sfpi::vFloat z = t * inv_ln2;
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
-    sfpi::vFloat r = k * LN2_HI + t;  // Extended precision subtraction
-    r = k * LN2_LO + r;
+    sfpi::vFloat r = k * ln2_hi + t;  // Extended precision subtraction
+    r = k * ln2_lo + r;
 
     // Degree-4 Taylor for exp(r)
     sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4);
@@ -204,6 +210,12 @@ constexpr float TAIL_REGION_LIMIT = 45.0f;  // Exp ↔ zero saturation boundary
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_tanh_derivative_sech2() {
+    // Loop-invariant constants loaded once and kept in LRegs: the three highest sech² coefficients here,
+    // the tail exp's Cody-Waite constants in Prgm0/1/2 from tanh_derivative_sech2_init (this kernel runs
+    // no reciprocal, so Prgm0 is free). Each would otherwise be an SFPLOADI pair per row.
+    sfpi::vFloat c10 = SECH2_POLY_C10, c9 = SECH2_POLY_C9, c8 = SECH2_POLY_C8;
+    // unroll 8: lets the body be recorded once into the replay buffer instead of re-issued from the RISC.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = 0.0f;
@@ -226,15 +238,15 @@ inline void calculate_tanh_derivative_sech2() {
                 SECH2_POLY_C5,
                 SECH2_POLY_C6,
                 SECH2_POLY_C7,
-                SECH2_POLY_C8,
-                SECH2_POLY_C9,
-                SECH2_POLY_C10);
+                c8,
+                c9,
+                c10);
         }
         v_elseif(a < TAIL_REGION_LIMIT) {
             // Tail region: inline exp(-2|x| + ln4) = 4·exp(-2|x|)
             // Asymptotic formula exact to 1 BF16 ULP for |x| >= CORE_REGION_LIMIT.
             // Beyond TAIL_REGION_LIMIT, result stays 0 (sech²(45) ≈ 5.5e-39 < BF16 min normal).
-            result = inline_exp_sech2_tail(a);
+            result = inline_exp_sech2_tail(a, sfpi::vConstFloatPrgm0, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2);
         }
         v_endif;
 
@@ -251,8 +263,12 @@ inline void calculate_tanh_derivative_sech2() {
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // No special initialization needed — no reciprocal, no LUT.
-    // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
+    // No reciprocal, no LUT: the three programmable registers hold the tail exp's Cody-Waite constants,
+    // which calculate_tanh_derivative_sech2 reads on every row (Prgm0 would be the reciprocal's 2.0f in a
+    // kernel that had one).
+    sfpi::vConstFloatPrgm0 = SECH2_TAIL_INV_LN2;
+    sfpi::vConstFloatPrgm1 = SECH2_TAIL_LN2_HI;
+    sfpi::vConstFloatPrgm2 = SECH2_TAIL_LN2_LO;
 }
 
 }  // namespace sfpu

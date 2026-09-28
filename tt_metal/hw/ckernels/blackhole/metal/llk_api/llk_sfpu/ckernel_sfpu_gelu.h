@@ -145,23 +145,31 @@ constexpr float GELU_HCORR_C1 = 9.5413386822e-02f;
 constexpr float GELU_HCORR_C2 = 1.3809983619e-02f;
 constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 
+// -0.5 / ln(2): folds the -x²/2 of the exp region into the exp_21f scale.
+constexpr float GELU_NEG_HALF_ONE_LN2 = -0.72134752044f;
+
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
-sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
+//
+// The loop-invariant constants the caller hoists are passed in (sfpi 7.83.0 never lifts a literal out of a
+// loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row): exp_21f's c0 and c1 are
+// read from vConstFloatPrgm1/2 (programmed by gelu_init<false, false>); -0.5/ln2 and the two highest CDF
+// coefficients are sfpi::vFloats the caller built once before its loop.
+template <typename K, typename C13, typename C11>
+sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x, K neg_half_one_ln2, C13 cdf13, C11 cdf11) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
 
     v_if(x > -5.54259443f) {
         // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
-        constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
-        sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
+        sfpi::vFloat xlog2 = x2 * neg_half_one_ln2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
         sfpi::vInt exponential_part = sfpi::exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
         sfpi::vMag fractional_part = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
         sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
-        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+        frac = PolynomialEvaluator::eval(frac, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2, EXP_21F_C2);
         sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
 
         sfpi::vFloat H =
@@ -181,14 +189,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         // Core CDF region [-3.125, 2.78125): GELU = x · Phi_core(x).
         v_and(x >= -3.125f);
         sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
-            x2,
-            GELU_CDF_CORE_C1,
-            GELU_CDF_CORE_C3,
-            GELU_CDF_CORE_C5,
-            GELU_CDF_CORE_C7,
-            GELU_CDF_CORE_C9,
-            GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13);
+            x2, GELU_CDF_CORE_C1, GELU_CDF_CORE_C3, GELU_CDF_CORE_C5, GELU_CDF_CORE_C7, GELU_CDF_CORE_C9, cdf11, cdf13);
         sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
 
@@ -219,8 +220,12 @@ void gelu_init() {
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
+    } else {
+        // BF16 accurate mode: no reciprocal; Prgm1/2 hold exp_21f's c0 and c1 for calculate_gelu_piecewise
+        // (its other loop constants live in LRegs, see calculate_gelu).
+        sfpi::vConstFloatPrgm1 = EXP_21F_C0;
+        sfpi::vConstFloatPrgm2 = EXP_21F_C1;
     }
-    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
 
 template <int ITERATIONS>
@@ -329,10 +334,15 @@ inline void calculate_gelu() {
     } else {
         // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU.
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
+        // -0.5/ln2 and the two highest CDF coefficients are loaded once and kept in LRegs for the whole
+        // loop; the exp_21f coefficients come from Prgm1/2 (gelu_init). Prgm0 is left alone: the LReg form
+        // is one instruction shorter here and keeps the reciprocal's convention for that register.
+        sfpi::vFloat neg_half_one_ln2 = GELU_NEG_HALF_ONE_LN2;
+        sfpi::vFloat cdf13 = GELU_CDF_CORE_C13, cdf11 = GELU_CDF_CORE_C11;
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = calculate_gelu_piecewise(in);
+            sfpi::vFloat result = calculate_gelu_piecewise(in, neg_half_one_ln2, cdf13, cdf11);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
