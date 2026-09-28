@@ -488,7 +488,13 @@ void kernel_main() {
                     const std::uint32_t mask_index = mask_offset + block_w_index;
 
                     dfb_xmm.wait_front(1);
-                    reconfig_data_format(dfb_xmm_id, dfb_xmm_id, dfb_ex2pe_id, dfb_input_mask_id);
+                    if constexpr (fp32_sfpu_normalizer) {
+                        // SFPU normalisation does not select ex2pe in SrcB;
+                        // eps or the previous tile's affine operand is still active.
+                        reconfig_data_format(dfb_xmm_id, dfb_input_mask_id);
+                    } else {
+                        reconfig_data_format(dfb_xmm_id, dfb_xmm_id, dfb_ex2pe_id, dfb_input_mask_id);
+                    }
                     mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, 0, mask_index, dst0);

@@ -2407,17 +2407,26 @@ def test_group_norm_optional_weight_bias(
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("grid_size, spatial, num_groups", [(1, 128, 16), (8, 1024, 32)], ids=["single_core", "8x8"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize(
+    "dtype,layout,mask_dtype",
+    [
+        pytest.param(ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, id="bf16_tile"),
+        pytest.param(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat8_b, id="bf16_row_major"),
+        pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, id="fp32_tile"),
+        pytest.param(ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat8_b, id="fp32_row_major"),
+        pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, ttnn.bfloat16, id="fp32_tile_bf16_mask"),
+        pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, ttnn.float32, id="fp32_tile_fp32_mask"),
+    ],
+)
 @pytest.mark.parametrize(
     "has_weight, has_bias",
     [(False, False), (True, False), (False, True), (True, True)],
     ids=["no_affine", "weight_only", "bias_only", "full_affine"],
 )
 def test_group_norm_sharded_optional_affine_program_cache(
-    device, enabled_program_cache, grid_size, spatial, num_groups, dtype, layout, has_weight, has_bias
+    device, enabled_program_cache, grid_size, spatial, num_groups, dtype, layout, mask_dtype, has_weight, has_bias
 ):
-    """The final affine operation must publish all output tiles on cached calls too."""
+    """Mask/affine format changes must preserve every output tile on cached calls too."""
     available_grid = device.compute_with_storage_grid_size()
     if min(available_grid.x, available_grid.y) < grid_size:
         pytest.skip(f"Requires a {grid_size}x{grid_size} compute grid")
@@ -2439,7 +2448,7 @@ def test_group_norm_sharded_optional_affine_program_cache(
         )
 
     gamma, beta = make_parameter(weight), make_parameter(bias)
-    input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(channels, num_groups, grid.y, ttnn.bfloat8_b), device)
+    input_mask = ttnn.to_device(ttnn.create_group_norm_input_mask(channels, num_groups, grid.y, mask_dtype), device)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size - 1, grid_size - 1))})
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED if grid_size == 1 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
