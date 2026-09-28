@@ -1239,7 +1239,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
 #endif
             return {"acosh_tile_init();", fmt::format("acosh_tile({});", idst)};
-        case UnaryOpType::ATAN: return {"atan_tile_init();", fmt::format("atan_tile({});", idst)};
+        case UnaryOpType::ATAN:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"atan_tt_poly_bf16_tile_init();", fmt::format("atan_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"atan_tile_init();", fmt::format("atan_tile({});", idst)};
         case UnaryOpType::ATANH:
 #if !defined(TT_POLY_LLK_DISABLE)
             if (input_dtype == DataType::BFLOAT16) {

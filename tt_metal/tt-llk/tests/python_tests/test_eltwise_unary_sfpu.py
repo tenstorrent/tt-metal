@@ -1387,6 +1387,7 @@ _TT_POLY_FP32_DEST = {
     "acos": (),
     "acosh": ("blackhole", "wormhole"),
     "asinh": (),
+    "atan": (),
     "atanh": (),
     "cbrt": (),
     "celu": (),
@@ -1432,6 +1433,7 @@ _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ("erfinv",)
 _TT_POLY_ADAPTER_OPERATIONS = {
     "asinh": "asinh",
+    "atan": "atan",
     "exp": "exp",
     "gelu": "gelu",
     "hardmish": "hardmish",
@@ -1555,6 +1557,7 @@ _GENERATED_UNARY_CASES = [
         "None",
         "ckernel_sfpu_trigonometry.h",
     ),
+    (MathOperation.Atan, "atan", True, True, 32, "None", "ckernel_sfpu_trigonometry.h"),
     (
         MathOperation.Atanh,
         "atanh",
@@ -1786,6 +1789,10 @@ def _apply_finite_constants(golden, coordinate, domain_rows):
 
 def _tt_poly_reference_asinh(x):
     return getattr(importlib.import_module("torch"), "asinh")(x.double(), **{})
+
+
+def _tt_poly_reference_atan(x):
+    return getattr(importlib.import_module("torch"), "atan")(x.double(), **{})
 
 
 def _tt_poly_reference_erfinv(x):
@@ -2049,6 +2056,15 @@ _TT_POLY_FORWARD_REFERENCES = {
         (),
         (),
     ),
+    "atan": (
+        _tt_poly_reference_atan,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (17251, 17252, 17253, 50019, 50020, 50021),
+        (
+            ("below", -228.0, True, "constant", -1.5703125),
+            ("above", 228.0, True, "constant", 1.5703125),
+        ),
+    ),
     "erfinv": (
         _tt_poly_reference_erfinv,
         ((0, 1), (128, 16256), (32768, 32769), (32896, 49024)),
@@ -2218,6 +2234,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "acos",
     "acosh",
     "asinh",
+    "atan",
     "atanh",
     "cbrt",
     "celu",
@@ -2480,6 +2497,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "acos",
     "acosh",
     "asinh",
+    "atan",
     "atanh",
     "cbrt",
     "celu",

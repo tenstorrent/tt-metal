@@ -1301,6 +1301,27 @@ inline void calculate_asinh_tt_poly_bf16() {
 
 #if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
     !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_atan_bf16.h"
+#define TT_POLY_ATAN_BF16_AVAILABLE 1
+#endif
+
+namespace ckernel::sfpu {
+
+#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_atan_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_reciprocal_complement<ttpoly_generated::AtanBf16Config, ITERATIONS>();
+}
+template <auto...>
+inline void init_atan_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_reciprocal_complement<ttpoly_generated::AtanBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
+
+#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
+    !defined(TT_POLY_LLK_DISABLE)
 #include "ckernel_sfpu_atanh_bf16.h"
 #define TT_POLY_ATANH_BF16_AVAILABLE 1
 #endif
