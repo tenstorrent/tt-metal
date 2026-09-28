@@ -10,6 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/span.hpp>
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 

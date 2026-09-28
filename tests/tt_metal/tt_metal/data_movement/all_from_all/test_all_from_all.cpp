@@ -128,11 +128,14 @@ bool run_dm(distributed::MeshDevice& mesh_device, const AllFromAllConfig& test_c
 
     DataMovementHardwareConfig requestor_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        requestor_hw_config = DataMovementGen2Config{};
+        requestor_hw_config = DataMovementHardwareConfig{};
     } else {
-        requestor_hw_config = DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = test_config.noc_id,
+        requestor_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = test_config.noc_id,
+                },
         };
     }
     KernelSpec requestor_spec{

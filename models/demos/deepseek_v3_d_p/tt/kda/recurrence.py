@@ -108,6 +108,9 @@ def _prepare_chunk_terms(
     geometry: _RecurrenceGeometry,
     *,
     compute_config: _RecurrenceComputeConfig,
+    actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
+    sequence_parallel_axis: int,
 ) -> _PreparedChunks:
     beta_by_head = ttnn.permute(beta, (0, 2, 1))
     beta_by_chunk = ttnn.reshape(
@@ -124,6 +127,9 @@ def _prepare_chunk_terms(
         memory_config=KDA_PREPARATION_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,
         output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
+        actual_start=actual_start,
+        actual_end=actual_end,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
     return _PreparedChunks(*outputs)
 
@@ -160,6 +166,7 @@ def _summarize_chunk_groups(
     grouped: _PreparedChunks,
     *,
     actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     groups_per_head: int,
     summary_memory_config: ttnn.MemoryConfig,
@@ -172,6 +179,7 @@ def _summarize_chunk_groups(
         memory_config=summary_memory_config,
         compute_kernel_config=compute_config.preparation,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
     # A single sequence rank has no split tail, so only the head summaries are needed.
@@ -186,6 +194,7 @@ def _scan_chunks(
     tail_entry_states: ttnn.Tensor,
     *,
     actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
@@ -197,6 +206,7 @@ def _scan_chunks(
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config,
         actual_start=actual_start,
+        actual_end=actual_end,
         tail_entry_states=tail_entry_states,
         sequence_parallel_axis=sequence_parallel_axis,
     )
@@ -299,6 +309,7 @@ def _ordinary_group_scan(
     initial_state: ttnn.Tensor,
     *,
     actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     groups_per_head: int,
     prefix_memory_config: ttnn.MemoryConfig,
@@ -314,6 +325,7 @@ def _ordinary_group_scan(
         memory_config=prefix_memory_config,
         compute_kernel_config=compute_config.affine_prefix,
         actual_start=actual_start,
+        actual_end=actual_end,
         tail_a=summary.a,
         tail_b=summary.b,
         tail_entry_states=initial_state,
@@ -327,6 +339,7 @@ def _ordinary_group_scan(
         groups_per_head=groups_per_head,
         compute_config=compute_config.scan,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
 
@@ -337,6 +350,7 @@ def _scan_local_grouped_chunks(
     geometry: _RecurrenceGeometry,
     *,
     actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     summary_group_chunks: int,
     groups: int,
@@ -352,6 +366,7 @@ def _scan_local_grouped_chunks(
         summary_memory_config=memory,
         compute_config=compute_config,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
     scan = _ordinary_group_scan(
@@ -362,6 +377,7 @@ def _scan_local_grouped_chunks(
         prefix_memory_config=KDA_LOCAL_PREFIX_MEMORY_CONFIG,
         compute_config=compute_config,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
     )
     output = ttnn.reshape(
@@ -379,6 +395,7 @@ def _partition_prefix(
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
@@ -387,6 +404,7 @@ def _partition_prefix(
         groups_per_head,
         local_rows=local_rows,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config.affine_prefix,
@@ -411,6 +429,7 @@ def _scan_sp_grouped_chunks(
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
     actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
@@ -420,6 +439,7 @@ def _scan_sp_grouped_chunks(
         *grouped.as_kernel_args(),
         groups_per_head=groups,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=memory,
         compute_kernel_config=compute_config.preparation,
@@ -432,6 +452,7 @@ def _scan_sp_grouped_chunks(
         groups_per_head=groups,
         local_rows=geometry.local_rows,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         selections=selections,
         compute_config=compute_config,
@@ -447,6 +468,7 @@ def _scan_sp_grouped_chunks(
         tail_b=tail_b,
         tail_entry_states=prefix_final_state,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
         compute_kernel_config=compute_config.affine_prefix,
@@ -457,6 +479,7 @@ def _scan_sp_grouped_chunks(
         prefix_final_state,
         groups_per_head=groups,
         actual_start=actual_start,
+        actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.scan,
     )
@@ -546,6 +569,8 @@ class KDARecurrence:
     def _prepare(
         self,
         *,
+        actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
         q: ttnn.Tensor,
         k: ttnn.Tensor,
         v: ttnn.Tensor,
@@ -577,6 +602,9 @@ class KDARecurrence:
             beta,
             geometry,
             compute_config=self._compute_config,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=self._sequence_parallel_axis,
         )
         return prepared, state, geometry
 
@@ -592,6 +620,7 @@ class KDARecurrence:
         self,
         *,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None = None,
         q: ttnn.Tensor,
         k: ttnn.Tensor,
         v: ttnn.Tensor,
@@ -603,14 +632,24 @@ class KDARecurrence:
         """Execute the constructed graph using caller-owned state and chronology."""
         if self._sequence_parallel != (selections is not None):
             raise ValueError("chronological selections must be provided exactly for sequence-parallel recurrence")
-        prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
-        return self._finish(self._execute(prepared, state, actual_start, selections), geometry)
+        prepared, state, geometry = self._prepare(
+            q=q,
+            k=k,
+            v=v,
+            gate=gate,
+            beta=beta,
+            initial_state=initial_state,
+            actual_start=actual_start,
+            actual_end=actual_end,
+        )
+        return self._finish(self._execute(prepared, state, actual_start, actual_end, selections), geometry)
 
     def _run_direct(
         self,
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
         selections: ChronologicalSelections | None,
     ) -> RecurrenceResult:
         return _scan_chunks(
@@ -618,6 +657,7 @@ class KDARecurrence:
             state,
             state,
             actual_start=actual_start,
+            actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             compute_config=self._compute_config.scan,
         )
@@ -627,6 +667,7 @@ class KDARecurrence:
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
         selections: ChronologicalSelections | None,
     ) -> RecurrenceResult:
         return _scan_local_grouped_chunks(
@@ -638,6 +679,7 @@ class KDARecurrence:
             memory=self._summary_memory,
             compute_config=self._compute_config,
             actual_start=actual_start,
+            actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
         )
 
@@ -646,6 +688,7 @@ class KDARecurrence:
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
         selections: ChronologicalSelections | None,
     ) -> RecurrenceResult:
         return _scan_sp_grouped_chunks(
@@ -657,6 +700,7 @@ class KDARecurrence:
             memory=self._summary_memory,
             compute_config=self._compute_config,
             actual_start=actual_start,
+            actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             selections=selections,
         )

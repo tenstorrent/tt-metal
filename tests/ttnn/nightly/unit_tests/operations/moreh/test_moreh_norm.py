@@ -455,6 +455,44 @@ def test_moreh_norm_rank_1_dim_0(p, keepdim, device, is_linalg_vector_norm):
     )
 
 
+@pytest.mark.parametrize("p", [2.0, 3.0])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_backward_rank_1_dim_0(p, device, is_linalg_vector_norm):
+    """Regression test for #57475 item 4: moreh_norm_backward's need_bcast_dim vector is sized
+    from input_grad's rank, so a rank-1 input_grad (this dim=0 norm over a 1-D tensor) made the
+    factory read ht_need_bcast one element past the end of that vector.
+
+    check_dim/run_moreh_norm_backward skip keepdim=False + dim=0 on a rank-1 shape (a rank-1
+    tensor's only dim is also its last dim), so this bypasses them and calls torch_norm/ttnn_norm
+    directly, mirroring test_moreh_norm_rank_1_dim_0's forward-only equivalent.
+    """
+    torch.manual_seed(2024)
+    torch_input, torch_output_grad = make_torch_tensors([5], 0, keepdim=False)
+    _, expected_input_grad = torch_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=0,
+        keepdim=False,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+        do_backward=True,
+    )
+    _, actual_input_grad = ttnn_norm(
+        torch_input,
+        torch_output_grad,
+        p=p,
+        dim=0,
+        keepdim=False,
+        device=device,
+        do_backward=True,
+        dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+    passing, out = comp_allclose(expected_input_grad.reshape(-1), actual_input_grad.reshape(-1), rtol=0.06, atol=0.06)
+    logger.info(f"input_grad's {out}")
+    assert passing
+
+
 @pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
 @pytest.mark.parametrize("dim", [[], None], ids=["global_norm(dim=[])", "global_norm(dim=None)"])
 @pytest.mark.parametrize("keepdim", [True, False])
