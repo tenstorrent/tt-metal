@@ -828,6 +828,10 @@ async def parse_file(file: str, logf: Optional[TextIO]) -> list[Event]:
     return await parse_logs(sr, logf)
 
 
+async def process_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]):
+    return await async_collect(parse_evs(parse_logs_stream(inf, logf)))
+
+
 async def main():
     parser = ArgumentParser()
     parser.add_argument("-t", type=str, help="Comma separated list of tests to run")
@@ -890,11 +894,7 @@ async def main():
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
-        exit_status, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
-
-    runs = []
-    async for e in parse_evs(async_iter(evs)):
-        runs.append(e)
+        exit_status, runs = await asyncio.gather(proc.wait(), process_logs(proc.stdout, logf))
 
     # pprint.pp(evs)
     # runs = list(e async for e in parse_evs(evs))
