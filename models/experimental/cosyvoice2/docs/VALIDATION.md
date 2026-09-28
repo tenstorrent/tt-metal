@@ -265,18 +265,19 @@ token, so the flow sees at most 750 prompt + 1,600 generated tokens, and HiFT 3,
 - **Nor can it take 2,560 frames alongside the warmed set.** With every smaller bucket warmed and resident, the
   2,560-frame bucket failed to allocate: it needed 118 MB of contiguous DRAM per bank, and the largest free block was
   106 MB (2026-09-27, the first cold warm-up). 2,048 frames had run in the same process.
-- **So a segment's speech is capped at 1,024 tokens** (2,048 frames, 41 s): `CosyVoice2Config.max_segment_speech_tokens`.
-  It binds only when a segment of more than 51 text tokens has not ended after 41 s.
+- **So a segment's speech was capped at 1,024 tokens** (2,048 frames, 41 s): `CosyVoice2Config.max_segment_speech_tokens`.
+  Chunked HiFT (below) has since lifted it back to upstream's own 1,600 (2026-09-28).
 - **Past the cap, the pipeline raises `SegmentTooLong`, naming the segment's length**, rather than truncating the
   speech or failing inside a device op (`test_pipeline_api.py::test_segment_past_the_cap_raises`). The LLM runs one
-  step past the cap, which tells a segment of exactly 1,024 tokens from a longer one. `tokens_to_mel` and
-  `mel_to_wav` refuse more than the cap before any device work.
-- **The resulting sets** step by one unit up to 8 units, then the step doubles every 8 steps (`tiered_buckets`):
+  step past the cap, which tells a segment of exactly the cap from a longer one, and `tokens_to_mel` refuses more
+  than the cap before any device work. At upstream's own 1,600, no segment of at most 80 text tokens can reach it.
+- **The resulting sets** step by one unit up to 8 units, then the step doubles every 8 steps (`tiered_buckets`).
+  Since chunked HiFT (2026-09-28):
 
   | stage | buckets |
   |---|---|
-  | flow tokens | 15 buckets, 64 … 1792, strictly above prompt + generated |
-  | HiFT mel frames | 12 buckets, 128 … 2048, at or above the mel length |
+  | flow tokens | 17 buckets, 64 … 2560, strictly above prompt + generated (15, up to 1792, under the 1,024 cap) |
+  | HiFT mel frames | 2 buckets, 256 and 512, below one chunk; a longer mel runs in 512-frame chunks (12, up to 2048, before) |
   | LLM prefill | 8 lengths, 128 … 1024; it already padded to multiples of 128 |
 
   The LLM's prefix embedding lookups pad to 128 as well.
@@ -346,14 +347,27 @@ Pipeline construction took 17 s and 13 s before that. Per bucket, first process 
   above).
 - **The conv safety checks rerun in every process: 182 s, 32 % of the warm start-up.** They are not dead weight.
   Both processes found the same 43 disagreements, geometry for geometry:
-  - **20 were real corruption of the fast path** (the prepared weight; tenstorrent/tt-metal#55545's class).
-    Relative error against a float64 host conv:
+  - **20 were real corruption of the fast path**, the prepared weight. Relative error against a float64 host
+    conv:
 
     | conv | where | prepared weight | raw weight, used instead |
     |---|---|---|---|
-    | `Conv1d(128->128, k=11)`, 6 resblock convs | the 640-frame bucket (length 5,120) | 1.0–2.6 | 0.003–0.005 |
+    | `Conv1d(128->128, k=11)`, 6 resblock convs | the 128-frame bucket (length 5,120, 40 x 128) | 1.0–2.6 | 0.003–0.005 |
     | `Conv1d(18->256, k=30, s=15)`, the first source downsampling | every bucket from 640 to 2,048 frames | 7.7 | 0.0018 |
     | `Conv1d(18->128, k=6, s=3)`, the second | every bucket from 896 to 2,048 frames | 0.14–0.19 | 0.0020 |
+
+    **What it is: tenstorrent/tt-metal#36487's bug.** `prepare_conv_weights` is wrong when the conv runs DRAM-sliced;
+    all three convs here see DRAM inputs, which conv1d auto-slices. Checked on 2026-09-28:
+    - **It is not our call.** Passing the conv's own compute config to `prepare_conv_weights` makes the k=11 case far
+      worse (1e28–1e29), and passing a matching slice config changes nothing.
+    - **It reproduces standalone** with random weights. With the same slice config given to prepare and to the conv,
+      prepared weights are wrong under explicit DRAM slicing at every geometry tried, including ones that auto
+      slicing gets right. The same conv with its input in L1, no slicing, is right. `act_block_h_override=1024`
+      (#35852's workaround) doesn't help.
+    - **#36487's own reproducer fails on this build too:** prepared PCC 0.00035, raw 0.999912.
+
+    A comment for #36487 with these geometries is drafted (notes branch), not posted. Chunked HiFT runs only the
+    256- and 512-frame geometries, where the prepared weights verified correct.
 
   - **23 were the reference's own error.** The raw-weight / safe-config reference was off by 0.05–0.10 while the
     fast path was at 0.004–0.005, and the float64 host conv kept the fast path. These arbitrations are most of the
@@ -381,6 +395,61 @@ the warm-up would not need to be deterministic. The same warm-up ran with `conv_
   reserved), that leaves at most 465 KiB for L1_SMALL.
 - **So config tensors stay in DRAM,** and the deterministic warm-up is the design. In DRAM they add almost nothing:
   after the 768-frame bucket, DRAM stood at 199.6 MiB per bank with them in DRAM, 198.9 MiB with them in L1.
+
+## Chunked HiFT (2026-09-28)
+
+A mel of 512 frames or more now runs through HiFT in 512-frame calls with upstream's streaming cache
+(`tt/hifigan/chunking.py`, `TtHiFTGenerator.inference_chunked`):
+- each call after the first re-synthesizes the previous call's last 8 frames, with the previous call's NSF source
+  carried over, and the two outputs are crossfaded with upstream's Hamming window (7,680 samples);
+- the last call is anchored to the end of the mel, so nothing is padded, and it carries the source over its whole
+  overlap;
+- a mel shorter than 512 frames runs once at 256 or 512 frames, padded with silence as before.
+
+So HiFT has two geometries instead of twelve, and no length limit: the segment cap is back to upstream's own 1,600
+tokens (the flow's buckets and the LLM context grow to cover it: 17 flow buckets up to 2,560 tokens, context 2,560).
+
+**The seam gate** (`tests/pcc/test_hift_chunked.py`). In the reference venv, upstream's own `HiFTGenerator`
+(`scripts/hift_streaming_reference.py`) ran three real test-clean mels on the same schedule, through its own
+`inference(cache_source=...)` and `fade_in_out`, with one fixed sine-noise draw. TT runs the same mels with the same
+noise. Seam windows are the 160 ms crossfade ± 40 ms.
+
+| mel | calls | seam | mechanism (upstream's F0 injected): PCC / max \|diff\| | no crossfade (control): PCC / max \|diff\| |
+|---|---|---|---|---|
+| 260-123288-0025, 600 frames | 2, the last anchored (424-frame overlap) | 1 | 0.99908 / 0.0135 | 0.99761 / 0.0199 |
+| 4992-23283-0012, 1,016 frames | 2, lined up | 1 | 0.99862 / 0.0077 | **0.91408 / 0.1028** |
+| 7021-79730-0003, 1,500 frames | 3, the last anchored (28-frame overlap) | 1 | 0.99855 / 0.0017 | 0.99795 / 0.0017 |
+| | | 2 | 0.99948 / 0.0337 | 0.99810 / **0.0701** |
+
+- **The gate:** at every seam, PCC ≥ 0.995 and max |diff| ≤ 0.05; over the whole signal, PCC ≥ 0.998 (measured
+  0.99927–0.99940). The mechanism passes everywhere.
+- **The control fails at two of the four seams.** At the other two, the two calls already agree over the overlap to
+  within the gate (the 1,500-frame mel's first seam is near-silent: max |diff| 0.0017 either way), so a missing
+  crossfade has nothing to show there.
+- chunking.py's stitch reproduces upstream's `fade_in_out` stitch exactly (max |diff| 0).
+
+**Own F0, spectral** (log-mel L1, TT chunked vs upstream chunked; seams ± 100 ms):
+
+| mel | whole | around each seam | for scale: upstream chunked vs upstream single pass |
+|---|---|---|---|
+| 600 frames | 0.090 | 0.115 | 0.011 |
+| 1,016 frames | 0.101 | 0.110 | 0.036 |
+| 1,500 frames | 0.109 | 0.109, 0.107 | 0.039 |
+
+The gate: whole ≤ 0.13, and no seam above 1.5x its utterance's whole-signal figure.
+
+**Chunking adds nothing to the port's own spectral error.** The same mels through single-pass HiFT (log-mel L1):
+
+| mel | TT vs upstream, single pass, own F0 | the same, torch F0 injected | TT vs upstream, chunked, own F0 | TT chunked vs TT single | upstream chunked vs upstream single |
+|---|---|---|---|---|---|
+| 600 frames | 0.090 | 0.050 | 0.090 | 0.024 | 0.011 |
+| 1,016 frames | 0.100 | 0.062 | 0.101 | 0.033 | 0.036 |
+| 1,500 frames | 0.121 | 0.087 | 0.109 | 0.069 | 0.039 |
+
+- TT is as far from upstream chunked as single-pass: 0.09–0.12 is the port's own-F0 error on these mels.
+- Chunking moves TT's spectrum about as much as it moves upstream's.
+- In the waveform, chunked vs single pass has PCC only 0.49–0.82, even in upstream itself: past the carried overlap,
+  each call's sine phase restarts. The spectrum barely moves.
 
 ## Speech quality: WER and speaker similarity (2026-09-27)
 

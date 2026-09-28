@@ -681,7 +681,17 @@ class TtHiFTGenerator:
         )
         self.dtype = dtype
 
-    def inference(self, mel, mel_frames: int, batch_size: int = 1, sine_noise: torch.Tensor | None = None):
+    def inference(
+        self,
+        mel,
+        mel_frames: int,
+        batch_size: int = 1,
+        sine_noise: torch.Tensor | None = None,
+        *,
+        f0: torch.Tensor | None = None,
+        cache_source: torch.Tensor | None = None,
+        return_source: bool = False,
+    ):
         """mel: ttnn [B, T_mel, 80] (straight from `TtCausalMaskedDiffWithXvec`,
         unchanged). Returns ttnn [B, L, 1] waveform. f0 is computed here by the
         real `TtConvRNNF0Predictor`, not supplied externally -- matching real
@@ -713,8 +723,23 @@ class TtHiFTGenerator:
         n` with `uv=0`) to a hard, exact zero instead of the natural noise
         floor the model was trained on -- a real, structural source of the
         reported "noisy, robotic" audio quality, not a precision artifact.
+
+        Chunked HiFT (tt/hifigan/chunking.py) uses the rest, as upstream's streaming `HiFTGenerator.inference` does:
+        - `cache_source`, host `[B, n]`: replaces the first n samples of the NSF source (`s[:, :, :n] = cache`), so
+          the sine phase continues from the previous call. The replacement is on the host, because n varies from
+          call to call and a device slice of each new n would be a new program.
+        - `return_source=True` also returns the host source `[B, L]` (after any replacement), for the next call.
+        - `f0`, host `[B, T_mel]`: skips the F0 predictor and uses this F0 (the seam gate injects torch's).
         """
-        f0_mel_rate = self.f0_predictor(mel, mel_frames, batch_size)  # ttnn [B, T_mel]
+        if f0 is None:
+            f0_mel_rate = self.f0_predictor(mel, mel_frames, batch_size)  # ttnn [B, T_mel]
+        else:
+            f0_mel_rate = ttnn.from_torch(
+                f0.reshape(batch_size, mel_frames).float(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
         f0_mel_rate = ttnn.reshape(f0_mel_rate, (batch_size, mel_frames, 1))
         f0_audio = ttnn.repeat_interleave(f0_mel_rate, self.upsample_scale, dim=1)  # [B, T_audio, 1]
         audio_len = mel_frames * self.upsample_scale
@@ -725,4 +750,55 @@ class TtHiFTGenerator:
         sine_merge, _, _ = self.source(f0_audio, sine_noise=sine_noise_dev)
         ttnn.deallocate(f0_audio)
         ttnn.deallocate(sine_noise_dev)
-        return self.decoder.decode(mel, sine_merge, mel_frames, batch_size)
+        source = None
+        if cache_source is not None or return_source:
+            source = ttnn.to_torch(sine_merge).float().reshape(batch_size, audio_len)
+            if cache_source is not None:
+                source[:, : cache_source.shape[-1]] = cache_source.reshape(batch_size, -1)
+                replaced = ttnn.from_torch(
+                    source.reshape(batch_size, audio_len, 1),
+                    dtype=sine_merge.dtype,
+                    layout=sine_merge.layout,
+                    device=self.device,
+                    memory_config=sine_merge.memory_config(),
+                )
+                ttnn.deallocate(sine_merge)
+                sine_merge = replaced
+        wav = self.decoder.decode(mel, sine_merge, mel_frames, batch_size)
+        return (wav, source) if return_source else wav
+
+    def inference_chunked(
+        self, mel: torch.Tensor, sine_noise: torch.Tensor, *, f0s: list | None = None, crossfade: bool = True
+    ) -> torch.Tensor:
+        """HiFT over a host mel `[1, T, 80]`, T >= 512, in 512-frame calls on tt/hifigan/chunking.py's schedule, with
+        upstream's streaming cache: each call after the first takes the previous call's source over its overlap, and
+        the calls' outputs are crossfaded as upstream's `token2wav` does. `sine_noise` (host `[1, T x 480, 9]`)
+        covers the whole mel; each call takes its own frames of it. Returns the host waveform, `T x 480` samples.
+        `f0s` (one host `[1, 512]` per call) and `crossfade=False` are for the seam gate
+        (tests/pcc/test_hift_chunked.py)."""
+        from .chunking import CHUNK_FRAMES, HOP, carried_source, chunk_schedule, stitch
+
+        assert self.upsample_scale == HOP
+        schedule = chunk_schedule(int(mel.shape[1]))
+        outs, prev_source = [], None
+        for i, c in enumerate(schedule):
+            mel_dev = ttnn.from_torch(
+                mel[:, c.start : c.start + CHUNK_FRAMES].contiguous(),
+                dtype=self.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+            wav_dev, source = self.inference(
+                mel_dev,
+                CHUNK_FRAMES,
+                1,
+                sine_noise=sine_noise[:, c.start * HOP : (c.start + CHUNK_FRAMES) * HOP],
+                f0=None if f0s is None else f0s[i],
+                cache_source=None if c.carry == 0 else carried_source(prev_source, c),
+                return_source=True,
+            )
+            outs.append(ttnn.to_torch(wav_dev).float().reshape(-1)[: CHUNK_FRAMES * HOP])
+            ttnn.deallocate(wav_dev)
+            ttnn.deallocate(mel_dev)
+            prev_source = source.reshape(-1)
+        return stitch(outs, schedule, crossfade=crossfade)

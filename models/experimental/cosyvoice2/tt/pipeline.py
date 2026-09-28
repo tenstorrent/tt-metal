@@ -26,16 +26,18 @@ utterances capture on every call, and a capturing solve costs about what an eage
 
 **Context budget.** `ModelArgs.max_seq_len` (the LLM's KV cache and RoPE tables) is fixed at construction from the
 config's budget: the longest prompt transcript, prompt speech and segment the pipeline accepts, plus the speech-token
-limit per segment. The limit is upstream's 20 speech tokens per text token, capped at the HiFT single-pass limit
+limit per segment: upstream's own 20 speech tokens per text token, 1,600 for the longest (80-token) segment
 (`CosyVoice2Config.max_segment_speech_tokens`). `synthesize` refuses an input over budget before running anything.
-A segment whose speech runs past the cap raises `SegmentTooLong`, naming its length, instead of being truncated;
-so do `tokens_to_mel` and `mel_to_wav` given more than the cap.
+HiFT has no length limit: a long mel runs in fixed-size chunks. Past the cap, which only a smaller configured cap can
+reach, a segment raises `SegmentTooLong`, naming its length, instead of being truncated; so does `tokens_to_mel`
+given more than the cap.
 
 **Bucketing (on in `reported()`).** Non-streaming lengths are otherwise exact, so every distinct utterance would meet
 new device geometries. Each new geometry means JIT kernel compiles and the conv resolver's first-sight checks:
 minutes per utterance on a cold kernel cache (docs/VALIDATION.md). Instead:
 - the flow runs at the smallest token bucket strictly above prompt + generated tokens, with the padding masked;
-- HiFT runs at the smallest frame bucket at or above its mel length, padded with silence and trimmed;
+- HiFT runs a mel of 512 frames or more in 512-frame chunks with upstream's streaming cache (tt/hifigan/chunking.py):
+  one geometry, nothing padded. A shorter mel runs once at 256 or 512 frames, padded with silence and trimmed;
 - the LLM already pads its prefill to multiples of 128;
 - `warmup_buckets()` runs every one of these geometries once, at start-up, in a fixed order.
 
@@ -134,12 +136,10 @@ class CosyVoice2Config:
     max_prompt_text_tokens: int = 128
     max_prompt_speech_tokens: int = 750  # upstream refuses prompt audio over 30 s: 750 tokens at 25 Hz
     max_segment_text_tokens: int = 80  # upstream split_paragraph's token_max_n; the bucket sets derive from it
-    # Upstream allows 20 speech tokens per text token (1,600 for an 80-token segment, 64 s). Single-pass HiFT on
-    # an N150 is capped at 1,024 tokens (2,048 mel frames, 41 s). Past ~2,900 frames a ttnn.concat row exceeds one
-    # core's L1, and with every bucket warmed and resident, a 2,560-frame bucket found no contiguous DRAM
-    # (docs/VALIDATION.md). The cap binds only when a segment of more than 51 text tokens has not ended after 41 s;
-    # the pipeline then raises `SegmentTooLong` rather than truncate the speech.
-    max_segment_speech_tokens: int = 1024
+    # The longest segment's speech: upstream's own 20 speech tokens per text token, 1,600 for an 80-token segment
+    # (64 s). Chunked HiFT has no length limit; the flow's buckets and the LLM's context are sized to this. A smaller
+    # value caps segments: the pipeline then raises `SegmentTooLong` rather than truncate the speech.
+    max_segment_speech_tokens: int = 1600
     # geometry: bucketing runs the flow and HiFT at a finite set of lengths, all warmed at start-up (`warmup_buckets`)
     bucketing: bool = True
     conv_config_tensors_in_dram: bool = True
@@ -180,9 +180,11 @@ class CosyVoice2Config:
         return tiered_buckets(self.max_prompt_speech_tokens + self.max_tokens_for(self.max_segment_text_tokens), 64)
 
     def hift_frame_buckets(self) -> list[int]:
-        """HiFT lengths in mel frames (2 per generated token) up to the longest segment's token limit, inclusive:
-        HiFT has one code path, so an exact fit needs no padding (`bucket_at_least`)."""
-        return tiered_buckets(TOKEN_MEL_RATIO * self.max_tokens_for(self.max_segment_text_tokens), 128, strict=False)
+        """HiFT's single-pass lengths in mel frames, for a mel shorter than one chunk: 256 and 512, at or above its
+        length (`bucket_at_least`). A longer mel runs in 512-frame chunks, the same geometry as the 512 bucket."""
+        from .hifigan.chunking import CHUNK_FRAMES
+
+        return tiered_buckets(CHUNK_FRAMES, CHUNK_FRAMES // 2, strict=False)
 
     def llm_prefill_lengths(self) -> list[int]:
         """The LLM pads its prefill to multiples of 128 already; these are every length the budget allows."""
@@ -200,7 +202,13 @@ class CosyVoice2Config:
     def describe(self) -> dict:
         out = {**asdict(self), "max_seq_len": self.max_seq_len(), **FIXED}
         if self.bucketing:
-            out.update(flow_token_buckets=self.flow_token_buckets(), hift_frame_buckets=self.hift_frame_buckets())
+            from .hifigan.chunking import CHUNK_FRAMES
+
+            out.update(
+                flow_token_buckets=self.flow_token_buckets(),
+                hift_frame_buckets=self.hift_frame_buckets(),
+                hift_chunk_frames=CHUNK_FRAMES,
+            )
         return out
 
 
@@ -237,14 +245,14 @@ def bucket_for(length: int, buckets: list[int]) -> int:
 
 
 class SegmentTooLong(ValueError):
-    """A segment's speech runs past `CosyVoice2Config.max_segment_speech_tokens`, the single-pass HiFT limit."""
+    """A segment's speech runs past `CosyVoice2Config.max_segment_speech_tokens`."""
 
     @classmethod
     def past_cap(cls, what: str, cfg: CosyVoice2Config) -> "SegmentTooLong":
         cap = cfg.max_segment_speech_tokens
         return cls(
             f"{what}: past max_segment_speech_tokens={cap} ({cap / TOKEN_RATE_HZ:.1f} s, {TOKEN_MEL_RATIO * cap} mel "
-            "frames), the most single-pass HiFT runs; split the text into shorter segments"
+            "frames); split the text into shorter segments"
         )
 
 
@@ -504,15 +512,22 @@ class CosyVoice2TTNN:
         """Stage 3, HiFT: F0 predictor, NSF source (SineGen2's noise from `rng`), decoder with the iSTFT head.
         Returns the host waveform, `mel frames x 480` samples.
 
-        Bucketed, the mel is padded to the smallest HiFT bucket above its length with `MEL_SILENCE` (silence, not
-        zeros: 0 is a loud mel), the source noise with zeros, and the audio is trimmed back. HiFT's convs look
-        ahead, so the padding reaches the last few tens of milliseconds; docs/VALIDATION.md has the measured tail
-        error."""
+        Bucketed:
+        - a mel of 512 frames or more runs in 512-frame chunks with upstream's streaming cache: source carry-over and
+          a Hamming crossfade (`TtHiFTGenerator.inference_chunked`). Every call is the same geometry, and nothing
+          is padded.
+        - a shorter mel runs once at the smallest HiFT bucket at or above it (256 or 512 frames). It is padded with
+          `MEL_SILENCE` (silence, not zeros: 0 is a loud mel), the source noise with zeros, and the audio is trimmed
+          back. HiFT's convs look ahead, so the padding reaches into the last few hundred milliseconds;
+          docs/VALIDATION.md has the measured tail error.
+        Unbucketed, it runs once at the exact length (single-pass HiFT tops out near 2,900 frames on an N150)."""
+        from .hifigan.chunking import CHUNK_FRAMES
+
         mel_frames = int(mel.shape[1])
-        if mel_frames > TOKEN_MEL_RATIO * self.config.max_segment_speech_tokens:
-            raise SegmentTooLong.past_cap(f"a mel of {mel_frames} frames", self.config)
         audio_len = mel_frames * self.hift.upsample_scale
         noise = rng.sine_noise_for(audio_len, self.harmonics)
+        if self.config.bucketing and mel_frames >= CHUNK_FRAMES:
+            return self.hift.inference_chunked(mel, noise)
         run_frames = mel_frames
         if self.config.bucketing:
             run_frames = bucket_at_least(mel_frames, self.config.hift_frame_buckets())
@@ -590,7 +605,7 @@ class CosyVoice2TTNN:
         """Run every geometry a request can meet, once, in a fixed order, and return the seconds each took:
         - the LLM's prefill lengths and prefix lookups, then one decode;
         - every flow bucket, with one padded position, so it is the masked path every request takes;
-        - every HiFT bucket.
+        - every HiFT bucket, then one chunked HiFT run (two calls, the second anchored).
 
         Call it right after construction, before anything else touches the device. Its order and its dummy inputs
         never change, so each process allocates exactly as the previous one did. The conv kernels, whose
@@ -627,6 +642,11 @@ class CosyVoice2TTNN:
             timed(f"flow_{b}", lambda b=b, t=tokens: self.flow.inference(t, no_prompt, no_feat, emb, bucket_tokens=b))
         for m in cfg.hift_frame_buckets():
             timed(f"hift_{m}", lambda m=m: self._hift_at(m))
+        from .hifigan.chunking import CHUNK_FRAMES, HOP, OVERLAP_FRAMES
+
+        frames = CHUNK_FRAMES + OVERLAP_FRAMES
+        silent = torch.full((1, frames, 80), MEL_SILENCE)
+        timed("hift_chunked", lambda: self.hift.inference_chunked(silent, torch.zeros(1, frames * HOP, self.harmonics)))
         return clock
 
     def _hift_at(self, frames: int) -> None:
