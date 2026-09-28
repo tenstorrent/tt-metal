@@ -1250,3 +1250,33 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
   limits (checked by hand, then reverted).
 - Gate: forks_used 5, fork_calls_uncovered 0, fork_tests_failed 0 (12 fork tests passed).
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/rms_norm_ttnn/tests/test_rms_norm_ttnn.py`
+
+## Attention V at 128 (ttnn.bringup SDPA), 2026-09-28
+- V now stays at its real head dim 128 end to end (tt/attention.py); `MIMO_V_PAD=1` restores the padded path (fused
+  qkv with V zero-padded to 192, nlp_create_qkv_heads, V caches 192, ttnn.transformer SDPA, o_proj with zero rows).
+  Read when modules and caches are built; the attention asserts cache.vw matches. perf_settings records `attn_v_pad`.
+- Head split (per chip, S 5120, device us, 1 / 2 KV heads, matmul + split + the Q RoPE slices): padded fused +
+  nlp_create_qkv_heads 3996 / 4278; + slice V 4001 / 4295; fused unpadded + 2 slices + 2 nlp_create_q_heads_split
+  4022 / 4314; **two matmuls (Q N 3072; KV rows per head [k_h | v_h]) + 2 nlp_create_q_heads_split 3723 / 4131**
+  (chosen; Q split at 64 gives the RoPE halves, KV split at 192 gives K / V); three matmuls 3911 / 5366.
+  Probe: tests/ttnn/unit_tests/operations/mimo_attn/probes/probe_00{1,2}.py (not committed).
+- Caches: paged full cache V [nb, 1, 64, 128] (page size unchanged), sliding V [1, 2, max_seq, 128]; kv_tail slices V
+  at 128; sliding output slice uses V's width; o_proj K 2048 per chip.
+- KV contract: layout kept (384-wide per-chip slabs, V heads zero-padded to 192). `_slab` pads V at the contract
+  write, so the gpt_oss_d_p kv_cache / address table (one width for K and V) and the prefill producer's read-back
+  are unchanged. Contract test passes (K 0.99984 / V 0.99954, pad columns zero).
+- Weight cache: attention weights are built with from_torch at load (no cache_file_name); tt_cache holds only
+  embed_bf16 and experts, so no stale padded tensor can be reused.
+- Accuracy: ladder last and s4096 per-layer / state PCCs are identical to MIMO_V_PAD=1 to 6 digits (last: L00
+  0.998576 ... L05 0.998435, state_min 0.999283); component tests pass with the recorded numbers (rel 0.0061 / 0.0136
+  / 0.0043). The narrow-V fork is bit-identical to padded SDPA and the zero o_proj rows add exact zeros.
+- Profile 50k->55k (V 128 vs V_PAD=1): device 204.9 vs 222.4 ms, wall 205.7 vs 223.3 ms, host dispatch 26.3 vs
+  25.4 ms. sdpa 44.96 vs 54.20, sliding_sdpa 2.00 vs 2.50, o_proj 14.18 vs 20.77, qkv 23.99 vs 24.11, rope 2.20 vs
+  3.22 (the Q RoPE slices are gone), kv_tail 0.88 vs 0.90, kv_write 0.20 vs 0.22, ccl 5.28 both.
+- Pre-existing, not from this change: test_swap_sliding_moe_02_attention.py fails on HEAD before this change too
+  (attention rel 0.0220 > 0.02, ratio 0.942 < 0.95), identically with MIMO_V_PAD=1. It passes (rel 0.014544, the
+  frozen measurement) only with MIMO_NORM_IMPL=native MIMO_SLIDING_SDPA_CFG=base: the P.2 sliding preset S (fails
+  alone: 0.0235, ratio 1.073) and ttnn.bringup.rms_norm (base + bringup norm: 0.0248) each push it over.
+- Next: the sliding Q front-pad concat (16x5248x192, 0.17 ms x 4 layers) and the Q rope concat (0.17 ms / layer).
+- Re-run: `BRINGUP_SPEC=models/demos/mimo_v2_6_d_p/bringup/spec.yaml`, the attention component / swap tests, ladder
+  `BRINGUP_RUNG=last --no-precompile`, test_contract / test_profile `--no-precompile`; compare with `MIMO_V_PAD=1`.
