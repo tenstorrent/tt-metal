@@ -118,13 +118,16 @@ pytest models/experimental/voxtral_tts/tests/test_codec_ref.py       # Block 3 r
 
 # On-device PCC against the fp32 reference (needs a device + the checkpoint)
 # Naming: test_<block>_ref.py is the fp32 reference; test_<block>_pcc.py is the device.
-pytest models/experimental/voxtral_tts/tests/test_backbone_pcc.py
-pytest models/experimental/voxtral_tts/tests/test_flow_pcc.py
-pytest models/experimental/voxtral_tts/tests/test_codec_pcc.py
+pytest models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py
+pytest models/experimental/voxtral_tts/tests/pcc/test_backbone_decode_pcc.py
+pytest models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py
+pytest models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
 pytest models/experimental/voxtral_tts/tests/test_codec_request_path.py
-pytest models/experimental/voxtral_tts/tests/test_model_teacher_forced_pcc.py
+pytest models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.py
 
-# The traced frame loop -- the path that actually ships
+# The traced frame loop -- the path that actually ships. Traced vs eager over FULL utterances:
+# all 15 prompts x 3 seeds to their natural [END_AUDIO], asserting the sweep crossed sdpa's
+# 512-position chunk boundary. ~10 min.
 pytest models/experimental/voxtral_tts/tests/test_traced_frame_loop.py
 
 # Request paths: a sequence of requests, not one in isolation
@@ -143,15 +146,26 @@ pytest models/experimental/voxtral_tts/tests/test_wer.py
 pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
 
 # Per-stage timings and RTF, gated against per-stage ceilings
-pytest models/experimental/voxtral_tts/tests/test_perf.py
+pytest models/experimental/voxtral_tts/tests/perf/test_perf.py
+
+# The recogniser itself, on known audio, before it gates anything: fp32-reference speech in
+# English, Hindi and Arabic must score within a word of their measured WER; silence, noise and
+# cut tails must score badly; a 39 s clip must transcribe to its last word (and must NOT with
+# long form off). CPU only, ~12 min.
+pytest models/experimental/voxtral_tts/tests/test_asr_calibration.py
 
 # End-to-end intelligibility, one gate per language: the full request path, transcribed
-# back with whisper-large-v3 and scored against the prompt. ~35 min, 100 runs.
+# back with whisper-large-v3 and scored against the prompt. ~75 min, 180+ runs.
 pytest models/experimental/voxtral_tts/tests/test_wer_languages.py
 pytest models/experimental/voxtral_tts/tests/test_wer_languages.py -k hindi   # one language
 
+# Naturalness per language (DistillMOS) against fixed per-language floors. Needs the isolated
+# MOS venv once -- tests/probes/mos_setup.sh -- and FAILS without it rather than skipping. ~20 min.
+pytest models/experimental/voxtral_tts/tests/test_mos.py
+
 # All on-device tests are marked `slow`, at module level. `-m "not slow"` is the
-# host-only subset: 136 tests, ~45 s, no device and no checkpoint needed.
+# host-only subset: 136 tests (+1 skipped until the MOS floors exist), ~50 s, no device and no
+# checkpoint needed.
 ```
 
 **Gate on real prompts, never random activations.** Random embeddings are off-manifold and read

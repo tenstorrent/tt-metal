@@ -8,7 +8,7 @@ PCC ~1.0), so matching it here is a real correctness statement, not a self-compa
 
 Skips cleanly without ttnn, a device, or the checkpoint.
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_codec_ttnn_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_codec_request_path.py
 """
 
 import os

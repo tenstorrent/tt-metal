@@ -8,7 +8,7 @@ PCC ~1.0), so matching it here is a real correctness statement, not a self-compa
 
 Skips cleanly without ttnn, a device, or the checkpoint.
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_codec_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_codec_pcc.py
 """
 
 import os
@@ -18,7 +18,7 @@ import torch
 
 from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, pcc
-from models.experimental.voxtral_tts.tests.reference_helpers import long_frame_cases, real_frames_long
+from models.experimental.voxtral_tts.tests.reference_helpers import FRAMES, long_frame_cases, real_frames_long
 
 ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
 # Every test here opens a device, so `slow` joins the checkpoint guard: `-m "not slow"` is
@@ -149,7 +149,7 @@ def test_real_speech_frames_decode_correctly(device):
     """
     from models.experimental.voxtral_tts.tt.ttnn_voxtral_codec import TtVoxtralCodecDecoder
 
-    fx = os.path.join(os.path.dirname(__file__), "real_frames_fixture.pt")
+    fx = FRAMES
     if not os.path.exists(fx):
         pytest.skip("real_frames_fixture.pt missing")
     frames = torch.load(fx).long()

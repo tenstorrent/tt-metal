@@ -14,10 +14,10 @@ rows has a fixed set of reachable shapes, each its own kernel shape and `fill_ca
 
 Shapes beyond the longest real prompt are driven by the fixture's texts joined and repeated, so
 their bar is a collapse floor rather than an accuracy gate; real-prompt accuracy lives in
-test_backbone_pcc.py and test_all_voices_smoke.py.
+test_backbone_prefill_pcc.py and test_all_voices_smoke.py.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_prefill_shapes.py
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_prefill_shapes.py
 """
 
 import pytest

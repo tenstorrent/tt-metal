@@ -46,10 +46,11 @@ def main():
     ap.add_argument("--tag", default="base")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--langs", default="all")
+    ap.add_argument("--out", default=None, help="clip directory (default generated/lang_<tag>)")
     args = ap.parse_args()
 
     langs = sorted(WER_SENTENCES) if args.langs == "all" else args.langs.split(",")
-    out = os.path.join(GEN, f"lang_{args.tag}")
+    out = args.out or os.path.join(GEN, f"lang_{args.tag}")
     os.makedirs(out, exist_ok=True)
 
     dev = open_device()

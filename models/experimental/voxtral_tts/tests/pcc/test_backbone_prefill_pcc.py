@@ -11,8 +11,8 @@
 Decode is test_backbone_decode_pcc.py. Prefill across every padded shape is test_prefill_shapes.py.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_prefill_pcc.py
-    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_prefill_pcc.py -k case0
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_prefill_pcc.py -k case0
 """
 
 import pytest

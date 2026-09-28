@@ -9,7 +9,7 @@ Two tiers, mirroring what can be checked without an 8 GB non-commercial download
     (random weights, shortened stack) with the KV-cache path reproducing prefill exactly.
   * numerical — runs only when the checkpoint is present (skipped otherwise).
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_ref.py
 """
 
 import os

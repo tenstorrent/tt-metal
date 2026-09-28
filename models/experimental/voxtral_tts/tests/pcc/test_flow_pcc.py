@@ -9,7 +9,7 @@ real-hidden-state tests below drive it from the reference's own last-position hi
 what Block 1 hands it at inference.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_flow_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_flow_pcc.py
 """
 
 import pytest
@@ -101,7 +101,7 @@ def test_full_frame_codes_close_to_reference(rig):
 
 # ── Real hidden states ──
 # Driven from the reference's own last-position hidden state, which isolates Block 2: Block 1's
-# device accuracy is test_backbone_pcc.py's job.
+# device accuracy is test_backbone_prefill_pcc.py / test_backbone_decode_pcc.py's job.
 
 REAL_CASES = (0, 2, 3)
 X0_SEEDS = (0, 7)

@@ -18,7 +18,7 @@ real frames, so both sides step on the same embedding and each frame is an indep
   * full cache     -- stepping past max_seq_len must raise.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_decode_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/pcc/test_backbone_decode_pcc.py
 """
 
 import pytest
