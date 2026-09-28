@@ -41,6 +41,7 @@ name: "Copilot flow: mark finished Copilot PRs ready for review"
 # What it never does: it does not approve workflow runs (that is the repo setting's job),
 # does not request reviewers (CODEOWNERS + the Copilot review ruleset do that on
 # `ready_for_review`), does not touch PRs whose linked issue was never `copilot-ready`,
+# does not re-apply `copilot-flow` to a PR a maintainer removed it from (see FLOW_LABEL),
 # does not at-mention Copilot (that would start a new session), and never merges.
 
 on:
@@ -67,7 +68,10 @@ env:
   # the moment the linked issue is checked so that later edits to the issue's labels do
   # not change which PRs the follow-up automation considers its own. Must exist in the
   # repository (see the merge checklist in PR #58063). Removing it from a PR opts that
-  # PR out of pr-sous-chef nudges.
+  # PR out of the whole flow — pr-sous-chef nudges AND this bridge — and the opt-out is
+  # sticky: the scan below reads the PR's label timeline and, when the most recent
+  # `copilot-flow` event is an `unlabeled`, treats the absence as a maintainer decision
+  # instead of re-applying the label on the next tick. Adding the label back opts in again.
   FLOW_LABEL: copilot-flow
   # The opt-in label on the *issue* (issue-monster.md's PICKUP_LABEL).
   PICKUP_LABEL: copilot-ready
@@ -85,7 +89,9 @@ jobs:
       - name: Decide what each open Copilot PR needs
         id: scan
         # Read-only, GITHUB_TOKEN. Produces a list of actions; performs none of them.
-        uses: actions/github-script@v9.0.0
+        # Pinned to the same commit the gh-aw compiler resolves v9.0.0 to in this repo's
+        # .lock.yml files (a tag can be moved; a SHA cannot).
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           ONLY_PR: ${{ inputs.pr_number }}
         with:
@@ -197,20 +203,35 @@ jobs:
                 //    `copilot_work_finished` and `copilot_work_finished_failure` are the
                 //    events the coding agent emits (seen on #56833 / #57148). We also need
                 //    the latest draft-state change so a finish that a human has already
-                //    reacted to (marked ready, or converted back to draft) is not replayed.
+                //    reacted to (marked ready, or converted back to draft) is not replayed —
+                //    and the latest `copilot-flow` label event, for the opt-out below.
                 const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, {
                   owner, repo, issue_number: number, per_page: 100
                 });
                 let lastWork = null;
                 let lastDraftChange = null;
+                let lastFlowLabelEvent = null;
                 for (const ev of timeline) {
                   if (typeof ev.event !== 'string') continue;
                   if (ev.event.startsWith('copilot_work_')) lastWork = ev;
                   if (ev.event === 'ready_for_review' || ev.event === 'convert_to_draft') lastDraftChange = ev;
+                  if ((ev.event === 'labeled' || ev.event === 'unlabeled') && ev.label?.name === FLOW_LABEL) lastFlowLabelEvent = ev;
                 }
                 const workState = lastWork ? lastWork.event : 'none';
                 const workAt = lastWork?.created_at || null;
                 const finishIsFresh = workAt && (!lastDraftChange || new Date(workAt) > new Date(lastDraftChange.created_at));
+
+                // 4b. Maintainer opt-out. The label is absent AND the most recent label-history
+                //     event for it is a removal with no re-add after it: somebody took this PR
+                //     out of the flow on purpose. Re-applying the label here would silently undo
+                //     the documented kill switch every ten minutes, so the bridge does nothing at
+                //     all for this PR (no label, no flip, no notice) until the label is added
+                //     back by hand. A PR that never carried the label has no such event and is
+                //     labeled normally.
+                if (!hasFlowLabel && lastFlowLabelEvent?.event === 'unlabeled') {
+                  note(number, `opted out: ${FLOW_LABEL} was removed by ${lastFlowLabelEvent.actor?.login || 'a maintainer'} at ${lastFlowLabelEvent.created_at} and not re-added; leaving this PR alone`);
+                  continue;
+                }
 
                 // 5. Existing bridge comments, for idempotency of the failure notice.
                 const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
@@ -245,8 +266,8 @@ jobs:
         if: steps.scan.outputs.action_count != '0'
         # Writes only, with the PAT. Kept separate from the decision step so the elevated
         # credential is only ever handed to code that does nothing but the three writes
-        # decided above.
-        uses: actions/github-script@v9.0.0
+        # decided above. Same pinned commit as the read step.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           ACTIONS_JSON: ${{ steps.scan.outputs.actions }}
           PAT_PRESENT: ${{ secrets.GH_AW_AGENT_TOKEN != '' }}
@@ -286,7 +307,7 @@ jobs:
                       'Copilot cannot leave draft state on its own, and on tt-metal nothing runs on a draft: pr-gate/merge-gate skip drafts, the Copilot code-review ruleset ignores drafts, and CODEOWNERS review requests only fire on `ready_for_review`. This flip is what starts all three.',
                       '',
                       `- Linked \`${PICKUP_LABEL}\` issue(s): ${issues.map(n => `#${n}`).join(', ')}`,
-                      `- Label \`${FLOW_LABEL}\` marks this PR as managed by the Copilot flow: the scheduled **PR Sous Chef** workflow will now nudge Copilot about failed checks, merge conflicts and unresolved review threads until the PR is mergeable. Remove the label to opt out.`,
+                      `- Label \`${FLOW_LABEL}\` marks this PR as managed by the Copilot flow: the scheduled **PR Sous Chef** workflow will now nudge Copilot about failed checks, merge conflicts and unresolved review threads until the PR is mergeable. Remove the label to opt out — the removal is respected (this bridge will not add it back); re-add it to opt back in.`,
                       '- If Copilot pushes again, its runs may show **Approve and run workflows** — that is GitHub\'s Copilot approval gate (Settings → Copilot → Cloud agent), and a maintainer must click it; this automation deliberately does not.',
                       '',
                       `> Applied by [Copilot flow: ready-for-review bridge](${RUN_URL}); a human still reviews and merges.`

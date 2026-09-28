@@ -107,10 +107,17 @@ on:
             'perf', 'performance', 'tech-debt', 'cleanup', 'host refactor',
             'sw-dev-best-practice', 'toil'
           ];
-          // Only closed-unmerged Copilot PRs newer than this feed the retry-block map.
-          // tt-metal has well over a hundred closed Copilot PRs from other flows; an
-          // unbounded history would block topics for reasons nobody remembers.
+          // Only Copilot PRs CLOSED (unmerged) within this window feed the retry-block map —
+          // filtered on the close date, so a long-lived PR opened before the window but
+          // closed inside it still counts. tt-metal has well over a hundred closed Copilot
+          // PRs from other flows; an unbounded history would block topics for reasons
+          // nobody remembers.
           const RETRY_HISTORY_DAYS = 90;
+          // The search API never returns more than 1000 results for one query. The retry
+          // history is paginated up to that bound and, if the window holds MORE closed
+          // Copilot PRs than that, the run fails closed (an incomplete history would make
+          // repeated topics look like first attempts). tt-metal's all-time total is ~130.
+          const RETRY_HISTORY_SEARCH_CAP = 1000;
           // One closed-unmerged Copilot PR on a topic is normal (a human often lands the
           // fix instead); two means the approach itself keeps failing and a full agent
           // session per retry is wasted. 1 would block after any single miss; 3+ burns
@@ -159,8 +166,11 @@ on:
           const isoMinus = (ms) => new Date(Date.now() - ms).toISOString().split('.')[0] + 'Z';
 
           try {
-            // 1. Rate-limit back-off: if a Copilot PR opened in the last hour carries a
-            //    rate-limit complaint, do not schedule more work this run.
+            // 1. Rate-limit back-off: if, on a Copilot PR opened in the last hour, the Copilot
+            //    coding agent ITSELF reported a rate limit, do not schedule more work this run.
+            //    Only comments authored by the Copilot bot count. Anyone can comment on a
+            //    public PR, so matching the pattern in arbitrary comment bodies would let any
+            //    commenter suppress dispatch for an hour at a time, indefinitely.
             core.info('Checking for recent rate-limited Copilot PRs...');
             const recentPRsQuery = `is:pr author:app/copilot-swe-agent ${COPILOT_PR_EXCLUDE} created:>${isoMinus(60 * 60 * 1000)} repo:${owner}/${repo}`;
             const recentPRsResponse = await github.rest.search.issuesAndPullRequests({
@@ -175,15 +185,21 @@ on:
                   query($owner: String!, $repo: String!, $number: Int!) {
                     repository(owner: $owner, name: $repo) {
                       pullRequest(number: $number) {
-                        timelineItems(first: 50, itemTypes: [ISSUE_COMMENT]) {
-                          nodes { ... on IssueComment { body } }
+                        timelineItems(last: 50, itemTypes: [ISSUE_COMMENT]) {
+                          nodes { ... on IssueComment { body author { login __typename } } }
                         }
                       }
                     }
                   }`, { owner, repo, number: pr.number });
                 const comments = res?.repository?.pullRequest?.timelineItems?.nodes || [];
-                if (comments.some(c => c?.body && rateLimitPattern.test(c.body))) {
-                  core.warning(`Rate limiting detected in PR #${pr.number}`);
+                // Authoritative source only: a Bot-typed actor matching the Copilot predicate
+                // (GraphQL login `copilot-swe-agent`). Human comments and other bots are ignored
+                // even if they quote the same words.
+                const fromCopilot = (c) => c?.author?.__typename === 'Bot' && isCopilotActor(c.author.login);
+                const ignored = comments.filter(c => c?.body && rateLimitPattern.test(c.body) && !fromCopilot(c)).length;
+                if (ignored > 0) core.info(`PR #${pr.number}: ignored ${ignored} rate-limit-looking comment(s) not authored by Copilot`);
+                if (comments.some(c => fromCopilot(c) && c.body && rateLimitPattern.test(c.body))) {
+                  core.warning(`Rate limiting reported by Copilot in PR #${pr.number}`);
                   rateLimitDetected = true;
                   break;
                 }
@@ -387,11 +403,27 @@ on:
               .trim();
             const closedTopicCounts = new Map();
             try {
-              const closedPRQuery = `is:pr is:closed is:unmerged author:app/copilot-swe-agent ${COPILOT_PR_EXCLUDE} created:>${isoMinus(RETRY_HISTORY_DAYS * 24 * 60 * 60 * 1000)} repo:${owner}/${repo}`;
-              const closedPRResponse = await github.rest.search.issuesAndPullRequests({
-                q: closedPRQuery, per_page: 100, sort: 'created', order: 'desc'
-              });
-              for (const pr of closedPRResponse.data.items) {
+              // `closed:>` (not `created:>`): the window is about when the attempt ended.
+              const closedPRQuery = `is:pr is:closed is:unmerged author:app/copilot-swe-agent ${COPILOT_PR_EXCLUDE} closed:>${isoMinus(RETRY_HISTORY_DAYS * 24 * 60 * 60 * 1000)} repo:${owner}/${repo}`;
+              let closedTotal = null;
+              let closedFetched = 0;
+              const closedPRs = await github.paginate(
+                github.rest.search.issuesAndPullRequests,
+                { q: closedPRQuery, per_page: 100, sort: 'updated', order: 'desc' },
+                (response, done) => {
+                  // Same octokit shape as the candidate search above: one page per callback.
+                  if (closedTotal === null) closedTotal = response.data.total_count ?? null;
+                  closedFetched += response.data.length;
+                  if (closedFetched >= RETRY_HISTORY_SEARCH_CAP) done();
+                  return response.data;
+                }
+              );
+              if (closedTotal !== null && closedTotal > closedPRs.length) {
+                // Fail closed (caught below): coverage of the window is not complete.
+                throw new Error(`retry history incomplete: ${closedTotal} closed-unmerged Copilot PRs in the last ${RETRY_HISTORY_DAYS}d but only ${closedPRs.length} retrievable (search cap ${RETRY_HISTORY_SEARCH_CAP})`);
+              }
+              core.info(`Retry history: ${closedPRs.length} closed-unmerged Copilot PR(s) closed in the last ${RETRY_HISTORY_DAYS}d (complete)`);
+              for (const pr of closedPRs) {
                 const topic = normalizeTopic(pr.title);
                 if (topic.length < MIN_TOPIC_LENGTH) continue;
                 const entry = closedTopicCounts.get(topic) || { count: 0, prs: [] };
@@ -481,13 +513,31 @@ on:
               return true;
             });
 
-            // 7b. Retry-block bookkeeping (deterministic, no agent involved): label each
-            //     newly retry-blocked issue and post ONE human checkpoint comment. The label
-            //     is in the search exclusions, so the issue does not come back next run and
-            //     the comment is never repeated. This also runs when no dispatchable
-            //     candidate is left, so blocked issues are never silent.
+            // 7b. Retry-block bookkeeping (deterministic, no agent involved): post ONE human
+            //     checkpoint comment on each newly retry-blocked issue, THEN apply the label.
+            //     Order and idempotency matter because these are two writes that cannot be
+            //     made atomic: the label is what excludes the issue from every later search,
+            //     so it must only land after the explanation a maintainer needs is on the
+            //     issue. The comment carries CHECKPOINT_MARKER; before posting, existing
+            //     comments are scanned for a marker authored by this workflow's identity
+            //     (github-actions[bot]), so a run that commented but failed to label does
+            //     not comment twice when the heuristic fires again on the next tick — it
+            //     just finishes the labeling. Every partial state is therefore recoverable:
+            //       comment failed            -> nothing changed, retried next run;
+            //       comment ok, label failed  -> next run finds the marker, skips the comment,
+            //                                    applies the label.
+            //     This also runs when no dispatchable candidate is left, so blocked issues
+            //     are never silent.
             const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const CHECKPOINT_MARKER = '<!-- issue-monster-retry-checkpoint -->';
+            // The pre-activation job writes with GITHUB_TOKEN, i.e. as github-actions[bot].
+            const isOwnComment = (c) => c?.user?.type === 'Bot' && (c.user.login || '').toLowerCase() === 'github-actions[bot]';
+            const hasCheckpoint = async (issue_number) => {
+              const existing = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+              return existing.some(c => isOwnComment(c) && (c.body || '').includes(CHECKPOINT_MARKER));
+            };
             const checkpointBody = (b) => [
+              CHECKPOINT_MARKER,
               '🛑 **Retry blocked — human review required.**',
               '',
               `This topic already has ${b.count} Copilot pull request(s) that were closed without merging in the last ${RETRY_HISTORY_DAYS} days (#${b.prs.join(', #')}). Automatic dispatch is paused to avoid spending another agent session on the same problem, and the \`${RETRY_BLOCKED_LABEL}\` label has been applied.`,
@@ -500,13 +550,20 @@ on:
             ].join('\n');
             for (const b of retryBlockedIssues.slice(0, MAX_RETRY_CHECKPOINTS_PER_RUN)) {
               try {
+                if (await hasCheckpoint(b.number)) {
+                  core.info(`#${b.number}: checkpoint comment already present (earlier run labeled nothing); only applying ${RETRY_BLOCKED_LABEL}`);
+                } else {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: b.number, body: checkpointBody(b) });
+                  core.info(`#${b.number}: posted the checkpoint comment`);
+                }
                 await github.rest.issues.addLabels({ owner, repo, issue_number: b.number, labels: [RETRY_BLOCKED_LABEL] });
-                await github.rest.issues.createComment({ owner, repo, issue_number: b.number, body: checkpointBody(b) });
-                core.info(`#${b.number}: applied ${RETRY_BLOCKED_LABEL} and posted the checkpoint comment`);
+                core.info(`#${b.number}: applied ${RETRY_BLOCKED_LABEL}`);
               } catch (error) {
-                // Not fatal for dispatch (the issue is already excluded this run); it will be
-                // retried on the next tick because the label is still missing.
-                core.warning(`Could not label/comment retry-blocked issue #${b.number}: ${error.message}`);
+                // Not fatal for dispatch (the issue is already excluded this run). Whatever
+                // failed is retried on the next tick: without the label the issue is still
+                // found, the heuristic fires again, and the marker check above prevents a
+                // duplicate comment.
+                core.warning(`Could not checkpoint/label retry-blocked issue #${b.number}: ${error.message}`);
               }
             }
             if (retryBlockedIssues.length > MAX_RETRY_CHECKPOINTS_PER_RUN) {
@@ -686,7 +743,8 @@ pre-activation job. Your job is selection and bookkeeping; keep it short.
 
 ### What the pre-activation job already did
 
-- Skipped the run entirely if a Copilot PR from the last hour mentions rate limiting.
+- Skipped the run entirely if the Copilot coding agent itself reported rate limiting
+  on a Copilot PR opened in the last hour (comments by anyone else are ignored).
 - Kept only open issues labeled `copilot-ready` (whole queue, oldest first).
 - Dropped any candidate whose sub-issue/parent/linked-PR metadata could not be read
   (unchecked is not safe).
@@ -812,8 +870,11 @@ failures.
   up on.
 - **Retry-block recovery (what actually works)**: when two or more Copilot PRs on the
   same normalized title were closed unmerged in the last 90 days, the pre-activation
-  script labels the issue `copilot-retry-blocked` and posts one checkpoint comment,
-  deterministically, whether or not the agent runs. To approve one more attempt, add
+  script posts one checkpoint comment and then labels the issue `copilot-retry-blocked`,
+  deterministically, whether or not the agent runs (comment first, so the label that
+  hides the issue from future scans can never exist without the explanation; a run that
+  commented but failed to label finishes the labeling next tick without commenting
+  again). To approve one more attempt, add
   `copilot-retry-approved` **and** remove `copilot-retry-blocked`. Removing the block
   label alone does nothing useful: the title-history heuristic is independent of the
   label and will re-apply it (with a fresh comment) on the next run.
