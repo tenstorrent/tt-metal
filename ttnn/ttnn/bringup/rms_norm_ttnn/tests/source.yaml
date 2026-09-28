@@ -1,0 +1,16 @@
+# The replaced op's own tests (ttnn.rms_norm), run in place against this drop-in
+# (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests".
+upstream_sha: 36d18a5c8526e7e212fb2e2076974c1aef31ba53
+swap:
+  ttnn.rms_norm: ttnn.bringup.rms_norm
+tests:
+  - path: tests/ttnn/unit_tests/operations/fused/test_rms_norm.py
+    why: "sanity tier: interleaved TILE, ROW_MAJOR x compute configs, weight + residual, bf16/fp32"
+  - path: tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py
+    why: "sanity tier: block/width sharded, 1- and 2-stage reduce, subblock, residual, bias, padded and uneven grids"
+  - path: tests/ttnn/nightly/unit_tests/operations/fused/test_rmsnorm.py
+    why: "nightly tier: RMSN/G/GB x DRAM/L1 in and out, llama 4D shapes, large tensor, determinism (runs twice)"
+  - path: tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py
+    k: "rms"
+    why: "nightly tier: ULP of the rms cases, non-tile-aligned and unevenly split sharded widths, residual"

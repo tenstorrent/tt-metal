@@ -13,7 +13,9 @@ model cases (bring-up task O.1) are the top-level `tests/test_*.py`.
 
 How to fork: `models/demos/common/bringup/skill/bringup-fork-op/SKILL.md`. In short: `python
 ttnn/ttnn/bringup/fork_op.py <source op folder> --model <model> --task <task>`, then make the change, fill the
-changelog, `./build_metal.sh`, and run the fork's tests (`<fork>/tests/`). Every model that calls a fork adds a
+changelog, `./build_metal.sh`, and run the fork's tests (`<fork>/tests/`). Each fork also carries a best-effort selection of its
+source op's own tests (`tests/source.yaml`, run in place with `testing/fork_source.py`; baseline in
+`tests/source_baseline.json`). Every model that calls a fork adds a
 random-input case to those tests for each call it makes: `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`
 (bring-up task O.1).
 
