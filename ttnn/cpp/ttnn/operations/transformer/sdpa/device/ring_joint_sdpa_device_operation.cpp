@@ -1217,7 +1217,10 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
+    const auto matmul_fidelity =
+        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
+    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
