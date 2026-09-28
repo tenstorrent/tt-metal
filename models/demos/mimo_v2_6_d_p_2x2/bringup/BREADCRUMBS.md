@@ -303,3 +303,13 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate: pcc_router_L01 0.999129. nnz is 8 on every row, selection overlap 0.99841, matched rows 2022/2048, matched rel L2 0.00102, row sums [0.9976, 1.0020]. PASS.
   - The first `FAIL pcc=0` line is the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_router.py`
+
+## S.sliding_moe.05 test (attempt 1)
+- Replaced the rendered template with the 1x4 prior's frozen swap 05 body (same golden/reference), with this run's
+  owner-widened attention limits (rel L2 0.022, norm ratio [0.95, 1.08]), as swap 04. Router checks: PCC >= 0.99,
+  nnz == 8, no negative weights, row sums 1 +- 0.01, selection overlap >= 0.985 vs golden / >= 0.99 vs the CPU router
+  on the device ffn_norm ("iso"), matched-row rel L2 <= 0.01 / 0.005; block out rel L2 <= 0.01.
+- BRINGUP_IMPL=reference passes (router overlap 0.99866 / 1.0); BRINGUP_IMPL=stub fails every check.
+- Gate (device): pcc_swap_out 0.999993, out rel 0.0039; attention rel 0.0193 (limit 0.022); router overlap 0.99725 /
+  0.99921, matched rel 0.00144 / 0.00158, row sums [0.9980, 1.0020]. 1 passed.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_05_router.py`
