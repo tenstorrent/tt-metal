@@ -340,8 +340,11 @@ GITIGNORE
   # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json):
   # the symlink shows up as a typechange. Mark such tracked paths
   # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
-  # its own appended lines stay hidden too.)
-  for rel in CLAUDE.md .mcp.json .gitignore .claude/scripts/run_test.sh .claude/scripts/run_qsr_metal_test.sh .claude/scripts/llk_triage.py; do
+  # its own appended lines stay hidden too.) codegen/CLAUDE.md and
+  # codegen/__init__.py are symlinked above too; leaving them out made every
+  # fresh worktree fail validate_input's clean check unless the agent patched
+  # the index by hand.
+  for rel in CLAUDE.md .mcp.json .gitignore codegen/CLAUDE.md codegen/__init__.py .claude/scripts/run_test.sh .claude/scripts/run_qsr_metal_test.sh .claude/scripts/llk_triage.py; do
     p="${LLK_REL}/${rel}"
     if git -C "$WORKTREE_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
       git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true
