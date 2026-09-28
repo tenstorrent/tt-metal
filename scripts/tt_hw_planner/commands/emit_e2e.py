@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -1399,6 +1400,119 @@ def _batch_gate_reason(requested: int, test_output: str) -> Optional[str]:
     return f"G3 batch: --batch {requested} was requested but tests/e2e drove {served} samples; {how}"
 
 
+# SKIPPING A CORRECTNESS RE-RUN THAT CANNOT HAVE CHANGED ITS ANSWER.
+#
+# termination_check runs the FULL correctness suite on every call, then the host-free/trace check
+# only once correctness passes. That order is right -- the agent may not self-declare, and an edit
+# aimed at the trace can break correctness. But it re-runs UNCONDITIONALLY, with no way to tell "the
+# pipeline was rewritten" from "nothing that matters was touched", so it assumes the worst every
+# time. On a Qwen-Image-Edit bring-up that meant ~3.5 h of 50-step device work per round to re-prove
+# a byte-identical pipeline, before reaching the ~10-minute trace check that was the actual failure:
+# six rounds, ~33 h, one real attempt at the blocker per four hours.
+#
+# So the verdict is keyed by CONTENT, the way reference/golden.py already keys its goldens. The key
+# covers every file that can change the answer -- found by walking the demo's own import closure, so
+# a graduated stub in another package counts too and nothing is assumed about where code lives --
+# plus the pcc bar and the batch. Two deliberate limits:
+#   * ONLY A PASS IS CACHED. A failing gate is what the agent is working on; it must re-run.
+#   * THE RUN STAMP IS PART OF THE KEY, so a new run always re-verifies once. A pass is a statement
+#     about this code on THIS board, and device_recovery._run_stamp() already exists to say which
+#     run a piece of state belongs to -- see its docstring on state outliving the run that earned it.
+# Set $E2E_GATE_NO_CACHE=1 to re-run regardless.
+_GATE_CACHE_FILE = ".e2e_correctness_pass.json"
+_GATE_CACHE_OFF_ENV = "E2E_GATE_NO_CACHE"
+_GATE_KEY_VERSION = 1
+
+
+def _repo_root_of(demo_dir: Path) -> Optional[Path]:
+    """The checkout `demo_dir` lives in, found by walking up to the directory holding `models/`."""
+    for parent in [demo_dir] + list(demo_dir.parents):
+        if (parent / "models").is_dir() and (parent / "scripts").is_dir():
+            return parent
+    return None
+
+
+def _import_closure(demo_dir: Path) -> list:
+    """Every .py file the demo's own sources reach, transitively, inside this checkout.
+
+    Walks the imports rather than assuming a layout: a graduated stub the pipeline composes may live
+    in another package entirely (models/tt_dit/..., a sibling demo), and hashing only `demo_dir`
+    would call such an edit "no change". Module names come from the AST, never from a path typed
+    here."""
+    root = _repo_root_of(demo_dir)
+    seen, out = set(), []
+    work = sorted(demo_dir.rglob("*.py")) if demo_dir.is_dir() else []
+    while work:
+        f = work.pop()
+        rf = f.resolve()
+        if rf in seen or not rf.is_file():
+            continue
+        seen.add(rf)
+        out.append(rf)
+        if root is None:
+            continue
+        try:
+            tree = ast.parse(rf.read_text(errors="ignore"))
+        except (SyntaxError, OSError):
+            continue
+        mods = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods += [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                mods.append(node.module)
+        for m in mods:
+            rel = Path(*m.split("."))
+            for cand in (root / rel.with_suffix(".py"), root / rel / "__init__.py"):
+                if cand.is_file() and cand.resolve() not in seen:
+                    work.append(cand)
+    return out
+
+
+def _correctness_key(demo_dir: Path, pcc: float, batch: int) -> Optional[str]:
+    """Fingerprint of everything that decides the correctness verdict, or None if it cannot be taken.
+
+    Content, not mtimes: a checkout or a no-op rewrite must not invalidate a good answer, and a real
+    edit must."""
+    try:
+        from models.experimental.perf_automation.agent.device_recovery import _run_stamp
+
+        stamp = _run_stamp()
+    except Exception:  # noqa: BLE001
+        stamp = ""
+    if not stamp:
+        return None  # no run identity -> cannot scope a pass to this run -> never cache
+    try:
+        h = hashlib.sha256()
+        h.update(repr((_GATE_KEY_VERSION, stamp, float(pcc), int(batch))).encode())
+        for f in sorted(_import_closure(demo_dir)):
+            h.update(str(f).encode())
+            h.update(f.read_bytes())
+        return h.hexdigest()[:16]
+    except Exception:  # noqa: BLE001 - a key that cannot be taken must not block the gate
+        return None
+
+
+def _cached_correctness_pass(demo_dir: Path, key: Optional[str]) -> bool:
+    if not key or os.environ.get(_GATE_CACHE_OFF_ENV) == "1":
+        return False
+    try:
+        doc = json.loads((demo_dir / _GATE_CACHE_FILE).read_text())
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(doc, dict) and doc.get("key") == key
+
+
+def _record_correctness_pass(demo_dir: Path, key: Optional[str]) -> None:
+    """Remember a PASS only. A failure is what the loop is working on and must be re-run."""
+    if not key or os.environ.get(_GATE_CACHE_OFF_ENV) == "1":
+        return
+    try:
+        (demo_dir / _GATE_CACHE_FILE).write_text(json.dumps({"key": key, "version": _GATE_KEY_VERSION}))
+    except OSError:
+        pass
+
+
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: int = 1):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons).
 
@@ -1409,6 +1523,14 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     test_files = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
     if not test_files:
         return False, ["G2/G3: no tests/e2e/test_*.py to run"]
+
+    # A pass this run already earned, on code that has not changed since, is still a pass. Re-running
+    # it costs the whole round (see _correctness_key). Only a PASS is reused, and only within the run
+    # that earned it.
+    _key = _correctness_key(demo_dir, pcc, batch)
+    if _cached_correctness_pass(demo_dir, _key):
+        print("  [gate] correctness unchanged since it passed this run -- reusing that verdict", flush=True)
+        return True, []
 
     demo_subdir = demo_dir / "demo"
     demo_entrypoints = sorted(demo_subdir.glob("demo_*.py")) if demo_subdir.is_dir() else []
@@ -1833,6 +1955,8 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int, batch: 
     if _stack_reason:
         reasons.append(_stack_reason)
 
+    if not reasons:
+        _record_correctness_pass(demo_dir, _key)
     return (len(reasons) == 0), reasons
 
 
