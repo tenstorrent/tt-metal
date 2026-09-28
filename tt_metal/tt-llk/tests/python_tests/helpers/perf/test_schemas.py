@@ -651,6 +651,27 @@ PERF_TEST_SCHEMAS = {
         },
         "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},
     },
+    "perf_topk_xl_split": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "topk_xl_k",
+            "topk_split",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_topk_xl_split": "perf_topk_xl_split"},
+    },
     "perf_vif_targets": {
         "version": 2,
         "columns": [
