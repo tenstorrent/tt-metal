@@ -19,3 +19,24 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - V planned at 128 (sdpa fork), so the KV state is 0.06 GiB smaller than the prior's plan. Per chip 14.59 of 27.20 GiB.
 - Gate (no device): plan_fits 1, 0 unplaced, 0 plan/component/ledger errors; plan approved False until a person approves.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.plan.check_plan`
+
+## C.full_dense.attn_norm.test.1 (test role)
+- Replaced the rendered test with the prior's frozen 1x4 test (`mimo_v2_6_d_p/tests/bringup/test_c_full_dense_attn_norm.py`), which uses the same golden. Only the docstring changed. It gates on PCC >= 0.99, and also asserts that the output is finite, rel L2 <= 0.03 and the per-token norm ratio is in [0.97, 1.03]. PCC alone misses sum-instead-of-mean, a wrong eps, and `1 + w` (see known_issues "PCC alone does not gate a component").
+- BRINGUP_IMPL=reference: PCC 0.999999, rel_l2 0.001597, ratio [0.9980, 1.0023], passes. BRINGUP_IMPL=stub: PCC 0, fails.
+- Default gate (the device mesh 2x2) currently fails with NotImplementedError from hooks.device_component. That is expected until the implement step.
+- The `FAIL pcc=0.000000` line printed before the real result comes from the precompile collect pass (stubbed device results). Ignore it.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_norm.py`
+
+## C.full_dense.attn_norm.implement.1 (implement role), 2026-09-28
+- New `tt/`: `rms_norm.py` copied from the 1x4 prior's `tt/rms_norm.py`. Only the docstring changed: replication through
+  `ReplicateTensorToMesh` works on a 2x2 mesh, and the norm needs no CCL. `TtRMSNorm` runs `ttnn.bringup.rms_norm`
+  at HiFi4 with fp32 acc, using the plain w. `MIMO_NORM_IMPL=native` selects `ttnn.rms_norm`. `fused_add`
+  (return_residual_sum) is kept for the later layers.
+  `model.py` holds only `NORM_WEIGHTS` and `build_norm` so far. The hooks and the future all-device model will share these builders.
+- `hooks.py`: `device_component` handles the norm steps (attn_norm and ffn_norm) through `_host_fn`, which does host->replicated
+  device->chip-0 read-back at the harness boundary. `device_model` returns a `HybridDeviceModel`: the CPU reference
+  with `DEVICE_STEPS` (currently only `full_dense: {attn_norm}`) swapped in. It stays that way until the assemble step.
+  Weights load through the prior's `reference/weights.py:WeightLoader`. The CPU side is shared, and nothing is imported from the prior's `tt/`.
+- Gate: pcc_attn_norm_L00 0.999999, rel_l2 0.001738, row_norm_ratio [0.9956, 1.0027], PASS. The first `FAIL pcc=0.000000`
+  line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attn_norm.py`
