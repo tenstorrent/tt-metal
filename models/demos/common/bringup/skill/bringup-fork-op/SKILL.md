@@ -70,6 +70,9 @@ test layernorm), so pick a reasonable set, not an exhaustive one:
    interleaved and sharded files, the nightly file, and the rms cases of the nightly ULP file). Recording took about
    6 minutes in all; a check takes about 1 minute.
 4. Complete the `swap:` map. Every Python name the tests reach, including enum types they pass, points at the fork.
+   If the tests also hand that enum to original ops, keep it and convert at the fork op instead: a swap value
+   `{op: ttnn.bringup.<op>, convert_enums: {ttnn.<Enum>: ttnn.bringup.<Enum>}}` maps each original-enum argument to
+   the fork enum's member of the same name (see `ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/source.yaml`).
 5. Record the baseline: `python -m models.demos.common.bringup.testing.fork_source --fork <fork> --record`. It runs the
    selection on the original op and on the fork, and writes `tests/source_baseline.json`. Everything runs in the
    foreground, so when the selection is long, record one entry at a time (`--record --entry N`; the results merge into
