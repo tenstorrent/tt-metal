@@ -32,6 +32,15 @@ void FrobeniusNormalizeDeviceOperation::validate_on_program_cache_miss(
         "FrobeniusNormalize requires BFLOAT16. Got: {}",
         enchantum::to_string(input_tensor.dtype()));
 
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    const auto canonical_tile = tt::tt_metal::Tile{};
+    TT_FATAL(
+        input_tile.get_tile_shape() == canonical_tile.get_tile_shape() &&
+            input_tile.get_face_shape() == canonical_tile.get_face_shape() &&
+            input_tile.get_num_faces() == canonical_tile.get_num_faces() && !input_tile.get_transpose_within_face() &&
+            !input_tile.get_transpose_of_faces(),
+        "FrobeniusNormalize requires an untransposed 32x32 tile with four 16x16 faces");
+
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "FrobeniusNormalize requires INTERLEAVED memory layout. Got: {}",
