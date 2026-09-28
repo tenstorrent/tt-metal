@@ -286,7 +286,7 @@ public:
     }
 
     // Hands the worker a parallel_for job, taking over one of the job's references. A job the worker has not
-    // picked up yet is finished by now, and is dropped.
+    // picked up yet is dropped: its caller runs any calls it still has.
     void offer(ParallelJob* job);
 
     // Enters the kernel only if the worker is parked.
