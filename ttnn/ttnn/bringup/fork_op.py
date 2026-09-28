@@ -223,6 +223,24 @@ def main(argv=None) -> int:
     reg.write_text(t)
     binds = [f"{bns}::{bind}"]
 
+    # The source op's own tests, run in place against the fork (testing/fork_source.py): the swap map is known here;
+    # the test selection is the forking agent's (skill bringup-fork-op, "Carry the source op's tests").
+    ops = sorted(
+        {m for f in dst.glob("*_nanobind.cpp") for m in re.findall(r'bind_function<\s*"(\w+)"', f.read_text())}
+    )
+    enums = sorted(
+        {m for f in dst.glob("*_nanobind.cpp") for m in re.findall(r'nb::enum_<\w+>\(\s*\w+,\s*"(\w+)"', f.read_text())}
+    )
+    (dst / "tests").mkdir(exist_ok=True)
+    swap = "".join(f"  {py_prefix}{o}: ttnn.bringup.{o}\n" for o in ops)
+    swap += "".join(
+        f"  # ttnn.{e}: ttnn.bringup.{e}   (enum: check where the source's tests take it from)\n" for e in enums
+    )
+    (dst / "tests" / "source.yaml").write_text(
+        f"# The source op's own tests, run in place against this fork (models/demos/common/bringup/testing/fork_source.py).\n"
+        f'# Best-effort selection: see the bringup-fork-op skill, "Carry the source op\'s tests".\n'
+        f"upstream_sha: {sha}\nswap:\n{swap}tests: []\n"
+    )
     (dst / "CHANGELOG.md").write_text(
         f"# {name} (fork)\n\n"
         f"- Source: `{src.relative_to(ROOT)}`\n"

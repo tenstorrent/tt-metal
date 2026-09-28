@@ -1,0 +1,1057 @@
+{
+ "upstream_sha": "36d18a5c8526e7e212fb2e2076974c1aef31ba53",
+ "tests": {
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=24-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=32-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=32-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=384-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=1024-h=384-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=42-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=42-h=24-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=42-h=32-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=42-h=32-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=42-h=384-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=42-h=384-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=64-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=64-h=24-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=64-h=32-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=64-h=32-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=64-h=384-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm[w=64-h=384-batch_size=8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=False-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=False-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=False-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi2-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=32-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=128-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_row_major[packer_l1_acc=True-fp32_dest_acc_en=True-math_approx_mode=True-math_fidelity=MathFidelity.HiFi4-w=4096-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.bfloat16-w=4022-h=2048-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.bfloat16-w=4022-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.bfloat16-w=42-h=2048-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.bfloat16-w=42-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.float32-w=4022-h=2048-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.float32-w=4022-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.float32-w=42-h=2048-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm::test_rms_norm_with_weight_and_residual[dtype=torch.float32-w=42-h=24-batch_size=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[col_major-1_line_plus_1]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[col_major-2_lines_plus_3]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[col_major-4_lines_plus_1]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[col_major-offset_and_short]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[col_major-offset_origin]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[col_major-short_lines]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[row_major-1_line_plus_1]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[row_major-2_lines_plus_3]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[row_major-4_lines_plus_1]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[row_major-offset_and_short]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[row_major-offset_origin]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores[row_major-short_lines]": {
+   "original": "skipped",
+   "fork": "skipped"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_padded[h=32-w=256]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=4-num_cores_w=8-block_ht=2-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=4-block_ht=1-block_wt=4-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_single_stage[dtype=torch.float32-tensor_type=random-two_stage=False-h=256-w=512-num_cores_h=8-num_cores_w=8-block_ht=1-block_wt=2-subblock_wt=2]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True-h=128-w=256-num_cores_h=4-num_cores_w=2-block_ht=4-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True-h=256-w=512-num_cores_h=2-num_cores_w=4-block_ht=8-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True-h=64-w=128-num_cores_h=2-num_cores_w=2-block_ht=2-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=True-h=128-w=256-num_cores_h=4-num_cores_w=2-block_ht=4-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=True-h=256-w=512-num_cores_h=2-num_cores_w=4-block_ht=8-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.bfloat16-tensor_type=random-two_stage=True-h=64-w=128-num_cores_h=2-num_cores_w=2-block_ht=2-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True-h=128-w=256-num_cores_h=4-num_cores_w=2-block_ht=4-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True-h=256-w=512-num_cores_h=2-num_cores_w=4-block_ht=8-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True-h=64-w=128-num_cores_h=2-num_cores_w=2-block_ht=2-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.float32-tensor_type=random-two_stage=True-h=128-w=256-num_cores_h=4-num_cores_w=2-block_ht=4-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.float32-tensor_type=random-two_stage=True-h=256-w=512-num_cores_h=2-num_cores_w=4-block_ht=8-block_wt=2-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_two_stage[dtype=torch.float32-tensor_type=random-two_stage=True-h=64-w=128-num_cores_h=2-num_cores_w=2-block_ht=2-block_wt=1-subblock_wt=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat8_b]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-float32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w224_c3-bfloat16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w224_c3-bfloat8_b]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w224_c3-float32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w72_c2_nonaligned-bfloat16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w72_c2_nonaligned-bfloat8_b]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w72_c2_nonaligned-float32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w96_c2-bfloat16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w96_c2-bfloat8_b]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_uneven_multicore_logical_width[w96_c2-float32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_default_config[dtype=torch.bfloat16-h=32-w=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-col_major-1_line_plus_1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-col_major-2_lines_plus_3]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-col_major-4_lines_plus_1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-col_major-offset_and_short]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-col_major-offset_origin]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-col_major-short_lines]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-row_major-1_line_plus_1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-row_major-2_lines_plus_3]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-row_major-4_lines_plus_1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-row_major-offset_and_short]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-row_major-offset_origin]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_width_non_rectangular_grid[dtype=torch.bfloat16-row_major-short_lines]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.float32-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_bias_only[dtype=torch.float32-tensor_type=random_normal-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.float32-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_residual[dtype=torch.float32-tensor_type=random_normal-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.float32-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias[dtype=torch.float32-tensor_type=random_normal-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.bfloat16-tensor_type=random-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.bfloat16-tensor_type=random-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.float32-tensor_type=random-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_and_residual[dtype=torch.float32-tensor_type=random-two_stage=True]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_row_major[dtype=torch.bfloat16-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_row_major[dtype=torch.bfloat16-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_row_major[dtype=torch.float32-tensor_type=ascending_values_repeated_rows-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.unit_tests.operations.fused.test_rms_norm_sharded::test_rms_norm_sharded_with_weight_and_bias_row_major[dtype=torch.float32-tensor_type=random_normal-two_stage=False]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_large_tensor_rms_norm[batch_size=1-w=48]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_large_tensor_rms_norm[batch_size=1-w=5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=24]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=65536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=2048-h=8192]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=24]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=65536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=3072-h=8192]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=24]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=65536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_llama_4D_rms_norm[w=4096-h=8192]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_DRAM-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_DRAM-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_L1-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN-BFLOAT16-in0_L1-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_DRAM-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_DRAM-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_L1-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_G-BFLOAT16-in0_L1-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_DRAM-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_L1-out_DRAM]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_rmsnorm::test_rmsnorm_test[RMSN_GB-BFLOAT16-in0_L1-out_L1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=1-norm=rmsnorm-dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_norm_ulp_sharded_non_tile_aligned_residual[num_cores_w=2-norm=rmsnorm-dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=200-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_non_tile_aligned_width[dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=200-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.bfloat16-w=96-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=200-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=40-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=72-distribution=centered_uniform]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.fused.test_layer_norm_ulp::test_rms_norm_ulp_sharded_unevenly_split_width_across_cores[dtype=torch.float32-w=96-distribution=normal]": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}
