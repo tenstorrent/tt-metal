@@ -168,4 +168,23 @@ TEST_F(ScalarLhsBinaryFixture, OmittedFastApproximateModeMatchesTensorFirstDefau
     device.disable_and_clear_program_cache();
 }
 
+// Regression: gt/lt/ne with a scalar lhs threw "Unsupported operation".
+TEST_F(ScalarLhsBinaryFixture, ScalarFirstGtLtNeCompareInOperandOrder) {
+    auto& device = *device_;
+    const ttnn::Shape shape({32, 64});
+    const auto tensor = ttnn::full(shape, 4.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    const auto expect = [&](const Tensor& actual, float value, const char* what) {
+        const auto expected = ttnn::full(shape, value, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+        EXPECT_TRUE(ttnn::allclose<::bfloat16>(ttnn::from_device(expected), ttnn::from_device(actual))) << what;
+    };
+
+    expect(ttnn::gt(2.0f, tensor), 0.0f, "gt(2, 4)");
+    expect(ttnn::lt(2.0f, tensor), 1.0f, "lt(2, 4)");
+    expect(ttnn::ne(2.0f, tensor), 1.0f, "ne(2, 4)");
+    expect(ttnn::gt(4.0f, tensor), 0.0f, "gt(4, 4)");
+    expect(ttnn::lt(4.0f, tensor), 0.0f, "lt(4, 4)");
+    expect(ttnn::ne(4.0f, tensor), 0.0f, "ne(4, 4)");
+    expect(ttnn::gt(8.0f, tensor), 1.0f, "gt(8, 4)");
+}
+
 }  // namespace ttnn::operations::binary::test
