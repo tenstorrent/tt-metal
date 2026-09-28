@@ -39,6 +39,17 @@ tasks:
   - models/demos/hy4_preview_d_p/reference
   - models/demos/hy4_preview_d_p/bringup/hooks.py
   - models/demos/hy4_preview_d_p/__init__.py
+- id: R.4
+  title: Trim the checkpoint to layers 0-5 (the whole model was needed only for the HF sanity)
+  step: intake
+  deps:
+  - R.2
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.trim_checkpoint
+    metrics:
+      trim_done: == 1
+      trim_verify_errors: == 0
+      trim_freed_gb: '>= 0'
 - id: R.3
   title: Reference chunked == one-shot (4096 in 2048) and block graphs replay exactly
   step: reference
@@ -53,17 +64,6 @@ tasks:
       boundaries_missing: == 0
       graph_replay_maxabs: <= 0
   paths: *id001
-- id: R.4
-  title: Trim the checkpoint to layers 0-5 (the whole model was needed only for the HF sanity)
-  step: intake
-  deps:
-  - R.2
-  gate:
-    cmd: python -m models.demos.common.bringup.intake.trim_checkpoint
-    metrics:
-      trim_done: == 1
-      trim_verify_errors: == 0
-      trim_freed_gb: '>= 0'
 - id: G.s4096
   title: 'Golden s4096: 4096 tokens in 2048-token chunks, full dumps'
   step: goldens
