@@ -127,6 +127,12 @@ std::pair<uint32_t, uint32_t> get_effective_max_steps_and_vocab_size(const Train
 
     auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());
+    if (dataset.get_size() == 0) {
+        throw std::runtime_error(fmt::format(
+            "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens",
+            config.data_path,
+            sequence_length + 1));
+    }
 
     const double steps_per_epoch = ttml::utils::steps_per_epoch(
         dataset.get_num_tokens(), config.batch_size * config.gradient_accumulation_steps, sequence_length);
