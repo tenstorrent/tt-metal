@@ -745,6 +745,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param1))};
         }
         case UnaryOpType::HARDTANH: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 2 &&
+                std::bit_cast<uint32_t>(params[0]) == 0xbf800000u &&
+                std::bit_cast<uint32_t>(params[1]) == 0x3f800000u) {
+                return {
+                    "hardtanh_tt_poly_bf16_tile_init();",
+                    fmt::format("hardtanh_tt_poly_bf16_tile({}, 0xbf800000u, 0x3f800000u);", idst)};
+            }
+#endif
+
             float param1 = params[1];
             return {
                 "hardtanh_tile_init();",
