@@ -115,7 +115,9 @@ A recipe caller does not need to pick chunk sizes. Omit `program_config` (dense 
 `q_chunk_size`/`k_chunk_size` at their default of 0 in `SDPAProgramConfig`, and the op chooses them
 (and, for exp ring, the grid width) from the shape, recipe, op, grid and L1. Explicit chunk sizes are
 honored and validated exactly as before, and a single explicit dimension pins only that dimension. A
-chunk size of 0 without `precision` is rejected: legacy SDPA always needs explicit chunks.
+chunk size of 0 without `precision` is rejected: legacy SDPA always needs explicit chunks, and every
+legacy validation (dense, chunked, joint, ring joint, exp ring, ring-distributed) requires a positive
+tile-aligned chunk.
 
 ```python
 cfg = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(10, 10))  # grid only; chunks op-selected
@@ -127,7 +129,8 @@ Blocking is an execution detail: the chosen chunks change rounding order (see
 blocking. For every candidate the chooser asks two host functions in
 `sdpa_recipe_blocking.cpp`: `recipe_geometry_rejection` (the supported Q/K/D geometry per op) and
 `recipe_l1_bytes` (circular-buffer bytes from `recipe_compute_program`, plus the ring factory's extra
-buffers, single-slot Q fallback, and FAST's legacy ring/exp-ring layouts). It consults nothing else,
+buffers, single-slot Q fallback, FAST's legacy ring/exp-ring layouts, and the dense `attn_mask` CB of
+one or two QK row groups of mask tiles). It consults nothing else,
 so widening the supported geometry needs no chooser change. The heuristic:
 
 - **Makespan.** Cost = (Q chunks on the busiest core) x (K blocks per Q chunk) x block cost. Dense and
