@@ -186,15 +186,19 @@ def build(spec) -> dict:
                 "commit": commits.get(tid),
                 "waiting": s.get("waiting") if s.get("status") != "PASS" else None,
                 "reason": "; ".join(s.get("reason") or []) or None,
-                "frozen": f"{len(fr.get('files', {}))} files, reference {fr.get('reference', 'n/a')}, stub {fr.get('stub', 'n/a')}"
-                if fr
-                else None,
+                "frozen": (
+                    f"{len(fr.get('files', {}))} files, reference {fr.get('reference', 'n/a')}, stub {fr.get('stub', 'n/a')}"
+                    if fr
+                    else None
+                ),
                 "agent": (
-                    f"{len(runs)} runs ({', '.join(sorted({r['role'] for r in runs}))}), debugger {s.get('debugger_attempts', 0)}, "
-                    f"last session {runs[-1].get('session_id')}"
-                )
-                if runs
-                else None,
+                    (
+                        f"{len(runs)} runs ({', '.join(sorted({r['role'] for r in runs}))}), debugger {s.get('debugger_attempts', 0)}, "
+                        f"last session {runs[-1].get('session_id')}"
+                    )
+                    if runs
+                    else None
+                ),
             }
         )
     status = {t["id"]: t["status"] for t in tasks}
@@ -258,9 +262,11 @@ def build(spec) -> dict:
         "page_title": f"{spec.get('display_name') or spec.model} Prefill Bring-up",
         "short_name": spec.get("display_name") or spec.model,
         "model": spec.data.get("hf_id", spec.model),
-        "target": f"{spec.get('target.seq'):,} tokens in {spec.get('target.chunk'):,}-token chunks, {spec.get('target.dtype', 'bf16')}"
-        if spec.get("target.seq")
-        else "",
+        "target": (
+            f"{spec.get('target.seq'):,} tokens in {spec.get('target.chunk'):,}-token chunks, {spec.get('target.dtype', 'bf16')}"
+            if spec.get("target.seq")
+            else ""
+        ),
         "box": spec.get("box.name") or f"mesh {'x'.join(map(str, spec.mesh))}, {spec.mesh[0] * spec.mesh[1]} chips",
         "arch": hf_arch(spec),
         "mesh": spec.mesh,
@@ -458,7 +464,7 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
 
 
 ACC_KEY = re.compile(r"^(pcc_|text_top|top[15]_|final_hidden)")
-PER_LAYER = re.compile(r"^pcc_(layer|state_key|state_value|hidden)_L\d+$")
+PER_LAYER = re.compile(r"^pcc_(layer|state_\w+|hidden)_L\d+$")
 
 
 def _num(v):
