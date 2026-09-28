@@ -269,3 +269,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   attention rel 0.0193 / first rows 0.0148, ratio [0.9739, 1.0652], vs CPU w128 0.0130, w127 0.0164, w129 0.0150. h_mid rel 0.0029, ratio [0.9991, 1.0018].
   coef 1.0199 (0.03 of margin), attn rel 0.154. PASS.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_03_attn_residual.py`
+
+## C.sliding_moe.ffn_norm.test.1 (test review)
+- Adopted the frozen 1x4 test `models/demos/mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_ffn_norm.py` verbatim (same golden, same RMSNorm `x * w`, eps 1e-6); only the docstring's review line changed. Checks: PCC >= 0.99 (gated), finite, rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03].
+- BRINGUP_IMPL=reference: PCC 0.999997, rel 0.0024, ratio [0.9970, 1.0031], pass. BRINGUP_IMPL=stub: PCC 0.0, fail.
+- Gate (default impl, device): PCC 0.999996, rel 0.0030, ratio [0.9958, 1.0031], 1 passed.
+- The first "FAIL pcc=0.000000" line in each run is the precompile collect pass (stubbed), not the real result.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_norm.py`
