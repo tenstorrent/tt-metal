@@ -710,33 +710,27 @@ file and a threshold per SKU; nothing in CI catches a speed regression yet.
 
 ## CI
 
-Registered in the Tier 3 unit pipeline on WH N150 and BH P150
-(`tests/pipeline_reorg/models_unit_tests.yaml`, model identifier `qwen3-tts-1.7b-base`). The
-identifier drops the frame rate that the HF name carries; `HF_MODEL` keeps the canonical
-`Qwen/Qwen3-TTS-12Hz-1.7B-Base`, and the target resolver matches on that through its aliases.
-Dispatch a single run from
+Tier 2, on WH N150 and BH P150, one leg per size: model identifiers `qwen3-tts-1.7b-base` and
+`qwen3-tts-0.6b-base`, with `HF_MODEL` keeping the canonical HF name. Dispatch a single run from
 [`all-model-tests`](https://github.com/tenstorrent/tt-metal/actions/workflows/all-model-tests.yaml)
-with tier 3, type unit, and that identifier.
+with tier 2 and that identifier.
 
-A second leg, `qwen3-tts-0.6b-base`, runs on `Qwen/Qwen3-TTS-12Hz-0.6B-Base` on the same two
-SKUs, but only the eight files whose coverage differs at 0.6B. The tokenizer, the sampler,
-both codec halves and the streaming logic are identical at both sizes and run in the 1.7B leg,
-and there is no 0.6B VoiceDesign.
+The unit legs (`tests/pipeline_reorg/models_unit_tests.yaml`) run the module PCC files only:
+the speaker encoder, talker, code predictor and cached decoders at both sizes, and both codec
+halves at 1.7B, since the codec is the same at both sizes. The rest of the suite (checkpoint
+layout, tokenizer, sampler, the prompt builders, the pipeline, generation stops, streaming) is
+not in CI; run it by hand as above.
 
-Timeouts assume each CI job starts with an empty kernel cache, and are the cold time plus 20%,
-measured by replaying each leg's CI command with the watcher on:
+Timeouts are the time with an empty kernel cache, watcher on, plus 20%:
 
-| leg | N150 cold | `wh_n150` | Blackhole cold | `bh_p150` |
-|---|---|---|---|---|
-| 1.7B | 21.1 min | 26 | 15.6 min | 19 |
-| 0.6B | 10.7 min | 13 | 8.7 min | 11 |
+| leg | N150 cold | `wh_n150` | `bh_p150` |
+|---|---|---|---|
+| 1.7B unit | 8.6 min | 11 | 8 |
+| 0.6B unit | 3.2 min | 4 | 3 |
 
-The Blackhole numbers come from one chip of a P300 standing in for the P150. A first run that
-downloads the checkpoints into the shared cache takes longer.
-
-The end-to-end leg is deliberately absent. It lands with the first change that produces a
-waveform, together with its own `e2e_tier3` budget; registering one before then would either
-duplicate these tests or claim coverage that does not exist.
+The Blackhole timeouts scale the N150 time by 0.74, the ratio the previous full legs measured
+on one Blackhole chip. A first run that downloads the checkpoints into the shared cache takes
+longer.
 
 ## Directory layout
 

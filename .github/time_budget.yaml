@@ -396,19 +396,19 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 87
+    wh_n150: 102
     wh_n300: 30
     wh_galaxy_perf: 80
-    bh_p150: 20
+    bh_p150: 26
     bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 114 # Qwen3-TTS unit tests: +26 the 1.7B leg, +13 the 0.6B leg (was 75 without them)
+    wh_n150: 75
     wh_n150_civ2: 12
     wh_n300: 43  # +10 DiffusionDrive unit tests (#42995)
-    bh_p150: 50 # Qwen3-TTS unit tests: +19 the 1.7B leg, +11 the 0.6B leg (was 20 without them)
+    bh_p150: 30
     bh_p300: 30
     bh_quietbox_2: 25
   integration:
