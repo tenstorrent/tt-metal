@@ -435,4 +435,6 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket_core.h
 )
