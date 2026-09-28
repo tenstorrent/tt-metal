@@ -5,11 +5,20 @@
 
 Under classifier-free guidance `combined_step` runs `inner_step` twice with the same timestep
 and spatial input, so the timestep embedding, the patch embedding and every block's AdaLN
-modulation (`WanTransformerBlock.prepare_modulation`, plus the `norm_out` pair) are now computed
-once and handed to both passes. That is pure reuse of identical device results, so the gate is exact
-equality, not a PCC floor: the hoisted `combined_step` must match the pre-hoist computation
-(two independent `inner_step` calls and a `ttnn.lerp`) to the bit, and each pass must match
-its standalone `inner_step`.
+modulation (plus the `norm_out` pair) are computed once and handed to both passes. Since sprint 6
+the hoisted path also builds the modulation in a different layout: the flat timestep projection
+is sliced at tile-aligned group boundaries (`split_timestep_proj`) and added to pre-split table
+rows (`WanTransformerBlock.prepare_modulation_split`, `prepare_norm_out_modulation_split`),
+while the inline `inner_step` keeps the original add-then-`ttnn.chunk` form. Both are pure data
+movement plus the same elementwise ops, so the gate is exact equality, not a PCC floor: the
+hoisted `combined_step` must match the pre-hoist computation (two independent `inner_step` calls
+and a `ttnn.lerp`) to the bit, each pass must match its standalone `inner_step`, and every one
+of the six modulation tensors per block (and the two `norm_out` ones) must match its legacy
+counterpart, so a mismatch is attributed to one op.
+
+Both timestep layouts are covered: the scalar (T2V) one and the two-row per-token (I2V) one,
+the latter with all-ones masks so it reduces to the scalar values while exercising the
+per-token arm's shapes.
 
 Real 720p latent geometry at 2 transformer blocks, so the patch-embed and modulation shapes
 are the production ones while the run stays short.
@@ -44,6 +53,90 @@ from test_transformer_wan_ti2v_5b import (  # noqa: E402
 
 NUM_LAYERS = 2
 GUIDANCE_SCALE = 4.0
+MODULATION_NAMES = ("shift", "1+scale", "gate", "c_shift", "1+c_scale", "c_gate")
+
+
+def _bit_exact_checks(tt_model, *, timestep, guidance, spatial_device, prompt_1BLP, negative_1BLP, n, rope):
+    """Every (reference, new) pair the gate compares, for one timestep layout."""
+    common = {
+        "spatial_1BNI": spatial_device,
+        "N": n,
+        "timestep": timestep,
+        "gather_output": False,
+        **rope,
+    }
+
+    checks = {}
+
+    # Pre-hoist computation: each pass embeds the timestep and the patches itself, and each
+    # block builds its modulation inline with the legacy add-then-chunk layout.
+    ref_cond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common))
+    ref_uncond_tt = tt_model.inner_step(prompt_1BLP=negative_1BLP, **common)
+    ref_uncond = local_device_to_torch(ref_uncond_tt)
+    ref_combined = local_device_to_torch(
+        ttnn.lerp(ref_uncond_tt, tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common), guidance)
+    )
+
+    # Hoisted path, untraced (the traced_function wrapper passes straight through).
+    new_combined = local_device_to_torch(
+        tt_model.combined_step(
+            do_classifier_free_guidance=True,
+            spatial_1BNI=spatial_device,
+            prompt_1BLP=prompt_1BLP,
+            negative_prompt_1BLP=negative_1BLP,
+            N=n,
+            rope_cos_1HND=common["rope_cos_1HND"],
+            rope_sin_1HND=common["rope_sin_1HND"],
+            trans_mat=common["trans_mat"],
+            timestep=timestep,
+            guidance_scale=guidance,
+            gather_output=False,
+        )
+    )
+
+    # Each pass with the shared embeddings and the split-layout modulations handed in
+    # explicitly (exactly what combined_step builds), against its standalone self.
+    temb_11BD, proj_flat = tt_model.prepare_timestep_conditioning(timestep, flat_proj=True)
+    block_modulations, norm_out_modulation = tt_model.prepare_hoisted_modulation(temb_11BD, proj_flat)
+    shared = {
+        "timestep_conditioning": (temb_11BD, proj_flat),
+        "spatial_1BND": tt_model.patch_embedding(spatial_device),
+        "block_modulations": block_modulations,
+        "norm_out_modulation": norm_out_modulation,
+    }
+    new_cond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common, **shared))
+    new_uncond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=negative_1BLP, **common, **shared))
+
+    checks["cond pass"] = (ref_cond, new_cond)
+    checks["uncond pass"] = (ref_uncond, new_uncond)
+    checks["combined_step"] = (ref_combined, new_combined)
+
+    # Per-tensor: legacy layout (add the 6-row / flat table, ttnn.chunk, typecast) against the
+    # split layout (tile-aligned slices of the projection, pre-split table rows, bf16 adds).
+    _, proj_legacy = tt_model.prepare_timestep_conditioning(timestep)
+    for b, (block, split) in enumerate(zip(tt_model.blocks, block_modulations)):
+        legacy = block.prepare_modulation(proj_legacy)
+        assert len(legacy) == len(split) == 6
+        for name, l_t, s_t in zip(MODULATION_NAMES, legacy, split):
+            assert l_t.dtype == s_t.dtype, f"block {b} {name}: dtype {l_t.dtype} vs {s_t.dtype}"
+            assert tuple(l_t.shape) == tuple(s_t.shape), f"block {b} {name}: shape {l_t.shape} vs {s_t.shape}"
+            checks[f"block {b} {name}"] = (local_device_to_torch(l_t), local_device_to_torch(s_t))
+    legacy_norm_out = tt_model.prepare_norm_out_modulation(temb_11BD)
+    for name, l_t, s_t in zip(("norm_out shift", "norm_out 1+scale"), legacy_norm_out, norm_out_modulation):
+        assert tuple(l_t.shape) == tuple(s_t.shape), f"{name}: shape {l_t.shape} vs {s_t.shape}"
+        checks[name] = (local_device_to_torch(l_t), local_device_to_torch(s_t))
+    return checks
+
+
+def _assert_bit_exact(checks, label):
+    failures = []
+    for name, (ref, new) in checks.items():
+        diff = (ref.float() - new.float()).abs().max().item()
+        logger.info(f"CFG hoist [{label}] {name}: max_abs_diff = {diff}")
+        print(f"CFGHOIST [{label}] {name}: max_abs_diff = {diff}")
+        if diff != 0.0:
+            failures.append(f"[{label}] {name}: max_abs_diff {diff} != 0")
+    assert not failures, "; ".join(failures)
 
 
 @pytest.mark.parametrize(
@@ -82,68 +175,34 @@ def test_cfg_hoist_bit_exact(mesh_device, sp_axis, tp_axis, num_links, device_pa
     spatial_device = from_torch(spatial_host, device=mesh_device, mesh_axes=[None, None, sp_axis_, None])
     logger.info(f"5B transformer: N={n} (padded {spatial_host.shape[2]}), {NUM_LAYERS} blocks")
 
-    timestep = float32_tensor(
+    guidance = float32_tensor(torch.tensor(GUIDANCE_SCALE, dtype=torch.float32).reshape(1, 1, 1, 1), device=mesh_device)
+    inputs = {
+        "guidance": guidance,
+        "spatial_device": spatial_device,
+        "prompt_1BLP": prompt_1BLP,
+        "negative_1BLP": negative_1BLP,
+        "n": n,
+        "rope": {"rope_cos_1HND": rope_cos, "rope_sin_1HND": rope_sin, "trans_mat": trans_mat},
+    }
+
+    # Scalar timestep (T2V, 14B): projection (1, 1, 1, 6*D/tp) -> legacy (1, 1, 6, D/tp).
+    scalar_ts = float32_tensor(
         torch.full((1,), TIMESTEP, dtype=torch.float32).unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device
     )
-    guidance = float32_tensor(torch.tensor(GUIDANCE_SCALE, dtype=torch.float32).reshape(1, 1, 1, 1), device=mesh_device)
+    _assert_bit_exact(_bit_exact_checks(tt_model, timestep=scalar_ts, **inputs), "scalar")
 
-    common = {
-        "spatial_1BNI": spatial_device,
-        "rope_cos_1HND": rope_cos,
-        "rope_sin_1HND": rope_sin,
-        "trans_mat": trans_mat,
-        "N": n,
-        "timestep": timestep,
-        "gather_output": False,
-    }
+    # Two-row per-token timestep (TI2V-5B I2V): projection (1, 1, N, 6*D/tp). All-ones masks
+    # select row 1 (TIMESTEP) everywhere, so the values equal the scalar case while every
+    # modulation tensor takes the per-token shape.
+    padded_n = spatial_host.shape[2]
+    dim_tp = (cfg.num_attention_heads * cfg.attention_head_dim) // tuple(mesh_device.shape)[tp_axis]
 
-    # Pre-hoist computation: each pass embeds the timestep and the patches itself.
-    ref_cond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common))
-    ref_uncond_tt = tt_model.inner_step(prompt_1BLP=negative_1BLP, **common)
-    ref_uncond = local_device_to_torch(ref_uncond_tt)
-    ref_combined = local_device_to_torch(
-        ttnn.lerp(ref_uncond_tt, tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common), guidance)
+    def ones_mask(width):
+        m = torch.ones(1, 1, padded_n, width, dtype=torch.float32)
+        return from_torch(m, device=mesh_device, mesh_axes=[None, None, sp_axis_, None], dtype=ttnn.float32)
+
+    tt_model.set_per_token_timestep_masks(ones_mask(dim_tp), ones_mask(6 * dim_tp))
+    two_row_ts = float32_tensor(
+        torch.tensor([0.0, TIMESTEP], dtype=torch.float32).reshape(1, 1, 2, 1), device=mesh_device
     )
-
-    # Hoisted path, untraced (the traced_function wrapper passes straight through).
-    new_combined = local_device_to_torch(
-        tt_model.combined_step(
-            do_classifier_free_guidance=True,
-            spatial_1BNI=spatial_device,
-            prompt_1BLP=prompt_1BLP,
-            negative_prompt_1BLP=negative_1BLP,
-            N=n,
-            rope_cos_1HND=rope_cos,
-            rope_sin_1HND=rope_sin,
-            trans_mat=trans_mat,
-            timestep=timestep,
-            guidance_scale=guidance,
-            gather_output=False,
-        )
-    )
-
-    # Each pass with the shared embeddings and the per-block AdaLN modulations handed in
-    # explicitly, against its standalone self (which computes all of them inline).
-    temb_11BD, timestep_proj_1BTD = tt_model.prepare_timestep_conditioning(timestep)
-    shared = {
-        "timestep_conditioning": (temb_11BD, timestep_proj_1BTD),
-        "spatial_1BND": tt_model.patch_embedding(spatial_device),
-        "block_modulations": [block.prepare_modulation(timestep_proj_1BTD) for block in tt_model.blocks],
-        "norm_out_modulation": tt_model.prepare_norm_out_modulation(temb_11BD),
-    }
-    new_cond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, **common, **shared))
-    new_uncond = local_device_to_torch(tt_model.inner_step(prompt_1BLP=negative_1BLP, **common, **shared))
-
-    checks = {
-        "cond pass": (ref_cond, new_cond),
-        "uncond pass": (ref_uncond, new_uncond),
-        "combined_step": (ref_combined, new_combined),
-    }
-    failures = []
-    for name, (ref, new) in checks.items():
-        diff = (ref.float() - new.float()).abs().max().item()
-        logger.info(f"CFG hoist {name}: max_abs_diff = {diff}")
-        print(f"CFGHOIST {name}: max_abs_diff = {diff}")
-        if diff != 0.0:
-            failures.append(f"{name}: max_abs_diff {diff} != 0")
-    assert not failures, "; ".join(failures)
+    _assert_bit_exact(_bit_exact_checks(tt_model, timestep=two_row_ts, **inputs), "two-row")
