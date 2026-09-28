@@ -106,6 +106,33 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
         check_tensor(
             max_exp_avg_sq.value(), "Max Exponential Average Squared Buffer", tt::tt_metal::Layout::TILE, param_dtype);
     }
+
+    auto check_distinct_writable_buffers =
+        [](const ttnn::Tensor& lhs, const std::string& lhs_name, const ttnn::Tensor& rhs, const std::string& rhs_name) {
+            TT_FATAL(
+                lhs.buffer() != rhs.buffer(),
+                "AdamW writable tensors '{}' and '{}' must not share the same device buffer.",
+                lhs_name,
+                rhs_name);
+        };
+
+    check_distinct_writable_buffers(param, "Parameter", exp_avg, "Exponential Average Buffer");
+    check_distinct_writable_buffers(param, "Parameter", exp_avg_sq, "Exponential Average Squared Buffer");
+    check_distinct_writable_buffers(
+        exp_avg, "Exponential Average Buffer", exp_avg_sq, "Exponential Average Squared Buffer");
+
+    if (max_exp_avg_sq.has_value()) {
+        const auto& max_exp_avg_sq_tensor = max_exp_avg_sq.value();
+        check_distinct_writable_buffers(
+            param, "Parameter", max_exp_avg_sq_tensor, "Max Exponential Average Squared Buffer");
+        check_distinct_writable_buffers(
+            exp_avg, "Exponential Average Buffer", max_exp_avg_sq_tensor, "Max Exponential Average Squared Buffer");
+        check_distinct_writable_buffers(
+            exp_avg_sq,
+            "Exponential Average Squared Buffer",
+            max_exp_avg_sq_tensor,
+            "Max Exponential Average Squared Buffer");
+    }
 }
 
 AdamWDeviceOperation::spec_return_value_t AdamWDeviceOperation::compute_output_specs(

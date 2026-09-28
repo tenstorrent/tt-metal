@@ -7,6 +7,10 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <optional>
+#include <string_view>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
@@ -579,6 +583,70 @@ TEST_F(AdamWStateDictTest, BetaSettersRecomputeBiasCorrection) {
 
 using AdamWValidationTest = AdamWStateDictTest;
 
+namespace {
+
+struct WritableAliasCase {
+    std::size_t first;
+    std::size_t second;
+    bool amsgrad;
+    std::string_view name;
+};
+
+constexpr std::array<WritableAliasCase, 6> kWritableAliasCases = {{
+    {0U, 1U, false, "param_exp_avg"},
+    {0U, 2U, false, "param_exp_avg_sq"},
+    {1U, 2U, false, "exp_avg_exp_avg_sq"},
+    {0U, 3U, true, "param_max_exp_avg_sq"},
+    {1U, 3U, true, "exp_avg_max_exp_avg_sq"},
+    {2U, 3U, true, "exp_avg_sq_max_exp_avg_sq"},
+}};
+
+std::array<ttnn::Tensor, 4> make_adamw_writable_tensors(uint32_t seed_base) {
+    using namespace ttml;
+
+    constexpr std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    return {
+        to_tt_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_base)),
+        to_tt_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_base + 1U)),
+        to_tt_bf16(test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed_base + 2U)),
+        to_tt_bf16(test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed_base + 3U)),
+    };
+}
+
+ttnn::Tensor run_direct_adamw(
+    const std::array<ttnn::Tensor, 4>& writable_tensors, const ttnn::Tensor& grad, bool amsgrad) {
+    return ttml::metal::adamw(
+        writable_tensors[0],
+        grad,
+        writable_tensors[1],
+        writable_tensors[2],
+        amsgrad ? std::make_optional(writable_tensors[3]) : std::nullopt,
+        /* lr */ 1e-3f,
+        /* beta1 */ 0.9f,
+        /* beta2 */ 0.999f,
+        /* beta1_pow */ 0.9f,
+        /* beta2_pow */ 0.999f,
+        /* epsilon */ 1e-8f,
+        /* weight_decay */ 0.0f);
+}
+
+void expect_only_selected_writable_pair_aliased(
+    const std::array<ttnn::Tensor, 4>& writable_tensors, const WritableAliasCase& alias_case) {
+    const std::size_t active_roles = alias_case.amsgrad ? writable_tensors.size() : writable_tensors.size() - 1U;
+    for (std::size_t first = 0; first < active_roles; ++first) {
+        for (std::size_t second = first + 1U; second < active_roles; ++second) {
+            const bool is_selected_pair = first == alias_case.first && second == alias_case.second;
+            if (is_selected_pair) {
+                EXPECT_EQ(writable_tensors[first].buffer(), writable_tensors[second].buffer());
+            } else {
+                EXPECT_NE(writable_tensors[first].buffer(), writable_tensors[second].buffer());
+            }
+        }
+    }
+}
+
+}  // namespace
+
 TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     using namespace ttml;
 
@@ -604,6 +672,72 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* beta2_pow */ 0.999f,
         /* epsilon */ 1e-8f,
         /* weight_decay */ 0.0f));
+}
+
+TEST_F(AdamWValidationTest, RejectsWritableAliasesBeforeColdCacheInsertion) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    constexpr std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    for (std::size_t case_index = 0; case_index < kWritableAliasCases.size(); ++case_index) {
+        const auto& alias_case = kWritableAliasCases[case_index];
+        SCOPED_TRACE(alias_case.name);
+
+        device->clear_program_cache();
+        auto writable_tensors = make_adamw_writable_tensors(200U + static_cast<uint32_t>(case_index) * 10U);
+        auto grad = to_tt_bf16(
+            test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 204U + static_cast<uint32_t>(case_index) * 10U));
+        writable_tensors[alias_case.second] = writable_tensors[alias_case.first];
+        expect_only_selected_writable_pair_aliased(writable_tensors, alias_case);
+
+        const auto entries_before = device->num_program_cache_entries();
+        EXPECT_ANY_THROW(run_direct_adamw(writable_tensors, grad, alias_case.amsgrad));
+        const auto entries_after = device->num_program_cache_entries();
+        EXPECT_EQ(entries_after, entries_before) << "invalid aliases must be rejected before cache insertion";
+
+        // Also completes any unexpectedly dispatched work when this regression is run against an unfixed build.
+        (void)core::to_xtensor(writable_tensors[0]);
+    }
+}
+
+TEST_F(AdamWValidationTest, RejectsWritableAliasesOnWarmCacheHit) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    constexpr std::array<std::size_t, 4> shape = {1, 1, 32, 32};
+    for (std::size_t case_index = 0; case_index < kWritableAliasCases.size(); ++case_index) {
+        const auto& alias_case = kWritableAliasCases[case_index];
+        SCOPED_TRACE(alias_case.name);
+
+        device->clear_program_cache();
+        auto valid_writable_tensors = make_adamw_writable_tensors(300U + static_cast<uint32_t>(case_index) * 20U);
+        auto valid_grad = to_tt_bf16(
+            test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 304U + static_cast<uint32_t>(case_index) * 20U));
+        const auto entries_before_prime = device->num_program_cache_entries();
+        auto output = run_direct_adamw(valid_writable_tensors, valid_grad, alias_case.amsgrad);
+        (void)core::to_xtensor(output);
+        EXPECT_EQ(output.buffer(), valid_writable_tensors[0].buffer())
+            << "the valid in-place parameter/output alias must remain supported";
+        const auto entries_after_prime = device->num_program_cache_entries();
+        ASSERT_GT(entries_after_prime, entries_before_prime) << "valid call did not populate the program cache";
+
+        auto invalid_writable_tensors = make_adamw_writable_tensors(310U + static_cast<uint32_t>(case_index) * 20U);
+        auto invalid_grad = to_tt_bf16(
+            test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 314U + static_cast<uint32_t>(case_index) * 20U));
+        invalid_writable_tensors[alias_case.second] = invalid_writable_tensors[alias_case.first];
+        expect_only_selected_writable_pair_aliased(invalid_writable_tensors, alias_case);
+
+        EXPECT_ANY_THROW(run_direct_adamw(invalid_writable_tensors, invalid_grad, alias_case.amsgrad));
+        EXPECT_EQ(device->num_program_cache_entries(), entries_after_prime)
+            << "invalid alias on a cache hit must not compile another program";
+
+        // Also completes any unexpectedly dispatched work when this regression is run against an unfixed build.
+        (void)core::to_xtensor(invalid_writable_tensors[0]);
+    }
 }
 
 // ====================================================================
