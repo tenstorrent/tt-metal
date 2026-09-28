@@ -3079,6 +3079,72 @@ ${batch_env} -- never a number typed into the test -- and print `{report}` once 
 # busy, and the supervisor killed a healthy run. The repair was a per-iteration print in the MODEL's
 # test -- which meant the lesson lived in one model's code and was lost the moment that demo was
 # regenerated. It belongs here, where every model gets it.
+# THE DEMO README'S LAYOUT, which this repo has a convention for and the builder was never told.
+#
+# The brief was one line -- "what each Call does, how to run it, the PCC numbers" -- which is not
+# what the repo does, so every generated README invented its own shape. Measured over the 39 demos
+# under models/demos: 12 have no README at all, and of the 27 that do only 6 use the sequence below.
+# It is nonetheless the ONLY heading sequence that recurs; the other 21 are each unique ("quick
+# start > configuration > testing", "runtime > run > verification and weekly ci", ...). So the
+# convention existed and simply was not written anywhere the builder could read it.
+#
+# WHICH NUMBERS BELONG THERE. The trace-replay result does: it is what `trace_replay.py` prints and
+# what the trace gate reads, so it is measured by the tool rather than typed by the agent, and
+# whether each stage replayed under trace is the single most useful fact about a bring-up. Tracy
+# profiler output does not -- zone levels and capture env vars are harness knobs (`minimax_m3`
+# documents four of them), and a profile is a debugging artefact, not documentation of the demo.
+# Nor do headline throughput tables: `gemma4/README.md` carries "Tokens/s | TTFT (ms)", and on one
+# bring-up a batch-32 result lived ONLY in a README while the gate had passed on 4 samples (see
+# _batch_gate_reason). RUN_REPORT.md is the tool-written file (`run_report.py` upserts
+# marker-delimited sections into it), so the README ends by pointing at it.
+_README_LAYOUT_BLOCK = """
+README.md -- USE THIS REPO'S LAYOUT, not one of your own. This is the only shape that recurs across
+the existing demos under models/demos, so match it instead of inventing headings:
+
+  # <Model name>
+
+  ## Platforms
+  the hardware this was brought up and validated on.
+
+  ## Introduction
+  a short paragraph: what the model is and what it does.
+
+  ## Prerequisites
+  cloned tt-metal for source, and TT-Metalium / TT-NN installed (link INSTALLING.md).
+
+  ## How to Run
+  copy-pasteable commands, one block per way to run it -- the demo entrypoint(s), the e2e test, and
+  any variant (a different input, a different batch). Commands, not prose about commands.
+
+  ## Details
+  the entry-point function and the file it lives in, where it loads weights/config from, and which
+  reference the goldens are built against.
+
+  ### Inputs
+  where the inputs come from and how to change them.
+
+  ### Trace replay
+  the TRACE-REPLAY RESULT, copied from the trace-replay output -- one row per stage IT reports
+  (never a stage list you type): its `TRACE_STAGE_MS[...]` and the `path=` that row carries, plus
+  the `TRACE_PER_TOKEN_MS` headline and its `TRACE_HEADLINE_UNIT`. If a stage reports
+  `TRACE_NOT_TRACE_CAPABLE` or replays on a non-trace path, say so for that stage. Copy what the
+  replay printed; do not restate it in your own numbers and do not fill in a stage it did not report.
+
+DO NOT PUT IN THE README:
+  * TRACY PROFILER OUTPUT OR SETTINGS -- zone levels, profiling env vars, capture knobs and profile
+    dumps are harness configuration and debugging artefacts, not documentation of this demo.
+  * HEADLINE THROUGHPUT TABLES -- tokens/s, TTFT, latency league tables. Nothing verifies a README,
+    so a number written there reads as certified when nobody checked it.
+  * PCC VALUES -- give the command that measures PCC, never the value it produced.
+
+END THE README with exactly this section, so a reader after the full results is sent to the file that
+holds them:
+
+  ## Results
+  See [RUN_REPORT.md](RUN_REPORT.md) for the measured gate results for this demo.
+"""
+
+
 _PROGRESS_PROMPT_BLOCK = """
 THE SUPERVISOR WATCHES FORWARD PROGRESS, NOT ELAPSED TIME. Your tests run under a watchdog that
 kills a step only when its LOG HAS STOPPED GROWING for {stall_s}s with nothing else moving. A long
@@ -3213,7 +3279,7 @@ For ANY model, emit a complete, runnable package — not a lone test file:
     tests/e2e/    the e2e pipeline test(s): real input -> chained stubs ->
                   real output, asserting Gate 1/2/3 (all stubs INVOKED + final
                   PCC >= {pcc} vs HF golden).
-    README.md     what each Call does, how to run it, the PCC numbers.
+    README.md     the demo's documentation, in THIS REPO'S layout (spelled out below).
 
   CRITICAL — DEMO AND TEST MUST SHARE ONE PIPELINE: the chained forward pass (the
   exact wiring of the graduated stubs) lives in `tt/` as a single function, and
@@ -3227,7 +3293,7 @@ inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT de
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
-{hardware_note}{parallel_note}{trace_note}{batch_note}{_progress_prompt_block()}
+{hardware_note}{parallel_note}{trace_note}{batch_note}{_progress_prompt_block()}{_README_LAYOUT_BLOCK}
 {_TT_ONLY_CONTRACT}
 """
 
