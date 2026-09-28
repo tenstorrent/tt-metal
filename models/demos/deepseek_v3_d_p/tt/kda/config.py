@@ -52,6 +52,9 @@ class KDAProgramConfig:
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # Explicit projection matmul schedules; None keeps the auto-selected ttnn.linear configs.
+    input_projection_minimal_matmul_config: ttnn.MinimalMatmulConfig | None = None
+    output_projection_program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None = None
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -63,6 +66,39 @@ class KDAProgramConfig:
             raise ValueError("gated_rms_output_dtype must be ttnn.float32 or ttnn.bfloat16")
 
 
+def _galaxy_projection_configs() -> tuple[ttnn.MinimalMatmulConfig, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig]:
+    """Return the Galaxy SP8xTP4 projection schedules for 640 tokens per device.
+
+    Measured on the 12x10 Blackhole worker grid with the production numerics (bf16, FP32
+    destination accumulation) in tests/kda/perf/test_matmul_perf.py. Each core row owns 2 of the
+    20 row tiles; subblocks stay within the 4-tile FP32 destination limit.
+    """
+    grid = ttnn.CoreCoord(12, 10)
+    input_projection = ttnn.MinimalMatmulConfig(
+        M_block_size=2,
+        K_block_size=8,
+        N_block_size=3,
+        subblock_h=1,
+        subblock_w=3,
+        compute_with_storage_grid_size=grid,
+    )
+    # 7168 output columns over 12 grid columns: 19 tiles per core.
+    output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=8,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        out_block_h=2,
+        out_block_w=19,
+        per_core_M=2,
+        per_core_N=19,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    return input_projection, output_projection
+
+
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
@@ -70,6 +106,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
     if active_seq_len_local not in group_chunks:
         raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
+    # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
+    input_projection, output_projection = _galaxy_projection_configs() if active_seq_len_local == 640 else (None, None)
     return KDAProgramConfig(
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
@@ -81,4 +119,6 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        input_projection_minimal_matmul_config=input_projection,
+        output_projection_program_config=output_projection,
     )

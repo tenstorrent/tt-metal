@@ -157,6 +157,8 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.input_projection_minimal_matmul_config = program_config.input_projection_minimal_matmul_config
+        self.output_projection_program_config = program_config.output_projection_program_config
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
@@ -295,12 +297,21 @@ class ttKDA:
         """Run the fused input projection and split its semantic outputs."""
         config = self.config
         weights = self.weights
-        projected = ttnn.linear(
-            hidden_states,
-            weights.input_projection,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
+        if self.input_projection_minimal_matmul_config is not None:
+            projected = ttnn.experimental.minimal_matmul(
+                hidden_states,
+                weights.input_projection,
+                config=self.input_projection_minimal_matmul_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+        else:
+            projected = ttnn.linear(
+                hidden_states,
+                weights.input_projection,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
             qkv=_slice_width(projected, 0, auxiliary_start),
@@ -389,6 +400,7 @@ class ttKDA:
             output,
             weights.output_projection,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
