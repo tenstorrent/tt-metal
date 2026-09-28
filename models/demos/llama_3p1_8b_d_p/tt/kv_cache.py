@@ -27,9 +27,9 @@ _BYTES_PER_ELEMENT = {ttnn.bfloat16: 2.0, ttnn.bfloat8_b: 1.0625}
 DEFAULT_RUN_RESERVE_BYTES = 1024**3
 # Slots a migrating deployment needs per live sequence. The shared prefill migration driver sends
 # slot ``src`` to ``src + dst_slot_offset`` and defaults that offset to the producer's live-user
-# count (common/prefill/runners/migration_driver.py), so a loopback migration wants a table twice the
-# live set: [0, n) hold sequences and [n, 2n) receive them. MiniMax M3 and GPT-OSS both encode this
-# as a 4-slot runner table against a 2-user producer. It matters here because a count taken from all
+# count (models/demos/common/prefill/runners/migration_driver.py), so a loopback migration wants a
+# table twice the live set: [0, n) hold sequences and [n, 2n) receive them. MiniMax M3 and GPT-OSS
+# both encode this as a 4-slot runner table against a 2-user producer. It matters here because a count taken from all
 # of DRAM puts every destination out of range, and the driver's advice at that point -- "Grow
 # PREFILL_NUM_USERS" -- is the one thing such a deployment cannot do.
 MIGRATION_SLOTS_PER_USER = 2
