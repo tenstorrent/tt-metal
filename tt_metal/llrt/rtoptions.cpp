@@ -158,6 +158,7 @@ enum class EnvVarID {
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US,         // Time dispatch pool workers keep polling after a task
+    TT_METAL_THREAD_POOL_RESERVED_CORES,           // Physical cores per NUMA node left free of thread pool workers
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS,           // NOC debug dump: background poll period (ms)
     TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS,      // NOC debug dump: period between self-triggered full reads (ms)
@@ -1320,6 +1321,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 TT_THROW("Invalid TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US: {}", value);
             } catch (const std::out_of_range&) {
                 TT_THROW("TT_METAL_DISPATCH_POOL_ACTIVE_SPIN_US value out of range: {}", value);
+            }
+            break;
+
+        // TT_METAL_THREAD_POOL_RESERVED_CORES
+        // Number of physical cores on each NUMA node that thread pool workers are not pinned to, so that the
+        // threads calling into the pools and other host threads have whole cores to run on. The pools share the
+        // remaining cores, two workers per core where there are fewer cores than workers.
+        // Default: 0
+        // Usage: export TT_METAL_THREAD_POOL_RESERVED_CORES=8
+        case EnvVarID::TT_METAL_THREAD_POOL_RESERVED_CORES: try { this->thread_pool_reserved_cores = std::stoul(value);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("Invalid TT_METAL_THREAD_POOL_RESERVED_CORES: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_THREAD_POOL_RESERVED_CORES value out of range: {}", value);
             }
             break;
 
