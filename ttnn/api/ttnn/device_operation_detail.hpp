@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string_view>
 #include <utility>
@@ -20,9 +21,24 @@ class Tensor;
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
+
+struct ProgramPreparationResult {
+    uint32_t max_program_config_size_bytes = 0;
+    uint32_t max_kernel_binary_size_bytes = 0;
+};
+
+/**
+ * Compile and finalize `workload` without dispatching it, reporting the program-memory it needs.
+ *
+ * Defined out of line so that the experimental preparation header stays out of the include graph of
+ * device_operation.hpp, which close to 600 translation units pull in.
+ */
+ProgramPreparationResult summarize_prepared_workload(
+    tt::tt_metal::distributed::MeshWorkload& workload, tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 /**
  * Non-template implementation of output placement and shape computation.
