@@ -2135,6 +2135,7 @@ def _norm_cb_depth(has_gamma: bool, has_bias: bool, block_rows: int = 0) -> int:
 def _cb_block_bytes(
     bt: int,
     it: int,
+    qt: int,
     depth_x: int,
     depth_out: int,
     has_gamma: bool,
@@ -2167,7 +2168,9 @@ def _cb_block_bytes(
     `depth_x + 1 + has_gamma + depth_out` tiles -- nothing is sized for an absent
     operand and no worst-case bucket is taken over the possible operand sets.
     """
-    total = depth_x * bt + it + _norm_cb_depth(has_gamma, has_bias, block_rows) * it + depth_out * bt
+    # `qt` prices the two statistics intermediates (cb_x_squared, cb_normalized; fp32 at
+    # fp32_dest_acc_en, see _stat_dtype); `it` prices cb_x_sum.
+    total = depth_x * bt + qt + _norm_cb_depth(has_gamma, has_bias, block_rows) * qt + depth_out * bt
     if has_residual:
         total += depth_r * bt + it  # cb_residual_tiles + cb_x_sum
     return total
@@ -2204,6 +2207,18 @@ def _intermediate_dtype(dtype):
     fp32 build is byte-identical to before.
     """
     return ttnn.bfloat16 if dtype in BLOCK_FLOAT_DTYPES else dtype
+
+
+def _stat_dtype(dtype, fp32_dest_acc_en):
+    """The format of the two STATISTICS intermediates, cb_x_squared and cb_normalized (CHANGELOG 3).
+
+    fp32 when DEST is fp32, as native ttnn.rms_norm holds its intermediates
+    (`fp32_dest_acc_en ? Float32 : Float16_b`).  In the input's format x^2 was rounded on the pack
+    (a round-to-nearest-away bias of +2.4e-4 in the mean square at MiMo's shape) and y was rounded
+    twice, once into cb_normalized and once on the output.  cb_x_sum keeps _intermediate_dtype: it
+    IS the returned residual sum t.  Mirrors `stat_dtype` in the C++ program factory.
+    """
+    return ttnn.float32 if fp32_dest_acc_en else _intermediate_dtype(dtype)
 
 
 def _stick_elem_bytes(tensor) -> int:
@@ -3511,6 +3526,8 @@ def create_program_descriptor(
     # block-float input -- see _intermediate_dtype for the measured reason.
     interm_dtype = _intermediate_dtype(input_tensor.dtype)
     it = ttnn.tile_size(interm_dtype)
+    sq_dtype = _stat_dtype(input_tensor.dtype, bool(getattr(compute_kernel_config, "fp32_dest_acc_en", False)))
+    qt = ttnn.tile_size(sq_dtype)
     gt = ttnn.tile_size(weight.dtype) if has_gamma else 0
     bit = ttnn.tile_size(bias.dtype) if has_bias else 0
     st = ttnn.tile_size(ttnn.bfloat16)  # cb_bank (the one-hot permutation tiles) -- always bf16
@@ -3662,7 +3679,8 @@ def create_program_descriptor(
     # solve that prices this CB -- and the ReduceTile branch is correct at either
     # format, so the wider gate costs one extra scaler tile of L1 and no
     # correctness.
-    scaler_dtype = interm_dtype if kernel_partial_w else ttnn.bfloat16
+    # CHANGELOG 3: cb_x_squared is `sq_dtype` (fp32 at fp32_dest_acc_en), so the mask follows it.
+    scaler_dtype = sq_dtype if kernel_partial_w else ttnn.bfloat16
     scaler_tile_bytes = ttnn.tile_size(scaler_dtype)
     scaler_bytes = scaler_tile_bytes * scaler_pages
 
@@ -3746,6 +3764,7 @@ def create_program_descriptor(
             mult = _cb_block_bytes(
                 bt,
                 it,
+                qt,
                 depth if dx0 is None else dx0,
                 depth if do0 is None else do0,
                 has_gamma,
@@ -3766,7 +3785,7 @@ def create_program_descriptor(
             # full width, so subtract the difference back off when the fold is on.
             # `CB_SQ_EXACT = 0` keeps the seed's conservative price exactly.
             sq_wt = _x_squared_wt(wt_core, kernel_partial_w) if CB_SQ_EXACT else wt_core
-            per_tilerow = wt_core * mult - (wt_core - sq_wt) * it + per_row_bytes
+            per_tilerow = wt_core * mult - (wt_core - sq_wt) * qt + per_row_bytes
             return max(0, (budget - fixed) // max(1, per_tilerow)), mult
 
         # D41 -- RESIDENT PICKS ON ROW-BLOCKS PER CORE, NOT ON DEPTH ORDER.
@@ -3963,7 +3982,7 @@ def create_program_descriptor(
             # residual is present, the per-channel stick rings, and the ROW_MAJOR
             # staging rings (D2).
             per_chunk_tile = (
-                it * (1 + _norm_cb_depth(has_gamma, has_bias, 1))  # cb_x_squared + cb_normalized
+                qt * (1 + _norm_cb_depth(has_gamma, has_bias, 1))  # cb_x_squared + cb_normalized
                 + bt * depth_out  # cb_output_tiles carries the output tensor
                 + (bt * (depth_x + _residual_depth(depth_x)) if has_residual else 0)
                 + _per_channel_bytes(0, 1)
@@ -4034,7 +4053,7 @@ def create_program_descriptor(
         # re-read x (and the residual) in pass B.  An L1 fallback, not a
         # parallelization.
         depth = depth_candidates[0]
-        mult = _cb_block_bytes(bt, it, depth, depth, has_gamma, has_bias, has_residual, _residual_depth(depth), 1)
+        mult = _cb_block_bytes(bt, it, qt, depth, depth, has_gamma, has_bias, has_residual, _residual_depth(depth), 1)
         per_chunk_tile_bytes = (
             mult + _per_channel_bytes(1, 1) + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
@@ -4249,7 +4268,7 @@ def create_program_descriptor(
         # LAST block of a core can be partial, so D6's straddle cannot arise here.
         cbs.append(_cb(CB_X_SUM, it, block_rows * x_hold_wt, interm_dtype, all_cores))
     # x_squared_wt == 1 under the DEST fold (D12), else wt_chunk -- one source.
-    cbs.append(_cb(CB_X_SQUARED, it, block_rows * x_squared_wt, interm_dtype, all_cores))
+    cbs.append(_cb(CB_X_SQUARED, qt, block_rows * x_squared_wt, sq_dtype, all_cores))
     cbs.append(_cb(CB_SCALER, scaler_tile_bytes, scaler_pages, scaler_dtype, all_cores))
     # D6: CB_ROW_STAT_DEPTH * block_rows, so transform_in_place's rotation leaves
     # a PARTIAL final block's stat tiles contiguous for pass B's indexed read.
@@ -4286,7 +4305,7 @@ def create_program_descriptor(
             cbs.append(_cb(CB_BIAS_COMPACT, 2 * TILE_DIM * bias_elem_bytes, pc_hold_wt, bias.dtype, all_cores))
     norm_depth = _norm_cb_depth(has_gamma, has_bias, block_rows)
     if norm_depth:
-        cbs.append(_cb(CB_NORMALIZED, it, norm_depth * block_rows * wt_chunk, interm_dtype, all_cores))
+        cbs.append(_cb(CB_NORMALIZED, qt, norm_depth * block_rows * wt_chunk, sq_dtype, all_cores))
     if plan.native_out:
         osh_t, osw_t = _shard_tile_extent(output_tensor)
         out_shard_pages = osh_t * osw_t
