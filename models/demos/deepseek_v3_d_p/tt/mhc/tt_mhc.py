@@ -292,9 +292,12 @@ class TtMHCWrap(LightweightModule):
         if sublayer_dtype is None:
             h = sublayer(h)
         else:
-            out = sublayer(ttnn.typecast(h, sublayer_dtype))
+            cast = ttnn.typecast(h, sublayer_dtype)
+            ttnn.deallocate(h)
+            out = sublayer(cast)
             h = ttnn.typecast(out, x.dtype)
             ttnn.deallocate(out)
+            ttnn.deallocate(cast)
         return self.hc_post(h, residual, post, comb)
 
 
