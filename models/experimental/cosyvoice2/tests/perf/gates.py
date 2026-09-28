@@ -76,9 +76,9 @@ WORMHOLE: dict = {
     # corpus utterances. RTF 0.428-0.633 each, aggregate 0.481. Before bucketing, a distinct utterance ran at RTF
     # 21-75 on a cold kernel cache.
     "rtf_nonstreaming": Meets(),
-    # Teacher-forced top-1 over 1,349 positions of the corpus's seven cases (tests/e2e/test_token_accuracy.py):
-    # 96.37 % with the fp32-logit head (bf16 logits: 90.66 %). A bf16 PyTorch run of the same model reaches
-    # 95.70 %, or 98.37 % with an fp32 head.
+    # Teacher-forced top-1 (tests/e2e/test_token_accuracy.py), fp32-logit head: 95.94 % over 5,003 positions of
+    # 27 sequences, 4 speakers (the corpus plus its token-accuracy extension); 96.37 % on the first seven (bf16
+    # logits: 90.66 %). A bf16 PyTorch run of the same model reaches 96.45 %, or 98.58 % with an fp32 head.
     "token_accuracy": Meets(),
     # scripts/eval_wer_sim.py in the reference venv, on the bucketed Stage 1 audio (2026-09-28): corpus WER 0.68 %
     # and WavLM-base-plus-sv SIM 95.88 (cosine x 100), the PyTorch reference 0.68 % and 95.21. Recorded, not

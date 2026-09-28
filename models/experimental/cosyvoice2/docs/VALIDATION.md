@@ -7,7 +7,7 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 | target (#54104) | stage | status | enforced in |
 |---|---|---|---|
 | RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **met: worst 0.633, aggregate 0.481** over six distinct utterances after the bucket warm-up (542 s at start-up; below); `Meets()` recorded | `tests/perf/test_pipeline_perf.py` |
-| token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 96.37 %**, teacher-forced over 1,349 positions, with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
+| token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 95.94 %** teacher-forced over 5,003 positions (27 sequences, 4 speakers), with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
 | WER < 5.0 | Stage 1 | **met: corpus WER 0.68 %** on the bucketed Stage 1 audio, the same as the PyTorch reference (below); `Meets()` recorded | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
 | speaker similarity > 0.60 | Stage 1 | **met: 95.88** on the bucketed Stage 1 audio, reference 95.21 (WavLM-base-plus-sv cosine x 100; below); `Meets()` recorded | same |
 | time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | streaming not built | — |
@@ -242,6 +242,22 @@ at a median reference margin of 0.047 nats. With bf16 weights but fp32 accumulat
 - TT with the fp32 head (96.37 %) disagrees about as often, and at the same margins, as a pure-bf16 PyTorch run.
   The 2 points between it and the bf16 + fp32-head reference (98.37 %) are the TT decoder's own rounding, not
   broken down further.
+
+**The larger sample (2026-09-28).** The corpus's token-accuracy extension (scripts/corpus.py) adds 20
+sequences: six more targets from each primary speaker, and two new speakers, 672 (M) and 237 (F), with four each.
+Same method, same reference seed, and the pipeline's current configuration (LLM context 2,560):
+
+| sequences | positions | TT (fp32-logit head) | PyTorch reference in bf16 vs fp32 | the same with an fp32 head |
+|---|---|---|---|---|
+| the first seven (six LibriSpeech + parity) | 1,349 | 96.37 % | 95.70 % | 98.37 % |
+| the extension, 20 | 3,654 | 95.79 % | 96.72 % | 98.66 % |
+| **all 27** | **5,003** | **95.94 %** | 96.45 % | 98.58 % |
+
+- **It holds, with a thin margin:** 0.94 points over the target on 5,003 positions. The first seven gave the same
+  96.37 % as before, case for case, so the longer context changed nothing there.
+- **Per sequence it spans 92.4–100 %**, so a handful of sequences would not have been enough to tell.
+- The 203 disagreements are all at small reference margins: median 0.024 nats, maximum 0.226.
+- TT sits 0.5 points under the pure-bf16 PyTorch run of the same model.
 
 **Why fp32 logits are the default.** The noise floor shows how little room a bf16 head leaves:
 - even the reference itself, run in bf16 with no port error at all, clears 95 % by only 0.7 points (95.70 %);

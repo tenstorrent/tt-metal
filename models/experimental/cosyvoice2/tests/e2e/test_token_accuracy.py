@@ -12,6 +12,9 @@ Method: CosyVoice1's teacher-forced measure. For each corpus case, the reference
 through TT's own decode loop: the prefill, then the traced decode of the reported configuration, one step per token
 (`TtQwen2LM.teacher_forced_topk`). At each of the N + 1 positions, TT's top-1 is compared with the reference's.
 
+Every case with a reference file counts: the primary set, the parity sentence and, when its files are there, the
+token-accuracy extension (scripts/corpus.py). A subtotal is printed per corpus set.
+
 Gated: top-1 agreement over all positions of all cases. Also reported:
 - how often TT's top-1 is inside the reference's top-5;
 - the reference's own top-1 / top-2 log-prob margin where the two disagree. A near-tie there is an ordering
@@ -42,12 +45,13 @@ def test_device_teacher_forced_token_accuracy(device):
     refs = sorted(glob.glob(os.path.join(TOKEN_REF_DIR, "*.npz")))
     assert refs, TOKEN_REF_DIR
     pipe = CosyVoice2TTNN(device)
-    rows, agree_all, top5_all, margins = [], 0, 0, []
+    rows, agree_all, top5_all, margins, by_set = [], 0, 0, [], {}
     try:
         for path in refs:
             case_id = os.path.basename(path)[: -len(".npz")]
             ref = np.load(path)
             ctx = PromptContext.from_npz(os.path.join(INPUTS_DIR, f"{case_id}.npz"))
+            case_set = ctx.meta["case"]["set"]
             text_ids = torch.cat(
                 [ctx.prompt_text_ids.long(), torch.tensor([ctx.meta["segment_text_ids"][0]], dtype=torch.long)], dim=1
             )
@@ -61,6 +65,8 @@ def test_device_teacher_forced_token_accuracy(device):
             margins.extend(gap[~agree].tolist())
             agree_all, top5_all = agree_all + int(agree.sum()), top5_all + int(in_top5.sum())
             rows.append((case_id, len(agree), agree.mean(), in_top5.mean()))
+            n_set, a_set, c_set = by_set.get(case_set, (0, 0, 0))
+            by_set[case_set] = (n_set + len(agree), a_set + int(agree.sum()), c_set + 1)
     finally:
         pipe.release()
 
@@ -70,6 +76,8 @@ def test_device_teacher_forced_token_accuracy(device):
         print(f"  | {case_id} | {positions} | {100 * a:.2f} % | {100 * t5:.2f} % |")
     accuracy = 100.0 * agree_all / n
     print(f"  | **all** | {n} | **{accuracy:.2f} %** | {100.0 * top5_all / n:.2f} % |")
+    for case_set, (n_set, a_set, c_set) in by_set.items():
+        print(f"  set {case_set}: {c_set} cases, {n_set} positions, top-1 agreement {100.0 * a_set / n_set:.2f} %")
     if margins:
         m = np.array(margins)
         print(

@@ -6,7 +6,10 @@
 RUN IN THE REFERENCE VENV (see requirements-reference*.txt and scripts/reference_env.py):
 
     COSYVOICE2_REPO=<upstream checkout> LIBRISPEECH_ROOT=<dir containing LibriSpeech/> \\
-        $COSYVOICE2_REF_ENV/bin/python prepare_inputs.py --out-dir <dir> [--parity]
+        $COSYVOICE2_REF_ENV/bin/python prepare_inputs.py --out-dir <dir> [--parity | --extension]
+
+`--extension` writes the token-accuracy extension (`corpus.extension_cases()`) instead, with its own index file, so
+both sets can share one directory.
 
 The frontend is not a network this bring-up ports. It is a text normalizer, the Qwen2 text tokenizer, an ONNX
 speech tokenizer on a Whisper log-mel, an ONNX speaker encoder (CAM++) on a Kaldi fbank, and a mel filterbank.
@@ -84,6 +87,7 @@ def build_case(model, case: dict) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--extension", action="store_true", help="the token-accuracy extension instead (corpus.py)")
     ap.add_argument("--parity", action="store_true", help="also write the CosyVoice1-parity case (secondary)")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -91,7 +95,7 @@ def main() -> int:
     model = reference_env.load_upstream()
     meta = {"corpus_version": corpus.CORPUS_VERSION, **reference_env.versions()}
     index = []
-    for case in corpus.cases(include_parity=args.parity):
+    for case in corpus.extension_cases() if args.extension else corpus.cases(include_parity=args.parity):
         fields = build_case(model, case)
         fields["meta_json"] = np.array(json.dumps(meta))
         name = f"{case['case_id']}.npz"
@@ -103,7 +107,8 @@ def main() -> int:
             f"{len(segs)} segment(s), text ids {[len(x) for x in json.loads(str(fields['segment_text_ids_json']))]}",
             flush=True,
         )
-    with open(os.path.join(args.out_dir, "index.json"), "w") as fh:
+    index_name = "index_extension.json" if args.extension else "index.json"  # the two sets can share a directory
+    with open(os.path.join(args.out_dir, index_name), "w") as fh:
         json.dump({"meta": meta, "cases": index}, fh, indent=2, ensure_ascii=False)
     print(f"wrote {len(index)} cases to {args.out_dir}")
     return 0

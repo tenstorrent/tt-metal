@@ -6,7 +6,7 @@
 RUN IN THE REFERENCE VENV (see requirements-reference*.txt and scripts/reference_env.py):
 
     COSYVOICE2_REPO=<upstream checkout> LIBRISPEECH_ROOT=<dir containing LibriSpeech/> \\
-        $COSYVOICE2_REF_ENV/bin/python run_reference.py --out-dir <dir> [--parity] [--seed 1986]
+        $COSYVOICE2_REF_ENV/bin/python run_reference.py --out-dir <dir> [--parity | --extension] [--seed 1986]
 
 Each case runs `CosyVoice2.inference_zero_shot(text, prompt_text, prompt_wav, stream=False)` -- the same
 normalization, splitting and frontend as scripts/prepare_inputs.py -- on CPU in fp32, after
@@ -39,6 +39,7 @@ SEED = 1986  # CosyVoice1's, for parity
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--extension", action="store_true", help="the token-accuracy extension instead (corpus.py)")
     ap.add_argument("--parity", action="store_true")
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
@@ -57,7 +58,7 @@ def main() -> int:
     model.model.token2wav = capture
 
     results = []
-    for case in corpus.cases(include_parity=args.parity):
+    for case in corpus.extension_cases() if args.extension else corpus.cases(include_parity=args.parity):
         base = reference_env.upstream_repo() if case["set"] == "cosyvoice1_parity" else reference_env.librispeech_root()
         prompt_wav = os.path.join(base, case["prompt_wav"])
         set_all_random_seed(args.seed)
