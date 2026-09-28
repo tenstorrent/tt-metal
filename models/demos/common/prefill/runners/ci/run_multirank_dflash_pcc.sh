@@ -3,8 +3,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # Multi-galaxy DFlash drafter KV accuracy. Sibling of run_multirank_pcc.sh, which covers the VERIFIER's
-# KVPE cache only -- that leg sets no PREFILL_DFLASH and cannot be extended in place, because it runs
-# PREFILL_USE_TRACE=1 and the drafter path is not trace-captured (prefill_runner asserts on the pair).
+# KVPE cache only -- that leg sets no PREFILL_DFLASH, and a drafter run needs enough extra knobs
+# (see the manifest notes below) that it gets its own launcher rather than a flag on that one.
+# Both legs run PREFILL_USE_TRACE=1: DFlash is traced-only, and prefill_runner asserts on the pair.
 #
 # What this proves that the single-galaxy leg cannot: the drafter is built on the LAST pipeline rank while
 # rank 0 builds and serializes the KV chunk table, so every drafter address in that table is a remote

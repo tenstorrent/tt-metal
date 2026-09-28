@@ -110,6 +110,17 @@ assert not (MTP_LEVELS and USE_TRACE), (
 )
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
+# DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
+# the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
+# validated against, and an untraced drafter is a second path nothing gates. The manifests pin
+# PREFILL_USE_TRACE=1; this catches a run that overrides it back to 0 rather than letting it start and
+# diverge silently. To re-measure traced-vs-eager equivalence, drop this assert in a scratch tree --
+# deliberately not an env escape hatch, so a production run cannot reach the eager path by accident.
+assert not (DFLASH_ENABLED and not USE_TRACE), (
+    "PREFILL_DFLASH=1 requires PREFILL_USE_TRACE=1: the DFlash drafter is only supported on the "
+    "traced path. Unset PREFILL_USE_TRACE (the dflash manifest pins it to 1) or drop PREFILL_DFLASH."
+)
+
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
 _shutdown = False
