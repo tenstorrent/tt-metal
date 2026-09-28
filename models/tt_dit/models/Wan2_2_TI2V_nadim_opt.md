@@ -21,9 +21,12 @@ that change alone. The `all_bf8_lofi` preset (section 7.7) has not been re-measu
 | T2V  | 1280x704   | 0.089s | — | **10.198s** | 0.922s | **11.23s** | -2.4% (denoise -2.3%) |
 | I2V  | 1280x704   | 0.089s | 1.293s | **10.580s** | 0.923s | **12.90s** | -4.4% (denoise -4.5%) |
 | T2V  | 832x480    | 0.088s | — | **4.842s** | 0.556s | **5.49s** | -8.9% (denoise -9.5%) |
+| T2V  | 1280x704, opt-in `all_bf8_lofi` (2026-09-28) | 0.089s | — | **8.583s** | 0.919s | **9.61s** | -3.4% vs its sprint-4 9.95s; **-16.5% vs the bf16 default** |
 
-Spreads across the three runs: denoise 0.6 % (720p T2V), 0.4 % (I2V), 0.07 % (480p); totals
-0.7 / 0.7 / 0.4 %. The gain grows as the step gets shorter (720p T2V 261 -> 255 ms/step, 480p
+Spreads across the three runs: denoise 0.6 % (720p T2V), 0.4 % (I2V), 0.07 % (480p), 0.3 %
+(`all_bf8_lofi`); totals 0.7 / 0.7 / 0.4 / 0.2 %. The preset row (runs 9.598 / 9.620 /
+9.608 s) shows the hoist and the quant preset stack: the preset stays opt-in pending the
+visual sign-off in section 7.7. The gain grows as the step gets shorter (720p T2V 261 -> 255 ms/step, 480p
 134 -> 121 ms/step) because what was removed is a fixed ~330 program launches per step, not
 math. Against the sprint start (16.78 / 18.86 / 8.87 s) the totals are now **-33.1 % / -31.6 % /
 -38.1 %**.
@@ -453,6 +456,10 @@ All verified by reading the code; none implemented.
    that is going to hang does so inside the 20 s PCC test, not in a 4-minute perf run: gate new
    presets there first, with a watchdog, and expect to reset the box. The SDPA at bf8 HiFi2 is the
    floor for that op until someone debugs the LoFi ring-SDPA kernel.
+
+   *Re-measured on the sprint-5 tip (2026-09-28, mean of 3):* denoise **8.583 s**, total
+   **9.61 s** (9.598 / 9.620 / 9.608), i.e. the modulation hoist and the preset stack
+   (-0.34 s on top of the preset's own -1.55 s); -16.5 % against the sprint-5 bf16 default.
 
    `all_bf8_lofi` is the sprint-4 result: -15.5% end to end at 720p against the sprint-3 tip, a
    0.024 pp PCC cost and a CLIP mean *above* bf16 (which says nothing about quality, section 8).
