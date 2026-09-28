@@ -8,13 +8,18 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <exception>
+#include <string_view>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/optimizers/sgd/device/sgd_device_operation.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
@@ -425,6 +430,49 @@ TEST_F(SGDLateMomentumTest, CompositeFirstLateUpdateSeedsRawGradient) {
 
 using SGDValidationTest = SGDLateMomentumTest;
 
+static ttnn::Tensor make_sgd_tensor_with_tile(
+    const tt::tt_metal::Tile& tile, float value, ttnn::distributed::MeshDevice* device = nullptr) {
+    constexpr uint32_t kHeight = 32;
+    constexpr uint32_t kWidth = 32;
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape({1, 1, kHeight, kWidth}),
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16, tt::tt_metal::PageConfig(ttnn::Layout::TILE, tile), ttnn::DRAM_MEMORY_CONFIG));
+    return ttnn::Tensor::from_vector(
+        std::vector<float>(kHeight * kWidth, value),
+        spec,
+        device != nullptr ? device : &ttml::autograd::ctx().get_device());
+}
+
+template <typename ValidateFunction>
+static void expect_sgd_validation_error(ValidateFunction&& validate, std::string_view expected_diagnostic) {
+    bool caught = false;
+    try {
+        validate();
+    } catch (const std::exception& error) {
+        caught = true;
+        EXPECT_NE(std::string_view(error.what()).find(expected_diagnostic), std::string_view::npos)
+            << "unexpected SGD validation diagnostic: " << error.what();
+    } catch (...) {
+        caught = true;
+        ADD_FAILURE() << "SGD validation threw a non-standard exception";
+    }
+    EXPECT_TRUE(caught) << "SGD accepted invalid input";
+}
+
+using SGDDeviceOperation = ttml::metal::optimizers::sgd::device::SGDDeviceOperation;
+using SGDAdapter = ttnn::device_operation::MeshDeviceOperationAdapter<SGDDeviceOperation>;
+
+static void expect_sgd_validation_error_on_miss_and_hit(
+    const SGDDeviceOperation::operation_attributes_t& attributes,
+    const SGDDeviceOperation::tensor_args_t& tensor_args,
+    std::string_view expected_diagnostic) {
+    expect_sgd_validation_error(
+        [&] { SGDAdapter::validate_on_program_cache_miss(attributes, tensor_args); }, expected_diagnostic);
+    expect_sgd_validation_error(
+        [&] { SGDAdapter::validate_on_program_cache_hit(attributes, tensor_args); }, expected_diagnostic);
+}
+
 TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     using namespace ttml;
 
@@ -435,13 +483,106 @@ TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
     auto param = to_tt(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 123U));
     auto grad = to_tt(test_utils::make_uniform_xarray<float>(grad_shape, -1.0F, 1.0F, 124U));
 
-    EXPECT_ANY_THROW(ttml::metal::sgd(
-        param,
-        grad,
-        /* lr */ 1e-2f,
-        /* momentum */ 0.0f,
-        /* dampening */ 0.0f,
-        /* weight_decay */ 0.0f,
-        /* nesterov */ false,
-        /* momentum_buffer */ std::nullopt));
+    const auto attributes = SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F};
+    const auto tensor_args = SGDDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .momentum_buffer = std::nullopt,
+    };
+
+    expect_sgd_validation_error_on_miss_and_hit(attributes, tensor_args, "must match the parameter's logical shape");
+}
+
+TEST_F(SGDValidationTest, RejectsNoncanonicalTileOnMissAndHitValidationPaths) {
+    constexpr std::string_view expected_diagnostic = "must use the canonical 32x32 TILE page";
+
+    const auto canonical_tile = tt::tt_metal::Tile{};
+    auto param = make_sgd_tensor_with_tile(canonical_tile, 1.0F);
+    auto narrow_grad = make_sgd_tensor_with_tile(tt::tt_metal::Tile({16, 32}), 0.5F);
+    const auto attributes = SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F};
+    const auto tensor_args = SGDDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = narrow_grad,
+        .momentum_buffer = std::nullopt,
+    };
+
+    expect_sgd_validation_error_on_miss_and_hit(attributes, tensor_args, expected_diagnostic);
+}
+
+TEST_F(SGDValidationTest, RejectsMismatchedTopologyOnMissAndHitValidationPaths) {
+    const auto canonical_tile = tt::tt_metal::Tile{};
+    auto param = make_sgd_tensor_with_tile(canonical_tile, 1.0F);
+    auto grad = make_sgd_tensor_with_tile(canonical_tile, 0.5F);
+    const auto canonical_topology = grad.tensor_topology();
+    auto placements = canonical_topology.placements();
+    placements.front() = tt::tt_metal::distributed::MeshMapperConfig::Shard{0};
+    const auto mismatched_topology = tt::tt_metal::TensorTopology(
+        canonical_topology.distribution_shape(), std::move(placements), canonical_topology.mesh_coords());
+
+    grad.update_tensor_topology(mismatched_topology);
+    const auto attributes = SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F};
+    const auto tensor_args = SGDDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .momentum_buffer = std::nullopt,
+    };
+
+    expect_sgd_validation_error_on_miss_and_hit(attributes, tensor_args, "same mesh topology");
+}
+
+TEST_F(SGDValidationTest, RejectsForeignMeshDeviceOnMissAndHitValidationPaths) {
+    const auto canonical_tile = tt::tt_metal::Tile{};
+    auto& device = ttml::autograd::ctx().get_device();
+    auto foreign_mesh = device.create_submesh(
+        tt::tt_metal::distributed::MeshShape(1, 1), tt::tt_metal::distributed::MeshCoordinate(0, 0));
+    auto param = make_sgd_tensor_with_tile(canonical_tile, 1.0F);
+    auto foreign_grad = make_sgd_tensor_with_tile(canonical_tile, 0.5F, foreign_mesh.get());
+    const auto attributes = SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F};
+    const auto tensor_args = SGDDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = foreign_grad,
+        .momentum_buffer = std::nullopt,
+    };
+
+    expect_sgd_validation_error_on_miss_and_hit(attributes, tensor_args, "same mesh device");
+}
+
+TEST_F(SGDValidationTest, RejectsInconsistentMomentumModesOnMissAndHitValidationPaths) {
+    const auto canonical_tile = tt::tt_metal::Tile{};
+    auto param = make_sgd_tensor_with_tile(canonical_tile, 1.0F);
+    auto grad = make_sgd_tensor_with_tile(canonical_tile, 0.5F);
+    auto momentum_buffer = make_sgd_tensor_with_tile(canonical_tile, 0.0F);
+
+    const auto no_buffer_args = SGDDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .momentum_buffer = std::nullopt,
+    };
+    const auto buffer_args = SGDDeviceOperation::tensor_args_t{
+        .param = param,
+        .grad = grad,
+        .momentum_buffer = momentum_buffer,
+    };
+
+    expect_sgd_validation_error_on_miss_and_hit(
+        SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F, .dampening = 0.1F},
+        no_buffer_args,
+        "Dampening requires positive momentum");
+    expect_sgd_validation_error_on_miss_and_hit(
+        SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F, .nesterov = true},
+        no_buffer_args,
+        "Nesterov requires positive momentum");
+    expect_sgd_validation_error_on_miss_and_hit(
+        SGDDeviceOperation::operation_attributes_t{.lr = 1e-2F},
+        buffer_args,
+        "Momentum buffer presence must match positive momentum");
+    expect_sgd_validation_error_on_miss_and_hit(
+        SGDDeviceOperation::operation_attributes_t{
+            .lr = 1e-2F,
+            .momentum = 0.9F,
+            .dampening = 0.1F,
+            .nesterov = true,
+        },
+        buffer_args,
+        "Nesterov requires positive momentum and zero dampening");
 }
