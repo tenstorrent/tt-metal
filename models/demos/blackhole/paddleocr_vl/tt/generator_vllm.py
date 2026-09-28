@@ -150,7 +150,7 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
             *args, **kwargs, model=self.model, model_args=self.model_args, tt_cache_path=self.cache_path
         )
 
-    def _image_inputs_for(self, kwargs, user_id, batch_size):
+    def _image_inputs_for(self, kwargs, user_id):
         """Pull one user's pixel_values/grid out of the per-request lists."""
         pv_all = kwargs.get("pixel_values") or []
         grid_all = kwargs.get("image_grid_thw") or []
@@ -188,7 +188,7 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
             prompt_len = int(prompt_lens[user_id])
             input_ids = tokens[user_id][:prompt_len].to(torch.int64)
 
-            pixel_values, grid = self._image_inputs_for(kwargs, user_id, batch_size)
+            pixel_values, grid = self._image_inputs_for(kwargs, user_id)
 
             with torch.no_grad():
                 text_embeds = embed_tokens(input_ids.unsqueeze(0))[0]

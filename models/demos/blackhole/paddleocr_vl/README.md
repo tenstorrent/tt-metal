@@ -90,7 +90,8 @@ pytest models/demos/blackhole/paddleocr_vl/tests/ -s
 
 Without `demo/golden/` staged, the PCC/accuracy/resolution-ceiling tests skip
 cleanly (collection still succeeds) rather than failing; `test_vision_permutation.py`
-needs no device or golden data and always runs. Set
+needs no device or golden data, only the HF processor and config (from the hub
+or a warm cache). Set
 `PADDLEOCR_VL_REQUIRE_ARTIFACTS=1` on an unattended run (e.g. CI) to turn those
 skips into failures instead, so a staging break is caught rather than reported
 as a green skip.

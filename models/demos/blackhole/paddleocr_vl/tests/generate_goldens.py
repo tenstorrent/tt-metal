@@ -13,14 +13,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 
 import torch
 from PIL import Image
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ocr_corpus import CORPUS, build_corpus  # noqa: E402
+from models.demos.blackhole.paddleocr_vl.tests.ocr_corpus import CORPUS, build_corpus
 
 MODEL_ID = "PaddlePaddle/PaddleOCR-VL-1.6"
 OCR_PROMPT = "OCR:"

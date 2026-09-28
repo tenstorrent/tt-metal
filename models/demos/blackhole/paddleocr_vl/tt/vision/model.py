@@ -12,7 +12,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 # Encoder kernels are shared with Qwen3.5's Blackhole tower (identical dims),
-# not duplicated; tests/probe_vision_layers.py guards the coupling.
+# not duplicated; tests/test_vision_tower_pcc.py gates it, probe_vision_layers.py localizes a break.
 from models.demos.blackhole.qwen36.tt.vision.patch_merger import PatchMerger
 from models.demos.blackhole.qwen36.tt.vision.vision_block import VisionBlock
 from models.demos.blackhole.qwen36.tt.vision.vision_distributed_layernorm import DistributedLayerNorm
@@ -63,7 +63,7 @@ class HostEmbeddings(torch.nn.Module):
                 "patch_embedding.bias": host_weights[PATCH_EMBED_BIAS],
                 "position_embedding.weight": host_weights[POS_EMBED],
             },
-            strict=False,
+            strict=True,
         )
         self.embeddings.to(dtype).eval()
         self.dtype = dtype

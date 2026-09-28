@@ -58,7 +58,6 @@ class VisionModelArgs(ModelArgs):
             logger.info(f"padding vision head dim from {self.head_dim} to {self.padded_head_dim}")
 
         self.qkv_size = self.padded_head_dim * (2 * self.n_kv_heads + self.n_heads)
-        self.MAX_QKV_MM_SEQ_LEN = self.MAX_QKV_MM_SEQ_LEN
 
         self.optimizations = VisionModelOptimizations(self.model_name)
 
@@ -128,26 +127,3 @@ class VisionModelArgs(ModelArgs):
             "": "",
         }
         return layer_prefix + module_map[module_name]
-
-    # ---- references for PCC comparison -------------------------------------
-
-    def reference_vision_model(self):
-        from transformers import AutoModelForImageTextToText
-
-        model = AutoModelForImageTextToText.from_pretrained(self.CKPT_DIR, dtype="auto")
-        return model.model.visual.vision_model
-
-    def reference_vision_block(self, layer_num=0):
-        return self.reference_vision_model().encoder.layers[layer_num]
-
-    def reference_mlp(self):
-        return self.reference_vision_block().mlp
-
-    def reference_attention(self):
-        return self.reference_vision_block().attn
-
-    def reference_patch_merger(self):
-        from transformers import AutoModelForImageTextToText
-
-        model = AutoModelForImageTextToText.from_pretrained(self.CKPT_DIR, dtype="auto")
-        return model.model.projector

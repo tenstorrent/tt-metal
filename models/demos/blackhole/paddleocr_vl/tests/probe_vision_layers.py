@@ -34,7 +34,7 @@ def main() -> int:
     ap.add_argument("--layers", type=int, default=27)
     a = ap.parse_args()
 
-    g = torch.load(os.path.join(GOLDEN_DIR, f"intermediates_{a.golden}.pt"), weights_only=False)
+    g = torch.load(os.path.join(GOLDEN_DIR, f"intermediates_{a.golden}.pt"), weights_only=True)
     grid, n = g["image_grid_thw"], int(g["image_grid_thw"].prod())
 
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))

@@ -107,20 +107,7 @@ class Transformer(TTTransformer):
         tt_page_table = _int32(page_table) if page_table is not None else None
         tt_chunk_page_table = _int32(chunk_page_table) if chunk_page_table is not None else None
 
-        if chunk_start_idx is not None and int(chunk_start_idx) > 0:
-            tt_chunk_start_idx = ttnn.from_torch(
-                torch.tensor([chunk_start_idx], dtype=torch.int32),
-                device=device,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            )
-        else:
-            tt_chunk_start_idx = None
-
-        # qwen3_vl's order: (input, rot_mats, page_table, chunk_page_table, deepstack).
-        # chunk_start_idx is built above for parity with the base class but has no
-        # slot in this contract; the chunked path passes start_pos instead.
-        del tt_chunk_start_idx
+        # qwen3_vl's order has no chunk_start_idx slot; the chunked path passes start_pos instead.
         return (
             tokens_embd,
             tt_rot_mats_prefill,

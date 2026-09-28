@@ -60,11 +60,8 @@ def _cer(ref: str, hyp: str) -> float:
     return prev[-1] / len(ref)
 
 
-def _read_page(sample: dict, tower, generator, embed_tokens, image_token_id, ref, text_args, device) -> str:
+def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_token_id, ref, text_args, device) -> str:
     img = Image.open(os.path.join(DEMO, sample["image"])).convert("RGB")
-    from transformers import AutoProcessor
-
-    processor = AutoProcessor.from_pretrained(text_args.CKPT_DIR)
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": OCR_PROMPT}]}]
     text = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
     inputs = processor(text=[text], images=[img], return_tensors="pt")
@@ -157,8 +154,9 @@ def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
     )
     generator = VLGenerator(text_model, text_args, device, tokenizer=text_args.tokenizer)
 
-    from transformers import AutoModelForImageTextToText
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 
+    processor = AutoProcessor.from_pretrained(text_args.CKPT_DIR)
     # Kept for three host-side jobs only: the embedding table, get_rope_index, and
     # the text rotary module. Its decoder weights are never used for inference.
     ref = AutoModelForImageTextToText.from_pretrained(text_args.CKPT_DIR, dtype=torch.bfloat16)
@@ -168,7 +166,7 @@ def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
 
     cers = []
     for s in samples:
-        text = _read_page(s, tower, generator, embed_tokens, image_token_id, ref, text_args, device)
+        text = _read_page(s, processor, tower, generator, embed_tokens, image_token_id, ref, text_args, device)
         c = _cer(s["hf_output"], text)
         cers.append(c)
         print(f"[{s['name']}] CERvsHF={c * 100:.2f}%  TT={text[:120]!r}")

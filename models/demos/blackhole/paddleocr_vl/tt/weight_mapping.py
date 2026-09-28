@@ -110,13 +110,3 @@ def map_vision_state_dict(
         )
 
     return device, host
-
-
-def summarize(device: dict, host: dict) -> str:
-    n_blocks = len({k.split(".")[2] for k in device if k.startswith("visual.blocks.")})
-    n_merger = sum(1 for k in device if k.startswith("visual.merger."))
-    n_text = sum(1 for k in device if not k.startswith("visual."))
-    return (
-        f"device: {len(device)} keys ({n_blocks} vision blocks, {n_merger} merger, {n_text} text) | "
-        f"host: {len(host)} keys ({sorted(host)})"
-    )

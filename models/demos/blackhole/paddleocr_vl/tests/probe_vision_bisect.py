@@ -35,7 +35,7 @@ def main() -> int:
     ap.add_argument("--dtype", choices=("bfp8", "bf16"), default="bfp8")
     a = ap.parse_args()
 
-    g = torch.load(os.path.join(GOLDEN_DIR, f"intermediates_{a.golden}.pt"), weights_only=False)
+    g = torch.load(os.path.join(GOLDEN_DIR, f"intermediates_{a.golden}.pt"), weights_only=True)
     grid, n = g["image_grid_thw"], int(g["image_grid_thw"].prod())
     logger.info(f"golden={a.golden} grid={grid.tolist()} patches={n}")
 

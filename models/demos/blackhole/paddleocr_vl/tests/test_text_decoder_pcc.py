@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PROMPT = "The capital of France is Paris. The capital of Japan is"
 TOP_K = 5
-PCC_TARGET = 0.98  # margin below the observed 0.989 (see tt/model.py docstring)
+PCC_TARGET = 0.98  # margin below the observed 0.989
 
 
 def test_text_decoder_logits_match_hf(device):

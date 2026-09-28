@@ -32,7 +32,7 @@ def golden(golden_dir):
         path = os.path.join(golden_dir, f"intermediates_{name}.pt")
         if not os.path.isfile(path):
             missing_artifact(f"golden tensor not found: {path}")
-        return torch.load(path, weights_only=False)
+        return torch.load(path, weights_only=True)
 
     return _load
 
