@@ -15,6 +15,18 @@ import sys
 import re
 import os
 
+T = TypeVar("T")
+
+
+async def async_iter(it: Iterable[T]) -> AsyncIterator[T]:
+    for i in it:
+        yield i
+
+
+async def async_collect(f: AsyncIterator[T]) -> list[T]:
+    return [i async for i in f]
+
+
 timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
 teststart = re.compile("\[\s+RUN\s+\] (.*)")
 testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
@@ -416,19 +428,7 @@ async def parse_logs_stream(inf: asyncio.StreamReader, logf: Optional[TextIO]) -
 
 
 async def parse_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> list[Event]:
-    evs = []
-    async for e in parse_logs_stream(inf, logf):
-        evs.append(e)
-
-    return evs
-
-
-T = TypeVar("T")
-
-
-async def async_iter(it: Iterable[T]) -> AsyncIterator[T]:
-    for i in it:
-        yield i
+    return await async_collect(parse_logs_stream(inf, logf))
 
 
 def publish_link(test, link: TestedLink, srcsn, dstsn, *args):
