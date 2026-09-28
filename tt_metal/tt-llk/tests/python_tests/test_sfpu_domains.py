@@ -387,16 +387,7 @@ def _binary_op_enumerators(arch_dir: str) -> set:
     return set(re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:=|,)", body.group(1), re.M))
 
 
-# Listed in the coverage audit as driven by "none (WH/BH)", which is true of the enum *members*
-# and false of the *kernels*: these carry MathOpType.SFPU_BINARY_INT, which only the Quasar
-# dispatch header implements, while the same kernels are reached on WH/BH through the SFPU_BINARY
-# members below at DataFormat.Int32. Same aliasing hazard the audit records for SfpuWhere/TTNNWhere
-# and LogicalNot/LogicalNotUnary, one enum apart.
 _QUASAR_INT_BINARY_ALIASES = {
-    MathOperation.SfpuGtInt: MathOperation.SfpuElwGt,
-    MathOperation.SfpuLtInt: MathOperation.SfpuElwLt,
-    MathOperation.SfpuLeInt: MathOperation.SfpuElwLe,
-    MathOperation.SfpuGeInt: MathOperation.SfpuElwGe,
     # The int multiply is spelled MUL on Quasar and reaches _mul_int32_; on WH/BH the same kernel
     # is MUL_INT32, which SfpuMulInt32 drives (test_eltwise_binary_sfpu_int_uniform).
     MathOperation.SfpuElwmulInt: MathOperation.SfpuMulInt32,
@@ -405,7 +396,7 @@ _QUASAR_INT_BINARY_ALIASES = {
 
 @pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
 def test_quasar_int_binary_members_alias_covered_kernels(arch_dir):
-    """The five SFPU_BINARY_INT members are unreachable on WH/BH; their kernels are not.
+    """The Quasar integer multiply member is unreachable on WH/BH; its kernel is not.
 
     Two halves, and both matter. If the first fails, one of these members became dispatchable and
     is now genuinely untested -- give it a test. If the second fails, the alias it was relying on
@@ -417,47 +408,13 @@ def test_quasar_int_binary_members_alias_covered_kernels(arch_dir):
 
     for member, alias in _QUASAR_INT_BINARY_ALIASES.items():
         spec = member.value
-        if member is MathOperation.SfpuElwmulInt:
-            # "MUL" *is* declared -- it is the float multiply. What matters is that this member
-            # cannot be dispatched here, which its MathOpType decides, not its spelling.
-            assert spec.operation_type.name == "SFPU_BINARY_INT"
-        else:
-            assert spec.cpp_enum_value not in declared, (
-                f"{member.name} names BinaryOp::{spec.cpp_enum_value}, which is now declared "
-                f"in {arch_dir}. It is reachable on this arch and needs a test of its own; the "
-                "audit's section 4.5 alias note no longer covers it."
-            )
+        # "MUL" is declared as float multiply. Dispatchability here is determined by MathOpType.
+        assert spec.operation_type.name == "SFPU_BINARY_INT"
 
         assert alias.value.cpp_enum_value in declared, (
             f"{member.name}'s kernel is covered on WH/BH only through {alias.name}, whose "
             f"BinaryOp::{alias.value.cpp_enum_value} is no longer declared in {arch_dir}"
         )
-
-
-def test_int_comparison_aliases_are_driven_at_int32():
-    """The aliasing claim above is only worth anything while the alias is actually driven at Int32.
-
-    Checked against the test module's own list so the two cannot drift: if the ordered comparisons
-    stop being driven on an integer format, the four Quasar members lose their proxy coverage
-    silently.
-    """
-    import test_eltwise_binary_sfpu
-
-    driven = set(test_eltwise_binary_sfpu._INT_COMPARISON_OPS)
-    expected = {
-        MathOperation.SfpuElwLt,
-        MathOperation.SfpuElwGt,
-        MathOperation.SfpuElwLe,
-        MathOperation.SfpuElwGe,
-    }
-    assert driven == expected, (
-        "_INT_COMPARISON_OPS no longer holds the four ordered comparisons, so the Int32 "
-        f"comparison kernel's coverage moved: {driven ^ expected}"
-    )
-    assert (
-        set(_QUASAR_INT_BINARY_ALIASES.values()) - {MathOperation.SfpuMulInt32}
-        == driven
-    ), "the alias table and the driven set disagree"
 
 
 def test_every_float_binary_op_is_classified_for_cat_b():

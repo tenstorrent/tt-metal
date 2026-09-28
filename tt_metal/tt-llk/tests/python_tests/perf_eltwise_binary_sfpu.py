@@ -3,7 +3,7 @@
 
 import pytest
 import test_eltwise_binary_sfpu as _func
-from helpers.llk_params import ApproximationMode
+from helpers.llk_params import ApproximationMode, MathOperation
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 
@@ -11,12 +11,29 @@ _PERF_AXES = dict(
     run_types=[ALL_PERF_RUN_TYPES],
     loop_factor=[16],
     iterations=[32],
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
+    approx_mode=[ApproximationMode.No],
     is_perf=[True],
 )
+
+_ATAN2_PERF_AXES = {
+    **_PERF_AXES,
+    "approx_mode": [ApproximationMode.Yes, ApproximationMode.No],
+}
+
+_PERF_EXCLUDED_MATHOPS = {
+    # TODO(#58145): profiler register pressure prevents a production-equivalent build.
+    MathOperation.SfpuDivInt32,
+    MathOperation.SfpuDivInt32Floor,
+}
+
+_INT_UNIFORM_PERF_SWEEP = {
+    **_func.INT_UNIFORM_SWEEP,
+    "mathop": [
+        mathop
+        for mathop in _func.INT_UNIFORM_SWEEP["mathop"]
+        if mathop not in _PERF_EXCLUDED_MATHOPS
+    ],
+}
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, iterations, approx_mode, is_perf):
@@ -137,7 +154,7 @@ def test_perf_eltwise_binary_sfpu_mask(
 @pytest.mark.perf
 @parametrize(
     **_func.ATAN2_SWEEP,
-    **_PERF_AXES,
+    **_ATAN2_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_atan2(
     perf_report,
@@ -318,7 +335,7 @@ def test_perf_eltwise_binary_sfpu_bitwise(
 
 @pytest.mark.perf
 @parametrize(
-    **_func.INT_UNIFORM_SWEEP,
+    **_INT_UNIFORM_PERF_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_int_uniform(
@@ -421,13 +438,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
 @pytest.mark.perf
 @parametrize(
     **_func.BCAST_SWEEP,
-    run_types=[ALL_PERF_RUN_TYPES],
-    loop_factor=[16],
-    iterations=[32],
-    # Kernel never reads APPROX_MODE; pin No so the schema column stays present
-    # without compiling two identical ELFs.
-    approx_mode=[ApproximationMode.No],
-    is_perf=[True],
+    **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_bcast(
     perf_report,

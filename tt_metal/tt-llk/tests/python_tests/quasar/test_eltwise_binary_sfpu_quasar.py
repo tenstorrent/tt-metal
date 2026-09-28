@@ -248,8 +248,6 @@ def _prepare_int_stimuli(
 
 
 # Shared with perf_eltwise_binary_sfpu_quasar.py. tile_indices stays functional-only.
-# Compare aliases: SfpuLtInt/GtInt/LeInt/GeInt are Quasar-only enum members for the
-# same kernels BH drives as SfpuElwLt/Gt/Le/Ge (see test_sfpu_domains.py).
 INT_SWEEP = dict(
     formats=input_output_formats([DataFormat.Int32], same=True),
     dest_acc=[DestAccumulation.Yes],

@@ -1769,15 +1769,6 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs
         pytest.skip(
             "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
         )
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "DestAccumulation.No is not supported for SfpuAddTopRow on Blackhole"
-        )
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
 

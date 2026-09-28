@@ -33,10 +33,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_A         = params.buffer_A;
 #endif
-    // Isolate mocks must match _llk_unpack_A_ dvalids (not halved by even/odd SFPU pairing).
-    // Per tile: NONE = num_faces SrcA plus a SrcB zerosrc dvalid (WA #1230) every face,
-    // including dest_acc=No; ROW = num_faces SrcB; COL = dummy SrcA + 2 SrcB;
-    // SCALAR = dummy SrcA + 1 SrcB.
+    // Mocks post the same src dvalids per tile as _llk_unpack_A_.
     const std::uint32_t tile_iters = LOOP_FACTOR * TILE_CNT;
 
     {
@@ -63,8 +60,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 if constexpr (BROADCAST_TYPE == BroadcastType::NONE)
                 {
-                    // Real NONE unpack posts SrcA plus a SrcB zerosrc dvalid (WA #1230)
-                    // every face, including dest_acc=No. MATH_ISOLATE must match that.
                     _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ tile_iters * num_faces);
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::ROW)
@@ -73,8 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
                 {
-                    // Interleave per tile: posting all A+B then all extra B fills the 2-deep src banks
-                    // while math is still waiting for the second SrcB of tile 0.
+                    // Interleave per tile; bulk posting deadlocks on the 2-deep src banks.
                     for (std::uint32_t i = 0; i < tile_iters; ++i)
                     {
                         _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ 1);

@@ -3983,18 +3983,6 @@ class EltwiseBinaryGolden(FidelityMasking):
         # results the SFPU helper branches on (0/0 -> NaN, x/0 -> +/-inf, x/x -> 1.0).
         return (t1.to(torch.float32) / t2.to(torch.float32)).to(t1.dtype)
 
-    def _gt_int(self, t1, t2):
-        return (t1 > t2).to(torch.int32)
-
-    def _lt_int(self, t1, t2):
-        return (t1 < t2).to(torch.int32)
-
-    def _le_int(self, t1, t2):
-        return (t1 <= t2).to(torch.int32)
-
-    def _ge_int(self, t1, t2):
-        return (t1 >= t2).to(torch.int32)
-
 
 @register_golden
 class BinarySFPUGolden(EltwiseBinaryGolden):
@@ -4007,10 +3995,6 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwmul: self._mul,
                 MathOperation.SfpuElwdiv: self._div,
                 MathOperation.SfpuElwmulInt: self._mul,
-                MathOperation.SfpuGtInt: self._gt_int,
-                MathOperation.SfpuLtInt: self._lt_int,
-                MathOperation.SfpuLeInt: self._le_int,
-                MathOperation.SfpuGeInt: self._ge_int,
                 MathOperation.SfpuXlogy: self._xlogy,
                 MathOperation.SfpuLogaddexp: self._logaddexp,
                 MathOperation.SfpuLogaddexp2: self._logaddexp2,
