@@ -574,12 +574,16 @@ PROFILING_ENV = {
 }
 
 
-def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path, plugins=()) -> list[str]:
+def build_tracy_command(
+    perf_test: str, case: str | None, out_dir: str | Path, plugins=(), mid_run_dump: bool = False
+) -> list[str]:
     """The raw profile_this command (C++ post-processing default) + -o.
 
     TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -r -p -o <out> -m pytest ... -sv
     Run directly (never via profile_this.py: it swallows the exit code). `plugins` are pytest
-    plugin modules loaded into the profiled run (`-p <module>`).
+    plugin modules loaded into the profiled run (`-p <module>`). `mid_run_dump` is tracy's own
+    --dump-device-data-mid-run: each profiler read is written out and released instead of held in
+    host memory until exit.
     """
     cmd = [
         sys.executable,
@@ -588,6 +592,7 @@ def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path, p
         "-v",
         "-r",
         "-p",
+        *(["--dump-device-data-mid-run"] if mid_run_dump else []),
         "-o",
         str(out_dir),
         "-m",
@@ -1835,10 +1840,12 @@ def make_run_profiled(
         except Exception as exc:  # noqa: BLE001 -- never let the gate stop the run
             _warn_thermal_inert("make_run_profiled", exc)
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
-        # Drain the profiler from the process's first op, not only inside the measured forward: see
-        # profiler_drain for the Galaxy run whose buffers were all full before the forward began.
+        # Drain from the first op (profiler_drain), and release each read (mid-run dump): kept, every
+        # marker sat in host memory until exit -- 320 GB and climbing on a WH Galaxy, 2026-09-28.
         _drain = profiler_drain_plugin(root)
-        cmd = build_tracy_command(node_id, None, out_dir, plugins=(_drain,) if _drain else ())
+        cmd = build_tracy_command(
+            node_id, None, out_dir, plugins=(_drain,) if _drain else (), mid_run_dump=bool(_drain)
+        )
         support_count = int(env.get(_SUPPORT_COUNT_ENV) or 0)
         t_start = time.monotonic()
         partial_reason = None

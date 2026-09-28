@@ -35,7 +35,7 @@ from __future__ import annotations
 # The seam names live in ONE module -- see stage_seams. A RELATIVE import resolves under both
 # names this package is imported by, so neither spelling has to be guarded.
 from . import stage_seams as _seams
-from .profiler_drain import ProfilerDrain, is_device
+from .profiler_drain import ProfilerDrain, capacity_cadence, is_device
 
 import ast
 import re
@@ -117,9 +117,10 @@ def mark_stages(adapter, device) -> int:
         no_marks("the pipeline declares no stages after setup")
         return 0
     n = 0
-    # The session-wide drain (profiler_drain, loaded into the profiled pytest) reads at the buffer's
-    # capacity; the measured pass reads at the run's fine cadence and after each stage.
-    with ProfilerDrain(ttnn, device) as drain:
+    # At the buffer's capacity, like the session drain (profiler_drain) it runs inside, plus a read
+    # after each stage. A read of every chip is not free: at the fine TT_PERF_FLUSH_EVERY cadence one
+    # 2-layer vision_encode stage ran 16+ minutes on a WH Galaxy (2026-09-28) without ending.
+    with ProfilerDrain(ttnn, device, every=capacity_cadence()) as drain:
         for st in stages:
             name = str(getattr(st, "name", "") or "").strip()
             step = getattr(st, "step", None)

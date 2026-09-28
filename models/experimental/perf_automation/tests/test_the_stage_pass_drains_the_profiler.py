@@ -48,6 +48,7 @@ def profiling(monkeypatch):
     for k, v in probes.PROFILING_ENV.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setenv(probes.PERF_FLUSH_EVERY_ENV, "2")
+    monkeypatch.setenv(probes._SUPPORT_COUNT_ENV, "8")  # capacity interval 8 // 4 = 2
 
 
 def _run(monkeypatch, ops_per_stage=(3, 2)):
@@ -92,8 +93,8 @@ def test_outside_a_profiling_run_nothing_is_read_or_wrapped(monkeypatch):
     assert "read" not in calls and (t.add, t.somewhere.mul) == orig
 
 
-def test_without_a_cadence_it_still_reads_after_every_stage(profiling, monkeypatch):
-    monkeypatch.delenv(probes.PERF_FLUSH_EVERY_ENV)
+def test_a_big_buffer_still_reads_after_every_stage(profiling, monkeypatch):
+    monkeypatch.delenv(probes._SUPPORT_COUNT_ENV)  # the default buffer: interval far above 5 ops
     calls, _, _ = _run(monkeypatch)
     assert calls.count("read") == 3  # one per stage + one on exit
 
@@ -247,6 +248,7 @@ def test_make_run_profiled_passes_it(tmp_path, monkeypatch):
     with pytest.raises(probes.TracyRunError):  # allow-pytest.raises: no expect_error fixture
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
     assert seen and seen[0][seen[0].index("-p", 7) + 1] == "x.profiler_drain"
+    assert "--dump-device-data-mid-run" in seen[0]
 
 
 def test_a_read_by_the_tests_own_wrapper_is_not_repeated(profiling, small_buffer, monkeypatch):
@@ -282,3 +284,9 @@ def test_the_generated_tests_own_wrapper_still_finds_every_op(profiling, monkeyp
         assert t.add() == "r" and calls == ["op"]
     finally:
         pd.pytest_unconfigure(None)
+
+
+def test_the_drained_run_releases_each_read():
+    cmd = probes.build_tracy_command("t.py", None, "/tmp/out", plugins=("x",), mid_run_dump=True)
+    assert cmd.index("--dump-device-data-mid-run") < cmd.index("-m", 3), "a tracy option, before -m pytest"
+    assert "--dump-device-data-mid-run" not in probes.build_tracy_command("t.py", None, "/tmp/out")
