@@ -1,4 +1,26 @@
 {
+ "G.s16384": {
+  "attempts": 0,
+  "duration_s": 6.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T04:41:14"
+   }
+  ],
+  "last_run": "2026-09-28T04:41:14",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/G.s16384.log",
+  "metrics": {
+   "golden_chunks": 2,
+   "golden_hash_ok": 1,
+   "golden_layers": 6,
+   "golden_reused": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T04:41:08",
+  "status": "PASS"
+ },
  "G.s4096": {
   "attempts": 0,
   "duration_s": 3.6,
