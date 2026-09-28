@@ -230,15 +230,49 @@ Example::
 """
 ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 
+
+def _golden_function_unsqueeze_to_4d(input_tensor):
+    # Match Shape.to_rank(4): left-pad the logical shape with 1s up to rank 4.
+    shape = list(input_tensor.shape)
+    while len(shape) < 4:
+        shape.insert(0, 1)
+    return input_tensor.reshape(shape)
+
+
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
+ttnn.attach_golden_function(ttnn.unsqueeze_to_4D, golden_function=_golden_function_unsqueeze_to_4d)
 
 
-def _golden_function(input_tensor, *args, **kwargs):
-    return input_tensor
+def _golden_function_from_torch(input_tensor, dtype=None, *, spec=None, layout=None, **_):
+    if input_tensor is None:
+        return None
+
+    import torch
+
+    target_dtype = spec.dtype if spec is not None else dtype
+    if target_dtype is None:
+        return input_tensor
+
+    # Host float-to-uint16 conversion truncates and clamps, unlike PyTorch's direct unsigned cast.
+    if isinstance(input_tensor, torch.Tensor) and input_tensor.is_floating_point() and target_dtype == ttnn.uint16:
+        return torch.clamp(input_tensor.to(torch.int32), min=0, max=65535).to(torch.uint16)
+
+    if target_dtype == ttnn.fp8_e4m3:
+        # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
+        return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        # Round-trip block floats through host packing so the golden includes BFP quantization.
+        target_layout = spec.layout if spec is not None else layout
+        target_layout = target_layout or ttnn.TILE_LAYOUT
+        return ttnn.Tensor(tensor=input_tensor, data_type=target_dtype, layout=target_layout).to_torch()
+
+    # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
+    return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
 
 
-@ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)
+@ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function_from_torch)
 def from_torch(
     tensor: Optional["torch.Tensor"],
     dtype: Optional[ttnn.DataType] = None,
@@ -336,6 +370,11 @@ def from_torch(
         # NumPy does not support bfloat16, so we use a Torch tensor instead.
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
+
+    if isinstance(tensor, torch.Tensor) and type(tensor) is not torch.Tensor:
+        # nanobind picks its torch importer by type(tensor).__module__ starting with "torch", so a subclass defined
+        # elsewhere (ttnn.torch_tracer.TracedTorchTensor, model-side wrappers) is not converted and fails to import.
+        tensor = tensor.as_subclass(torch.Tensor)
 
     # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
     # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
@@ -440,23 +479,9 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.MeshDevice`.
-
-The tensor may be placed in DRAM or L1 memory.
-
-Currently memory_config must be of an Interleaved tensor (not sharded)
-
-Args:
-    * :attr:`tensor`: the ttnn.Tensor
-    * :attr:`device`: the ttnn.MeshDevice
-    * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
-"""
-
 ttnn.register_python_operation(
     name="ttnn.to_device",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.core.to_device)
 
 
@@ -464,19 +489,28 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the host.
-
-Args:
-    * :attr:`tensor`: the ttnn.Tensor
-"""
-
-
 ttnn.register_python_operation(
     name="ttnn.from_device",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
+
+
+def _golden_function_allocate_tensor(*args, **kwargs):
+    import torch
+
+    # Support both the (tensor_spec, mesh_device) and (shape, dtype, layout, mesh_device, memory_config) overloads.
+    first_argument = args[0] if args else kwargs.get("tensor_spec", kwargs.get("shape"))
+    if isinstance(first_argument, ttnn.TensorSpec):
+        shape, dtype = first_argument.shape, first_argument.dtype
+    else:
+        shape = first_argument
+        dtype = args[1] if len(args) > 1 else kwargs.get("dtype")
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.bfloat16
+    output = torch.empty(tuple(shape), dtype=torch_dtype)
+    # Allocation leaves storage uninitialized, so only shape and dtype are meaningful downstream.
+    ttnn.decorators.set_golden_comparison_config(output, method="skip", scope="all")
+    return output
+
 
 ttnn.register_python_operation(
     name="ttnn.allocate_tensor_on_device",
@@ -484,10 +518,39 @@ ttnn.register_python_operation(
 ttnn.register_python_operation(
     name="ttnn.allocate_tensor_on_host",
 )(ttnn._ttnn.operations.core.allocate_tensor_on_host)
+ttnn.attach_golden_function(ttnn.allocate_tensor_on_device, golden_function=_golden_function_allocate_tensor)
+ttnn.attach_golden_function(ttnn.allocate_tensor_on_host, golden_function=_golden_function_allocate_tensor)
+
+
+def _make_copy_transfer_golden_function(source_name, destination_name):
+    """Build a golden for a void host<->device copy that keeps the destination's stored golden in sync.
+
+    Args are resolved by nanobind kwarg name first, falling back to the idiomatic positional order
+    (source, destination); both bindings declare source as arg 0 and destination as arg 1.
+    """
+
+    def golden_function(*args, _ttnn_global_golden=False, **kwargs):
+        # The op returns None, so the golden must also return None to preserve the output contract.
+        # Only the global golden path passes tensors that alias the stored golden graph; mutate there.
+        if _ttnn_global_golden:
+            source = kwargs.get(source_name, args[0] if len(args) > 0 else None)
+            destination = kwargs.get(destination_name, args[1] if len(args) > 1 else None)
+            if source is None or destination is None:
+                raise ValueError(f"copy transfer golden requires {source_name} and {destination_name}")
+            destination.copy_(source)
+        return None
+
+    golden_function._ttnn_mutates_global_inputs = True
+    return golden_function
+
 
 ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor",
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
+ttnn.attach_golden_function(
+    ttnn.copy_host_to_device_tensor,
+    golden_function=_make_copy_transfer_golden_function("host_tensor", "device_tensor"),
+)
 doc = """
 Copies host tensor data into a pre-allocated device tensor, writing only the shards mapped to cores in :attr:`logical_core_filter`.
 
@@ -513,9 +576,14 @@ ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor_partial",
     doc=doc,
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor_partial)
+# Per-core partial writes have no safe dense-tensor golden without the device shard mapping.
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)
+ttnn.attach_golden_function(
+    ttnn.copy_device_to_host_tensor,
+    golden_function=_make_copy_transfer_golden_function("device_tensor", "host_tensor"),
+)
 
 doc = """
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
@@ -526,6 +594,8 @@ Args:
 """
 
 ttnn.register_python_operation(name="ttnn.deallocate", doc=doc)(ttnn._ttnn.operations.core.deallocate)
+# deallocate returns None and only releases storage; there is no output value to compare.
+ttnn.attach_golden_function(ttnn.deallocate, golden_function=None)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -546,9 +616,113 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-# TODO: Merge to_dtype and typecast
 ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
-ttnn.attach_golden_function(ttnn.typecast, golden_function=_golden_function)
+
+
+def _preprocess_typecast_golden_function_inputs(function_args, function_kwargs):
+    """Preserve TT storage metadata required by typecast golden evaluation.
+    Records source dtype, host placement, and architecture beside Torch inputs.
+    """
+
+    # Default preprocessing erases TT storage, dtype, and device details when it creates a Torch tensor.
+    # Retain them so the golden can select the same host or architecture-specific integer conversion.
+    input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
+    golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
+        function_args, function_kwargs
+    )
+    golden_kwargs["_ttnn_input_dtype"] = input_tensor.dtype
+    golden_kwargs["_ttnn_is_host"] = not ttnn.is_tensor_storage_on_device(input_tensor)
+    arch_name = ttnn.get_arch_name().lower()
+    if any("quasar" in os.environ.get(variable, "").lower() for variable in ("ARCH_NAME", "CHIP_ARCH")):
+        arch_name = "quasar"
+    golden_kwargs["_ttnn_arch_name"] = arch_name
+    return golden_args, golden_kwargs
+
+
+def _typecast_golden_function(
+    input_tensor,
+    *dtype_args,
+    dtype=None,
+    input_dtype=None,
+    output_dtype=None,
+    _ttnn_input_dtype=None,
+    _ttnn_is_host=False,
+    _ttnn_arch_name=None,
+    **_,
+):
+    import torch
+
+    if output_dtype is None:
+        if dtype is not None:
+            output_dtype = dtype
+        elif len(dtype_args) == 1:
+            output_dtype = dtype_args[0]
+        elif len(dtype_args) >= 2:
+            input_dtype = input_dtype if input_dtype is not None else dtype_args[0]
+            output_dtype = dtype_args[1]
+    if output_dtype is None:
+        raise TypeError("ttnn.typecast golden requires an output dtype")
+
+    # Integer conversion semantics depend on source dtype/placement and target architecture, which can change rounding.
+    # Environment markers override runtime detection for simulator paths; other target dtypes need no architecture query.
+    input_dtype = _ttnn_input_dtype if _ttnn_input_dtype is not None else input_dtype
+    arch_name = _ttnn_arch_name.lower() if _ttnn_arch_name is not None else None
+    if any("quasar" in os.environ.get(variable, "").lower() for variable in ("ARCH_NAME", "CHIP_ARCH")):
+        arch_name = "quasar"
+    elif output_dtype in (ttnn.uint8, ttnn.uint16) and arch_name is None:
+        arch_name = ttnn.get_arch_name().lower()
+
+    # Comparison preprocessing supplies source values rather than the cast result.
+    # Integer conversion differs across host, Wormhole/Blackhole, and Quasar paths,
+    # so apply the matching target conversion here before PCC is evaluated.
+    if output_dtype == ttnn.uint8:
+        if _ttnn_is_host:
+            return torch.clamp(input_tensor.to(torch.int64), min=0, max=255).to(torch.uint8)
+        if "quasar" in arch_name and input_tensor.is_floating_point():
+            return torch.round(torch.clamp(input_tensor.float(), min=0)).to(torch.uint8)
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        # Same wrap as the int8 branch below
+        return (converted.to(torch.int64) % 256).to(torch.uint8)
+
+    if output_dtype == ttnn.uint16:
+        if input_tensor.is_floating_point():
+            if _ttnn_is_host or input_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+                converted = torch.trunc(input_tensor.float())
+            elif "quasar" in arch_name:
+                converted = torch.round(input_tensor.float())
+            else:
+                converted = torch.floor(input_tensor.float() + 0.5)
+        else:
+            converted = input_tensor
+        return torch.clamp(converted.to(torch.int64), min=0, max=65535).to(torch.uint16)
+
+    if output_dtype == ttnn.int8:
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        # Narrowing to int8 wraps modulo 256 rather than saturating
+        return ((converted.to(torch.int64) + 128) % 256 - 128).to(torch.int8)
+
+    if output_dtype == ttnn.uint32:
+        converted = torch.trunc(input_tensor.float()) if input_tensor.is_floating_point() else input_tensor
+        if input_dtype == ttnn.int8:
+            # int8 widens to uint32 by sign-extending and reinterpreting so negatives wrap to the
+            # top of the range instead of clamping to 0.
+            return (converted.to(torch.int64) & 0xFFFFFFFF).to(torch.uint32)
+        return torch.clamp(converted.to(torch.int64), min=0, max=2**32 - 1).to(torch.uint32)
+
+    if output_dtype == ttnn.fp8_e4m3:
+        return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    if output_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return ttnn.Tensor(tensor=input_tensor, data_type=output_dtype, layout=ttnn.TILE_LAYOUT).to_torch()
+
+    return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(output_dtype))
+
+
+ttnn.attach_golden_function(
+    ttnn.typecast,
+    golden_function=_typecast_golden_function,
+    preprocess_golden_function_inputs=_preprocess_typecast_golden_function_inputs,
+)
 
 
 def _golden_function(tensor, *args, **kwargs):
@@ -569,7 +743,13 @@ ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_f
 ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
-@ttnn.register_python_operation(name="ttnn.load_tensor")
+def _golden_function_load_tensor(file_name, *, device=None, **_):
+    # Load on host and convert to torch so device-vs-host load consistency is still value-compared.
+    host_tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), None)
+    return host_tensor.to_torch()
+
+
+@ttnn.register_python_operation(name="ttnn.load_tensor", golden_function=_golden_function_load_tensor)
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice = None) -> ttnn.Tensor:
     """
     Load tensor from a file.
@@ -593,7 +773,8 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
     return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device)
 
 
-@ttnn.register_python_operation(name="ttnn.dump_tensor")
+# dump_tensor writes to disk and returns None; there is no output value to compare.
+@ttnn.register_python_operation(name="ttnn.dump_tensor", golden_function=None)
 def dump_tensor(
     file_name: Union[str, pathlib.Path],
     tensor: ttnn.Tensor,
@@ -624,7 +805,7 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
-@ttnn.register_python_operation(name="ttnn.as_tensor")
+@ttnn.register_python_operation(name="ttnn.as_tensor", golden_function=_golden_function_from_torch)
 def as_tensor(
     tensor: Union["torch.Tensor"],  # TODO: add support for numpy.ndarray and other tensor types
     dtype: Optional[ttnn.DataType] = None,

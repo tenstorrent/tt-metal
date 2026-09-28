@@ -4,6 +4,7 @@
 
 #include "fold_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,36 +19,18 @@ bool is_fast_path_input(const Tensor& t) {
 
 tt::tt_metal::ShardSpec synthesize_fold_output_shard_spec(
     const Tensor& input_tensor, tt::tt_metal::TensorMemoryLayout layout, uint32_t rows, uint32_t cols) {
+    // COL_MAJOR input now yields column-wise H/W CoreRangeSet (documented via fold COL_MAJOR H/W shrink test).
     auto* device = input_tensor.device();
-    const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t max_cores = grid.x * grid.y;
-    std::array<uint32_t, 2> shape = {0, 0};
-    CoreRangeSet cores;
-    switch (layout) {
-        case TensorMemoryLayout::HEIGHT_SHARDED: {
-            shape = {tt::div_up(rows, max_cores), cols};
-            cores = tt::tt_metal::num_cores_to_corerangeset(tt::div_up(rows, shape[0]), grid, /*row_wise=*/true);
-            break;
-        }
-        case TensorMemoryLayout::WIDTH_SHARDED: {
-            shape = {rows, tt::div_up(cols, max_cores)};
-            cores = tt::tt_metal::num_cores_to_corerangeset(tt::div_up(cols, shape[1]), grid, /*row_wise=*/true);
-            break;
-        }
-        default: {  // BLOCK_SHARDED
-            shape = {tt::div_up(rows, grid.y), tt::div_up(cols, grid.x)};
-            const uint32_t n_rows = tt::div_up(rows, shape[0]);
-            const uint32_t n_cols = tt::div_up(cols, shape[1]);
-            cores = CoreRangeSet(CoreRange({0, 0}, {n_cols - 1, n_rows - 1}));
-            break;
-        }
-    }
-    // Inherit input's orientation when available (mirrors generate_transpose_shard_spec); ROW_MAJOR fallback for
-    // non-sharded inputs.
-    tt::tt_metal::ShardOrientation orientation = input_tensor.shard_spec().has_value()
-                                                     ? input_tensor.shard_spec()->orientation
-                                                     : tt::tt_metal::ShardOrientation::ROW_MAJOR;
-    return tt::tt_metal::ShardSpec(cores, shape, orientation);
+    return common::synthesize_output_shard_spec(
+        device->compute_with_storage_grid_size(),
+        static_cast<uint64_t>(rows),
+        static_cast<uint64_t>(cols),
+        layout,
+        {.is_tile = false,
+         .input_orientation = input_tensor.shard_spec().has_value()
+                                  ? std::optional{input_tensor.shard_spec()->orientation}
+                                  : std::nullopt,
+         .caller_tag = "Fold"});
 }
 
 Fold::program_factory_t Fold::select_program_factory(

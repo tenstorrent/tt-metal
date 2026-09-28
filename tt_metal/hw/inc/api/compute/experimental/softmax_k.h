@@ -21,13 +21,14 @@ namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softmax_k_init(uint32_t icb) {
     UNPACK((llk_unpack_A_init<BroadcastType::SCALAR, false, EltwiseBinaryReuseDestType::NONE, false>(false, 1, icb)));
     MATH((llk_math_eltwise_unary_datacopy_softmax_k_init()));
-    MATH((sfpu::llk_math_sfpu_softmax_k_init()));
+    MATH((sfpu::llk_math_sfpu_softmax_k_init<is_fp32_dest_acc_en>()));
 }
 
-template <int k = 8>
+template <int k = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softmax_k(uint32_t icb) {
     // NOTE: the implementation handles at most 16 lanes, and the odd-tail mask computes 1u << (k - 1), so k
     // outside [1, 16] is not supported. Callers validate this today (blaze's softmax_k op asserts the same
@@ -39,7 +40,7 @@ ALWI void softmax_k(uint32_t icb) {
     MATH((llk_math_eltwise_unary_datacopy_softmax_k(0)));
 
     // Softmax
-    MATH((sfpu::llk_math_sfpu_softmax_k<k>()));
+    MATH((sfpu::llk_math_sfpu_softmax_k<k, is_fp32_dest_acc_en>()));
 }
 
 #endif

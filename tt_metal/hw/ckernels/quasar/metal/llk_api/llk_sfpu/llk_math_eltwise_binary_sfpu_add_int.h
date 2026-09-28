@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_add.h"
+#include "llk_sfpu/ckernel_sfpu_add.h"
 
 namespace ckernel {
 
@@ -35,7 +35,7 @@ inline void llk_math_eltwise_binary_sfpu_add_int(
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _add_int_,
+        calculate_add_int,
         (APPROXIMATE, ITERATIONS, DATA_FORMAT, 0, SIGN_MAGNITUDE_FORMAT),
         idst0,
         idst1,

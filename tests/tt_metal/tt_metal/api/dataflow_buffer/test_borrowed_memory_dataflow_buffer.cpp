@@ -163,12 +163,18 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         if (!cfg.tensix_consumer) {
-            auto& consumer_hw_config =
-                std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+            auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+            if (!consumer_spec_dm.config_2xx) {
+                consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+            }
+            auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
             consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
         }
     }
@@ -201,7 +207,10 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Create program and allocate tensors
     // -----------------------------------------------------------------------
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
     MeshTensor src_tensor = MeshTensor::allocate_on_device(mesh_device, src_spec);
     std::optional<MeshTensor> dst_tensor;
@@ -260,13 +269,11 @@ void run_borrowed_memory_dfb_program(
     std::iota(input.begin(), input.end(), 0u);
     slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input);
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     // Assert the borrowed tensor's L1 address was used for the DFB ring. For a borrowed DFB this
     // stays PINNED across a size override (no reallocation).
-    EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor.address()));
+    EXPECT_EQ(program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor.address()));
 
     if (cfg.num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)
@@ -336,10 +343,16 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
-        auto& consumer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
+        auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+        if (!consumer_spec_dm.config_2xx) {
+            consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
@@ -365,7 +378,10 @@ void run_update_address_test(
     spec.dataflow_buffers = {dfb_spec};
     spec.work_units       = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
     MeshTensor src_tensor = MeshTensor::allocate_on_device(mesh_device, src_spec);
     MeshTensor dst_tensor = MeshTensor::allocate_on_device(mesh_device, dst_spec);
@@ -401,11 +417,10 @@ void run_update_address_test(
         {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
     SetProgramRunArgs(program, params1);
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_a.address()));
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_a.address()));
     {
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
@@ -448,11 +463,10 @@ void run_update_address_test(
                 {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
             });
     }
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_b.address()));
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_b.address()));
     if (reentry_num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *reentry_num_entries_override)
             << "combined re-bind + resize: num_entries override was not applied";

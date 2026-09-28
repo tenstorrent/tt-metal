@@ -48,7 +48,8 @@ void kernel_main() {
 
                     if (enable_reload) {
                         // Reconfigure input
-                        copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_init(mm_partials_cb_id);
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(mm_partials_cb_id, i, i);

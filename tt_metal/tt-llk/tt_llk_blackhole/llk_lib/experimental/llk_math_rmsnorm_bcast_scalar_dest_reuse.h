@@ -15,6 +15,30 @@
 
 using namespace ckernel;
 
+// Clear one reused product slot without touching the cross-chunk accumulator.
+// mul_reduce_scalar_init must have configured the non-incrementing ADDR_MOD_1.
+template <std::uint32_t dst_capacity, bool is_fp32_dest_acc_en>
+inline void _llk_math_rmsnorm_clear_product_tile_(const std::uint32_t dst_index)
+{
+    static_assert(dst_capacity >= 2 && dst_capacity <= 8);
+    LLK_ASSERT(dst_index < dst_capacity - 1, "product clear must preserve the accumulator");
+
+    // Finish the preceding chunk's SFPU read before clearing its product slots.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    constexpr std::uint32_t tiles_per_bank = is_fp32_dest_acc_en ? 4 : 8;
+    const std::uint32_t local_tile         = dst_index & (tiles_per_bank - 1);
+    // ZEROACC selects the bank from the destination offset. Face indices must
+    // stay bank-relative, including slots 4..6 with FP32/full-dest sync.
+    // Keep the offset at the tile start: advancing it face-by-face can trigger
+    // Blackhole's CLR_16 bank-selection issue (tt-metal#53693).
+#pragma GCC unroll 4
+    for (std::uint32_t face = 0; face < 4; ++face)
+    {
+        TT_ZEROACC(p_zeroacc::CLR_16, is_fp32_dest_acc_en, 0, ADDR_MOD_1, get_dest_index_in_faces(local_tile, face));
+    }
+}
+
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity>
 inline void rmsnorm_bcast_scalar_dest_reuse_configure_mop(const std::uint32_t num_faces = 4, const std::uint32_t acc_to_dest = 0)
 {
@@ -73,8 +97,8 @@ inline void rmsnorm_bcast_scalar_reuse_dest_as_src()
 {
     TTI_STALLWAIT(
         p_stall::STALL_MATH,
-        p_stall::WAIT_SFPU | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
-                                                 // data_valid, so we want to wait on that
+        p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
+                                                                 // data_valid, so we want to wait on that
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
 }
 

@@ -48,6 +48,7 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -365,19 +366,19 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     auto output_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
     // Query coords for syncer, datacopy and addition workloads
-    auto syncer_coord = sub_device_1.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto syncer_coord = sub_device_1.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto syncer_core_phys = mesh_device_->worker_core_from_logical_core(syncer_coord);
-    auto datacopy_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto datacopy_coord = sub_device_2.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto datacopy_core = CoreRangeSet(CoreRange(datacopy_coord, datacopy_coord));
     auto datacopy_core_phys = mesh_device_->worker_core_from_logical_core(datacopy_coord);
-    auto add_coord = sub_device_4.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto add_coord = sub_device_4.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto add_core = CoreRangeSet(CoreRange(add_coord, add_coord));
     auto add_core_phys = mesh_device_->worker_core_from_logical_core(add_coord);
 
     // Create global semaphore for syncing between programs
     auto all_cores = syncer_core.merge(datacopy_core).merge(add_core);
-    auto global_sem = CreateGlobalSemaphore(mesh_device_.get(), all_cores, 0);
+    auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     // Program syncs with host and notifies downstream datacopy or addition program
     Program sync_and_incr_program = CreateProgram();

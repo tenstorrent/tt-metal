@@ -133,9 +133,9 @@ class StimuliConfig:
         self.operand_res_tile_size = operand_res_tile_size
         self.twos_complement = twos_complement
 
-        # Hardware flags injected by TestConfig via set_use_srcs() / set_dest_acc()
+        # Hardware flags injected by TestConfig via set_use_srcs() / set_srcs_32bit_mode()
         self.use_srcs = False
-        self._dest_acc_32b = False
+        self._srcs_32bit_mode = False
 
         self._calculate_tile_sizes()
 
@@ -262,7 +262,7 @@ class StimuliConfig:
                 self.tile_dimensions,
                 format_tile_sizes,
                 use_srcs=self._operand_use_srcs("Res"),
-                dest_acc=self._dest_acc_32b,
+                dest_acc=self._srcs_32bit_mode,
             )
 
     def set_use_srcs(self, unpack_to_srcs: bool):
@@ -270,11 +270,9 @@ class StimuliConfig:
         self.use_srcs = unpack_to_srcs
         self._calculate_tile_sizes()
 
-    def set_dest_acc(self, dest_acc):
-        """Set 32-bit dest accumulation mode. Called by TestConfig."""
-        from .llk_params import DestAccumulation
-
-        self._dest_acc_32b = dest_acc == DestAccumulation.Yes
+    def set_srcs_32bit_mode(self, srcs_32bit_mode: bool):
+        """Set 32-bit SrcS element mode (drives MX SrcS slice geometry). Called by TestConfig."""
+        self._srcs_32bit_mode = srcs_32bit_mode
         self._calculate_tile_sizes()
 
     def __str__(self) -> str:
@@ -305,7 +303,7 @@ class StimuliConfig:
             f"  write_full_tiles: {self.write_full_tiles}"
             f"  use_dense_tile_dimensions: {self.use_dense_tile_dimensions}"
             f"  use_srcs: {self.use_srcs}"
-            f"  dest_acc_32b: {self._dest_acc_32b}"
+            f"  srcs_32bit_mode: {self._srcs_32bit_mode}"
             f"  operand_res_tile_size: {self.operand_res_tile_size}"
             f"  buf_a_addr: 0x{self.buf_a_addr:08X}"
             f"  buf_b_addr: 0x{self.buf_b_addr:08X}"
@@ -419,6 +417,48 @@ class StimuliConfig:
         return packers.get(data_format)
 
     @staticmethod
+    def _write_prepacked(
+        buffer, base_address: int, location: str, tile_count: int, tile_size: int
+    ) -> bool:
+        """Write an operand the test already packed into its exact L1 image.
+
+        Returns True when it took the write, False when ``buffer`` is a tensor and the
+        normal per-tile packing applies.
+
+        Both write_matrix variants below derive an operand's L1 layout from a tile
+        geometry, and some operands do not have one: the custom_mm family's in0 is a
+        dense run of partial faces (an in0 k-tile is 64 * in0_rows bytes, not a padded
+        32x32 tile), and a BFP-compressed in1 is a stream whose per-tile size follows
+        that tile's format code. Those tests hand over bytes instead of a tensor, and
+        the bytes go to L1 verbatim -- the same thing the silicon-validated
+        compressed_utils.CompressedStimuliConfig does by overriding write() wholesale.
+
+        The bytes still have to fit the region the L1 layout reserved for this operand:
+        operands are laid out contiguously, so the next operand starts at
+        ``base_address + tile_count * tile_size``. Writing past that silently corrupts
+        the neighbouring buffer and shows up as a wrong-looking golden somewhere else,
+        so reject it here instead. ``tile_count``/``tile_size`` is what the caller
+        reserved, not a claim about how the bytes are structured -- a prepacked image is
+        free to be smaller (a dense partial-face run) or laid out differently inside the
+        region.
+        """
+        if not isinstance(buffer, (bytes, bytearray, memoryview)):
+            return False
+
+        num_bytes = memoryview(buffer).nbytes
+        reserved = tile_count * tile_size
+        if num_bytes > reserved:
+            raise ValueError(
+                f"Prepacked operand at 0x{base_address:08X} is {num_bytes} B but only "
+                f"{reserved} B are reserved for it ({tile_count} tiles x {tile_size} B). "
+                "Raise tile_count (or declare a wider stimuli format) in the StimuliConfig "
+                "so the reservation covers the image."
+            )
+
+        write_to_device(location, base_address, bytes(buffer))
+        return True
+
+    @staticmethod
     def write_matrix(
         buffer,
         tile_count: int,
@@ -437,6 +477,11 @@ class StimuliConfig:
         - Always strides through buffer at MAX_TILE_ELEMENTS (1024) intervals
         - Packs either full tiles (1024 elements) or partial tiles (num_faces * face_r_dim * 16)
         """
+        if StimuliConfig._write_prepacked(
+            buffer, base_address, location, tile_count, tile_size
+        ):
+            return
+
         addresses = []
         packed_data_list = []
 
@@ -501,6 +546,11 @@ class StimuliConfig:
         - Strides through buffer based on actual tile_dimensions (tile_r * tile_c)
         - Always writes all elements for the given tile dimensions
         """
+        if StimuliConfig._write_prepacked(
+            buffer, base_address, location, tile_count, tile_size
+        ):
+            return
+
         addresses = []
         packed_data_list = []
 
@@ -689,7 +739,7 @@ class StimuliConfig:
             self.tile_dimensions,
             format_tile_sizes,
             use_srcs=use_srcs,
-            dest_acc=self._dest_acc_32b,
+            dest_acc=self._srcs_32bit_mode,
         )
         read_bytes_cnt = tile_size_bytes * count
 
@@ -725,7 +775,7 @@ class StimuliConfig:
             self.face_r_dim,
             tile_stride_bytes=stride_bytes,
             use_srcs=use_srcs,
-            dest_acc=self._dest_acc_32b,
+            dest_acc=self._srcs_32bit_mode,
             twos_complement=self.twos_complement,
         )
 
@@ -753,7 +803,7 @@ class StimuliConfig:
             self.tile_dimensions,
             format_tile_sizes,
             use_srcs=self._operand_use_srcs(operand),
-            dest_acc=self._dest_acc_32b,
+            dest_acc=self._srcs_32bit_mode,
         )
 
     def _collect_raw(self, operand: str, addr: int, fmt, count: int, location) -> bytes:

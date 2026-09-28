@@ -132,7 +132,7 @@ protected:
 
         // Create and launch program (note: correct argument order)
         program_ = create_traffic_generator_program(mesh_device_, worker_core, dest_node, memory_layout_);
-        this->RunProgramNonblocking(mesh_device_, *program_);
+        this->RunProgramNonblocking(mesh_device_, std::move(*program_));
 
         log_info(
             LogTest,

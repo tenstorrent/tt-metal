@@ -9,6 +9,7 @@
 - name: llk_e2e_wormhole group 1/2
   split_group: 1
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -26,6 +27,7 @@
 - name: llk_e2e_wormhole group 2/2
   split_group: 2
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -43,6 +45,7 @@
 - name: llk_e2e_blackhole group 1/2
   split_group: 1
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
@@ -60,6 +63,7 @@
 - name: llk_e2e_blackhole group 2/2
   split_group: 2
   team: llk
+  budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail

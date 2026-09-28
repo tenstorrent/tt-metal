@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
@@ -39,15 +40,15 @@ namespace sfpu {
 
 // v == s (IS_EQUAL) or v != s.
 template <int ITERATIONS, bool IS_EQUAL>
-inline void _calculate_unary_comp_equal_(uint value) {
-    constexpr uint v = p_sfpu::LREG0;
-    constexpr uint s = p_sfpu::LREG1;
-    constexpr uint abs_v = p_sfpu::LREG2;
-    constexpr uint abs_s = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
-    constexpr uint inf = p_sfpu::LREG5;
-    constexpr uint unequal_result = IS_EQUAL ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
-    constexpr uint equal_result = IS_EQUAL ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
+inline void _calculate_unary_comp_equal_(std::uint32_t value) {
+    constexpr std::uint32_t v = p_sfpu::LREG0;
+    constexpr std::uint32_t s = p_sfpu::LREG1;
+    constexpr std::uint32_t abs_v = p_sfpu::LREG2;
+    constexpr std::uint32_t abs_s = p_sfpu::LREG3;
+    constexpr std::uint32_t sum = p_sfpu::LREG4;
+    constexpr std::uint32_t inf = p_sfpu::LREG5;
+    constexpr std::uint32_t unequal_result = IS_EQUAL ? p_sfpu::LCONST_0 : p_sfpu::LCONST_1;
+    constexpr std::uint32_t equal_result = IS_EQUAL ? p_sfpu::LCONST_1 : p_sfpu::LCONST_0;
 
     TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_UPPER, (value >> 16) & 0xFFFF);
     TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
@@ -79,15 +80,15 @@ inline void _calculate_unary_comp_equal_(uint value) {
 
 // v > s (IS_GREATER) or v < s.
 template <int ITERATIONS, bool IS_GREATER>
-inline void _calculate_unary_comp_strict_(uint value) {
-    constexpr uint v = p_sfpu::LREG0;
-    constexpr uint s = p_sfpu::LREG1;
-    constexpr uint abs_v = p_sfpu::LREG2;
-    constexpr uint abs_s = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
-    constexpr uint inf = p_sfpu::LREG5;
-    constexpr uint copy = p_sfpu::LREG6;
-    constexpr uint work = p_sfpu::LREG7;
+inline void _calculate_unary_comp_strict_(std::uint32_t value) {
+    constexpr std::uint32_t v = p_sfpu::LREG0;
+    constexpr std::uint32_t s = p_sfpu::LREG1;
+    constexpr std::uint32_t abs_v = p_sfpu::LREG2;
+    constexpr std::uint32_t abs_s = p_sfpu::LREG3;
+    constexpr std::uint32_t sum = p_sfpu::LREG4;
+    constexpr std::uint32_t inf = p_sfpu::LREG5;
+    constexpr std::uint32_t copy = p_sfpu::LREG6;
+    constexpr std::uint32_t work = p_sfpu::LREG7;
 
     TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_UPPER, (value >> 16) & 0xFFFF);
     TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
@@ -129,15 +130,15 @@ inline void _calculate_unary_comp_strict_(uint value) {
 
 // v >= s (IS_GREATER) or v <= s.
 template <int ITERATIONS, bool IS_GREATER>
-inline void _calculate_unary_comp_weak_(uint value) {
-    constexpr uint v = p_sfpu::LREG0;
-    constexpr uint s = p_sfpu::LREG1;
-    constexpr uint abs_v = p_sfpu::LREG2;
-    constexpr uint abs_s = p_sfpu::LREG3;
-    constexpr uint sum = p_sfpu::LREG4;
-    constexpr uint inf = p_sfpu::LREG5;
-    constexpr uint copy = p_sfpu::LREG6;
-    constexpr uint work = p_sfpu::LREG7;
+inline void _calculate_unary_comp_weak_(std::uint32_t value) {
+    constexpr std::uint32_t v = p_sfpu::LREG0;
+    constexpr std::uint32_t s = p_sfpu::LREG1;
+    constexpr std::uint32_t abs_v = p_sfpu::LREG2;
+    constexpr std::uint32_t abs_s = p_sfpu::LREG3;
+    constexpr std::uint32_t sum = p_sfpu::LREG4;
+    constexpr std::uint32_t inf = p_sfpu::LREG5;
+    constexpr std::uint32_t copy = p_sfpu::LREG6;
+    constexpr std::uint32_t work = p_sfpu::LREG7;
 
     TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_UPPER, (value >> 16) & 0xFFFF);
     TT_SFPLOADI(s, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF);
@@ -184,42 +185,42 @@ inline void _calculate_unary_comp_weak_(uint value) {
 inline void unary_ne_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_ne(uint value) {
+inline void calculate_unary_ne(std::uint32_t value) {
     _calculate_unary_comp_equal_<ITERATIONS, /*IS_EQUAL=*/false>(value);
 }
 
 inline void unary_eq_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_eq(uint value) {
+inline void calculate_unary_eq(std::uint32_t value) {
     _calculate_unary_comp_equal_<ITERATIONS, /*IS_EQUAL=*/true>(value);
 }
 
 inline void unary_gt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_gt(uint value) {
+inline void calculate_unary_gt(std::uint32_t value) {
     _calculate_unary_comp_strict_<ITERATIONS, /*IS_GREATER=*/true>(value);
 }
 
 inline void unary_lt_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_lt(uint value) {
+inline void calculate_unary_lt(std::uint32_t value) {
     _calculate_unary_comp_strict_<ITERATIONS, /*IS_GREATER=*/false>(value);
 }
 
 inline void unary_ge_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_ge(uint value) {
+inline void calculate_unary_ge(std::uint32_t value) {
     _calculate_unary_comp_weak_<ITERATIONS, /*IS_GREATER=*/true>(value);
 }
 
 inline void unary_le_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_unary_le(uint value) {
+inline void calculate_unary_le(std::uint32_t value) {
     _calculate_unary_comp_weak_<ITERATIONS, /*IS_GREATER=*/false>(value);
 }
 

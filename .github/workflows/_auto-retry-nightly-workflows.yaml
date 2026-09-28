@@ -13,7 +13,6 @@ on:
         type: number
   workflow_run:
     workflows:
-      - "(Single-card) Frequent model and ttnn tests"
       - "Package and release"
       - "(Release) Model Status for Console Deployment"
       - "(Runtime) Unit Tests"
@@ -65,7 +64,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           MAX_ATTEMPTS=3
-          CURRENT_HOUR=$(date +"%H")
 
           # Fetch workflow run details
           run_details=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }} 2>&1)
@@ -93,9 +91,6 @@ jobs:
             should_continue=false
           elif [[ "$conclusion" != "failure" ]]; then
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
-            should_continue=false
-          elif [[ "$CURRENT_HOUR" -lt 6 || "$CURRENT_HOUR" -ge 23 ]]; then
-            echo "::notice title=no-continue-outside-hours::This workflow is outside of the hours of 6am-10pm PT. Not re-trying"
             should_continue=false
           else
             should_continue=true

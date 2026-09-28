@@ -5,6 +5,7 @@
 #pragma once
 #include "experimental/llk_unpack_AB_compressed_custom_mm.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB CUSTOM_MM
@@ -23,6 +24,7 @@
 
 template <bool transpose = false>
 inline void llk_unpack_AB_compressed_custom_mm_init(const std::uint32_t operand0, const std::uint32_t operand1) {
+    SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_id = get_operand_id(operand0);
@@ -38,6 +40,7 @@ inline void llk_unpack_AB_compressed_custom_mm(
     const std::uint32_t base_address_meta,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_id = get_operand_id(operand0);

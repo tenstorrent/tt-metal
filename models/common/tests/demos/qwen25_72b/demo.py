@@ -4,7 +4,7 @@
 """
 TTTv2 Qwen2.5-72B-Instruct demo — accuracy and performance measurement on T3K.
 
-Uses ``EagerQwen25_72BExecutor`` / ``TracedQwen25_72BExecutor`` directly (no vLLM adapter).
+Uses the model-owned ``Qwen25_72BExecutor`` directly (no vLLM adapter).
 
 **Mesh note — T3K only.** Qwen2.5-72B-Instruct has 64 attention heads and 8 KV heads; both
 divide 8, and the 72B weights need 8-way tensor parallelism to fit (a single/2-device mesh cannot
@@ -44,23 +44,25 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.models.executor import (
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.models.qwen25_72b.executor import Qwen25_72BExecutor, Qwen25_72BExecutorConfig
+from models.common.models.qwen25_72b.hf_adaptor import encode_prompt, from_pretrained, load_tokenizer
+from models.common.models.qwen25_72b.model import QWEN25_72B_ACCURACY, QWEN25_72B_PERFORMANCE, Qwen25_72B
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import (
+    assert_no_special_tokens,
     load_eval_repeat_prompts_batch32,
+    make_contiguous_page_table,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.models.qwen25_72b.executor import EagerQwen25_72BExecutor, TracedQwen25_72BExecutor
-from models.common.models.qwen25_72b.model import QWEN25_72B_ACCURACY, QWEN25_72B_PERFORMANCE, Qwen25_72B
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import encode_prompt_hf
 
 # =============================================================================
 # Expected metrics — perf gates set from a same-box TTTv1-vs-TTTv2 sweep (on-device sampling),
@@ -152,9 +154,7 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
         # minimal_matmul ENABLED (2026-07-25, model.py) TTTv2 b32-ci = 81.2 ms ON (A/B: minimal_matmul OFF
         # 97.2 ms → a −16.5% prefill win). Same-box TTTv1 ci-32 = 68.74 ms (batched) but ONLY runs after a
         # TEMPORARY, uncommitted trace-region bump (its committed 70 MB region trace-OOMs the 32-user
-        # batched-prefill trace); TTTv2 is +18.1% over it — a documented shared batched-prefill-fold TTFT
-        # residual (ticket b32ci-prefill-ttft-minimal-matmul; fold-cap dead lever; same family as
-        # qwen3_32b/coder-32b/deepseek). ttft gate 185 is a best-of ceiling covering batched ON (81.2) AND
+        # batched-prefill trace). ttft gate 185 is a best-of ceiling covering batched ON (81.2) AND
         # the DISABLE_BATCHED_PREFILL=1 sequential A/B baseline (~179); never lowered to a slow number.
         "performance": {"T3K": {"tok_s_u": 15.5, "ttft_ms": 185}},
         "accuracy": {"T3K": {"tok_s_u": 15.5, "ttft_ms": 185}},
@@ -232,12 +232,9 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         "trace_region_size": 70_000_000,
         "num_command_queues": 1,
     }
-    # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without an
-    # explicit 1D fabric; the root conftest does not auto-enable it. Qwen2.5-72B is T3K-only (8
-    # devices), so FABRIC_1D is always required here; guard on shape != (1, 1) for symmetry with the
-    # other ports.
+    # The model resolves T3K collectives to Ring topology, so the fabric config must match that topology.
     if shape != (1, 1):
-        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
     return param
 
 
@@ -260,15 +257,11 @@ def mesh_device(ttnn_mesh_device):
 def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> None:
     """Attention1D TP requires n_heads and n_kv_heads divisible by device count."""
     n_dev = mesh_device.get_num_devices()
-    if n_dev <= 1:
-        return
-    cfg = AutoConfig.from_pretrained(hf_model_id, trust_remote_code=True)
-    n_h, n_kv = cfg.num_attention_heads, cfg.num_key_value_heads
-    if n_h % n_dev == 0 and n_kv % n_dev == 0:
+    if 64 % n_dev == 0 and 8 % n_dev == 0:
         return
     pytest.skip(
         f"Incompatible mesh for {hf_model_id}: {n_dev} devices need "
-        f"num_attention_heads ({n_h}) and num_key_value_heads ({n_kv}) each divisible by {n_dev}."
+        f"num_attention_heads (64) and num_key_value_heads (8) each divisible by {n_dev}."
     )
 
 
@@ -305,25 +298,7 @@ def ref_basename_for_hf(hf_model_id: str) -> str:
 
 
 def _load_tokenizer(hf_model_id: str):
-    """Load HF tokenizer with a writable-cache fallback.
-
-    The default ``HF_HOME`` on shared dev hosts is often owned by another user, so
-    ``AutoTokenizer.from_pretrained`` cannot create ``.locks/`` entries when tokenizer files are missing
-    from the shared cache. On ``OSError`` / ``PermissionError`` from the default path, retry with
-    ``cache_dir`` pointing at the user's home HF cache (tokenizer files are <10 MB so this is cheap).
-    """
-    try:
-        return AutoTokenizer.from_pretrained(hf_model_id, trust_remote_code=True)
-    except (OSError, PermissionError) as e:
-        msg = str(e)
-        if "Permission" not in msg and "permission" not in msg:
-            raise
-        fallback = os.environ.get("TT_TOKENIZER_FALLBACK_CACHE", str(Path.home() / ".cache" / "huggingface"))
-        logger.warning(
-            f"Default HF cache not writable for tokenizer download ({e!s:.120}); " f"retrying with cache_dir={fallback}"
-        )
-        Path(fallback).mkdir(parents=True, exist_ok=True)
-        return AutoTokenizer.from_pretrained(hf_model_id, cache_dir=fallback, trust_remote_code=True)
+    return load_tokenizer(hf_model_id)
 
 
 def load_reference_data(hf_model_id: str):
@@ -378,7 +353,7 @@ def tokenize_prompts(
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     encoded: list[list[int]] = []
     for p in prompts:
-        ids = list(encode_prompt_hf(tokenizer, p))
+        ids = list(encode_prompt(tokenizer, p))
         if max_prefill_len is not None and len(ids) > max_prefill_len:
             ids = ids[-max_prefill_len:]
         encoded.append(ids)
@@ -492,21 +467,88 @@ def create_model(
         # 4096 covers batch-1 (seq4096) and the teacher-forcing refpt; batch-32(-ci) pass explicit values.
         max_seq_len = min(131072 // max_batch_size, 4096)
 
-    try:
-        model = Qwen25_72B.from_pretrained(
-            mesh_device,
-            hf_model,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-            num_layers=None,
-            cache_dir=cache_dir,
-            precision=precision,
-            executor_mode=True,
-        )
-    except Exception as e:
-        pytest.skip(f"Could not build Qwen2.5-72B model (weights / memory / mesh): {e}")
+    llm = from_pretrained(
+        mesh_device,
+        hf_model=hf_model,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        n_layers=None,
+        cache_dir=cache_dir,
+        optimizations=precision,
+    )
 
+    model = llm.model
+    model.demo_tokenizer = llm.tokenizer
     return model
+
+
+def create_executor(
+    model: Qwen25_72B,
+    *,
+    traced: bool,
+    device_sampling_enabled: bool,
+    trace_mode=None,
+) -> Qwen25_72BExecutor:
+    block_size = 32
+    max_num_blocks = ((model.config.max_seq_len + block_size - 1) // block_size) * model.config.max_batch_size
+    attention_config = model.config.block_configs[0].attention_config
+    if trace_mode is None:
+        trace_mode = "all" if traced else "none"
+    return Qwen25_72BExecutor(
+        model,
+        model.model_args,
+        Qwen25_72BExecutorConfig(
+            trace=TraceConfig(mode=trace_mode),
+            warmup=WarmupConfig(),
+            paged_kv_cache=PagedKVCacheConfig(
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+                num_blocks=max_num_blocks,
+                dtype=attention_config.kv_cache_dtype,
+            ),
+            device_sampling_enabled=device_sampling_enabled,
+        ),
+    )
+
+
+def _warmup_demo_executor(
+    executor,
+    *,
+    kv_cache,
+    page_table,
+    prefill_compile_case=None,
+    prefill_sampling_params=None,
+    prefill_compile_execution=None,
+):
+    """Compile eager programs and representative requests before trace activation."""
+    config = executor.config
+    prefill_kwargs = {
+        "kv_cache": kv_cache,
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(executor.model.config.max_batch_size),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": config.device_sampling_enabled,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if prefill_compile_case is not None:
+        tokens, prompt_lens = prefill_compile_case
+        executor.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=list(range(tokens.shape[0])),
+            sampling_params=prefill_sampling_params,
+            execution=prefill_compile_execution if prefill_compile_execution is not None else executor.eager_execution,
+        )
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
 # =============================================================================
@@ -558,48 +600,8 @@ def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
     n = mesh_device.get_num_devices()
     if n % data_parallel != 0 or (n // data_parallel) != 1:
         pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
-
-
-def assert_no_special_tokens(
-    generated_token_ids, tokenizer, *, case_name: str = "", is_ci_env: bool | None = None
-) -> None:
-    """Garbage guard: no special token mid-stream. Mirrors TTTv1 ``simple_text_demo.py``.
-
-    TTTv2's ``result.generated_token_ids[user]`` already starts at the first generated token, so unlike
-    TTTv1 we do not slice off the prompt — these are output-only. Each user's output is truncated at the
-    first stop token (EoS / ``<|im_end|>`` / ``<|im_start|>``) before scanning, then checked for any
-    ``tokenizer.all_special_ids`` member. Following TTTv1, a survivor logs a warning always but
-    hard-fails only under CI (``CI == "true"``), so local runs finish while CI stays strict.
-    """
-    if is_ci_env is None:
-        is_ci_env = os.environ.get("CI") == "true"
-    special = set(tokenizer.all_special_ids)
-    stop = set()
-    if tokenizer.eos_token_id is not None:
-        stop.add(tokenizer.eos_token_id)
-    # Qwen ChatML: <|im_end|> ends a turn; <|im_start|> opens a NEW turn and is a de-facto response
-    # terminator too. On the perf path (open-ended batch-1, stop_at_eos OFF, fixed decode budget) a
-    # correct answer can be followed by a greedily-hallucinated "\n<|im_start|>user ..." — <|im_start|>
-    # is special but NOT an eos, so without truncating there the garbage guard false-trips under CI.
-    # Truncating at it is correct (it's a legitimate turn terminator; TTTv1 STOPS at eos so never
-    # force-decodes into it). Same Qwen-family fix as the eval-32 stop augmentation below.
-    for _tok in ("<|im_end|>", "<|im_start|>"):
-        _tid = tokenizer.convert_tokens_to_ids(_tok)
-        if isinstance(_tid, int) and _tid >= 0:
-            stop.add(_tid)
-    offenders = 0
-    for out in generated_token_ids:
-        seq = list(out)
-        for i, t in enumerate(seq):
-            if t in stop:
-                seq = seq[:i]
-                break
-        if any(t in special for t in seq):
-            offenders += 1
-    if offenders:
-        logger.warning(f"[{case_name}] model produced special tokens ({offenders}/{len(generated_token_ids)} users)")
-        if is_ci_env:
-            assert False, f"model produced special tokens ({offenders} users)"
+    if n // data_parallel < _MIN_TP_DEVICES:
+        pytest.skip(f"DP-{data_parallel} cannot provide the {_MIN_TP_DEVICES}-device TP group required by Qwen2.5-72B")
 
 
 def _run_dp_smoke(
@@ -646,36 +648,32 @@ def _run_dp_smoke(
     try:
         for i, sm in enumerate(submeshes):
             try:
-                model = Qwen25_72B.from_pretrained(
+                llm = from_pretrained(
                     sm,
-                    hf_model,
+                    hf_model=hf_model,
                     max_batch_size=1,
                     max_seq_len=max_seq_len,
-                    num_layers=None,
+                    n_layers=None,
                     cache_dir=cache_dir,
-                    precision=precision,
-                    executor_mode=True,
+                    optimizations=precision,
                 )
             except Exception as e:
                 pytest.skip(f"Could not build Qwen2.5-72B model (weights / memory / mesh): {e}")
+            model = llm.model
             models.append((model, sm))
 
-            traced_executor = TracedQwen25_72BExecutor(model, sm)
+            traced_executor = create_executor(
+                model,
+                traced=True,
+                device_sampling_enabled=True,
+            )
             executors.append(traced_executor)
 
             ma = model.model_args
             assert ma is not None
 
-            block_size = 32
-            n_dev_sm = sm.get_num_devices()
-            max_num_blocks_per_user = ma.max_seq_len // block_size
-            max_num_blocks = max_num_blocks_per_user * ma.max_batch_size  # max_batch_size == 1
-
-            kv_cache_shape = (max_num_blocks, ma.n_kv_heads // n_dev_sm, block_size, ma.head_dim)
-            kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-            page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(
-                ma.max_batch_size, max_num_blocks_per_user
-            )
+            kv_cache = traced_executor.allocate_kv_cache()
+            page_table = make_contiguous_page_table(ma.max_batch_size, ma.max_seq_len, 32)
 
             input_tokens, prompt_lens = tokenize_prompts(prompts[i : i + 1], tokenizer)
 
@@ -851,20 +849,15 @@ def _run_token_accuracy(model, mesh_device, expected):
 
     prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
 
-    executor = EagerQwen25_72BExecutor(model, mesh_device)
+    executor = create_executor(model, traced=False, device_sampling_enabled=False)
     ma = model.model_args
     assert ma is not None
 
     max_batch_size = ma.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     max_seq_len = ma.max_seq_len
-    block_size = 32
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    kv_cache = executor.allocate_kv_cache()
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, 32)
 
     target_top5 = select_teacher_forcing_top5_slice(
         top5_tokens,
@@ -878,17 +871,20 @@ def _run_token_accuracy(model, mesh_device, expected):
     # run_teacher_forcing times the prefill + per-step (teacher-forced) decode loop and, given the
     # profiler, brackets the "inference_prefill" / "inference_decode" steps itself — so the returned
     # result carries prefill/decode throughput alongside accuracy for CI benchmark-data emission.
-    result = run_teacher_forcing(
-        executor,
-        prompt_tokens=prompt_tokens,
-        reference_tokens=reference_tokens,
-        top5_tokens=target_top5,
-        kv_cache=kv_cache,
-        page_table=page_table,
-        max_batch_size=max_batch_size,
-        profiler=profiler,
-    )
-    profiler.end("run")
+    try:
+        result = run_teacher_forcing(
+            executor,
+            prompt_tokens=prompt_tokens,
+            reference_tokens=reference_tokens,
+            top5_tokens=target_top5,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            max_batch_size=max_batch_size,
+            profiler=profiler,
+        )
+        profiler.end("run")
+    finally:
+        executor.cleanup()
 
     top1 = result.top1_accuracy() * 100
     top5 = result.top5_accuracy() * 100
@@ -968,7 +964,7 @@ def _run_perf_benchmark(
     max_prefill_len: int | None = None,
     num_decode_tokens: int | None = None,
 ):
-    """Timed prefill + decode (``TracedQwen25_72BExecutor``).
+    """Timed prefill + decode with the traced model-owned executor.
 
     Prefill uses each prompt's natural token length (TTTv1 ``preprocess_inputs_prefill`` semantics — the
     executor buckets to ``get_padded_prefill_len``); decode runs for ``num_decode_tokens`` steps
@@ -1010,20 +1006,19 @@ def _run_perf_benchmark(
     # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling path
     # (inert on host / force-argmax; gated to the top-k path by _decode_loop_active). This is the #49282
     # T3K decode-gap fix (shared engine #49284) — it must be active on the perf path for the T3K gate.
-    traced_executor = TracedQwen25_72BExecutor(model, mesh_device, ondevice_decode_loop=sampling_params is not None)
+    traced_executor = create_executor(
+        model,
+        traced=True,
+        device_sampling_enabled=sampling_params is not None,
+    )
     try:
         ma = model.model_args
         assert ma is not None
 
-        block_size = 32
         max_seq_len = ma.max_seq_len
         max_batch_size = ma.max_batch_size
-        max_num_blocks_per_user = max_seq_len // block_size
-        max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-        kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        kv_cache = traced_executor.allocate_kv_cache()
+        page_table = make_contiguous_page_table(max_batch_size, max_seq_len, 32)
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep a
         # 16-token margin, so the high-water decode position stays inside max_seq_len.
@@ -1040,6 +1035,15 @@ def _run_perf_benchmark(
         # Natural-length tokenization (matches TTTv1): the executor buckets each user's real length to
         # get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
+        prefill_sampling_params = None
+        _warmup_demo_executor(
+            traced_executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=(input_tokens, prompt_lens),
+            prefill_sampling_params=prefill_sampling_params,
+            prefill_compile_execution=traced_executor.traced_prefill_execution,
+        )
 
         # BenchmarkProfiler brackets the timed prefill/decode regions inside run_perf_benchmark
         # (default-None ⇒ byte-inert for every other caller) so we can emit CI perf telemetry.
@@ -1055,6 +1059,7 @@ def _run_perf_benchmark(
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            prefill_sampling_params=prefill_sampling_params,
             profiler=profiler,
         )
         profiler.end("run")
@@ -1159,22 +1164,30 @@ def _run_eval_repeat_batch32(model, mesh_device):
     if os.environ.get("DISABLE_BATCHED_PREFILL"):
         ma.disable_batched_prefill = True
 
-    block_size = 32
     max_seq_len = ma.max_seq_len
     max_batch_size = ma.max_batch_size
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, 32)
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
     # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
     def make_executor():
-        return TracedQwen25_72BExecutor(model, mesh_device)
+        return create_executor(
+            model,
+            traced=True,
+            device_sampling_enabled=sampling_params is not None,
+            trace_mode="decode_only",
+        )
 
     def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        kv_cache = executor.allocate_kv_cache()
+        _warmup_demo_executor(
+            executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=representative_prefill,
+            prefill_sampling_params=sampling_params,
+        )
+        return kv_cache
 
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()
@@ -1192,6 +1205,7 @@ def _run_eval_repeat_batch32(model, mesh_device):
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    representative_prefill = tokenize_fn(prompts)
     logger.info(f"[eval-32] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
     run_eval_repeat_batch32(
