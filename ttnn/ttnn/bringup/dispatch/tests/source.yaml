@@ -1,0 +1,33 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.dispatch), run in place against this fork
+# (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". The tests reach the op through TtDispatchModule
+# (models/demos/deepseek_v3_d_p/tt/moe/tt_dispatch.py), which looks it up by name at call time.
+#
+# This box (4x Blackhole p150b, ClusterType P150_X4) can run only the 4-device cases. Of those, upstream lists only
+# fabric2d-torus-y-4x1 (a ring on the dispatch axis); its conftest's hardware table has no P150_X4 row, so it skips
+# them as "unfeasible on the given hardware", though they open and pass here (the 4 chips form a ring; the ernie45
+# 1x4 FABRIC_1D_RING mesh uses the same links). `unskip` drops that one skip reason, in both runs. The 8-device
+# (8x1, 4x2) and 32-device (8x4) cases are filtered out with -k.
+#
+# Not covered: a 1-device dispatch axis (the fork's one change), since no upstream test has one; the fork's own
+# tests/test_dispatch.py covers it. On a 4-device axis the fork runs the original's fabric path unchanged.
+#
+# Known failing in both runs (baseline 80/82 on each): the 2 gptoss_120b fp8_scaled_in cases. emb 2880 is not a
+# multiple of the 128-wide scale block (TT_FATAL input_hidden % numbers_per_scale_block); upstream CI selects fp8
+# only for fp8_disp_compression models, which excludes gptoss_120b.
+upstream_sha: b27084f09f85e518701e0b550ed044d42b530059
+swap:
+  ttnn.experimental.deepseek_prefill.dispatch: ttnn.bringup.dispatch
+tests:
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_dispatch.py
+    k: "4x1"
+    unskip: "unfeasible on the given hardware"
+    why: "dispatch alone vs the torch reference, ring 4x1 2-link: 8 model shapes (dsv3, glm_51, kimi_k2_7, minimax_m27, dsv4_pro, dsv4_flash, gptoss_120b, mistral4), bf16 TILE and fp8-scaled ROW_MAJOR in/out with the per-token scale tail, predictable and random data, pcc (seq 32) and no-check perf (seq 640) sizes"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py
+    k: "4x1"
+    unskip: "unfeasible on the given hardware"
+    why: "dispatch -> combine round trip (combine stays the original), ring 4x1 2-link: 8 model shapes at seq 640, TILE and ROW_MAJOR dispatched buffer, predictable and random data"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py
+    k: "dispatch-torus"
+    unskip: "unfeasible on the given hardware"
+    why: "dispatch semaphores in L1_SMALL vs default L1 on a fragmented L1, ring 4x1"
