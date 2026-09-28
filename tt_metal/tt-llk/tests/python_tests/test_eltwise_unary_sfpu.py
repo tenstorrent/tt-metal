@@ -1368,7 +1368,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 
 _TT_POLY_PACK_CONFIGS = {}
 _TT_POLY_NATIVE_CALLS = {}
-_TT_POLY_FP32_DEST = {"erf": (), "erfc": ()}
+_TT_POLY_FP32_DEST = {"erf": (), "erfc": (), "exp2": (), "expm1": ()}
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ()
 _TT_POLY_ADAPTER_OPERATIONS = {}
@@ -1450,6 +1450,8 @@ class _TTPolyGeneratedBF16(TemplateParameter):
 _GENERATED_UNARY_CASES = [
     (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
+    (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
+    (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
 ]
 
 
@@ -1499,7 +1501,7 @@ def test_tt_poly_generated_bf16_llk(
     )
 
 
-_TT_POLY_PERF_OPERATIONS = ("erf", "erfc")
+_TT_POLY_PERF_OPERATIONS = ("erf", "erfc", "exp2", "expm1")
 
 _TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
 
@@ -1720,4 +1722,4 @@ def _tt_poly_scalar_perf_binding(operation, dest_acc):
     return _TTPolyStockScalar(operation)
 
 
-_TT_POLY_SCALAR_PERF_OPERATIONS = ("erf", "erfc")
+_TT_POLY_SCALAR_PERF_OPERATIONS = ("erf", "erfc", "exp2", "expm1")
