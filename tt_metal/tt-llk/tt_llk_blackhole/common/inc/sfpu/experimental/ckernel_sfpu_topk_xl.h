@@ -3111,8 +3111,8 @@ inline void _topk_xl_separate_indices_row_major_init_(std::uint32_t chunk_base)
         .set(ADDR_MOD_0);
 
     _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/(chunk_base >> 16) & 0xFFFF, /*lower16=*/chunk_base & 0xFFFF);
-    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x000F);
-    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x0300); // decode masks
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0400);
 }
 
 template <std::uint32_t chunk_base_upper16>
@@ -3126,8 +3126,8 @@ inline void _topk_xl_separate_indices_row_major_init_upper_(std::uint32_t chunk_
         .set(ADDR_MOD_0);
 
     _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/chunk_base_upper16, /*lower16=*/chunk_base_low16 & 0xFFFF);
-    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x000F);
-    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x0300); // decode masks
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0400);
 }
 
 template <std::uint32_t chunk_base_upper16, std::uint32_t chunk_base_lower16>
@@ -3141,8 +3141,8 @@ inline void _topk_xl_separate_indices_row_major_init_static_()
         .set(ADDR_MOD_0);
 
     _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/chunk_base_upper16, /*lower16=*/chunk_base_lower16);
-    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x000F);
-    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x0300); // decode masks
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0400);
 }
 
 inline void _topk_xl_separate_indices_row_major_reinit_()
@@ -3166,52 +3166,52 @@ inline void _topk_xl_separate_indices_row_major_advance_chunk_base_()
 }
 
 // In:
-//   LREG0 raw low bits: [col bits at 10:6 | tile bit at 5 | row bits at 4:0]
+//   LREG0 raw word: [anything at 31:11 | col_hi at 10 | col_low4 at 9:6 | tile at 5 |
+//                    row_hi at 4 | row_low4 at 3:0]
+//   LREG13 = 0x300, LREG14 = 0x400 (loaded by the *_row_major_init* functions)
 // Out:
-//   LREG0: row-major within-chunk index.
+//   LREG0: row-major within-chunk index
+//          tile << 10 | row_hi << 9 | col_hi << 8 | row_low4 << 4 | col_low4.
+// Clobbers LREG2, LREG3.
 //
 // K=1024 ignores raw bit 5. K=2048 maps raw bit 5 to row-major bit 10.
+//
+// A left shift followed by a logical right shift of at least (32 - width) isolates
+// a field cleanly only when it lands at bit 0, or when the field already starts at
+// raw bit 0. Both row fields start at raw bit 0, so one shift pair moves
+// [tile | row_hi | row_low4] up by 4 at once; row_hi and tile then need one more
+// place, which adding the masked bits 9:8 to themselves provides. col_low4 lands
+// at bit 0 with a shift pair, and col_hi is masked and shifted. Every path
+// discards raw bits 31:11 (the bf16 value half and the chunk-id field), so
+// callers need not clear the high half first. 13 instructions for every K.
 template <std::uint32_t K>
 inline void _topk_xl_decode_row_major_index_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    // K=2048 keeps the tile bit 5; K<=1024 shifts it out.
+    constexpr std::uint32_t row_field_width = K == 2048 ? 6 : 5;
 
-    // part0 = col_low4: ((raw >> 6) & 0xf)
+    // LREG2 = [tile | row_hi | row_low4] << 4: raw bits 5:0 -> 31:26 -> 9:4 (K<=1024: 4:0 -> 8:4)
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-    TTI_SFPSHFT((-6) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-    TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG2, 0);
+    TTI_SFPSHFT(32 - row_field_width, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+    TTI_SFPSHFT((-(28 - static_cast<int>(row_field_width))) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, 1);
 
-    // part1 = row_low4 << 4
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+    // Move row_hi (bit 8) and tile (bit 9) up one place: LREG2 += LREG2 & 0x300.
+    // Bits 10:9 are clear beforehand, so the add cannot carry into anything.
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
     TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
-    TTI_SFPSHFT(4, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
 
-    // part2 = col_hi << 8
+    // col_hi << 8: (raw & 0x400) >> 2
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
-    TTI_SFPSHFT((-10) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
     TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
-    TTI_SFPSHFT(8, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+    TTI_SFPSHFT((-2) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
     TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
 
-    // part3 = row_hi << 9
-    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
-    TTI_SFPSHFT((-4) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-    TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
-    TTI_SFPSHFT(9, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-    TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
-
-    if constexpr (K == 2048)
-    {
-        // part4 = tile_in_sequence << 10
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
-        TTI_SFPSHFT((-5) & 0xFFF, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG3, 0);
-        TTI_SFPSHFT(10, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
-    }
-
-    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    // col_low4, in place: raw bits 9:6 -> 31:28 -> 3:0, then merge
+    TTI_SFPSHFT(22, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    TTI_SFPSHFT((-28) & 0xFFF, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 }
 
 template <std::uint32_t K>
@@ -3230,8 +3230,8 @@ inline void _topk_xl_separate_indices_row_major_()
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
 
-        // Index region: clear high half, decode low tile coordinate, OR chunk base.
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+        // Index region: decode the tile coordinate (the decode discards the
+        // value half itself), OR chunk base.
         _topk_xl_decode_row_major_index_<K>();
         TTI_SFPOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
 
@@ -3254,8 +3254,8 @@ inline void _topk_xl_separate_indices_row_major_global_init_()
         .set(ADDR_MOD_0);
 
     _sfpu_load_config32_(p_sfpu::LREG12, /*upper16=*/0, /*lower16=*/0xF800);
-    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x000F);
-    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0001);
+    _sfpu_load_config32_(p_sfpu::LREG13, /*upper16=*/0, /*lower16=*/0x0300); // decode masks
+    _sfpu_load_config32_(p_sfpu::LREG14, /*upper16=*/0, /*lower16=*/0x0400);
 }
 
 // Fused end-to-end split: runs ONCE per row on the final fused survivor
@@ -3284,10 +3284,10 @@ inline void _topk_xl_separate_indices_row_major_global_()
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
 
-        // Index region: clear high half, save the raw u16 (incl. chunk id),
-        // decode the within-chunk coordinate, then OR the rescaled chunk
-        // field back in.
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
+        // Index region: save the raw word (incl. chunk id), decode the
+        // within-chunk coordinate, then OR the rescaled chunk field back in.
+        // The decode drops bits 31:11 and the LREG12 mask keeps only 15:11,
+        // so the value half needs no explicit clear.
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
         _topk_xl_decode_row_major_index_<K>();
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
@@ -3327,7 +3327,6 @@ inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_b
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0);
 
-        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0);
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
         _topk_xl_decode_row_major_index_<K>();
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
