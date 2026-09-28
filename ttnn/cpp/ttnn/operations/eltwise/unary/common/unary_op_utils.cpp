@@ -626,6 +626,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("unary_le_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
         case UnaryOpType::SOFTPLUS: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 2 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f800000u &&
+                std::bit_cast<uint32_t>(params[1]) == 0x41a00000u) {
+                return {
+                    "softplus_tt_poly_bf16_tile_init();",
+                    fmt::format("softplus_tt_poly_bf16_tile({}, 0x3f800000u, 0x3f800000u, 0x41a00000u);", idst)};
+            }
+#endif
+
             TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
             float param1 = params[1];
             return {

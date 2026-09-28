@@ -1415,6 +1415,7 @@ _TT_POLY_FP32_DEST = {
     "relu_min": (),
     "selu": (),
     "sigmoid": (),
+    "softplus": (),
     "softsign": (),
     "sqrt": (),
     "tanh": (),
@@ -1437,6 +1438,7 @@ _TT_POLY_ADAPTER_OPERATIONS = {
     "relu6": "relu6",
     "relu_max": "relu_max",
     "relu_min": "relu_min",
+    "softplus": "softplus",
     "multigammaln_p4": "tt_poly_aggregate_multigammaln",
 }
 _TT_POLY_NATIVE_ARCHITECTURES = {}
@@ -1636,6 +1638,15 @@ _GENERATED_UNARY_CASES = [
     (MathOperation.ReluMin, "relu_min", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
     (MathOperation.Selu, "selu", False, False, 32, "None", "ckernel_sfpu_selu.h"),
     (MathOperation.Sigmoid, "sigmoid", True, True, 8, "RC", "ckernel_sfpu_sigmoid.h"),
+    (
+        MathOperation.Softplus,
+        "softplus",
+        False,
+        False,
+        32,
+        "None",
+        "ckernel_sfpu_softplus.h",
+    ),
     (
         MathOperation.Softsign,
         "softsign",
@@ -1924,6 +1935,12 @@ def _tt_poly_reference_relu_min(x):
     return torch.from_numpy(_declared_forward(x.double().numpy()))
 
 
+def _tt_poly_reference_softplus(x):
+    return getattr(importlib.import_module("torch.nn.functional"), "softplus")(
+        x.double(), **{"beta": 1.0, "threshold": 20.0}
+    )
+
+
 _TT_POLY_FORWARD_REFERENCES = {
     "asinh": (
         _tt_poly_reference_asinh,
@@ -2015,6 +2032,15 @@ _TT_POLY_FORWARD_REFERENCES = {
         (0,),
         (),
     ),
+    "softplus": (
+        _tt_poly_reference_softplus,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (16515, 16516, 16517, 49838, 49839, 49840),
+        (
+            ("below", -87.5, True, "constant", 0.0),
+            ("above", 4.125, False, "identity", None),
+        ),
+    ),
 }
 
 
@@ -2093,6 +2119,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "relu6",
     "selu",
     "sigmoid",
+    "softplus",
     "softsign",
     "sqrt",
     "tanh",
