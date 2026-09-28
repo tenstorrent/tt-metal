@@ -104,6 +104,18 @@ td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric
 .pill.p0 { background: var(--bad-soft); color: var(--bad); }
 .pill.p1 { background: var(--warn-soft); color: var(--warn); }
 .pill.p2 { background: var(--surface-2); color: var(--ink-3); }
+table.prio button.disc { all: unset; cursor: pointer; font-weight: 500; color: var(--ink); display: inline-flex; gap: 6px; align-items: baseline; }
+table.prio button.disc:hover { color: var(--accent); }
+table.prio button.disc:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+table.prio .chev { display: inline-block; color: var(--ink-3); transition: transform .15s; width: 10px; }
+table.prio button.disc[aria-expanded="true"] .chev { transform: rotate(90deg); color: var(--accent); }
+table.prio tr.fdetail > td { background: var(--surface-2); padding: 12px 14px; }
+.dgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; max-width: 1100px; }
+@media (max-width: 800px) { .dgrid { grid-template-columns: 1fr; } }
+.dgrid h4 { margin: 0 0 4px; font-size: 12px; font-family: var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); font-weight: 500; }
+.dgrid p, .dgrid li { font-size: 13px; line-height: 1.5; max-width: 70ch; }
+.dgrid ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.dgrid p + p { margin-top: 6px; }
 .pill.good { background: var(--good-soft); color: var(--good); }
 .stages { display: flex; gap: 2px; align-items: flex-end; height: 70px; margin-top: 6px; }
 .stages > div { flex: 1; min-width: 3px; border-radius: 3px 3px 0 0; background: var(--s1); position: relative; }
@@ -250,7 +262,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
   <div class="results">
     <div class="panel prose" id="roadHead"></div>
     <div class="panel">
-      <h2>Feature priorities</h2>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between"><h2>Feature priorities</h2><button type="button" id="expandAll">Expand all</button></div>
       <div class="prose small" style="margin:4px 0 10px">
         <p>Each scenario has two numbers per feature, measured from opposite ends:</p>
         <ul>
@@ -466,6 +478,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <li><b>Async stage handoff:</b> the send to the next stage overlaps with computing the next chunk. Removes the blocking send; the transfer then runs at link rate.</li>
       <li><b>MSA SP-local indexer:</b> each SP rank scores its local index keys, a small top-k merge follows, and only the selected K/V blocks are fetched. Removes the all-gather of the whole cached prefix.</li>
       <li><b>Shortest-first scheduling:</b> queue order by new tokens, with 30 s aging.</li>
+      <li>Each feature has a longer explanation (what it is, why it helps, what needs to be done, interactions): click its name in the Roadmap table.</li>
     </ul>
 
     <h2 id="m-study">How the study works (Roadmap tab)</h2>
@@ -828,9 +841,34 @@ function renderRoadmap() {
       const loss = l && l.goodput > 0 && S.full ? S.full.goodput / l.goodput : null;
       return `<td class="n">${gain ? '×' + gain.toFixed(2) + ` <span class="muted">#${gi}</span>` : '–'}</td><td class="n">${loss ? '×' + loss.toFixed(2) : '–'}</td>`;
     }).join('');
-    return { t, html: `<tr><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td>${esc(f.name)}${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span></td><td class="small muted">${f.scope ? esc(f.scope[1]) : ''}</td></tr>` };
+    // strongest measured effect, for the detail panel
+    let bestG = null, bestL = null;
+    for (const sk of SCS) {
+      const S = STUDY.scenarios[sk]; const lab = STUDY.scenarios[sk].label;
+      const gi = S.greedy.findIndex((g) => g.add === f.key);
+      if (gi > 0 && S.greedy[gi - 1].goodput > 0) { const v = S.greedy[gi].goodput / S.greedy[gi - 1].goodput; if (!bestG || v > bestG.v) bestG = { v, lab, gi }; }
+      const l = S.loo.find((x) => x.remove === f.key);
+      if (l && l.goodput > 0 && S.full) { const v = S.full.goodput / l.goodput; if (!bestL || v > bestL.v) bestL = { v, lab }; }
+    }
+    const d = f.detail || {};
+    const ncol = 3 + 2 * SCS.length;
+    const measured = `Largest gain when added: ${bestG ? `×${bestG.v.toFixed(2)} (${esc(bestG.lab)}, step #${bestG.gi})` : '–'}. Largest loss if removed: ${bestL ? `×${bestL.v.toFixed(2)} (${esc(bestL.lab)})` : '–'}. Tier ${t.tier}, complexity ${f.scope ? f.scope[0] : '–'}.`;
+    const detail = `<tr class="fdetail" id="fd-${f.key}" hidden><td colspan="${ncol}"><div class="dgrid">
+      <div><h4>What it is</h4><p>${d.what || ''}</p></div>
+      <div><h4>Why it helps</h4><p>${d.why || ''}</p></div>
+      <div><h4>What needs to be done</h4><ul>${(d.todo || []).map((x) => `<li>${x}</li>`).join('')}</ul>${f.scope ? `<p class="muted">In short: ${esc(f.scope[1])}</p>` : ''}</div>
+      <div><h4>Interactions &amp; caveats</h4><p>${d.notes || ''}</p><p class="muted">${measured}</p></div>
+    </div></td></tr>`;
+    return { t, html: `<tr class="frow"><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td><button type="button" class="disc" aria-expanded="false" aria-controls="fd-${f.key}"><span class="chev" aria-hidden="true">▸</span>${esc(f.name)}</button>${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span></td></tr>${detail}` };
   }).sort((a, b) => b.t.score - a.t.score);
-  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2" title="${esc(STUDY.scenarios[sk].label)}">${sk.replace(/^g(\d)_k0$/, "$1gx today").replace(/^g(\d)_k1$/, "$1gx roofline")}<br><span class="muted">G · LOO</span></th>`).join('')}<th>complexity</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
+  if (!$('prioTable').dataset.done) {
+  $('prioTable').dataset.done = '1';
+  $('prioTable').innerHTML = `<table class="prio"><thead><tr><th>tier</th><th>feature <span class="muted" style="font-weight:400">(click for details)</span></th>${SCS.map((sk) => `<th class="n" colspan="2" title="${esc(STUDY.scenarios[sk].label)}">${sk.replace(/^g(\d)_k0$/, "$1gx today").replace(/^g(\d)_k1$/, "$1gx roofline")}<br><span class="muted">G · LOO</span></th>`).join('')}<th>complexity</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
+  const setOpen = (btn, open) => { btn.setAttribute('aria-expanded', String(open)); $(btn.getAttribute('aria-controls')).hidden = !open; };
+  $('prioTable').querySelectorAll('button.disc').forEach((b) => b.addEventListener('click', () => setOpen(b, b.getAttribute('aria-expanded') !== 'true')));
+  const ea = $('expandAll');
+  if (ea) ea.onclick = () => { const btns = [...$('prioTable').querySelectorAll('button.disc')]; const open = btns.some((b) => b.getAttribute('aria-expanded') !== 'true'); btns.forEach((b) => setOpen(b, open)); ea.textContent = open ? 'Collapse all' : 'Expand all'; };
+  }
   $('scSeg').innerHTML = SCS.map((sk) => `<button type="button" data-sc="${sk}" aria-pressed="${sk === curSc}">${esc(STUDY.scenarios[sk].label)}</button>`).join('');
   $('scSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { curSc = b.dataset.sc; renderRoadmap(); }));
   const S = STUDY.scenarios[curSc];
