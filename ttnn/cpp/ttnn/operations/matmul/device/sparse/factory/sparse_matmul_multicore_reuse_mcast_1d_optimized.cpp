@@ -25,7 +25,7 @@ using tt::tt_metal::MeshTensor;
 using tt::tt_metal::KernelBuildOptLevel;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -41,7 +41,6 @@ using tt::tt_metal::experimental::SemaphoreSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -506,10 +505,20 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // factory. The two triples happen to coincide with the writer and reader defaults respectively,
     // but the arch-parameterised noc expressions are kept so the values cannot drift from the legacy
     // ones if a future arch changes the preferred NOCs.
-    const auto in0_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in0_noc};
-    const auto in1_hw_config =
-        DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc};
+    const auto in0_hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = in0_noc,
+            },
+    };
+    const auto in1_hw_config = DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in1_noc,
+            },
+    };
 
     const bool has_in0_receiver_kernel = in0_mcast_receivers.num_cores() > 0;
 
@@ -772,8 +781,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
         // The op resolves a TTNN ComputeKernelConfig and passes every field it resolves on to the
         // kernel, so translating the resolved config is faithful with nothing to pin back.
-        auto compute_hw =
-            ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config.value());
+        auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
 
         // When accumulating in fp32 with the K reduction split across blocks, the partials buffer
         // holds Float32 and is reloaded into DEST between blocks. Unless that reload's view is marked
@@ -785,11 +793,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 if (fmt != tt::DataFormat::Float32) {
                     return;
                 }
-                unpack_modes(compute_hw)
-                    .emplace(
-                        name,
-                        (mark_interm0 && name == INTERM0_DFB) ? tt::tt_metal::UnpackMode::UnpackToDest
-                                                              : tt::tt_metal::UnpackMode::UnpackToSrc);
+                compute_hw.unpack_modes.emplace(
+                    name,
+                    (mark_interm0 && name == INTERM0_DFB) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                                          : tt::tt_metal::UnpackMode::UnpackToSrc);
             };
             add_if_float32(IN0_DFB, in0_data_format);
             add_if_float32(IN1_DFB, in1_data_format);
