@@ -1416,6 +1416,7 @@ _TT_POLY_FP32_DEST = {
     "selu": (),
     "sigmoid": (),
     "softplus": (),
+    "softshrink": (),
     "softsign": (),
     "sqrt": (),
     "tanh": (),
@@ -1439,6 +1440,7 @@ _TT_POLY_ADAPTER_OPERATIONS = {
     "relu_max": "relu_max",
     "relu_min": "relu_min",
     "softplus": "softplus",
+    "softshrink": "softshrink",
     "multigammaln_p4": "tt_poly_aggregate_multigammaln",
 }
 _TT_POLY_NATIVE_ARCHITECTURES = {}
@@ -1646,6 +1648,15 @@ _GENERATED_UNARY_CASES = [
         32,
         "None",
         "ckernel_sfpu_softplus.h",
+    ),
+    (
+        MathOperation.Softshrink,
+        "softshrink",
+        True,
+        False,
+        32,
+        "None",
+        "ckernel_sfpu_softshrink.h",
     ),
     (
         MathOperation.Softsign,
@@ -1941,6 +1952,31 @@ def _tt_poly_reference_softplus(x):
     )
 
 
+def _tt_poly_reference_softshrink(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(x + 0.5, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
+
+    def _declared_piece_2(x):
+        return np.broadcast_to(np.asarray(x - 0.5, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((-0.5, 0.5), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        active = finite & (bins == 2)
+        result[active] = _declared_piece_2(x[active])
+        return result
+
+    return torch.from_numpy(_declared_forward(x.double().numpy()))
+
+
 _TT_POLY_FORWARD_REFERENCES = {
     "asinh": (
         _tt_poly_reference_asinh,
@@ -2041,6 +2077,12 @@ _TT_POLY_FORWARD_REFERENCES = {
             ("above", 4.125, False, "identity", None),
         ),
     ),
+    "softshrink": (
+        _tt_poly_reference_softshrink,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (16127, 16128, 16129, 48895, 48896, 48897),
+        (),
+    ),
 }
 
 
@@ -2120,6 +2162,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "selu",
     "sigmoid",
     "softplus",
+    "softshrink",
     "softsign",
     "sqrt",
     "tanh",

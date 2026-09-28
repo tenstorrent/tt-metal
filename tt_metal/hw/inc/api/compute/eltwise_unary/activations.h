@@ -280,6 +280,71 @@ ALWI void hardsigmoid_tt_poly_bf16_program_init() {
 #undef TT_POLY_HARDSIGMOID_BF16_ROUTE_ACTIVE
 
 #if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(TT_POLY_SOFTSHRINK_BF16_AVAILABLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                       \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_SOFTSHRINK_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_SOFTSHRINK_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void softshrink_tt_poly_bf16_tile(uint32_t idst, uint32_t param0) {
+#if !TT_POLY_SOFTSHRINK_BF16_ROUTE_ACTIVE
+    softshrink_tile(idst, param0);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        softshrink_tile(idst, param0);
+    } else {
+        if (param0 != 0x3f000000u) {
+            softshrink_tile_init();
+            softshrink_tile(idst, param0);
+            softshrink_tile_init();
+            MATH(sfpu::init_softshrink_tt_poly_bf16());
+            return;
+        }
+        if (idst != 0) {
+            softshrink_tile_init();
+            softshrink_tile(idst, param0);
+            softshrink_tile_init();
+            MATH(sfpu::init_softshrink_tt_poly_bf16());
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_softshrink_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void softshrink_tt_poly_bf16_tile_init() {
+#if !TT_POLY_SOFTSHRINK_BF16_ROUTE_ACTIVE
+    softshrink_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        softshrink_tile_init();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+ALWI void softshrink_tt_poly_bf16_program_init() {
+#if TT_POLY_SOFTSHRINK_BF16_ROUTE_ACTIVE
+    if constexpr (!(DST_ACCUM_MODE)) {
+        softshrink_tile_init();
+        MATH(sfpu::init_softshrink_tt_poly_bf16());
+    }
+#endif
+}
+
+#undef TT_POLY_SOFTSHRINK_BF16_ROUTE_ACTIVE
+
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
     ((defined(TT_POLY_SOFTSIGN_BF16_AVAILABLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                         \
      TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
      defined(SFPU_OP_PROGRAM_INIT_0))

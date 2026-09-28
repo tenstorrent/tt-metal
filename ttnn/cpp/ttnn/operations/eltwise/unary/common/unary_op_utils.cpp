@@ -775,6 +775,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {}u);", idst, lambda_bits)};
         }
         case UnaryOpType::SOFTSHRINK:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3f000000u) {
+                return {
+                    "softshrink_tt_poly_bf16_tile_init();",
+                    fmt::format("softshrink_tt_poly_bf16_tile({}, 0x3f000000u);", idst)};
+            }
+#endif
+
             return {
                 "softshrink_tile_init();",
                 fmt::format("softshrink_tile({}, {}u);", idst, std::bit_cast<uint32_t>(param0))};
