@@ -389,3 +389,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: pcc 0.999997, rel 0.0025, ratio [0.9989, 1.0009], coef 1.0000, attn rel 0.0: PASS. BRINGUP_IMPL=stub: pcc 0: FAIL.
 - The default gate already passes (the device add is registered from the other block types): pcc 0.999996, rel 0.0030, ratio [0.9998, 1.0018], coef 1.0007, attn rel 0.0028. 1 passed. (The first `FAIL pcc=0` line comes from the precompile collect pass.)
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_residual.py`
+
+## S.full_moe.03.test.1 (test review, swap 03 attn_residual, layer 5), 2026-09-28
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_full_moe_03_attn_residual.py` (same golden). Only the docstring differs: an adoption note. Gate pcc_swap_out >= 0.98. Asserted extras: swap 02's checks (attn_norm rel <= 0.03; attention rel <= 0.015 whole/first 128 rows, ratio [0.97, 1.03], worst row <= 0.06), attn_residual (h_mid) rel <= 0.01 whole/first 128 rows, ratio [0.99, 1.01], attn term coefficient [0.98, 1.02] and rel <= 0.05, block out rel <= 0.01 whole/first 128 rows.
+- Kept the full-attention limits (no sink, so the owner-widened sliding limits do not apply).
+- BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; h_mid rel 0.0023, coef 1.0000). BRINGUP_IMPL=stub: FAIL on every check.
+- The default gate already passes (all three steps are registered on device): pcc_swap_out 0.999989, out rel 0.0047 / first rows 0.0043, attention rel 0.0049, h_mid rel 0.0042 / first rows 0.0042, ratio [0.9998, 1.0031], coef 1.0007, attn rel 0.0028. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_03_attn_residual.py`
