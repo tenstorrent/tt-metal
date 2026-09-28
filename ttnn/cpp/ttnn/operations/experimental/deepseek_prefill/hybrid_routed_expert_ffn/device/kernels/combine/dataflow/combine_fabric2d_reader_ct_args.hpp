@@ -25,7 +25,7 @@ namespace hyb_cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 31;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 30;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -67,8 +67,6 @@ struct ReaderCtArgs {
     uint32_t expert_threshold;
     // This ring's first row of global_expert_idx_table: one row per chip of the ring follows it.
     uint32_t expert_table_page_base;
-    // The routed expert's per-expert readiness count on this core, or NO_READY_GATE when the op runs alone.
-    uint32_t ready_sem;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -112,8 +110,7 @@ struct ReaderCtArgs {
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
         unt_freed_sem(untilizers.my_freed_sem),
         expert_threshold(args.hybrid_token_threshold),
-        expert_table_page_base(plan.expert_table_page_base),
-        ready_sem(plan.ready_sem) {
+        expert_table_page_base(plan.expert_table_page_base) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -180,8 +177,7 @@ struct ReaderCtArgs {
             num_untilizers,
             unt_freed_sem,
             expert_threshold,
-            expert_table_page_base,
-            ready_sem};
+            expert_table_page_base};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -216,8 +212,7 @@ struct ReaderCtArgs {
         num_untilizers(get_compile_time_arg_val(26)),
         unt_freed_sem(get_compile_time_arg_val(27)),
         expert_threshold(get_compile_time_arg_val(28)),
-        expert_table_page_base(get_compile_time_arg_val(29)),
-        ready_sem(get_compile_time_arg_val(30)) {}
+        expert_table_page_base(get_compile_time_arg_val(29)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
