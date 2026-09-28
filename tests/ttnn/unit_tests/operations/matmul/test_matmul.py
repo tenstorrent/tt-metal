@@ -11,6 +11,7 @@ import math
 import ttnn
 
 from models.common.utility_functions import (
+    comp_pcc,
     is_blackhole,
     skip_for_slow_dispatch,
 )
@@ -3555,6 +3556,78 @@ def test_matmul_block_float_ktile_padding_fp32_dest_acc(device, fp32_dest_acc_en
     assert not torch.isnan(output).any(), "matmul output contains NaN"
     assert not torch.isinf(output).any(), "matmul output contains Inf"
     assert_with_pcc(torch_output, output, pcc=pcc)
+
+
+def _two_vs_four_k_blocks_config(family, in0_block_w):
+    if family == "2d":
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=2,
+            out_block_w=2,
+            per_core_M=2,
+            per_core_N=2,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+    if family == "1d_in1":
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            out_block_h=1,
+            out_block_w=8,
+            per_core_M=1,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        )
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=1,
+        per_core_N=8,
+    )
+
+
+@pytest.mark.parametrize("family", ["2d", "1d_in1", "reuse"])
+def test_matmul_packer_l1_acc_two_k_blocks(device, family):
+    """With packer_l1_acc requested, two K blocks must keep partial sums in the accumulation format like more
+    blocks do, instead of rounding them through the block-float output format: the same matmul split into two
+    and into four K blocks must be equally accurate. bfloat4_b makes the extra rounding unmistakable (it raised
+    the PCC error by ~40% before the fix, against noise of under 1%)."""
+    dtype = ttnn.bfloat4_b
+    torch.manual_seed(0)
+    M, K, N = 256, 512, 256
+    Kt = K // 32
+
+    torch_input_a = torch.randn(1, 1, M, K)
+    torch_input_b = torch.randn(1, 1, K, N)
+    torch_output = torch_input_a @ torch_input_b
+    ttnn_input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    ttnn_input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+
+    pcc = {}
+    for num_k_blocks in (2, 4):
+        output = ttnn.matmul(
+            ttnn_input_a,
+            ttnn_input_b,
+            program_config=_two_vs_four_k_blocks_config(family, Kt // num_k_blocks),
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
+        _, pcc[num_k_blocks] = comp_pcc(torch_output, ttnn.to_torch(output).float())
+    logger.info(f"{family}: PCC with 2 K blocks {pcc[2]:.5f}, with 4 K blocks {pcc[4]:.5f}")
+    assert 1 - pcc[2] <= 1.1 * (1 - pcc[4])
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
