@@ -1092,6 +1092,7 @@ _PAIRED_GENERATED = {
     "celu_bw": "backward_complete",
     "elu_bw": "backward_complete",
     "erf_bw": "backward_complete",
+    "gelu_bw": "backward_dedicated_gradient",
     "hardshrink_bw": "backward_where_factor",
     "hardsigmoid_bw": "backward_complete",
     "hardswish": "dedicated_unary",
