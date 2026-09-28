@@ -326,6 +326,37 @@ def _detect_weights(demo_dir: Path, slug: str) -> str | None:
     return best if best_score > 0 else None
 
 
+def _detect_mesh(demo_dir: Path) -> tuple[int, int] | None:
+    """The (rows, cols) mesh the model was actually built/validated on, read from the run's
+    parallelism manifest — so serve.mesh_device matches the real topology instead of a box guess."""
+    import glob as _g
+
+    for f in _g.glob(str(Path(demo_dir) / "**" / "parallelism_manifest.json"), recursive=True):
+        try:
+            d = json.loads(Path(f).read_text())
+        except Exception:
+            continue
+        m = d.get("mesh")
+        if isinstance(m, (list, tuple)) and len(m) == 2:
+            return int(m[0]), int(m[1])
+    return None
+
+
+# Honest serving-status note for a package whose architecture has no real vLLM generator yet (the
+# scaffolded adapter is a stub). Keeps the card truthful: it pulls but won't serve until an adapter
+# is written, and the perf/accuracy figures are bring-up measurements, not served results.
+_SERVE_STATUS_TITLE = "Serving status"
+_SERVE_STATUS_STUB = (
+    "**Brought up and optimized on Tenstorrent hardware — not yet servable via vLLM.** This "
+    "architecture is not a built-in of the Tenstorrent vLLM plugin, so the bundle ships a scaffolded "
+    "adapter that still needs a real generator (`initialize_vllm_model`, `prefill_forward`, `decode`, "
+    "warmup, KV-cache allocation, and the hybrid block-table handling). `tt-model pull` works; "
+    "`tt-model serve` will fail at model load until that adapter is implemented. The performance and "
+    "accuracy below are **bring-up measurements from the model's own on-device harness**, not results "
+    "served by this package."
+)
+
+
 def _detect_arch_and_type(demo_dir: Path) -> tuple[str | None, str | None]:
     """The HF architecture name + model_type from any config.json under the demo (works for every
     model, not just one): arch is what the vLLM plugin registers as TT<arch>."""
@@ -729,12 +760,25 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             arch_det, mtype = _detect_arch_and_type(Path(mr))
     if not arch_det and getattr(args, "hf_arch", None):
         arch_det, mtype = args.hf_arch, None
+    # Servability is decided by the architecture: a plugin built-in (stock generator) serves; a novel
+    # arch gets a scaffolded stub and is NOT servable until an adapter is written. Drives honest card
+    # labeling below — the tool never claims a stub package can serve.
+    servable = True
+    if arch_det:
+        _base_cls, _is_stub_arch = _pick_base_generator(arch_det, mtype)
+        servable = not _is_stub_arch
     if arch_det and not getattr(args, "no_scaffold", False):
         created, is_stub, bpath = _scaffold_vllm_bundle(
             checkout, extra, arch_det, mtype, getattr(args, "weights", None), slug
         )
-        state_note = "STUB — complete adapter.py before serving" if is_stub else "stock generator — servable as-is"
+        state_note = (
+            "STUB — not servable until an adapter is written" if is_stub else "stock generator — servable as-is"
+        )
         print(f"  [publish-hf] vLLM bundle {'created' if created else 'exists'}: {bpath}  ({state_note})")
+
+    # Serve on the mesh the model was actually built/validated on (from the run), not a box guess.
+    mesh_rc = _detect_mesh(Path(demo_dir))
+    mesh_override = getattr(args, "mesh", None) or (f"({mesh_rc[0]}, {mesh_rc[1]})" if mesh_rc else None)
 
     yaml_path = Path(tempfile.mkdtemp(prefix="tt_ttmodel_")) / "tt-model.yaml"
     _write_tt_model_yaml(
@@ -747,7 +791,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         box=getattr(args, "box", None),
         arch=getattr(args, "arch", None),
         hardware=getattr(args, "hardware", None),
-        mesh_device=getattr(args, "mesh", None),
+        mesh_device=mesh_override,
         kind=getattr(args, "kind", None) or "vllm-plugin",
         plugin_ref=getattr(args, "plugin_ref", None) or "main",
         vllm_version=getattr(args, "vllm_version", None) or "0.24.0",
@@ -851,6 +895,10 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         return 4
     print(f"  [publish-hf] published container bundle: https://huggingface.co/{args.repo}")
     _tidy_provenance_note(args)  # keep the published card's provenance clean/professional
+    if not servable:
+        # Never claim a stub package serves — say so plainly on the card.
+        _upload_card_section(args, _SERVE_STATUS_TITLE, _SERVE_STATUS_STUB)
+        print("  [publish-hf] card marked NOT-YET-SERVABLE (novel arch, adapter is a stub).")
     # Auto-benchmark: serve the bundle and write a measured latency sweep into the card. Universal +
     # best-effort — measures any model that serves, skips (publish stands) for one that can't yet.
     if not getattr(args, "no_bench", False):
