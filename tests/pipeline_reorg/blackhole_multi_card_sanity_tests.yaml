@@ -53,3 +53,19 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: sanity
+
+- name: TTNN MSA sp>1 metadata and block-cyclic geometry tests (QB2 only)
+  # indexer_score_msa / sparse_sdpa_msa at sp>1: the block-cyclic rotated-start geometry and the trace-safe
+  # metadata contract on a mesh. Every case needs 2 or 4 chips -- the mesh_device fixture skips them on one
+  # card, so the single-card sdpa/indexer legs collect them without ever exercising a rank other than 0.
+  # QB2's four chips cover the (1,2) and (1,4) submeshes both files parametrize; the one (2,2) case skips
+  # unless the system mesh is 2D.
+  cmd: |
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score_msa_metadata_multidevice.py -svv
+    pytest tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa_msa_block_cyclic_multidevice.py -svv
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+  owner_id: U0A5V5Q9SRF # Lukasz Galas
+  team: ttnn
+  budget_type: sanity
