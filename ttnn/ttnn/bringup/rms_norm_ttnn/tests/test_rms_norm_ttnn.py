@@ -55,6 +55,8 @@ def test_rms_norm_ttnn(mesh_device, device_params, case):
 
     x = torch.randn([n_dev, *xs["shape"][1:]], generator=g).to(torch.bfloat16)  # device d gets x[d:d+1]
     w = (1.0 + 0.5 * torch.randn(ws["shape"], generator=g)).to(torch.bfloat16)
+    rs = c.get("residual")  # optional residual_input_tensor, drawn after w so residual-free cases keep their inputs
+    r = torch.randn([n_dev, *rs["shape"][1:]], generator=g).to(torch.bfloat16) if rs else None
 
     tt_x = ttnn.from_torch(
         x,
@@ -81,18 +83,53 @@ def test_rms_norm_ttnn(mesh_device, device_params, case):
         dst_full_sync_en=ck["dst_full_sync_en"],
     )
 
+    extra = {}
+    if rs:
+        tt_r = ttnn.from_torch(
+            r,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            device=mesh_device,
+            dtype=getattr(ttnn.DataType, rs["dtype"]),
+            layout=getattr(ttnn.Layout, rs["layout"]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        extra["residual_input_tensor"] = tt_r
+        if c.get("return_residual_sum"):
+            extra["return_residual_sum"] = True
+            extra["residual_sum_memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+
     out = ttnn.bringup.rms_norm(
         tt_x,
         epsilon=c["epsilon"],
         weight=tt_w,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=cfg,
+        **extra,
     )
+    if c.get("return_residual_sum"):
+        assert isinstance(out, tuple) and len(out) == 2, f"expected (y, t), got {type(out)}"
+        out, t_sum = out
+        # t = x + residual must be bit-identical to the device's own add of the same two tensors (the option's
+        # contract; torch's bf16 add can differ by one ulp from the FPU's rounding). Every element is checked.
+        added = ttnn.add(tt_x, tt_r, dtype=getattr(ttnn.DataType, xs["dtype"]))
+        t_outs = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(t_sum)]
+        add_outs = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(added)]
+        for d in range(n_dev):
+            got_t, want_t = t_outs[d].reshape(xs["shape"]), add_outs[d].reshape(xs["shape"])
+            n_diff = int((got_t.view(torch.int16) != want_t.view(torch.int16)).sum())
+            assert n_diff == 0, f"dev {d}: residual sum differs from ttnn.add in {n_diff} elements"
+            t_ref = x[d : d + 1].reshape(xs["shape"]).double() + r[d : d + 1].reshape(xs["shape"]).double()
+            assert _pcc(got_t, t_ref) >= 0.9999, f"dev {d}: residual sum pcc vs torch"
     outs = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
     assert len(outs) == n_dev
     for d in range(n_dev):
         got = outs[d].reshape(xs["shape"]).double()
-        want = ref.rms_norm(x[d : d + 1].reshape(xs["shape"]), epsilon=c["epsilon"], weight=w)
+        want = ref.rms_norm(
+            x[d : d + 1].reshape(xs["shape"]),
+            epsilon=c["epsilon"],
+            weight=w,
+            residual=r[d : d + 1].reshape(xs["shape"]) if rs else None,
+        )
         pcc = _pcc(got, want)
         err = (got - want).abs()
         bound = c["atol"] + c["rtol"] * want.abs()
