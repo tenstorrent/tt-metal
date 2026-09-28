@@ -212,6 +212,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
     dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    fan_out_program_writes_(
+        MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_dispatch_pool_active_spin_us() >
+        0),
     active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -549,9 +552,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState();
 #endif
 
-    // Iterate over all programs. Update dispatch commands per program to reflect
-    // current device state. Write the finalized program command sequence to each
-    // physical device tied to the program.
+    // Update dispatch commands per program to reflect current device state, then write each local device's
+    // program to it, in one fan-out when enabled. Programs cover disjoint device ranges, so each device gets one
+    // program.
+    device_program_writes_.clear();
+    device_program_write_ids_.clear();
+    static std::atomic<uint64_t> next_enqueue_generation = 1;
+    enqueue_generation_ = next_enqueue_generation.fetch_add(1, std::memory_order_relaxed);
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq =
             mesh_workload.impl().get_dispatch_cmds_for_program(program, active_sub_device_manager_id);
@@ -575,8 +582,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         sub_device_recorder.record(local_devices, program.get_runtime_id(), sub_device_id);
-        this->write_program_commands_to_devices(
-            local_devices, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
+        const uint32_t one_shot_size = program_cmd_seq.get_one_shot_fetch_size(
+            dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
+        for (auto* device : local_devices) {
+            device_program_writes_.push_back({device, &program_cmd_seq, one_shot_size});
+            device_program_write_ids_.push_back(device->id());
+        }
         if (!covers_entire_mesh) {
             for (const auto* device : local_devices) {
                 chip_ids_in_workload.insert(device->id());
@@ -591,6 +602,27 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             TracyMessage(msg.c_str(), msg.size());
         }
 #endif
+    }
+
+    if (fan_out_program_writes_) {
+        dispatch_thread_pool_->parallel_for(device_program_write_ids_, [this, &dispatch_metadata](size_t i) {
+            const auto& write = device_program_writes_[i];
+            this->write_program_commands_to_device(
+                write.device,
+                *write.program_cmd_seq,
+                write.one_shot_size,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program);
+        });
+    } else {
+        for (const auto& write : device_program_writes_) {
+            this->write_program_commands_to_device(
+                write.device,
+                *write.program_cmd_seq,
+                write.one_shot_size,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program);
+        }
     }
 
     // Remember when this CrossNode launch will complete so a later re-enqueue of the
@@ -1287,33 +1319,41 @@ void FDMeshCommandQueue::reset_worker_state(
     }
 }
 
-void FDMeshCommandQueue::write_program_commands_to_devices(
-    const std::vector<IDevice*>& devices,
+void FDMeshCommandQueue::write_program_commands_to_device(
+    IDevice* device,
     ProgramCommandSequence& program_cmd_seq,
+    uint32_t one_shot_size,
     bool stall_first,
     bool stall_before_program) {
-    if (devices.size() > 1) {
-        const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
-        if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
-            // Every local device receives the same bytes. Pack the fragments once before the device copies.
-            static thread_local vector_aligned<uint32_t> packed;
-            program_dispatch::pack_program_command_sequence(
-                program_cmd_seq, stall_first, stall_before_program, true, packed);
-            for (auto* device : devices) {
-                auto& manager = device->sysmem_manager();
-                manager.issue_queue_reserve(size, id_);
-                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
-                manager.issue_queue_push_back(size, id_);
-                manager.fetch_queue_reserve_back(id_);
-                manager.fetch_queue_write(size, id_);
-            }
-            return;
-        }
-    }
-    for (auto* device : devices) {
+    const uint32_t size = one_shot_size;
+    if (size > program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
+        return;
     }
+    // Pack the fragments into one fetch on the thread that writes it, once per program per enqueue. A copy packed
+    // by the calling thread and read by a worker would make the next enqueue's pack wait for those cache lines.
+    struct PackedProgram {
+        const FDMeshCommandQueue* queue = nullptr;
+        const ProgramCommandSequence* program_cmd_seq = nullptr;
+        uint64_t generation = 0;
+        vector_aligned<uint32_t> data;
+    };
+    static thread_local PackedProgram packed;
+    if (packed.queue != this || packed.program_cmd_seq != &program_cmd_seq ||
+        packed.generation != enqueue_generation_) {
+        program_dispatch::pack_program_command_sequence(
+            program_cmd_seq, stall_first, stall_before_program, true, packed.data);
+        packed.queue = this;
+        packed.program_cmd_seq = &program_cmd_seq;
+        packed.generation = enqueue_generation_;
+    }
+    auto& manager = device->sysmem_manager();
+    manager.issue_queue_reserve(size, id_);
+    manager.cq_write(packed.data.data(), size, manager.get_issue_queue_write_ptr(id_));
+    manager.issue_queue_push_back(size, id_);
+    manager.fetch_queue_reserve_back(id_);
+    manager.fetch_queue_write(size, id_);
 }
 
 void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
