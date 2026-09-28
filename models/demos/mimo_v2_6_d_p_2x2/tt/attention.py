@@ -67,11 +67,12 @@ SDPA_PRESETS = {
     "base": dict(fidelity="HiFi4", fp32=True, exp_approx=False, chunks=(128, 128)),
     "A": dict(fidelity="HiFi2", fp32=False, exp_approx=True, chunks=(512, 128)),
     "S": dict(fidelity="HiFi4", fp32=False, exp_approx=False, chunks=(128, 128)),
-    # 2x2 default for full layers: preset A (streaming kernel, fp32 dest off, approx exp, q512/k128) at HiFi4, per the
-    # owner rule that every matmul (SDPA's QK^T and PV too) runs at HiFi4. MIMO_SDPA_CFG=A restores the prior's HiFi2.
+    # Preset A at HiFi4 (the 2x2 default before P.1, per the HiFi4 rule). MIMO_SDPA_CFG=A4 selects it for comparison.
     "A4": dict(fidelity="HiFi4", fp32=False, exp_approx=True, chunks=(512, 128)),
 }
-FULL_SDPA_DEFAULT = "A4"
+# P.1 (owner decision 2026-09-28): full-attention SDPA (layers 0, 5) runs preset A (HiFi2), as the 1x4 prior ends.
+# An explicit owner exception to the HiFi4 rule for this one op; every other matmul stays at HiFi4.
+FULL_SDPA_DEFAULT = "A"
 
 
 # Profile sub-sections inside attention (qkv, rope, kv_write, kv_tail, sdpa, o_proj, ccl). signpost is a no-op unless
@@ -90,7 +91,7 @@ def _sp(name: str) -> None:
 
 
 def sdpa_settings(sliding: bool = False) -> dict:
-    """Full layers: env MIMO_SDPA_CFG (default "A4"). Sliding layers: env MIMO_SLIDING_SDPA_CFG (default "S", or "base"
+    """Full layers: env MIMO_SDPA_CFG (default "A"; "A4" = the HiFi4 variant). Sliding layers: env MIMO_SLIDING_SDPA_CFG (default "S", or "base"
     when MIMO_SDPA_CFG=base, so that one variable restores the whole bring-up config). With the sink ~28 logits above
     the row max, the sliding output scales like exp(max - sink), so any relative error in the QK scores is amplified:
     bf16 dest is most of S's extra error over base, HiFi2 on top pushes the norm ratio to the limit.
