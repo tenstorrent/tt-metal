@@ -17,9 +17,7 @@ SHAPE = (1, 1, 32, 32)
 
 def _t(v, dtype, device):
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    return ttnn.from_torch(
-        torch.full(SHAPE, v, dtype=torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
-    )
+    return ttnn.from_torch(torch.full(SHAPE, v, dtype=torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
