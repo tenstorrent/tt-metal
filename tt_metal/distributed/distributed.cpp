@@ -18,6 +18,9 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
+#ifdef TT_METAL_USE_EMULE
+#include "emule_mesh_command_queue.hpp"
+#endif
 
 namespace tt::tt_metal::distributed {
 
@@ -131,6 +134,13 @@ void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return;
     }
+#ifdef TT_METAL_USE_EMULE
+    // tt-emule's queue tracks its events itself; there are no sysmem completion counters to poll.
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_target_device() == tt::TargetDevice::Emule) {
+        emule::event_synchronize(event);
+        return;
+    }
+#endif
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
@@ -143,6 +153,11 @@ bool EventQuery(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return true;
     }
+#ifdef TT_METAL_USE_EMULE
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_target_device() == tt::TargetDevice::Emule) {
+        return emule::event_query(event);
+    }
+#endif
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
