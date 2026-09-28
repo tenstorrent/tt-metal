@@ -1,0 +1,28 @@
+stage overhead o(W) = 0.000847 ms/token * W  (from S8 vs 5-sparse-layer sets):
+   W=4096 h=0: o=+2.37 ms  (fit 3.47)
+   W=8192 h=0: o=+7.49 ms  (fit 6.94)
+dense (D8, 19 points): a=2.805  b=0  c=1.12e-08  d=0  e=0  p0=5632  R2=0.9991
+   worst: W=2048 h=0 n=2048  meas 13.5  pred 10.2  (+28.3%)
+   worst: W=4096 h=0 n=512  meas 14.3  pred 11.9  (+22.4%)
+   worst: W=4096 h=0 n=4096  meas 13.9  pred 11.9  (+19.6%)
+   worst: W=4096 h=65536 n=512  meas 21.6  pred 24.3  (+15.1%)
+   worst: W=4096 h=65536 n=4096  meas 21.7  pred 24.3  (+14.5%)
+sparse (S8, 20 points): a=5.299  b=0.0007852  c=2.112e-10  d=0  e=0  p0=0  R2=0.9482
+   worst: W=8192 h=8192 n=8192  meas 84.3  pred 100.9  (+21.5%)
+   worst: W=2048 h=0 n=2048  meas 69.7  pred 57.0  (+18.7%)
+   worst: W=8192 h=139264 n=8192  meas 88.8  pred 102.7  (+16.9%)
+   worst: W=8192 h=0 n=8192  meas 91.0  pred 100.8  (+11.7%)
+   worst: W=16384 h=0 n=16384  meas 171.7  pred 159.2  (+7.9%)
+S0 composition check: measured vs o(W) + 3 dense + 5 sparse from the fit
+   stage ST0 W=8192 h=0: meas 137.2  pred 156.1  (-13.8%)
+   stage ST0 W=8192 h=139264: meas 167.6  pred 197.3  (-17.8%)
+   stage ST0 W=8192 h=548864: meas 290.2  pred 318.5  (-9.8%)
+   stage ST1 W=8192 h=0: meas 158.6  pred 182.9  (-15.3%)
+   stage ST1 W=8192 h=8192: meas 146.1  pred 183.1  (-25.3%)
+   stage ST1 W=8192 h=139264: meas 159.1  pred 186.5  (-17.2%)
+   stage ST1 W=8192 h=548864: meas 183.2  pred 197.2  (-7.6%)
+   dense W=4096 B=2: packed 21.7 vs plain 13.9 -> 2.571 ms/segment/layer
+   dense W=8192 B=4: packed 37.3 vs plain 15.0 -> 2.481 ms/segment/layer
+   sparse W=4096 B=2: packed 115.6 vs plain 73.0 -> 5.323 ms/segment/layer
+   sparse W=8192 B=4: packed 194.5 vs plain 91.0 -> 4.313 ms/segment/layer
+wrote results_torus/sp8/coeffs_sp8_fast.json

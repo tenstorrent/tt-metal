@@ -1,0 +1,3 @@
+#!/bin/bash
+# reset the whole galaxy even when TT_VISIBLE_DEVICES narrows the device process
+exec env -u TT_VISIBLE_DEVICES /usr/local/bin/tt-smi "$@"

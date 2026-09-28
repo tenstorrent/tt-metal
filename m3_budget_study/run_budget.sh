@@ -23,7 +23,7 @@ cd "$TT_METAL_HOME"; source python_env/bin/activate; export PYTHONPATH="$TT_META
 ulimit -Su "$(ulimit -Hu)" 2>/dev/null
 { echo "run_id=$RUN_ID"; echo "git_sha=$(git rev-parse HEAD)"; echo "dirty=$(git status --porcelain -uno | wc -l)"
   echo "date=$(date -Is)"; env | grep -E '^(BUDGET_|M3_|TT_|EXPERT_|HF_|EXP=|LAYER_SET=)' | sort; } > "$ENVF"
-tt-smi -glx_reset > "$RES/logs/$RUN_ID.reset" 2>&1 || { echo "STATUS=ERROR reset failed" | tee -a "$LOG"; exit 1; }
+env -u TT_VISIBLE_DEVICES tt-smi -glx_reset > "$RES/logs/$RUN_ID.reset" 2>&1 || { echo "STATUS=ERROR reset failed" | tee -a "$LOG"; exit 1; }
 python3 -u models/demos/minimax_m3/tests/perf/${HARNESS:-budget_sweep.py} > "$LOG" 2>&1 &
 PID=$!; T0=$(date +%s); STATUS=""
 while kill -0 $PID 2>/dev/null; do
@@ -38,5 +38,5 @@ else wait $PID; rc=$?
   elif grep -qiE 'out of memory|OOM|Out of Memory' "$LOG"; then STATUS=OOM; else STATUS=ERROR; fi
 fi
 echo "STATUS=$STATUS elapsed=$(( $(date +%s) - T0 ))s" | tee -a "$LOG"
-[ "$STATUS" = OK ] || tt-smi -glx_reset >> "$RES/logs/$RUN_ID.reset" 2>&1
+[ "$STATUS" = OK ] || env -u TT_VISIBLE_DEVICES tt-smi -glx_reset >> "$RES/logs/$RUN_ID.reset" 2>&1
 python3 "$HERE/budget_collect.py" "$LOG" "$ENVF" "$RES/runs.csv"

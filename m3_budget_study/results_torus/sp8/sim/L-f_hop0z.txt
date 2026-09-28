@@ -1,0 +1,7 @@
+stages=1 pipelines=4 hop=0.0 ms prefill requests=3613 useful tokens=19,624,571 work tokens=23,207,900 (recompute 15.4%) budget_ms=750.0
+split=[60]
+     W  policy     tok/s  fwd p50  fwd p99  fill % hot p50 ms hot p99 ms  stage utilisation
+  4096    fcfs     19089    593.9    930.8    86.3       1188       1862  100
+  4096    cost     19089    623.0    747.4    86.3       1246       1495  100
+  8192    fcfs     28590    780.8   1412.0    86.3       1562       2824  100
+  8192    cost     23682    732.8    749.7    86.3       1466       1499  100

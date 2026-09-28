@@ -1,0 +1,91 @@
+[parse] m3_budget_study/results_torus/nd/profiles/20260928_172608_stages4_stage0_layers0+3_cache0_nd_N0_bf4/ops_perf_results_2026_09_28_17_29_27.csv — 3105 CSV rows, 912 inside `profiled_chunk`, 31 zones
+
+====================================================================================================
+PROFILED CHUNK — device-kernel time 11.75 ms on the worst of 8 devices (dev 5); min 11.32 ms, skew 0.43 ms; 114 ops
+====================================================================================================
+
+--- DENSE layers (1 layer(s), 2.74 ms total device-kernel) ---
+  zone                                ms/layer  ms total  % class  ops/L     MiB/L     GB/s
+  ---------------------------------- --------- --------- -------- ------ --------- --------
+  (layer total)                          2.740      2.74   100.0%   32.0     489.0    187.1
+  attn                                   1.029      1.03    37.5%   21.0     167.9    171.2
+  mlp                                    0.943      0.94    34.4%    5.0     219.0    243.6
+  attn/ccl_out_reduce_scatter            0.280      0.28    10.2%    1.0      39.0    146.3
+  post_attn_norm_allgather               0.267      0.27     9.7%    1.0      15.0     58.9
+  mlp/tp_reduce_scatter                  0.256      0.26     9.3%    1.0      39.0    160.0
+  input_norm_allgather                   0.246      0.25     9.0%    1.0      15.0     63.9
+  attn/ring_joint_sdpa                   0.222      0.22     8.1%    1.0      11.5     54.3
+  attn/o_proj                            0.187      0.19     6.8%    2.0      33.0    185.5
+  attn/qkv_proj                          0.142      0.14     5.2%    1.0      30.8    227.2
+
+--- SPARSE layers (1 layer(s), 8.73 ms total device-kernel) ---
+  zone                                ms/layer  ms total  % class  ops/L     MiB/L     GB/s
+  ---------------------------------- --------- --------- -------- ------ --------- --------
+  (layer total)                          8.731      8.73   100.0%   73.0    1484.6    178.3
+  mlp                                    5.918      5.92    67.8%   19.0    1161.5    205.8
+  attn                                   3.282      3.28    37.6%   48.0     221.0     70.6
+  mlp/experts_mm                         2.390      2.39    27.4%    1.0     695.6    305.2
+  attn/sparse_sdpa                       2.120      2.12    24.3%    3.0      25.1     12.4
+  mlp/moe_reduce                         1.892      1.89    21.7%    3.0      99.0     54.9
+  mlp/combine                            1.304      1.30    14.9%    1.0     102.1     82.1
+  mlp/dispatch                           0.619      0.62     7.1%    1.0     113.7    192.6
+  mlp/shared_expert                      0.553      0.55     6.3%    5.0     124.5    236.1
+  input_norm_allgather                   0.280      0.28     3.2%    1.0      15.0     56.1
+  post_attn_norm_allgather               0.265      0.27     3.0%    1.0      15.0     59.3
+  mlp/shared_expert/tp_reduce_scatter     0.264      0.26     3.0%    1.0      39.0    155.2
+  attn/ccl_out_reduce_scatter            0.260      0.26     3.0%    1.0      39.0    157.2
+  attn/index_branch                      0.227      0.23     2.6%   18.0      33.6    155.0
+  attn/o_proj                            0.186      0.19     2.1%    2.0      33.0    185.8
+  attn/qkv_proj                          0.143      0.14     1.6%    1.0      30.8    226.6
+  mlp/router_topk                        0.108      0.11     1.2%    2.0      14.4    139.8
+  attn/indexer                           0.078      0.08     0.9%    2.0       1.1     15.1
+  attn/ag_kv                             0.052      0.05     0.6%    2.0       2.5     50.4
+  attn/ag_index_k                        0.022      0.02     0.2%    1.0       1.2     60.2
+
+--- first dense layer (layer 0) ---
+  zone                                               ms  skew ms    ops       MiB     GB/s   DRAM%
+  -------------------------------------------- -------- -------- ------ --------- -------- -------
+  layer00_dense                                   2.740    0.152     32     489.0    187.1       -
+  layer00_dense/attn                              1.029    0.145     21     167.9    171.2       -
+  layer00_dense/attn/ccl_out_reduce_scatter       0.280    0.056      1      39.0    146.3       -
+  layer00_dense/attn/o_proj                       0.187    0.003      2      33.0    185.5       -
+  layer00_dense/attn/qkv_proj                     0.142    0.001      1      30.8    227.2       -
+  layer00_dense/attn/ring_joint_sdpa              0.222    0.096      1      11.5     54.3       -
+  layer00_dense/input_norm_allgather              0.246    0.008      1      15.0     63.9       -
+  layer00_dense/mlp                               0.943    0.027      5     219.0    243.6       -
+  layer00_dense/mlp/tp_reduce_scatter             0.256    0.026      1      39.0    160.0       -
+  layer00_dense/post_attn_norm_allgather          0.267    0.031      1      15.0     58.9       -
+
+--- first sparse layer (layer 3) ---
+  zone                                               ms  skew ms    ops       MiB     GB/s   DRAM%
+  -------------------------------------------- -------- -------- ------ --------- -------- -------
+  layer03_sparse                                  8.731    0.152     73    1484.6    178.3       -
+  layer03_sparse/attn                             3.282    1.289     48     221.0     70.6       -
+  layer03_sparse/attn/ag_index_k                  0.022    0.009      1       1.2     60.2       -
+  layer03_sparse/attn/ag_kv                       0.052    0.026      2       2.5     50.4       -
+  layer03_sparse/attn/ccl_out_reduce_scatter      0.260    0.036      1      39.0    157.2       -
+  layer03_sparse/attn/index_branch                0.227    0.002     18      33.6    155.0       -
+  layer03_sparse/attn/indexer                     0.078    0.002      2       1.1     15.1       -
+  layer03_sparse/attn/o_proj                      0.186    0.002      2      33.0    185.8       -
+  layer03_sparse/attn/qkv_proj                    0.143    0.001      1      30.8    226.6       -
+  layer03_sparse/attn/sparse_sdpa                 2.120    1.240      3      25.1     12.4       -
+  layer03_sparse/input_norm_allgather             0.280    0.050      1      15.0     56.1       -
+  layer03_sparse/mlp                              5.918    1.309     19    1161.5    205.8       -
+  layer03_sparse/mlp/combine                      1.304    1.073      1     102.1     82.1       -
+  layer03_sparse/mlp/dispatch                     0.619    0.266      1     113.7    192.6       -
+  layer03_sparse/mlp/experts_mm                   2.390    1.342      1     695.6    305.2       -
+  layer03_sparse/mlp/moe_reduce                   1.892    1.466      3      99.0     54.9       -
+  layer03_sparse/mlp/router_topk                  0.108    0.001      2      14.4    139.8       -
+  layer03_sparse/mlp/shared_expert                0.553    0.033      5     124.5    236.1       -
+  layer03_sparse/mlp/shared_expert/tp_reduce_scatter    0.264    0.040      1      39.0    155.2       -
+  layer03_sparse/post_attn_norm_allgather         0.265    0.029      1      15.0     59.3       -
+
+--- host work & device<->host movement inside the profiled chunk ---
+  No non-device ops: every op in the profiled chunk ran as a device kernel (OP TYPE ==
+  tt_dnn_device) — no CPU fallbacks, no host ops.
+  NOT MEASURED: buffer transfers / program-cache misses. Those are child calls, and this
+  CSV has no *_TT_HOST_FUNC columns, so H2D/D2H copies cannot be ruled out from it.
+  Re-run `python -m tracy` with:
+    --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram
+
+[parse] json -> m3_budget_study/results_torus/nd/profiles/20260928_172608_stages4_stage0_layers0+3_cache0_nd_N0_bf4/zones.json
