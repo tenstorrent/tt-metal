@@ -68,6 +68,8 @@ def test_bucket_selection():
 
 
 def test_unsupported_device_sampling_fails_at_startup(expect_error):
+    # Only this case needs vLLM, so the guard is here rather than at module level.
+    pytest.importorskip("vllm")
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
     model = SimpleNamespace(
