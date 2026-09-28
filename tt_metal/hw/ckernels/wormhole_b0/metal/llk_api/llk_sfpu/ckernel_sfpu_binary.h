@@ -232,88 +232,54 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
-        sfpi::vFloat result = in0 * r;
+        sfpi::vFloat result;
         if constexpr (is_fp32_dest_acc_en) {
-            // Skip quotient refinement when in0*r is already non-finite.
-            // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
-            // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
-            v_if(sfpi::is_finite(result)) {
-                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                // The residual subtraction is exact under Sterbenz's lemma.
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
-            }
-            v_endif;
-        }
+            // Refine signed mantissas with magnitudes in [1, 2), so neither the
+            // reciprocal nor the residual underflows, then restore the exponent.
+            sfpi::vFloat ma = sfpi::setexp(in0, 127);
+            sfpi::vFloat mb = sfpi::setexp(in1, 127);
+            // One Newton step suffices when the residual uses a single multiply-add.
+            sfpi::vFloat r = sfpu_reciprocal_iter<1 /*max_iter*/, false /*round_to_bf16*/, true /*normalized*/>(mb);
+            sfpi::vFloat q = ma * r;
+            // Wormhole SFPMAD has no subtract modifier: negate an operand first.
+            sfpi::vFloat residual = ma + q * (-mb);
+            q = q + residual * r;
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+            sfpi::vInt ea = sfpi::exexp(in0, sfpi::ExponentMode::Biased);
+            sfpi::vInt eb = sfpi::exexp(in1, sfpi::ExponentMode::Biased);
+            // Split exponent restoration between two factors. Their product
+            // supplies hardware overflow/underflow handling, while power-of-two
+            // scaling is exact for normal results.
+            sfpi::vInt exponent = ea - eb + sfpi::exexp(q, sfpi::ExponentMode::Biased) + 127;
+            sfpi::vInt half = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(exponent) >> 1);
+            result = sfpi::setexp(q, half) * sfpi::setexp(sfpi::vFloat(1.0f), exponent - half);
+
+            // For exceptional inputs only the reciprocal's sign and zero/Inf
+            // classification matter. Inverting its exponent gives Inf for zero,
+            // zero for Inf/NaN, and a finite nonzero scale for every normal divisor.
+            // Denominator NaNs follow reciprocal-and-multiply behavior rather than propagating.
+            v_if((((ea + 1) & 0xfe) == 0) || (((eb + 1) & 0xfe) == 0)) {
+                sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(~sfpi::as<sfpi::vInt>(in1)), 0);
+                result = in0 * sfpi::copysgn(scale, in1);
+            }
+            v_endif;
+        } else {
+            result = in0 * sfpu_reciprocal_iter<2>(in1);
+            v_if(in1 == 0) {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
             v_endif;
         }
-        v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             // software RNE approach:
             result = float32_to_bf16_rne(result);
         }
-
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
-    }
-}
-
-// FP32 div_no_nan. Refine mantissas in [1, 2), where neither reciprocal nor
-// residual can underflow, then restore the exponent using integer arithmetic.
-// Ordinary div retains its existing implementation and behavior.
-template <int ITERATIONS>
-inline void calculate_sfpu_binary_div_no_nan(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat ma = sfpi::setexp(a, 127);
-        sfpi::vFloat mb = sfpi::setexp(b, 127);
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(mb);
-        sfpi::vFloat q = ma * r;
-        sfpi::vFloat residual = ma - q * mb;
-        q = q + residual * r;
-
-        sfpi::vInt exponent = sfpi::exexp(a, sfpi::ExponentMode::Biased) - sfpi::exexp(b, sfpi::ExponentMode::Biased) +
-                              sfpi::exexp(q, sfpi::ExponentMode::Biased);
-        sfpi::vFloat result = sfpi::setexp(q, exponent);
-        v_if(exponent >= 255) { result = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), q); }
-        v_endif;
-        // Let the multiplier preserve the architecture's underflow/zero-sign behavior.
-        v_if(exponent <= 0) { result = sfpi::setexp(q, 1) * 0.5f; }
-        v_endif;
-
-        // Classify integer bit patterns: float predicates are not reliable on -0/NaN.
-        sfpi::vInt abs_a = sfpi::as<sfpi::vInt>(a) & 0x7fffffff;
-        sfpi::vInt abs_b = sfpi::as<sfpi::vInt>(b) & 0x7fffffff;
-        v_if(abs_a >= 0x7f800000) { result = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), q); }
-        v_endif;
-        v_if(abs_a > 0x7f800000) { result = std::numeric_limits<float>::quiet_NaN(); }
-        v_endif;
-        // Preserve the SFPU's flush-to-zero behavior for subnormal inputs.
-        v_if(abs_a < 0x00800000) { result = 0.0f; }
-        v_endif;
-        v_if(abs_b < 0x00800000) {
-            result = a * sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), b);
-        }
-        v_endif;
-        // Preserve reciprocal-and-multiply behavior: an all-ones denominator
-        // exponent gives a zero reciprocal; nonfinite numerators times it give NaN.
-        v_if(abs_b >= 0x7f800000) { result = a * 0.0f; }
-        v_endif;
-        // Last, so +/-0 divisors return positive zero even for Inf/NaN numerators.
-        v_if(abs_b == 0) { result = 0.0f; }
-        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;

@@ -24,7 +24,8 @@ namespace sfpu {
 // round_to_bf16 rounds the normalized result to BF16, nearest with ties away from zero,
 // before power-of-two scaling. Intended for BF16 Dest; this preserves the normal
 // reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
-template <int max_iter = 2, bool round_to_bf16 = false>
+// normalized=true requires a finite input with magnitude in [1, 2) and skips scaling.
+template <int max_iter = 2, bool round_to_bf16 = false, bool normalized = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
@@ -45,13 +46,19 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Not only is 255-in.Exp more efficient via SFPNOT, but it also ensures
     // that in.Exp == 0 results in ±inf, and in.Exp == 255 results in ±0.
     // See the scale factor adjustment via scale*0.5 below for further details.
-    sfpi::vUInt scale_bits = ~sfpi::as<sfpi::vUInt>(in);
+    sfpi::vUInt scale_bits;
+    if constexpr (!normalized) {
+        scale_bits = ~sfpi::as<sfpi::vUInt>(in);
+    }
 
     // Continue with quadratic estimate.
     y = sfpi::vConstFloatPrgm2 + y * negative_x;
 
     // Scale factor: set mantissa to zero.
-    sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
+    sfpi::vFloat scale;
+    if constexpr (!normalized) {
+        scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
+    }
 
     // First iteration of Newton-Raphson: t = 1.0 - x*y.
     sfpi::vFloat t = 1.0f + negative_x * y;
@@ -60,7 +67,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // If scale = ±inf, then scale*0.5 = ±inf and scale.Exp=255.
     // If scale = ±0, then scale*0.5 = 0 and scale.Exp=0.
     // Otherwise, scale.Exp = scale.Exp-1 = 255-in.Exp-1 = 254-in.Exp.
-    scale *= 0.5f;
+    if constexpr (!normalized) {
+        scale *= 0.5f;
+    }
 
     // Continue Newton-Raphson: y = y + y*t.
     y = y + y * t;
@@ -81,7 +90,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Apply scaling factor and restore the sign, including for zero results.
     // Wormhole multiplication discards the sign of zero. Preserve it here
     // even when a subsequent BF16 pack currently discards it again.
-    y = y * scale;
+    if constexpr (!normalized) {
+        y = y * scale;
+    }
     y = sfpi::copysgn(y, in);
 
     return y;

@@ -91,7 +91,6 @@ struct OpConfig {
         EQ,
         NE,
         ISCLOSE,
-        DIV_NO_NAN,
     };
 
     template <class EnumT>

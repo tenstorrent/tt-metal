@@ -31,7 +31,6 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::REMAINDER:
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM: return float_and_int32_uint32;
-        case BinaryOpType::DIV_NO_NAN: return fp32_only;
         case BinaryOpType::DIV:
         case BinaryOpType::FMOD:
         case BinaryOpType::ISCLOSE: return float_and_int32;

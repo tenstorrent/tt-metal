@@ -55,7 +55,6 @@ enum class BinaryOpType {
     WHERE_TST,
     WHERE_TTS,
     ISCLOSE,
-    DIV_NO_NAN,  // Internal FP32 tensor/tensor path; public API remains composite.
 };
 
 // Parameters for ops that need more than their BinaryOpType to describe what to compile. One

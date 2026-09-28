@@ -186,7 +186,8 @@ def test_div_no_nan_fp32(device):
 
 
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_div_no_nan_fp32_quotient_refinement(device, layout):
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_quotient_refinement(device, op, layout):
     # Scale both adversarial pairs across the normal exponent range. Refining
     # unscaled operands loses a subnormal residual even when a, b and a/b are normal.
     a = torch.tensor([0x4F518358, 0x3FCF913C], dtype=torch.int32).view(torch.float32).double()
@@ -199,12 +200,13 @@ def test_div_no_nan_fp32_quotient_refinement(device, layout):
     a, b = a.repeat(2)[:2048].reshape(64, 32), b.repeat(2)[:2048].reshape(64, 32)
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=layout, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=layout, device=device)
-    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    actual = ttnn.to_torch(op(input_a, input_b))
     expected = (a.double() / b.double()).float()
     assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
 
 
-def test_div_no_nan_fp32_random_exponents(device):
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_random_exponents(device, op):
     generator = torch.Generator().manual_seed(58228)
     a = torch.randint(0x00800000, 0x7F800000, (65536,), generator=generator, dtype=torch.int32).view(torch.float32)
     b = torch.randint(0x00800000, 0x7F800000, (65536,), generator=generator, dtype=torch.int32).view(torch.float32)
@@ -216,8 +218,39 @@ def test_div_no_nan_fp32_random_exponents(device):
     expected = (a.double() / b.double()).float()
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    actual = ttnn.to_torch(op(input_a, input_b))
     assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_mantissa_refinement(device, op):
+    # Sweep near the reciprocal seed's worst error, varying both mantissas.
+    # With one reciprocal Newton step, a separately rounded residual multiply
+    # on Wormhole fails this at 2 ULP.
+    bits = torch.arange(1 << 18, dtype=torch.int32)
+    a = (((bits * 1664525 + 1013904223) & 0x7FFFFF) | 0x3F800000).view(torch.float32).reshape(8192, 32)
+    b = (bits | 0x3F800000).view(torch.float32).reshape(8192, 32)
+    expected = (a.double() / b.double()).float()
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_exponent_boundaries(device, op):
+    limits = torch.finfo(torch.float32)
+    values = torch.tensor([limits.tiny, 2.0 * limits.tiny, 0.5, 1.0, 2.0, limits.max / 2, limits.max, 2.0**64])
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    a, b = a.flatten().repeat(16).reshape(32, 32), b.flatten().repeat(16).reshape(32, 32)
+    a[::2], b[::3] = -a[::2], -b[::3]
+    expected = (a.double() / b.double()).float()
+    # Subnormal results flush to zero on these architectures.
+    expected = torch.where(expected.abs() < limits.tiny, 0.0, expected)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
@@ -233,37 +266,44 @@ def test_div_no_nan_zero_denominator(device, dtype):
     assert not torch.any(torch.signbit(actual))
 
 
-def test_div_no_nan_fp32_special_values(device):
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_special_values(device, op):
     values = torch.tensor([0.0, -0.0, 1.0, -1.0, float("inf"), -float("inf"), float("nan"), -float("nan")])
     a, b = torch.meshgrid(values, values, indexing="ij")
     a, b = a.flatten().repeat(16).reshape(32, 32), b.flatten().repeat(16).reshape(32, 32)
     expected = a / b
-    # Preserve the FP32 reciprocal-and-multiply path: Inf/NaN divisors have a
-    # zero reciprocal, so finite numerators give zero and nonfinite ones give NaN.
+    # Inf/NaN divisors use a zero reciprocal, matching the original FP32 div_no_nan path.
     expected = torch.where(~torch.isfinite(b), a * 0.0, expected)
-    expected = torch.where(b == 0, 0.0, expected)
+    if op == ttnn.div_no_nan:
+        expected = torch.where(b == 0, 0.0, expected)
+    # SFPU multiplication produces positive zero for exact zero results.
     expected = torch.where(expected == 0, 0.0, expected)
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    actual = ttnn.to_torch(op(input_a, input_b))
     assert torch.equal(torch.isnan(actual), torch.isnan(expected))
-    finite_or_inf = ~torch.isnan(expected)
-    assert torch.equal(actual[finite_or_inf], expected[finite_or_inf])
-    assert torch.equal(torch.signbit(actual[finite_or_inf]), torch.signbit(expected[finite_or_inf]))
+    non_nan = ~torch.isnan(expected)
+    assert torch.equal(actual[non_nan], expected[non_nan])
+    assert torch.equal(torch.signbit(actual[non_nan]), torch.signbit(expected[non_nan]))
 
 
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-def test_div_no_nan_fp32_broadcast(device, memory_config):
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_broadcast(device, op, memory_config):
     generator = torch.Generator().manual_seed(58228)
     a = torch.randn((2, 1, 32, 32), generator=generator)
     b = torch.randn((1, 3, 1, 32), generator=generator)
     b[..., 0] = 0.0
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    output = ttnn.div_no_nan(input_a, input_b, memory_config=memory_config)
-    expected = torch.where(b == 0, 0.0, (a.double() / b.double()).float())
+    output = op(input_a, input_b, memory_config=memory_config)
+    expected = (a.double() / b.double()).float()
+    if op == ttnn.div_no_nan:
+        expected = torch.where(b == 0, 0.0, expected)
     assert output.memory_config() == memory_config
-    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(output), ulp_threshold=1)
+    assert_with_ulp(
+        expected_result=expected, actual_result=ttnn.to_torch(output), ulp_threshold=1, allow_nonfinite=True
+    )
 
 
 def test_div_no_nan_fp32_subnormal_compatibility(device):
@@ -752,10 +792,14 @@ def test_div_int32_float_scalar_promotion_nonfinite(device, rounding_mode, scala
     expected = ttnn.to_torch(ttnn.div(fp32_input, scalar, rounding_mode=rounding_mode))
     assert result.dtype == ttnn.float32
     torch.testing.assert_close(ttnn.to_torch(result), expected, rtol=0, atol=0, equal_nan=True)
-    # Native FP32 division currently returns NaN for infinite divisors. Promotion
-    # must match that path; fixing its infinity handling is a separate kernel change.
-    if abs(scalar) != float("inf"):
-        golden = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
+    # Inf/NaN divisors use a zero reciprocal for finite numerators, matching
+    # the FP32 tensor path. Zero divisors retain the ordinary division behavior.
+    golden = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
+    if scalar != scalar:  # NaN
+        golden = torch.zeros_like(golden)
+    # PyTorch's floor division by infinity differs from flooring the quotient;
+    # the comparison against native FP32 above covers that existing behavior.
+    if abs(scalar) != float("inf") or rounding_mode != "floor":
         torch.testing.assert_close(ttnn.to_torch(result), golden, rtol=0, atol=0, equal_nan=True)
 
 
