@@ -60,6 +60,15 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     uint32_t fp32_tile_size = tt::tile_size(fp32_format);
 
     uint32_t total_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    const auto& logical_2d_shape = input.tensor_spec().logical_2d_shape();
+    const auto& physical_shape = input.tensor_spec().physical_shape();
+    const uint32_t physical_tiles_w = physical_shape.width() / tt::constants::TILE_WIDTH;
+    const uint32_t logical_tiles_h =
+        (logical_2d_shape.height() + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT;
+    const uint32_t logical_tiles_w =
+        (logical_2d_shape.width() + tt::constants::TILE_WIDTH - 1U) / tt::constants::TILE_WIDTH;
+    const uint32_t logical_last_tile_h = ((logical_2d_shape.height() - 1U) % tt::constants::TILE_HEIGHT) + 1U;
+    const uint32_t logical_last_tile_w = ((logical_2d_shape.width() - 1U) % tt::constants::TILE_WIDTH) + 1U;
 
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_grid.y;
@@ -138,7 +147,12 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         static_cast<uint32_t>(mcast_end.x),
         static_cast<uint32_t>(mcast_end.y),
         mcast_num_dests,
-        block_size};
+        block_size,
+        physical_tiles_w,
+        logical_tiles_h,
+        logical_tiles_w,
+        logical_last_tile_h,
+        logical_last_tile_w};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_ct_args);
 
     auto reader_origin = create_reader_kernel(program, origin_set, reader_ct_args, origin_defines, kReaderKernelPath);
