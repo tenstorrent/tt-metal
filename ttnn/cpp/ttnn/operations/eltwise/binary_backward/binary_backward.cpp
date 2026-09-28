@@ -944,7 +944,10 @@ std::vector<std::optional<Tensor>> mul_bw(
 
     if (are_required_outputs.at(0)) {
         if (input_needs_reduce) {
-            Tensor grad_a = ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config);
+            // Pin dtype to input's — else ttnn::multiply resolves to grad's dtype and diverges from the fused /
+            // empty_like paths.
+            Tensor grad_a =
+                ttnn::multiply(grad_tensor_arg, other_tensor_arg, input_tensor_arg.dtype(), output_mem_config);
             grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
                 grad_a, input_tensor_arg.logical_shape(), output_mem_config);
             if (input_grad_preallocated) {
@@ -960,7 +963,8 @@ std::vector<std::optional<Tensor>> mul_bw(
     }
     if (are_required_outputs.at(1)) {
         if (other_needs_reduce) {
-            Tensor grad_b = ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config);
+            Tensor grad_b =
+                ttnn::multiply(grad_tensor_arg, input_tensor_arg, other_tensor_arg.dtype(), output_mem_config);
             grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
                 grad_b, other_tensor_arg.logical_shape(), output_mem_config);
             if (other_grad_preallocated) {
