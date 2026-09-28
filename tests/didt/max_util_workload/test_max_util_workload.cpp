@@ -237,8 +237,8 @@ static MaxUtilConfig full_grid_config(
 // consecutive NOC page-read issues in the ETH DRAM streaming kernel.
 // noc_wait_cycles == 0 means no throttle (maximum DRAM utilization).
 //
-// Values are placeholder estimates; calibrate on target hardware by measuring
-// achieved DRAM bandwidth at each setting and adjusting the cycle counts.
+// Values are calibrated on Blackhole p300c against the measured four-bank
+// bandwidth at 100%. Integer NOP granularity limits exact matching near 100%.
 // ---------------------------------------------------------------------------
 
 // clang-format off
@@ -250,8 +250,8 @@ static const std::map<uint32_t, uint32_t> kDramUtilToCyclesMap = {
     {50,   23},
     {60,   15},
     {70,    9},
-    {80,    5},
-    {90,    2},
+    {80,    7},
+    {90,    3},
     {100,   0},
 };
 // clang-format on
@@ -370,7 +370,11 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     // ETH kernel runs 8x fewer loops than the compute kernel to match duration.
     // Also scale by utilization percentage to match the compute kernel duration.
-    cfg.eth_num_wl_loops = std::max(1u, cfg.num_wl_loops / 8 * (cfg.eth_dram_util_pct / 100));
+    const uint32_t eth_max_util_loops = std::max(1u, cfg.num_wl_loops / 8);
+    cfg.eth_num_wl_loops = std::max(
+        1u,
+        static_cast<uint32_t>(
+            static_cast<uint64_t>(eth_max_util_loops) * static_cast<uint64_t>(cfg.eth_dram_util_pct) / 100));
 
     cfg.eth_noc_wait_cycles = dram_pct_to_noc_wait_cycles(cfg.eth_dram_util_pct);
     const uint32_t matched_dram_pct = nearest_dram_pct(cfg.eth_dram_util_pct);
@@ -865,7 +869,8 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             log_info(
                 LogTest,
                 "ETH DRAM streaming: {} bank streams, {} enqueues × {} inner iterations "
-                "(compute loops={}, ratio=1/8), {} pages/bank × {} B/page ({}KB)",
+                "(compute loops={}, base ratio=1/8, scaled by DRAM utilization), "
+                "{} pages/bank × {} B/page ({}KB)",
                 assignments.size(),
                 cfg.num_iterations,
                 cfg.eth_num_wl_loops,
