@@ -142,12 +142,42 @@ chunk is a fixed 1024 tokens whatever the capacity, which is why the figure does
 
 The 1 GiB default reserve is therefore mostly placement margin rather than activation space.
 
-## Allocation is device-side
+## Allocation still stages on the host, and that is the binding limit
 
-`allocate_kv_cache` used to build the cache as a torch tensor and upload it. That tensor was fp32:
-4 B/element against 1.0625 on device, so it wanted 44 GiB of host RAM for a slot count the device
-holds in 21 GiB. The host, not DRAM, would have capped every auto-sized deployment. Zeroing on the
-device removes that ceiling and the upload.
+`allocate_kv_cache` used to build the cache as an fp32 torch tensor and upload it: 4 B/element
+against 1.0625 on device, so the host, not DRAM, capped every auto-sized deployment. Zeroing with
+`ttnn.zeros` dropped one host copy but **not** the ceiling, which is worth stating plainly because an
+earlier revision of this document claimed otherwise.
+
+For `bfloat8_b`, `ttnn.zeros` fills a `std::vector<float>` of `shape.volume()` and converts
+(`ttnn/cpp/ttnn/operations/creation/creation.cpp`), so the host still pays 4 B/element. Measuring
+`ttnn.zeros` with no device attached, at a 1,073,741,824-element shape, gives the staging vector
+exactly and nothing else:
+
+| Requested dtype | Peak host RSS delta | Per element |
+| --- | ---: | ---: |
+| `bfloat16` | 2.00 GB | 2.00 B |
+| `float32` | 4.00 GB | 4.00 B |
+
+`bfloat8_b` cannot be measured this way, because that branch builds its `TensorSpec` against a device
+and so needs a cluster, but it is the same `full_impl` and its vector is `float`.
+
+What that costs at an auto-sized count, per cache, at 8K and 1,681 slots:
+
+| | Bytes |
+| --- | ---: |
+| device, packed `bfloat8_b` | 14.0 GiB |
+| host fp32 staging vector | 52.5 GiB |
+| peak, with the packed host copy | 66.5 GiB |
+
+The figure does not fall as capacity rises, because slots x capacity is what DRAM fixes: every
+auto-sized allocation stages about the same 52 GiB whatever `max_seq_len` is. It fits the nodes these
+measurements ran on and would not fit a 62 GiB host.
+
+The fix is `ttnn.empty` for the device allocation plus an in-place `ttnn.fill` to zero it, which
+`ttnn.fill` supports for `BFLOAT8_B` in `TILE` layout with a preallocated `output_tensor`. That is
+not yet done here: it needs a Galaxy to confirm `ttnn.empty` accepts the `NdShard` memory config and
+that the aliased fill is sound, rather than being asserted from the signature.
 
 ## Using it
 
