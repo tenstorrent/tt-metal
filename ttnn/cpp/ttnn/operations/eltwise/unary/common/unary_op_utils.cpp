@@ -295,6 +295,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 param0);
             return {"power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {});", idst, param0_raw)};
         case UnaryOpType::LEAKY_RELU:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3c23d70au) {
+                return {
+                    "leaky_relu_tt_poly_bf16_tile_init();",
+                    fmt::format("leaky_relu_tt_poly_bf16_tile({}, 0x3c23d70au);", idst)};
+            }
+#endif
+
             // For unsigned inputs, leaky_relu is the identity. Emit an empty op so the tile is just copied.
             if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
                 return {};

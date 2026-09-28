@@ -443,6 +443,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp_root.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp_root_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_slope_max.h
     inc/api/compute/eltwise_unary/leaky_relu_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_root_native_log.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_root_native_log_core.h

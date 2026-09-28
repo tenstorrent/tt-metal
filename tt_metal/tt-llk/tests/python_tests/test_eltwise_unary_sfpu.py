@@ -1404,6 +1404,7 @@ _TT_POLY_FP32_DEST = {
     "hardswish": (),
     "hardtanh": (),
     "i1": (),
+    "leaky_relu": (),
     "lgamma": (),
     "log10": (),
     "log2": (),
@@ -1434,6 +1435,7 @@ _TT_POLY_ADAPTER_OPERATIONS = {
     "hardmish": "hardmish",
     "hardswish": "hardswish",
     "i1": "i1",
+    "leaky_relu": "leaky_relu",
     "lgamma": "lgamma",
     "log10": "log10",
     "logit": "logit",
@@ -1607,6 +1609,7 @@ _GENERATED_UNARY_CASES = [
         "ckernel_sfpu_hardtanh.h",
     ),
     (MathOperation.I1, "i1", False, False, 32, "None", "ckernel_sfpu_i1.h"),
+    (None, "leaky_relu", True, False, 32, "None", "ckernel_sfpu_relu.h"),
     (
         MathOperation.Lgamma,
         "lgamma",
@@ -1855,6 +1858,26 @@ def _tt_poly_reference_i1(x):
     return getattr(importlib.import_module("torch.special"), "i1")(x.double(), **{})
 
 
+def _tt_poly_reference_leaky_relu(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(0.01 * x, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((0.0,), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        return result
+
+    return torch.from_numpy(_declared_forward(x.double().numpy()))
+
+
 def _tt_poly_reference_lgamma(x):
     return getattr(importlib.import_module("torch"), "lgamma")(x.double(), **{})
 
@@ -2034,6 +2057,12 @@ _TT_POLY_FORWARD_REFERENCES = {
             ("below", -88.5, True, "constant", -1.1547668213381457e37),
             ("above", 88.5, True, "constant", 1.1547668213381457e37),
         ),
+    ),
+    "leaky_relu": (
+        _tt_poly_reference_leaky_relu,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (0,),
+        (),
     ),
     "lgamma": (
         _tt_poly_reference_lgamma,
@@ -2427,6 +2456,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "hardswish",
     "hardtanh",
     "i1",
+    "leaky_relu",
     "lgamma",
     "log10",
     "log2",
