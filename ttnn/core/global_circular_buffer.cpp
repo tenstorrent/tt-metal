@@ -432,12 +432,23 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     return block_count;
 }
 
+std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipe_refs(
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes) {
+    std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> refs;
+    refs.reserve(prefetcher_pipes.size());
+    for (const auto& pipe : prefetcher_pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", refs.size());
+        refs.emplace_back(*pipe);
+    }
+    return refs;
+}
+
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes) {
     const uint32_t receiver_count =
-        tt::tt_metal::experimental::prefetcher_pipe_receiver_cores(prefetcher_pipes).num_cores();
+        tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(prefetcher_pipe_refs(prefetcher_pipes)).num_cores();
     TT_FATAL(receiver_count > 0, "prefetcher_pipes has no receivers");
     TT_FATAL(
         is_receiver_contiguous_weight(weight),

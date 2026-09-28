@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
+#include "ttnn/global_circular_buffer.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -3709,8 +3710,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     Group<PrefetcherPipeParamName> prefetcher_pipe_names;
     const uint32_t in1_pipe_entry_size = in1_block_tiles * in1_single_tile_size;
     if (use_prefetcher_pipes) {
-        const CoreRangeSet pipe_receivers =
-            tt::tt_metal::experimental::prefetcher_pipe_receiver_cores(prefetcher_pipes);
+        const CoreRangeSet pipe_receivers = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(
+            ttnn::global_circular_buffer::prefetcher_pipe_refs(prefetcher_pipes));
         TT_FATAL(
             pipe_receivers.num_cores() == all_cores_with_work.num_cores() &&
                 pipe_receivers.intersection(all_cores_with_work).num_cores() == all_cores_with_work.num_cores(),
