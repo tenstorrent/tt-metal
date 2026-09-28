@@ -9,7 +9,7 @@ import pytest
 
 import ttnn
 from models.demos.qwen38_27b_qb2.tt import model
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, kv_head_owners, resolve_mesh_tp
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import _TP_POLICY, Qwen38TPDecoder, kv_head_owners, resolve_mesh_tp
 
 # A qualified platform is the whole tuple, so each rejection case perturbs exactly one element of
 # an otherwise-valid mesh. The Wormhole rows mirror the Blackhole ones so neither platform's gate
@@ -85,3 +85,15 @@ def test_every_device_owns_the_kv_head_its_q_heads_need(tp):
 def test_kv_head_owners_rejects_uneven_sharing(expect_error):
     with expect_error(ValueError, "cannot share"):
         kv_head_owners(3, 8)
+
+
+def test_t3k_policy_fits_a_narrower_grid_and_one_link():
+    # _width_memory builds a 10-wide rectangle for core counts divisible by ten, which cannot
+    # exist on an 8x8 worker grid, and the second ethernet link per pair is the dispatch datapath.
+    overlay = _TP_POLICY[8]
+    assert overlay["rectangular_working"] is False
+    assert overlay["num_links"] == 1
+
+
+def test_qb2_keeps_its_measured_policy():
+    assert 4 not in _TP_POLICY
