@@ -58,7 +58,12 @@ inline bool recipe_geometry_supported(
 struct RecipeL1Context {
     uint32_t q_blocks_per_worker = 2;  // ring: most Q chunks one worker owns (1 lets FAST single-buffer Q)
     uint32_t passes = 1;               // exp ring: head-segments per core row (FAST keeps one Q per pass)
+    uint32_t mask_page_bytes = 0;      // dense: attn_mask tile bytes (0 = no mask)
 };
+
+// Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
+// double-buffers when L1 allows, else single). Mirrors run_recipe_segments in sdpa_recipe.cpp.
+uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy, uint32_t q_tiles);
 
 // Circular-buffer bytes per core. `preferred` is the op's first-choice layout; `minimum` is the
 // smallest layout the op falls back to when `preferred` does not fit (ring: single-slot Q;
@@ -99,6 +104,8 @@ struct RecipeBlockingProblem {
     // Exp ring: the device's kernel config buffer (recipe_kernel_config_bytes); 0 = unknown (large). Small buffers
     // size-optimize some exp ring recipe builds (exp_ring_recipe_size_optimized_for_config_buffer).
     uint64_t kernel_config_bytes = 0;
+    // Dense: attn_mask tile bytes (0 = no mask); the mask CB counts against l1_bytes.
+    uint32_t mask_page_bytes = 0;
     // Nonzero pins that dimension (a caller-provided chunk); zero lets the chooser pick.
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;
@@ -135,7 +142,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor& k,
     const Tensor* joint_q,
     const Tensor* joint_k,
-    const std::optional<SDPAProgramConfig>& program_config);
+    const std::optional<SDPAProgramConfig>& program_config,
+    const Tensor* attn_mask = nullptr);
 
 SDPAProgramConfig resolve_ring_recipe_blocking(
     const PrecisionPolicy& policy,

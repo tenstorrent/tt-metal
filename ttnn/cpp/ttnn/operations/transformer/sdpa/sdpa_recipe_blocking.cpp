@@ -339,6 +339,12 @@ void validate_recipe_geometry(
         rejection.value_or(""));
 }
 
+uint32_t recipe_mask_group_rows(const PrecisionPolicy& policy, uint32_t q_tiles) {
+    return policy.fp32_destination                    ? 1
+           : policy.selection.recipe == Recipe::A ? (q_tiles % 2 == 0 ? 2 : 1)
+                                                  : 2;
+}
+
 RecipeL1Estimate recipe_l1_bytes(
     RecipeOp op,
     const PrecisionPolicy& policy,
@@ -354,7 +360,10 @@ RecipeL1Estimate recipe_l1_bytes(
         case RecipeOp::Dense:
         case RecipeOp::Joint: {
             const uint64_t bytes = recipe_cb_bytes(policy, q_tiles, k_tiles, d_tiles);
-            return {bytes, bytes};
+            // attn_mask CB: two row groups when they fit, one otherwise (sdpa_recipe.cpp).
+            const uint64_t mask_group =
+                uint64_t{recipe_mask_group_rows(policy, q_tiles)} * k_tiles * context.mask_page_bytes;
+            return {bytes + 2 * mask_group, bytes + mask_group};
         }
         case RecipeOp::Ring: {
             if (fast) {
@@ -403,7 +412,9 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                 continue;
             }
             // Dense/joint L1 grows with Q and K: stop at the first K that does not fit.
-            if (dense && recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles).minimum > p.l1_bytes) {
+            if (dense &&
+                recipe_l1_bytes(p.op, p.policy, qt, kt, p.d_tiles, {.mask_page_bytes = p.mask_page_bytes}).minimum >
+                    p.l1_bytes) {
                 break;
             }
             any_fit = true;
@@ -450,7 +461,7 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                         div_up(jobs_per_head, chain),
                         div_up(p.k_rows + p.joint_k_rows, k_chunk),
                         p.grid,
-                        RecipeL1Context{});
+                        RecipeL1Context{.mask_page_bytes = p.mask_page_bytes});
                     break;
                 }
                 case RecipeOp::Ring: {
@@ -633,7 +644,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor& k,
     const Tensor* joint_q,
     const Tensor* joint_k,
-    const std::optional<SDPAProgramConfig>& program_config) {
+    const std::optional<SDPAProgramConfig>& program_config,
+    const Tensor* attn_mask) {
     if (!recipe_blocking_requested(program_config) || q.storage_type() != StorageType::DEVICE) {
         return program_config;
     }
@@ -650,6 +662,7 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     problem.joint_q_rows = joint_q ? joint_q->padded_shape()[2] : 0;
     problem.joint_k_rows = joint_k ? joint_k->padded_shape()[2] : 0;
     problem.l1_bytes = unreserved_l1(*device);
+    problem.mask_page_bytes = attn_mask ? attn_mask->buffer()->page_size() : 0;
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");
 }
