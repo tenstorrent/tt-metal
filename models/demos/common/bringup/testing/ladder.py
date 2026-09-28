@@ -59,7 +59,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
     metrics.record("rung_start", (n_chunks - 1) * chunk if rung.get("prefix_from_golden") else 0)
     if rung.get("prefix_from_golden"):
         for i in layers:
-            state.load_prefix(i, g.state(i), last * chunk)
+            state.load_prefix(i, g.state(i, at=last * chunk), last * chunk)
         first = last
 
     trail, t_total, hidden = {}, 0.0, None

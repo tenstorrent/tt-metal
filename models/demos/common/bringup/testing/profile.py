@@ -199,8 +199,15 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     start = rung["seq"] - chunk
     model = s.hooks().device_model(mesh, s, layers, lm_head=False)
     state = model.new_state(rung["seq"])
-    for i in layers:
-        state.load_prefix(i, g.state(i), start)
+    prefix = {i: g.state(i, at=start) for i in layers}
+
+    def load_prefix():
+        for i in layers:
+            state.load_prefix(i, prefix[i], start)
+
+    load_prefix()
+    # Fixed-size state (spec state.fixed) advances on every run of the chunk: reload the prefix before each run.
+    reload = load_prefix if s.state_fixed else (lambda: None)
     tokens = g.tokens()[start:]
     starts = {i for k, i in enumerate(layers) if k == 0 or layers[k - 1] != i - 1}
 
@@ -229,12 +236,14 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         model.free(h)
 
     run()  # compile and fill the program cache: performance is measured warm only
+    reload()
     cpu_bridge.STATS.reset()
     t0 = time.time()
     run()
     wall = time.time() - t0
     cpu_bridge.record(metrics)
     bridged = {"steps": cpu_bridge.STATS.step_names, "ms": round(cpu_bridge.STATS.ms, 1)}
+    reload()
     run(count=True)  # warm, apart from the timed run: host round-trips inside the forward pass (agent rule 5)
     metrics.record("host_transfers_per_layer", max(host))
     # The full-target prefill takes minutes; it is for a final number, not for every perf iteration (spec perf.full_prefill
@@ -242,6 +251,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     want_full = s.get("perf.full_prefill", False) or os.environ.get("BRINGUP_FULL_PREFILL") == "1"
     full = full_prefill(s, model, state, layers, rung, g.tokens()) if want_full else None
 
+    reload()
     profiler.enable(mesh)
     run()
     profiler.signpost("end")

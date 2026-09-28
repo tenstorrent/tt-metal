@@ -13,12 +13,18 @@ block input of the first layer of each contiguous run of selected layers, so the
 Boundaries are stored for every chunk if the rung sets ``full_dumps``, else only for the last chunk.
 Rungs with ``golden: <other>`` reuse that rung's golden and are skipped here.
 
+State: each layer stores its own names (``spec.state_names``). Tensors in ``state.fixed`` (recurrent state, conv tail)
+do not grow along the sequence, so the state at a chunk start cannot be sliced from the final one: they are also stored
+as the state before every dumped chunk (``kv_cache/layer_{i}_at_{start}``) and, on the serving-contract rung, after
+``seq - tests.contract_tail_pad`` tokens (one extra partial chunk from the last chunk's snapshot).
+
 Records golden_layers, golden_chunks, golden_hash_ok, cpu_seconds, text_top5_acc_last_chunk.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import time
 from collections import defaultdict
@@ -99,10 +105,34 @@ def main(argv=None):
     print(f"reference loaded in {time.time() - t0:.0f}s; seq={seq} chunk={chunk}; storing layers {selected}")
 
     state = ref.new_state(seq)
+    fixed = spec.state_fixed
+    tail_at = None
+    if fixed:
+        from models.demos.common.bringup.testing.contract import BLOCK, contract_rung
+
+        if contract_rung(spec) == a.rung:
+            tail_at = seq - int(spec.get("tests.contract_tail_pad", BLOCK))
+
+    def snapshot(at: int) -> None:
+        for i in selected:
+            names = [n for n in spec.state_names(i) if n in fixed]
+            if names:
+                st = ref.state_tensors(state, i, at)
+                save_file(
+                    {f"{n}_cache_layer_{i}": store_dtype(st[n].clone(), keep_fp32, n) for n in names},
+                    str(tmp / "kv_cache" / f"layer_{i}_at_{at}.safetensors"),
+                )
+
+    snapshots, before_last = [], None
     chunk_times, top1, top5 = [], [], []
     for c in range(n_chunks):
         per_layer, model_t = defaultdict(dict), {}
         dump = c in dumped
+        if fixed and dump:
+            snapshot(c * chunk)
+            snapshots.append(c * chunk)
+        if tail_at is not None and c == n_chunks - 1:
+            before_last = copy.deepcopy(state)
 
         def rec(name, t, per_layer=per_layer, model_t=model_t, dump=dump):
             if name.startswith("L"):
@@ -141,13 +171,18 @@ def main(argv=None):
             flush=True,
         )
 
-    names = spec.get("state.tensors")
     for i in selected:
         st = ref.state_tensors(state, i, seq)
         save_file(
-            {f"{n}_cache_layer_{i}": store_dtype(st[n], keep_fp32, n) for n in names},
+            {f"{n}_cache_layer_{i}": store_dtype(st[n], keep_fp32, n) for n in spec.state_names(i)},
             str(tmp / "kv_cache" / f"layer_{i}.safetensors"),
         )
+    if before_last is not None:  # the contract's last chunk ends early: fixed state after seq - tail tokens
+        s = (n_chunks - 1) * chunk
+        state = before_last
+        ref.forward_chunk(tokens[s:tail_at], s, state, lambda n, t: None, logits_last_n=0)
+        snapshot(tail_at)
+        snapshots.append(tail_at)
 
     (tmp / "metadata.json").write_text(
         json.dumps(
@@ -156,7 +191,10 @@ def main(argv=None):
                 "token_ids": tokens.tolist(),
                 "num_layers": len(selected),
                 "layers": selected,
-                "state_tensors": names,
+                "state_tensors": list(spec.get("state.tensors") or []),
+                "state_by_layer": {str(i): spec.state_names(i) for i in selected},
+                "state_fixed": fixed,
+                "state_snapshots": snapshots,
                 "kv_cache_format": spec.get("state.format", "separate_k_v"),
                 "k_rope_layout": spec.get("state.k_rope_layout"),
                 "seq_len": seq,

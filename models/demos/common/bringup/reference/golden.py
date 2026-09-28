@@ -6,7 +6,8 @@
 One directory per ladder rung, ``<golden_root>/s{seq}_c{chunk}/`` (the prefill server's golden-trace layout):
     manifest.json                         run description, layers, dumped chunks, content_hash
     metadata.json                         token_ids, num_layers, state tensor names, seq_len
-    kv_cache/layer_{i}.safetensors        state per layer, key f"{name}_cache_layer_{i}" (key/value for a KV cache)
+    kv_cache/layer_{i}.safetensors        final state per layer, key f"{name}_cache_layer_{i}" (key/value for a KV cache)
+    kv_cache/layer_{i}_at_{p}.safetensors the fixed-size state tensors (spec state.fixed) as of position p
     chunk_{c:02d}/layer_{i:02d}.safetensors   boundary tensors of layer i in chunk c, keyed by boundary name
     chunk_{c:02d}/model.safetensors       embed, final_norm, top32 ids/values per position, logits of the last 32 rows
 
@@ -91,9 +92,29 @@ class Golden:
     def model(self, c: int) -> dict[str, torch.Tensor]:
         return load_file(str(self.dir / f"chunk_{c:02d}" / "model.safetensors"))
 
-    def state(self, i: int) -> dict[str, torch.Tensor]:
+    def layer_state_names(self, i: int) -> list[str]:
+        return list(self.meta.get("state_by_layer", {}).get(str(i), self.state_names))
+
+    @property
+    def state_fixed(self) -> list[str]:
+        return list(self.meta.get("state_fixed", []))
+
+    def state(self, i: int, at: int | None = None) -> dict[str, torch.Tensor]:
+        """Layer i's state. Tensors that grow along the sequence are the final ones (the consumer slices [0, at)).
+        Fixed-size tensors are the snapshot as of position ``at`` (None or seq: the final state)."""
         d = load_file(str(self.dir / "kv_cache" / f"layer_{i}.safetensors"))
-        return {n: d[f"{n}_cache_layer_{i}"] for n in self.state_names}
+        out = {n: d[f"{n}_cache_layer_{i}"] for n in self.layer_state_names(i)}
+        fixed = [n for n in out if n in self.state_fixed]
+        if fixed and at is not None and at != self.seq:
+            p = self.dir / "kv_cache" / f"layer_{i}_at_{at}.safetensors"
+            if not p.exists():
+                raise FileNotFoundError(
+                    f"{p}: no snapshot of the fixed-size state {fixed} at position {at} "
+                    f"(snapshots at {self.meta.get('state_snapshots', [])})"
+                )
+            snap = load_file(str(p))
+            out.update({n: snap[f"{n}_cache_layer_{i}"] for n in fixed})
+        return out
 
     def pinned_hash(self) -> str:
         """The hash recorded at generation (or, for goldens made before hashes, the manifest file's own hash)."""

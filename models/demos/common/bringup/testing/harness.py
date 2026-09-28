@@ -13,11 +13,13 @@ The module under test is chosen by BRINGUP_IMPL (set by freeze):
 Device hooks a model provides (the implement role writes them):
     device_params(spec) -> dict                     mesh fixture params (fabric config, l1_small_size, ...)
     device_component(mesh, spec, layer, step) -> fn(ctx, *host inputs) -> host tensor
-        ctx.extra: state_prefix ({name: tensor} from the golden, positions [0, prefix_len) valid), prefix_len, max_seq
+        ctx.extra: state_prefix ({name: tensor} from the golden, positions [0, prefix_len) valid; a fixed-size tensor
+        (spec state.fixed) is the state as of prefix_len), prefix_len, max_seq
     device_model(mesh, spec, layers, lm_head=True) -> object with
         load_seconds, new_state(max_seq), embed(tokens), from_host(h [S, H]), layer(i, h, start, state),
         final_norm(h), to_host(h) -> [S, H], logits(hidden, rows) -> [len(rows), V], free(h), sync()
         state.load_prefix(layer, tensors, length), state.to_torch(layer, length) -> {name: tensor}
+        (layer(i, h, 0, state) starts a new sequence: a fixed-size state resets there)
 """
 
 from __future__ import annotations
@@ -77,13 +79,15 @@ def reference_ctx(ref, layer: int, g: Golden, c: int):
     start = c * g.chunk
     state = ref.new_state(g.seq)
     if start:
-        ref.load_state(state, layer, g.state(layer), start)
+        ref.load_state(state, layer, g.state(layer, at=start), start)
     return ref.chunk_context(layer, start, g.chunk, state)
 
 
 def device_ctx(layer: int, g: Golden, c: int) -> Ctx:
     start = c * g.chunk
-    return Ctx(layer, start, g.chunk, None, {"state_prefix": g.state(layer), "prefix_len": start, "max_seq": g.seq})
+    return Ctx(
+        layer, start, g.chunk, None, {"state_prefix": g.state(layer, at=start), "prefix_len": start, "max_seq": g.seq}
+    )
 
 
 def as_float(t: torch.Tensor) -> torch.Tensor:

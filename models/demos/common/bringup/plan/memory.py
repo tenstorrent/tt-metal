@@ -21,8 +21,12 @@ The plan agent writes ``<bringup_dir>/plan.yaml``:
 placement: replicate (every chip holds it), shard (split over all chips), expert (an expert-stacked tensor or an
 expert's weights split over all chips), shard_rows / shard_cols (split over mesh rows / columns only), skip.
 dtype: fp32, bf16, bfp8 (1088 B per 1024 values), bfp4 (576 B per 1024 values), int32, uint16, uint8.
-State bytes per chip = heads_per_chip * head_dim * tensors * dtype bytes * min(target seq, window) * users.
-The check also requires heads_per_chip * chips >= the config's KV heads unless the entry says ``replicated: true``.
+State bytes per chip = heads_per_chip * head_dim * tensors * dtype bytes * length * users, where length is
+ceil(min(target seq, window) / seq_stride / seq_divisor) (seq_stride: tokens per stored row, e.g. pooled keys;
+seq_divisor: chips the sequence axis is split over), or 1 with ``per_token: false`` (a fixed-size state such as a
+linear-attention recurrent state: head_dim is then the per-head size, e.g. 128 * 128, plus any conv tail).
+The check also requires heads_per_chip * chips >= the config's KV heads (or the entry's ``kv_heads``) unless the entry
+says ``replicated: true``; entries with ``per_token: false`` are checked only against their own ``kv_heads``.
 """
 
 from __future__ import annotations
@@ -128,12 +132,14 @@ def check_plan(spec: Spec, plan: dict, tensors: dict[str, list[int]], hf_config:
         except (KeyError, TypeError) as e:
             errs.append(f"state entry {st}: missing or bad field {e}")
             continue
-        heads_total = st.get("kv_heads", kv_heads)
+        per_token = st.get("per_token", True)
+        heads_total = st.get("kv_heads", kv_heads if per_token else None)
         if heads_total and not st.get("replicated") and st["heads_per_chip"] * chips < heads_total:
             errs.append(
                 f"state {st['layers']}: {st['heads_per_chip']} heads/chip x {chips} chips < {heads_total} KV heads"
             )
-        length = min(seq, st.get("window") or seq)
+        div = int(st.get("seq_stride", 1)) * int(st.get("seq_divisor", 1))
+        length = -(-min(seq, st.get("window") or seq) // div) if per_token else 1
         groups[f"state: {st.get('what', 'state')} layers {st['layers']}"] = len(layers) * b_tok * length * users
         covered += layers
     missing_state = sorted(set(spec.layers()) - set(covered))
