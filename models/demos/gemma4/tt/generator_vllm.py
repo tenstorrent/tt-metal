@@ -145,6 +145,42 @@ def _resolve_vllm_bounded_sliding(max_seq_len, mesh_device, model_path, *, hybri
     return _bs_env.lower() in ("1", "true", "yes")
 
 
+def _assert_within_native_context(max_seq_len: int, model_args) -> None:
+    """Refuse a serving length beyond gemma4's native RoPE window.
+
+    vLLM's own ceiling check (max_model_len vs the HF-derived maximum) is
+    waived in the serving templates by ``VLLM_ALLOW_LONG_MAX_MODEL_LEN=1``,
+    and the spec convention sizes the all-user KV pool as "B=1 x max_context"
+    -- so a template with ``max_context`` above the native 262,144 admits a
+    SINGLE request of that length end to end. Gemma4 has no rope scaling
+    (``rope_scaling: null``): past ``max_position_embeddings`` RoPE indexes
+    off the table and the bounded sliding rings see positions the sizing
+    never accounted for, failing at runtime instead of at boot. Guard here,
+    at the one choke point every gemma4 vLLM class passes through.
+    ``GEMMA4_ALLOW_BEYOND_NATIVE=1`` opts back in, explicitly and per-launch.
+    """
+    native = int(getattr(model_args, "max_context_len", 0) or 0)
+    if not native or max_seq_len <= native:
+        return
+    if os.environ.get("GEMMA4_ALLOW_BEYOND_NATIVE", "0").lower() in ("1", "true", "yes"):
+        logger.warning(
+            "Gemma4 vLLM: max_seq_len={} exceeds the native context {} and "
+            "GEMMA4_ALLOW_BEYOND_NATIVE is set -- serving beyond the RoPE table "
+            "is unvalidated.",
+            max_seq_len,
+            native,
+        )
+        return
+    raise ValueError(
+        f"max_seq_len {max_seq_len} exceeds gemma-4's native max_position_embeddings "
+        f"({native}, no rope scaling). vLLM's ceiling check is disabled by "
+        "VLLM_ALLOW_LONG_MAX_MODEL_LEN in the serving templates, so this length would "
+        "be accepted and then fail at runtime for any single request past the native "
+        "window. Lower max_context / --max-model-len, or set "
+        "GEMMA4_ALLOW_BEYOND_NATIVE=1 to accept unvalidated behavior."
+    )
+
+
 def _patch_model_args(
     model_args,
     mesh_device,
@@ -155,6 +191,7 @@ def _patch_model_args(
     *,
     bounded_sliding=False,
 ):
+    _assert_within_native_context(max_seq_len, model_args)
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     # Prefill chunking (two cooperating layers after tenstorrent/vllm#448):
