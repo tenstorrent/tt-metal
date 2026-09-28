@@ -49,7 +49,7 @@ Shipped defaults at ISL 512:
 | all | `QWEN_FUSED_HEADS_NORM=1` (head split + Q/K RMSNorm + RoPE in one generic op), `QWEN_FUSED_Q_BFP8=force`, `QWEN_FUSED_KV_BFP8=1`, `QWEN_QKV_OUT_BFP8=1`, `QWEN_FUSED_ADD_NORM=1`, `QWEN_MM_MAX_DIVISOR=38` |
 | 1 | `QWEN_SDPA_Q_CHUNK=256 QWEN_SDPA_K_CHUNK=256`; legacy 2D matmuls on 12×8: `QWEN_QKV_GRID_X=12`, `QWEN_LEGACY_GRID_{FF13,FF2,WO}=12,8`, `QWEN_LEGACY_TIGHT_PER_CORE_N=1`, `QWEN_LEGACY_SUBBLOCK_K<k>_N<n>` (2×2 FF1/FF3, 2×1 FF2/WO, 1×4 QKV); `QWEN_SDPA_CONCAT_OUT_BS1=1` (SDPA writes `[1,1,S,H·d]` at bs1 too, model-local concat gone), `QWEN_BS1_RESID_SHARDED=1` (residual adds write the norm's 10×8 block-shard layout; the I2S before each norm is a no-op); `QWEN_SDPA_GQA_PACK=1` + `QWEN_SDPA_K_CHUNK=512` (SDPA `pack_gqa_heads`: one K/V stream per KV head), packed calls on q192 / 11×8: `QWEN_SDPA_GQA_PACK_Q_CHUNK=192 QWEN_SDPA_GQA_PACK_GRID=11,8`; `QWEN_FUSED_RESIDENT_CONSTS=1` (heads-op constants in a per-core L1 shard aliased to its CBs), `QWEN_FUSED_COMPUTE_V3=1` (heads-op phases batched across a unit's heads), `QWEN_BS1_NORM_SHARDED_OUT=1` (norm output stays 10×8 block-sharded; QKV/FF1/FF3 read it directly, no S2I) |
 | >1 | `QWEN_SDPA_CONCAT_OUT=1` (SDPA writes `[B,1,S,H·d]`, no concat pass), `QWEN_SDPA_K_CHUNK=512`, `QWEN_FUSE_SWIGLU=1` at bs8/16; at ISL 512 the fused add+norm's operands in L1 (`QWEN_BATCHED_L1_INTERMEDIATES=1`): `TT_PREFILL_WO_L1=1 TT_PREFILL_FF2_L1=1 QWEN_FUSED_ADD_NORM_OUT_L1=1`, plus `QWEN_FUSED_ADD_NORM_SUM1_L1=1` at bs8/16; SDPA K/V reuse on eligible calls with q128 (`QWEN_SDPA_REUSE_KV=1 QWEN_SDPA_REUSE_Q_CHUNK=128`) |
-| 8 | `QWEN_SDPA_GRID=12,8 QWEN_SDPA_Q_CHUNK=512`, `QWEN_MM_BLOCK_FF2=16,8,8 QWEN_MM_BLOCK_QKV=8,4,8 QWEN_MM_BLOCK_WO=16,8,8`, `QWEN_FUSED_ADD_NORM_MIN_ROWS=4096 QWEN_FUSED_ADD_NORM_R=5` |
+| 8 | `QWEN_SDPA_GRID=12,8 QWEN_SDPA_Q_CHUNK=512`, `QWEN_MM_BLOCK_FF2=16,8,8 QWEN_MM_BLOCK_QKV=8,4,8 QWEN_MM_BLOCK_WO=16,8,8`, `QWEN_FUSED_ADD_NORM_MIN_ROWS=4096 QWEN_FUSED_ADD_NORM_R=5`, QKV output in L1 (`TT_PREFILL_QKV_L1=1`) and with it the v3 heads compute (`QWEN_FUSED_COMPUTE_V3=1`) |
 | 16 | `QWEN_SDPA_GRID=12,10`, `QWEN_MM_BLOCK_FF13=4,20,8 QWEN_MM_SUBBLOCK_FF13=1,4`, `QWEN_FUSED_ADD_NORM_R=5` |
 | 32 | `QWEN_SDPA_GRID=12,10`, `QWEN_SILU_MUL=1`, `QWEN_FUSED_ADD_NORM_R=4`, `QWEN_WEIGHT_INTERLEAVED_K{2560_N6144,4096_N2560,2560_N9728}=1` |
 
@@ -137,6 +137,10 @@ tensors). End-of-model hidden-state cosines are not an equivalence test on this 
 | `bench_minimal_weight_layout.py` | interleaved vs width-sharded weights for `minimal_matmul` at bs8/16/32 shapes |
 | `bench_sdpa_bs1.py`, `bench_sdpa_batched.py` (`BS=8`) | SDPA grid × q/k chunk × fp32-acc sweeps |
 | `bench_add_norm_batched.py` | stock add + rms_norm vs fused / row-split add+RMSNorm (R sweep) |
+| `bench_heads_bs16_ablate.py [batch]` (`QWEN_FUSED_COMPUTE_V3=1`, `ABL_ROPE=DRAM`) | fused heads op: full vs compute-only / data-movement-only / read-only / write-only scratch kernel variants, DRAM and L1 input |
+| `bench_heads_bs16_kernels.py [batch] [v1 v2 v3 path.cpp …]` | heads-op compute kernels side by side: traced µs (L1 / DRAM input) + PCC / exactness vs v1 |
+| `bench_heads_bs16_phases.py [batch] [L1\|DRAM]` (`PH_MODE=unit`, `QWEN_FUSED_COMPUTE_V3=1`) | per-phase (v1) or per-unit wait/compute split of the heads compute from per-TRISC wall-clock accumulators (DPRINT), per core |
+| `bench_qkv_mm_bs16_ablate.py [batch]` | QKV `minimal_matmul` at the model's bs16 config with the in0 / in1 reads and / or the output write skipped (patches `matmul_dataflow_common_metal2.hpp` per variant, restores it; PCC shows each patch compiled in) |
 | `test_heads_qsplit.py`, `test_sdpa_concat_out.py` | bit-identity + timing of the fused-heads Q split and the concat-free SDPA output |
 | `parse_smi2.py <dev> <log>` | aligns tt-smi clock/power samples (`/tmp/smi_samples/*.json`) with iteration timestamps |
 

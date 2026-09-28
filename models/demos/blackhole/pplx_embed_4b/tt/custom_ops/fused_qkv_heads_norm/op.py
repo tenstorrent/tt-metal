@@ -113,9 +113,10 @@ def nlp_create_qkv_heads_norm_headsplit(
     device = qkv_fused.device()
     fuse_rotary = rot_cos is not None
     use_v2 = os.getenv("QWEN_FUSED_COMPUTE_V2", "0") == "1"
-    # bs1 compute (QWEN_FUSED_COMPUTE_V3=1, set at bs1 only): v1's math with every phase run once per unit over the
-    # unit's Q and K heads, so each phase's reconfig / init / CB handshakes are paid once per unit; intermediate CBs
-    # hold a unit's heads. Bit-identical to v1 at every batch size, but slower than v1 at bs8/16/32.
+    # v3 compute (QWEN_FUSED_COMPUTE_V3=1, set at bs1, and at bs8 with the QKV output in L1): v1's math with every
+    # phase run once per unit over the unit's Q and K heads, so each phase's reconfig / init / CB handshakes are paid
+    # once per unit; intermediate CBs hold a unit's heads. Bit-identical to v1 at every batch size; 30% less compute,
+    # but slower than v1 when the input streams from DRAM (NEGATIVE_RESULTS 53 / 56).
     use_v3 = os.getenv("QWEN_FUSED_COMPUTE_V3", "0") == "1" and not use_v2
     # cos/sin tiles depend only on the seq tile; consecutive units of a core share it across the
     # head groups, so with the v2 compute they are read once per seq tile instead of once per unit.

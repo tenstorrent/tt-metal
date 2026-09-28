@@ -1036,3 +1036,69 @@ q96 364, q64 402; 11×10 / 12×9 / 12×8 at q128 373 / 370 / 390; packed + reuse
 less DRAM-bound), bs32: 911.6 → 620.5 (12×10 q128). In the model the cold gain matches the standalone one (bs16 −5.6 ms,
 bs32 −9.8 ms over 36 calls) but the sustained gain is a third of it: less waiting on DRAM means more power per
 iteration, and the power manager settles the clock 10-15 MHz lower.
+
+## 56. bs16 fused heads op: compute-bound; the QKV output does not fit in L1 next to the QKV matmul (2026-09-28)
+
+8× p150b host. Standalone traced time per call of the fused heads op (head split + Q/K RMSNorm + RoPE, v1 compute) at
+the bs16 config (QKV [16, 1, 512, 6144] bfp8, bfp8 Q/K/V out in DRAM), `perf_tools/bench_heads_bs16_ablate.py` (scratch
+kernel variants that skip the unit reads, the unit writes, or replace the compute with a tile copy). cos / sin / the
+rotation tile in L1 as in the model (`QWEN_ROPE_PREFILL_L1=1`); `ABL_ROPE=DRAM` gives the second column:
+
+| variant | DRAM in | L1 in | DRAM in, cos/sin in DRAM |
+|---|---|---|---|
+| full | 327.3 µs | 304.5 µs | 435.3 µs |
+| compute only (no unit read / write) | 301.6 | | 309.8 |
+| data movement only (copy compute) | 272.0 | 224.8 | 350.4 |
+| read only | 183.4 | 232.5 | 250.9 |
+| write only | 200.9 | | 267.1 |
+| handshakes only (copy compute, no read / write) | 63.8 | | 112.8 |
+
+At the model's placement the op is compute-bound (full 327 against compute-only 302); an L1 input saves only 23 µs. A
+first pass of this bench read cos / sin from DRAM and concluded the op was bound by the DRAM input read (435 → 320 with
+the input in L1): the cos / sin reads were what the L1 input relieved (entry 25's lesson, again).
+
+**The v1 compute is per-phase overhead.** Per-phase wall-clock split of the v1 compute (`perf_tools/bench_heads_bs16_phases.py`,
+per-TRISC accumulators, 114 cores, 18 units per core; a unit is one 32-row tile of one KV group: 4 Q + 1 K heads
+normalised, V copied): ~412k cycles per core, ~4.5k per normalised head over 9 phases of 4 tiles each (~500 cycles per
+phase). The math thread spends a third of its time in eps + rsqrt (one tile per head: fp32, non-approximate, all four
+faces although only column 0 is used), and the rest is spread evenly over the phases. The compute kernels side by side
+(`perf_tools/bench_heads_bs16_kernels.py`, cos / sin in L1, PCC against v1):
+
+| compute | L1 in | DRAM in | vs v1 |
+|---|---|---|---|
+| v1 (batched default) | 304.7 µs | 327.6 µs | |
+| v2 (dest-reuse, 6 passes per head, entry 25) | 298.5 | 324.1 | PCC Q 0.9988, K 0.9997 |
+| v3 (each phase once per unit, over its 5 heads; bs1 default) | 214.2 | 372.3 | bit-identical |
+
+Fewer passes (v2) do not help; paying each phase's reconfigure / init / CB handshakes once per unit instead of once per
+head (v3) cuts the compute by 30%, but only when the input read does not compete with it (DRAM in: slower than v1,
+entry 53).
+
+**In the model the QKV output does not fit in L1 at bs16.** `TT_PREFILL_QKV_L1=1` at bs16 puts the 53.5 MB QKV output
+in L1 (446 KB per core on 12×10) while the norm output is also L1 resident; the QKV `minimal_matmul`'s static CBs at the
+default 8,8,8 blocks end at 595072, and the output lands at 517184: `Statically allocated dataflow buffers ... clash
+with L1 buffers` (78 KB per core short). Smaller blocks make room, but the matmul slows down more than the heads op speeds
+up (e2e best of 10, `ab_one.sh`, same chip): 8,8,8 DRAM 189.2 → 8,4,8 L1 189.0 ms (sustained iteration 9 223.4 →
+225.7); 8,8,8 DRAM 189.5 → 4,8,8 L1 197.8; 4,4,8 DRAM 202.0 → 4,4,8 L1 200.3. bs16 keeps the QKV output in DRAM. bs8
+fits (27 MB, 223 KB per core) and gains: QKV output in L1, default on at bs8 (POSITIVE_RESULTS).
+
+**The QKV matmul is compute-bound, but its output write does not overlap.** `perf_tools/bench_qkv_mm_bs16_ablate.py`
+(bs16 QKV minimal_matmul at the model's config: 12×10, 8,8,8 blocks, subblock 1,8, LoFi, bfp8 in / out; variants patch
+`matmul_dataflow_common_metal2.hpp`, the header the op's Metal 2.0 kernels include; output PCC 1.000 for full and ~0 for
+every skip variant, so the patches compiled in), µs per call, L1 / DRAM input: full 667.4 / 659.2, no output write
+554.1 / 533.1, no reads 627.7 / 626.8, no in0 read 656.0 / 655.8, no in1 read 640.7 / 631.4, compute only 512.0 /
+511.8. Compute is ~78% of the call; the reads mostly overlap it (−35 µs), the output write does not (−110 to −126 µs).
+A QKV + heads fusion would still write Q/K/V (the same 53.5 MB) for SDPA, so the write stall stays; it removes the heads
+op (327 µs) and adds its compute to the matmul's, which at v3's cost is at most ~214 µs.
+
+**Why v3 loses with a DRAM input: the op sits at the DRAM floor, and the saturated bandwidth reaches the top grid rows
+last.** Per-unit split (`bench_heads_bs16_phases.py`, `PH_MODE=unit`): with a DRAM input, v3's mean core is faster than
+v1's (347k vs 418k cycles), but the cores of grid rows 0-2 wait on their reader (unpack wait-for-input 183k cycles on
+the slowest, v1 ~20k) and end the op at 503k. Mean cycles by grid row, v3: 449 478 412 332 320 303 296 290 288 280k (v1
+the same gradient, 436 → 398k, hidden by its slower compute; L1 input: flat). It follows the core's position, not its
+data or its NoC: the same with the unit ranges handed out in reverse core order, with the reader on NoC1 and the writer
+on NoC0 (and everything much slower: v1 L1-input 305 → 500 µs), and with cos / sin in DRAM. Unit counts weighted by
+row (all 120 cores, rows 0-1 12 units, rows 7-9 20) even out the finish: v3 DRAM-input 372 → 327 µs, but that only
+matches v1 (328). The op moves 107 MB per call (read + write) and its data movement alone takes 272 µs (~390 GB/s), so
+with a DRAM input v1 is within ~55 µs of the floor and a faster compute cannot go below it. The experiment knobs (NoC
+swap, reversed units, row weights) were removed; v3 follows the QKV-output-in-L1 knob (bs8 default).
