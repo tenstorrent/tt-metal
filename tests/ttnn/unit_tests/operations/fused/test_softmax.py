@@ -294,26 +294,25 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.cache_entries_counter.total == 1
 
 
-# The sharded compute kernel keeps subblock_w tiles live in Dest, so a subblock_w above the Dest
-# capacity used to run to completion and return wrong numbers with no diagnostic. The capacity is
-# 8 tiles by default, 4 with fp32_dest_acc_en and 16 with dst_full_sync_en, so the guard has to read
-# the compute config rather than assume the default. subblock_w = 0 is the other end of the same
-# bound: block_w % subblock_w == 0 is only checked when a mask is present, so without one a zero
-# used to reach block_w / subblock_w in the program factory and take the process down with SIGFPE.
+# The sharded compute kernel sizes its Dest blocks from subblock_w. It used to keep all subblock_w tiles
+# live in Dest at once, so a value above the capacity of the compute config (8 tiles by default, 4 with
+# fp32_dest_acc_en, 16 with dst_full_sync_en) ran to completion and returned wrong numbers, PCC 0.01 at 16
+# on the default config. The kernel now clamps the block to the capacity and handles a tail block, so every
+# value above capacity, and one that does not divide block_w, has to match torch. subblock_w = 0 is
+# rejected on the host, because the mask branch of validation takes block_w % subblock_w.
 @pytest.mark.parametrize(
-    "fp32_acc_en, dst_full_sync_en, subblock_w, expect_raise",
+    "fp32_acc_en, dst_full_sync_en, subblock_w",
     [
-        (False, False, 0, True),
-        (False, False, 8, False),
-        (False, False, 16, True),
-        (True, False, 4, False),
-        (True, False, 8, True),
-        (False, True, 16, False),
+        (False, False, 0),
+        (False, False, 8),
+        (False, False, 16),
+        (False, False, 6),
+        (True, False, 4),
+        (True, False, 8),
+        (False, True, 16),
     ],
 )
-def test_softmax_sharded_subblock_w_dest_capacity(
-    device, expect_error, fp32_acc_en, dst_full_sync_en, subblock_w, expect_raise
-):
+def test_softmax_sharded_subblock_w_dest_capacity(device, expect_error, fp32_acc_en, dst_full_sync_en, subblock_w):
     torch.manual_seed(0)
     grid_size = (8, 4)
     batch_size, num_heads, h, w = 8, 4, 128, 512
@@ -342,11 +341,8 @@ def test_softmax_sharded_subblock_w_dest_capacity(
         torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
 
-    if expect_raise:
-        # The bound is enforced by two checks now: the zero end runs ahead of the mask branch, which
-        # carries a block_w % subblock_w, and the capacity end needs the compute config.
-        message = "subblock_w must be greater than 0" if subblock_w == 0 else "must be at most the Dest capacity"
-        with expect_error(RuntimeError, message):
+    if subblock_w == 0:
+        with expect_error(RuntimeError, "subblock_w must be greater than 0"):
             ttnn.softmax_in_place(
                 input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
             )
