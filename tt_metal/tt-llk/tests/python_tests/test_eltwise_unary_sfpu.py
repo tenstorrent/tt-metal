@@ -1412,6 +1412,7 @@ _TT_POLY_FP32_DEST = {
     "logsigmoid": (),
     "multigammaln": ("blackhole", "wormhole"),
     "polygamma": (),
+    "prelu": (),
     "relu": (),
     "relu6": (),
     "relu_max": (),
@@ -1441,6 +1442,7 @@ _TT_POLY_ADAPTER_OPERATIONS = {
     "logit": "logit",
     "logsigmoid": "logsigmoid",
     "multigammaln": "tt_poly_aggregate_multigammaln",
+    "prelu": "prelu",
     "relu6": "relu6",
     "relu_max": "relu_max",
     "relu_min": "relu_min",
@@ -1642,6 +1644,7 @@ _GENERATED_UNARY_CASES = [
         "None",
         "ckernel_sfpu_polygamma.h",
     ),
+    (MathOperation.Prelu, "prelu", True, False, 32, "None", "ckernel_sfpu_prelu.h"),
     (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
     (None, "relu6", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
     (MathOperation.ReluMax, "relu_max", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
@@ -1908,6 +1911,26 @@ def _tt_poly_reference_multigammaln_p4(x):
     )
 
 
+def _tt_poly_reference_prelu(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(0.25 * x, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((0.0,), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        return result
+
+    return torch.from_numpy(_declared_forward(x.double().numpy()))
+
+
 def _tt_poly_reference_relu6(x):
     def _declared_piece_0(x):
         return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
@@ -2094,6 +2117,12 @@ _TT_POLY_FORWARD_REFERENCES = {
         (16321, 31559),
         (),
     ),
+    "prelu": (
+        _tt_poly_reference_prelu,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (0,),
+        (),
+    ),
     "relu6": (
         _tt_poly_reference_relu6,
         ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
@@ -2203,6 +2232,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "multigammaln",
     "multigammaln_p4",
     "polygamma",
+    "prelu",
     "relu",
     "relu6",
     "selu",

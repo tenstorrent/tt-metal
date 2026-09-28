@@ -672,6 +672,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(params[1]))};
         }
         case UnaryOpType::PRELU_SFPU: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x3e800000u) {
+                return {
+                    "prelu_tt_poly_bf16_tile_init();", fmt::format("prelu_tt_poly_bf16_tile({}, 0x3e800000u);", idst)};
+            }
+#endif
+
             return {
                 "prelu_tile_init();", fmt::format("prelu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         }
