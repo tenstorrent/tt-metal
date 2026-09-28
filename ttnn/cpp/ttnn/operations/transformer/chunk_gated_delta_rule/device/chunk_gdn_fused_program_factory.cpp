@@ -48,8 +48,7 @@
 #include "chunk_gdn_compute_config.hpp"
 
 #include <algorithm>
-#include <cstring>
-#include <set>
+#include <bit>
 #include <string>
 #include <vector>
 
@@ -143,18 +142,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const std::vector<CoreCoord>& rcv_cores = layout.receivers;
     const std::vector<CoreCoord>& prod_cores = layout.producers;
 
-    std::set<CoreRange> rcv_crs, prod_crs, union_crs;
-    for (const auto& c : rcv_cores) {
-        rcv_crs.insert(CoreRange{c, c});
-        union_crs.insert(CoreRange{c, c});
-    }
-    for (const auto& c : prod_cores) {
-        prod_crs.insert(CoreRange{c, c});
-        union_crs.insert(CoreRange{c, c});
-    }
-    const CoreRangeSet rcv_set{rcv_crs};
-    const CoreRangeSet prod_set{prod_crs};
-    const CoreRangeSet union_set{union_crs};
+    // CoreRangeSet(Span<const CoreCoord>) merges the per-core coordinates into rectangles.
+    const CoreRangeSet rcv_set(rcv_cores);
+    const CoreRangeSet prod_set(prod_cores);
+    const CoreRangeSet union_set = rcv_set.merge(prod_set);
 
     ProgramDescriptor desc;
     auto add_cb = [&](const CoreRangeSet& on,
@@ -276,15 +267,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     prep_reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
 
-    auto f32_bits = [](float f) {
-        uint32_t u;
-        std::memcpy(&u, &f, sizeof(u));
-        return u;
-    };
     std::vector<uint32_t> prep_compute_ct = ct_prep;
     prep_compute_ct.push_back(attrs.qk_norm ? 1u : 0u);
-    prep_compute_ct.push_back(f32_bits(attrs.scale));
-    prep_compute_ct.push_back(f32_bits(1e-6f));
+    prep_compute_ct.push_back(std::bit_cast<uint32_t>(attrs.scale));
+    prep_compute_ct.push_back(std::bit_cast<uint32_t>(1e-6f));
 
     // Fused writer: plain scalars, no accessors (it writes no DRAM at all).
     const std::vector<uint32_t> fused_writer_ct = {
@@ -321,22 +307,24 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     // ---- Kernels. Push order FIXED (part of the program-cache identity):
     // prep_reader, prep_compute, fused_writer, fused_receiver_reader, scan_compute, scan_writer.
-    KernelDescriptor prep_reader;
-    prep_reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_prep.cpp";
-    prep_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    prep_reader.core_ranges = prod_set;
-    prep_reader.compile_time_args = prep_reader_ct;
-    prep_reader.config = ReaderConfigDescriptor{};
+    KernelDescriptor prep_reader{
+        .kernel_source = kdir + "dataflow/reader_chunk_gdn_prep.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = prod_set,
+        .compile_time_args = prep_reader_ct,
+        .config = ReaderConfigDescriptor{},
+    };
     prep_reader.runtime_args.reserve(P);
 
-    KernelDescriptor prep_compute;
-    prep_compute.kernel_source = kdir + "compute/chunk_gdn_prep.cpp";
-    prep_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    prep_compute.core_ranges = prod_set;
-    prep_compute.compile_time_args = prep_compute_ct;
-    prep_compute.config = gdn_compute_config(attrs.compute_kernel_config);
-    // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
-    prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
+    KernelDescriptor prep_compute{
+        .kernel_source = kdir + "compute/chunk_gdn_prep.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = prod_set,
+        .compile_time_args = prep_compute_ct,
+        // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
+        .defines = {{"GDN_HOIST_RECONFIG", "1"}},
+        .config = gdn_compute_config(attrs.compute_kernel_config),
+    };
     prep_compute.runtime_args.reserve(P);
 
     // The fused writer runs on the WriterConfigDescriptor's RISC/NoC (BRISC / NOC_1 on Blackhole).
@@ -346,37 +334,41 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // and identical on both NoCs.
     const bool writer_on_noc1 = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch()) == NOC::NOC_1;
 
-    KernelDescriptor fused_writer;
-    fused_writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp";
-    fused_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    fused_writer.core_ranges = prod_set;
-    fused_writer.compile_time_args = fused_writer_ct;
-    fused_writer.config = WriterConfigDescriptor{};
+    KernelDescriptor fused_writer{
+        .kernel_source = kdir + "dataflow/writer_chunk_gdn_fused.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = prod_set,
+        .compile_time_args = fused_writer_ct,
+        .config = WriterConfigDescriptor{},
+    };
     fused_writer.runtime_args.reserve(P);
 
-    KernelDescriptor receiver_reader;
-    receiver_reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp";
-    receiver_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    receiver_reader.core_ranges = rcv_set;
-    receiver_reader.compile_time_args = receiver_ct;
-    receiver_reader.defines = {{"GDN_FUSED_RECEIVER", "1"}};
-    receiver_reader.config = ReaderConfigDescriptor{};
+    KernelDescriptor receiver_reader{
+        .kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = rcv_set,
+        .compile_time_args = receiver_ct,
+        .defines = {{"GDN_FUSED_RECEIVER", "1"}},
+        .config = ReaderConfigDescriptor{},
+    };
     receiver_reader.runtime_args.reserve(R);
 
-    KernelDescriptor scan_compute;
-    scan_compute.kernel_source = kdir + "compute/chunk_gdn_scan.cpp";
-    scan_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    scan_compute.core_ranges = rcv_set;
-    scan_compute.compile_time_args = ct_scan;
-    scan_compute.config = gdn_compute_config(attrs.compute_kernel_config);
+    KernelDescriptor scan_compute{
+        .kernel_source = kdir + "compute/chunk_gdn_scan.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = rcv_set,
+        .compile_time_args = ct_scan,
+        .config = gdn_compute_config(attrs.compute_kernel_config),
+    };
     scan_compute.runtime_args.reserve(R);
 
-    KernelDescriptor scan_writer;
-    scan_writer.kernel_source = kdir + "dataflow/writer_chunk_gdn_scan.cpp";
-    scan_writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    scan_writer.core_ranges = rcv_set;
-    scan_writer.compile_time_args = scan_writer_ct;
-    scan_writer.config = WriterConfigDescriptor{};
+    KernelDescriptor scan_writer{
+        .kernel_source = kdir + "dataflow/writer_chunk_gdn_scan.cpp",
+        .source_type = KernelDescriptor::SourceType::FILE_PATH,
+        .core_ranges = rcv_set,
+        .compile_time_args = scan_writer_ct,
+        .config = WriterConfigDescriptor{},
+    };
     scan_writer.runtime_args.reserve(R);
 
     auto* q_buf = in.q.buffer();

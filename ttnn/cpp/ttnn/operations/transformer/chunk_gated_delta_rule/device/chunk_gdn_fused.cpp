@@ -161,11 +161,11 @@ namespace {
 constexpr float kFillUs = 65.0f;
 // Producer item time depends on how many producers load the DRAM/NoC at once: 26 us with <= 28 of
 // them (BH=4), 34 us with >= 84 (BH=12); linear in between.
-float w_p_us(uint32_t producers) {
+constexpr float w_p_us(uint32_t producers) {
     const float f = std::min(1.0f, std::max(0.0f, (static_cast<float>(producers) - 28.0f) / 56.0f));
     return 26.0f + 8.0f * f;
 }
-float t_step_us(uint32_t Vtl) {
+constexpr float t_step_us(uint32_t Vtl) {
     switch (Vtl) {
         case 1: return 3.5f;    // receiver period with the scan-step DST batching: 3.43 compute
         case 2: return 4.9f;    // 4.82 compute
@@ -173,7 +173,7 @@ float t_step_us(uint32_t Vtl) {
         default: return -1.0f;  // unmeasured width
     }
 }
-float t_phased_us(uint32_t BH, uint32_t NC) {
+constexpr float t_phased_us(uint32_t BH, uint32_t NC) {
     // Measured wall-op at NC=64 (wall - 115 us glue): 4 -> 453, 8 -> 593, 12 -> 706, 16 -> 883,
     // 32 -> 1449, 48 -> 2475. Linear 310 + 35.8*BH to BH=32, then interpolated to the DRAM-saturated
     // BH=48 point.

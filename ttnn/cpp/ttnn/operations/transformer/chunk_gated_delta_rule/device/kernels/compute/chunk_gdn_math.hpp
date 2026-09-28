@@ -106,16 +106,19 @@ inline void mm(
     cb_push_back(o, Mt * Nt);
 }
 
-// out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
-inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op, bool skip_reconfig = false) {
+// Elementwise binary op selector for ew() / ewt().
+enum class EwOp : uint8_t { Add, Sub, Mul };
+
+// out = A (op) B elementwise, n tiles.
+inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool skip_reconfig = false) {
     cb_reserve_back(o, n);
     if (!skip_reconfig) {
         pack_reconfig_data_format(o);
         reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
     }
-    if (op == 0) {
+    if (op == EwOp::Add) {
         add_init(a, b);
-    } else if (op == 1) {
+    } else if (op == EwOp::Sub) {
         sub_init(a, b);
     } else {
         mul_init(a, b);
@@ -123,9 +126,9 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op, bool skip
     if constexpr (kDstTiles == 1) {
         for (uint32_t i = 0; i < n; i++) {
             tile_regs_acquire();
-            if (op == 0) {
+            if (op == EwOp::Add) {
                 add_tiles(a, b, i, i, 0);
-            } else if (op == 1) {
+            } else if (op == EwOp::Sub) {
                 sub_tiles(a, b, i, i, 0);
             } else {
                 mul_tiles(a, b, i, i, 0);
@@ -142,9 +145,9 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op, bool skip
         const uint32_t nb = (n - i0 < kDstTiles) ? (n - i0) : kDstTiles;
         tile_regs_acquire();
         for (uint32_t j = 0; j < nb; j++) {
-            if (op == 0) {
+            if (op == EwOp::Add) {
                 add_tiles(a, b, i0 + j, i0 + j, j);
-            } else if (op == 1) {
+            } else if (op == EwOp::Sub) {
                 sub_tiles(a, b, i0 + j, i0 + j, j);
             } else {
                 mul_tiles(a, b, i0 + j, i0 + j, j);
@@ -269,20 +272,20 @@ inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfi
     cb_push_back(o, 1);
 }
 
-// out[0] = a[ai] (op) b[bi], single tile. op: 0 add, 2 mul. (Like ew but with free tile indices.)
-inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, int op, bool skip_reconfig = false) {
+// out[0] = a[ai] (op) b[bi], single tile; Add or Mul. (Like ew but with free tile indices.)
+inline void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, EwOp op, bool skip_reconfig = false) {
     cb_reserve_back(o, 1);
     if (!skip_reconfig) {  // see mm() for the skip_reconfig contract
         pack_reconfig_data_format(o);
         reconfig_data_format(a, b);
     }
-    if (op == 0) {
+    if (op == EwOp::Add) {
         add_init(a, b);
     } else {
         mul_init(a, b);
     }
     tile_regs_acquire();
-    if (op == 0) {
+    if (op == EwOp::Add) {
         add_tiles(a, b, ai, bi, 0);
     } else {
         mul_tiles(a, b, ai, bi, 0);
@@ -408,19 +411,19 @@ inline void invert_block(
     cpy_t(src, tile, tmpN, kGdnHoistReconfig);
     CircularBuffer(tmpN).wait_front(1);  // negN -> tmpN[0]
     // Bi00 = (I-N00)^-1  (N00 = top-left quadrant of negN; top-right is already 0)
-    ewt(tmpN, 0, cb_mask, 0, A, 2, kGdnHoistReconfig);
+    ewt(tmpN, 0, cb_mask, 0, A, EwOp::Mul, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);  // N00
     invert16(A, B, tmpT, cb_eye);
     CircularBuffer(B).wait_front(1);
     CircularBuffer(A).pop_front(1);  // Bi00 -> B
     // Bi11 = (I-N11)^-1  (N11 = bottom-right quadrant)
-    ewt(tmpN, 0, cb_mask, 1, A, 2, kGdnHoistReconfig);
+    ewt(tmpN, 0, cb_mask, 1, A, EwOp::Mul, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);  // N11
     invert16(A, C, tmpT, cb_eye);
     CircularBuffer(C).wait_front(1);
     CircularBuffer(A).pop_front(1);  // Bi11 -> C
     // off = Bi11 @ N10 @ Bi00  (N10 = bottom-left quadrant; result lives only there)
-    ewt(tmpN, 0, cb_mask, 2, A, 2, kGdnHoistReconfig);
+    ewt(tmpN, 0, cb_mask, 2, A, EwOp::Mul, kGdnHoistReconfig);
     CircularBuffer(A).wait_front(1);  // N10
     CircularBuffer(tmpN).pop_front(1);
     mm(C, A, tmpT, 1, 1, 1, false, kGdnHoistReconfig);
@@ -430,17 +433,17 @@ inline void invert_block(
     CircularBuffer(A).wait_front(1);
     CircularBuffer(tmpT).pop_front(1);  // @Bi00 -> A(off)
     // out = Qtl*Bi00 + Qbr*Bi11 + off
-    ewt(B, 0, cb_mask, 0, D, 2, kGdnHoistReconfig);
+    ewt(B, 0, cb_mask, 0, D, EwOp::Mul, kGdnHoistReconfig);
     CircularBuffer(D).wait_front(1);
     CircularBuffer(B).pop_front(1);  // Bi00_tl -> D
-    ewt(C, 0, cb_mask, 1, B, 2, kGdnHoistReconfig);
+    ewt(C, 0, cb_mask, 1, B, EwOp::Mul, kGdnHoistReconfig);
     CircularBuffer(B).wait_front(1);
     CircularBuffer(C).pop_front(1);  // Bi11_br -> B
-    ewt(D, 0, B, 0, C, 0, true);
+    ewt(D, 0, B, 0, C, EwOp::Add, true);
     CircularBuffer(C).wait_front(1);
     CircularBuffer(D).pop_front(1);
     CircularBuffer(B).pop_front(1);
-    ewt(C, 0, A, 0, out, 0, true);
+    ewt(C, 0, A, 0, out, EwOp::Add, true);
     CircularBuffer(C).pop_front(1);
     CircularBuffer(A).pop_front(1);  // + off -> out
 }
@@ -556,7 +559,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     uint32_t Q = cb.q, Kk = cb.k;
     if constexpr (qk_norm) {
         // q: q^2 -> rowsum_K -> rsqrt(+eps)*scale -> q_normed (cb.supd)
-        ew(cb.q, cb.q, cb.scr1, ck, 2);
+        ew(cb.q, cb.q, cb.scr1, ck, EwOp::Mul);
         WAIT(cb.scr1, ck);
         rowsum_k(cb.scr1, cb.scr2, Ct, Kt, cb.ones);
         WAIT(cb.scr2, Ct);
@@ -569,7 +572,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         POP(cb.scr3, Ct);
         POP(cb.q, ck);
         // k: same, no scale -> k_normed (cb.stmp)
-        ew(cb.k, cb.k, cb.scr1, ck, 2);
+        ew(cb.k, cb.k, cb.scr1, ck, EwOp::Mul);
         WAIT(cb.scr1, ck);
         rowsum_k(cb.scr1, cb.scr2, Ct, Kt, cb.ones);
         WAIT(cb.scr2, Ct);
@@ -608,13 +611,13 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     WAIT(cb.scr3, cc);
     POP(cb.scr1, Ct);  // decay_row done
     POP(cb.scr2, cc);
-    ew(cb.scr3, cb.tril, cb.scr2, cc, 2);  // *tril (zero upper)
+    ew(cb.scr3, cb.tril, cb.scr2, cc, EwOp::Mul);  // *tril (zero upper)
     WAIT(cb.scr2, cc);
     POP(cb.scr3, cc);
     expc(cb.scr2, cb.scr3, cc);  // exp
     WAIT(cb.scr3, cc);
     POP(cb.scr2, cc);
-    ew(cb.scr3, cb.tril, cb.lmask, cc, 2);  // *tril again -> L_mask
+    ew(cb.scr3, cb.tril, cb.lmask, cc, EwOp::Mul);  // *tril again -> L_mask
     WAIT(cb.lmask, cc);
     POP(cb.scr3, cc);
 
@@ -624,7 +627,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     mm(cb.ones, cb.g, cb.scr1, Ct, Ct, 1, false);  // g_sum in every row (col form)
     WAIT(cb.scr1, Ct);
     POP(cb.g, Ct);
-    ew(cb.scr1, cb.decay, cb.scr2, Ct, 1);  // g_sum - decay
+    ew(cb.scr1, cb.decay, cb.scr2, Ct, EwOp::Sub);  // g_sum - decay
     WAIT(cb.scr2, Ct);
     POP(cb.scr1, Ct);
     POP(cb.decay, Ct);
@@ -639,13 +642,13 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
     mm(cb.kbeta, Kk, cb.scr1, Ct, Kt, Ct, true);  // kk = k_beta @ k^T (Kk = normalized k)
     WAIT(cb.scr1, cc);
-    ew(cb.scr1, cb.lmask, cb.scr2, cc, 2);  // kk_masked = kk * L_mask
+    ew(cb.scr1, cb.lmask, cb.scr2, cc, EwOp::Mul);  // kk_masked = kk * L_mask
     WAIT(cb.scr2, cc);
     POP(cb.scr1, cc);
-    ew(cb.scr2, cb.eye, cb.scr1, cc, 2);  // diag(kk_masked)
+    ew(cb.scr2, cb.eye, cb.scr1, cc, EwOp::Mul);  // diag(kk_masked)
     WAIT(cb.scr1, cc);
     // negN = diag - kk_masked = -(strictly_lower(kk_masked))  (= -A_strict, kept in cb.scr3)
-    ew(cb.scr1, cb.scr2, cb.scr3, cc, 1);
+    ew(cb.scr1, cb.scr2, cb.scr3, cc, EwOp::Sub);
     WAIT(cb.scr3, cc);
     POP(cb.scr1, cc);
     POP(cb.scr2, cc);
@@ -705,13 +708,13 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         POP(cb.ointer, 1);
     } else {
         // Fallback (C>64, currently xfail): full-matrix Horner.
-        ew(cb.eye, cb.scr3, cb.Tinv, cc, 0);
+        ew(cb.eye, cb.scr3, cb.Tinv, cc, EwOp::Add);
         WAIT(cb.Tinv, cc);
         for (uint32_t m = 2; m < C; m++) {
             mm(cb.scr3, cb.Tinv, cb.scr1, Ct, Ct, Ct, false);
             WAIT(cb.scr1, cc);
             POP(cb.Tinv, cc);
-            ew(cb.eye, cb.scr1, cb.Tinv, cc, 0);
+            ew(cb.eye, cb.scr1, cb.Tinv, cc, EwOp::Add);
             WAIT(cb.Tinv, cc);
             POP(cb.scr1, cc);
         }
@@ -729,7 +732,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
     mm(Q, Kk, cb.scr1, Ct, Kt, Ct, true);  // qk = q @ k^T (Q/Kk = normalized q,k)
     WAIT(cb.scr1, cc);
-    ew(cb.scr1, cb.lmask, cb.intra, cc, 2);
+    ew(cb.scr1, cb.lmask, cb.intra, cc, EwOp::Mul);
     WAIT(cb.intra, cc);
     POP(cb.scr1, cc);
     POP(cb.lmask, cc);
@@ -761,7 +764,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 
     // ---- dl = exp(g_sum) = decayfac[i]*decay_exp[i] (same for all i); 1 tile, [0,0] holds dl.
     // The scan kernel uses it to decay the recurrent state: S <- S*dl + k_dec_t@v_new.
-    ew(cb.decayfac, cb.decay_exp, cb.dl, 1, 2);
+    ew(cb.decayfac, cb.decay_exp, cb.dl, 1, EwOp::Mul);
     WAIT(cb.dl, 1);
     POP(cb.decayfac, Ct);
     POP(cb.decay_exp, Ct);
@@ -798,7 +801,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     {
         GDN_ZONE("st_diff");
         WAIT(cb.vbeta, cv);
-        ew(cb.vbeta, cb.scr1, cb.ointer, cv, 1, H);  // diff = v_beta - kdS -> ointer
+        ew(cb.vbeta, cb.scr1, cb.ointer, cv, EwOp::Sub, H);  // diff = v_beta - kdS -> ointer
         WAIT(cb.ointer, cv);
         POP(cb.vbeta, cv);
         POP(cb.scr1, cv);
@@ -842,7 +845,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     // o = o_inter + intra_v -> cb_out (drained by writer)
     {
         GDN_ZONE("st_o");
-        ew(cb.ointer, cb.scr1, cb.out, cv, 0, H);
+        ew(cb.ointer, cb.scr1, cb.out, cv, EwOp::Add, H);
         POP(cb.ointer, cv);
         POP(cb.scr1, cv);
     }
@@ -857,7 +860,7 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     }
     {
         GDN_ZONE("st_snew");
-        ew(cb.stmp, cb.supd, dst, kv, 0, H);
+        ew(cb.stmp, cb.supd, dst, kv, EwOp::Add, H);
         POP(cb.stmp, kv);
         POP(cb.supd, kv);
     }
