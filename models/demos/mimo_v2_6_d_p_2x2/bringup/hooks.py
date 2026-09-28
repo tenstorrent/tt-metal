@@ -252,7 +252,7 @@ class _HybridState:
 
 class HybridDeviceModel:
     """CPU reference model with the steps in DEVICE_STEPS swapped for device modules (host in / host out per step).
-    Hidden states stay on the host until the assemble step builds the all-device model."""
+    Hidden states stay on the host (BRINGUP_HYBRID=1, debugging)."""
 
     def __init__(self, mesh, spec, layers, lm_head=True):
         import time
@@ -322,6 +322,122 @@ class HybridDeviceModel:
         pass
 
 
+class _DeviceState:
+    """Per-layer device KV caches (tt/model.py:new_attention_caches)."""
+
+    def __init__(self, mesh, cfg, layers, max_seq):
+        from models.demos.mimo_v2_6_d_p_2x2.tt.model import new_attention_caches
+
+        self.caches = new_attention_caches(mesh, cfg, layers, max_seq)
+
+    def load_prefix(self, layer, tensors, length):
+        self.caches[layer].load_prefix(tensors["key"], tensors["value"], length)
+
+    def to_torch(self, layer, length):
+        return self.caches[layer].to_torch(length)
+
+
+class MiMoDeviceModel:
+    """Ladder/profile adapter over tt/model.py:TtMiMoModel (2x2).
+
+    The hidden state is a replicated [1, 1, S, H] bf16 device tensor from the embedding to the final norm. Each layer
+    is TtMiMoBlock.__call__: run_block over the reference block graph with the validated device modules (one profiler
+    section per step). RoPE tables, page tables and router / dispatch tables are built once at load and sliced on the
+    device. Only the LM head runs on the host (ladder logits on sampled rows, when the stack ends at the last layer)."""
+
+    def __init__(self, mesh, spec, layers, lm_head=True):
+        import time
+
+        from models.demos.common.bringup.reference.golden import hf_path
+        from models.demos.mimo_v2_6_d_p_2x2.tt.model import TtMiMoModel
+
+        t0 = time.time()
+        self.mesh, self.spec = mesh, spec
+        self.path = hf_path(spec)
+        self.model = TtMiMoModel(
+            mesh, self.path, max_seq=_rope_max_seq(spec), max_chunk=_max_chunk(spec), layers=list(layers)
+        )
+        self.cfg = self.model.cfg
+        self.blocks = {b.i: b for b in self.model.blocks}
+        self._lm_head = None
+        if lm_head:
+            from models.demos.mimo_v2_6_d_p.reference.weights import WeightLoader
+
+            self._lm_head = WeightLoader(self.path).get("lm_head.weight").float()  # untied
+        self.load_seconds = time.time() - t0
+
+    def new_state(self, max_seq):
+        return _DeviceState(self.mesh, self.cfg, list(self.blocks), max_seq)
+
+    def embed(self, tokens):
+        import ttnn
+
+        ids = ttnn.from_torch(
+            tokens.reshape(1, 1, -1).to(torch.int64).to(torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        h = self.model.embed(ids)
+        ttnn.deallocate(ids)
+        return h
+
+    def from_host(self, h):
+        from models.demos.mimo_v2_6_d_p_2x2.tt.rms_norm import to_device_replicated
+
+        return to_device_replicated(self.mesh, h)
+
+    def to_host(self, h):
+        from models.demos.mimo_v2_6_d_p_2x2.tt.rms_norm import replicated_to_host
+
+        return replicated_to_host(h).float()
+
+    def layer(self, i, h, start, state):
+        return self.blocks[i](h, start, state.caches[i])
+
+    def final_norm(self, h):
+        return self.model.final_norm(h)
+
+    def logits(self, hidden, rows):
+        return torch.nn.functional.linear(self.to_host(hidden)[rows], self._lm_head)
+
+    def free(self, h):
+        import ttnn
+
+        if isinstance(h, ttnn.Tensor) and h.is_allocated():
+            ttnn.deallocate(h)
+
+    def sync(self):
+        import ttnn
+
+        ttnn.synchronize_device(self.mesh)
+
+    def perf_settings(self):
+        """Recorded in the profile: the active SDPA presets and the experts / router modes."""
+        import os
+
+        from models.demos.mimo_v2_6_d_p_2x2.tt.attention import sdpa_settings, v_pad_enabled
+
+        full, sl = sdpa_settings(False), sdpa_settings(True)
+        return {
+            "sdpa_full_cfg": full["name"],
+            "sdpa_sliding_cfg": sl["name"],
+            "sdpa_full_chunks": list(full["chunks"]),
+            "sdpa_sliding_chunks": list(sl["chunks"]),
+            "experts_mode": os.environ.get("MIMO_EXPERTS_MODE", "unified"),
+            "router_mode": os.environ.get("MIMO_ROUTER_MODE", "fp32"),
+            "fuse_residual_norm": os.environ.get("MIMO_FUSE_RESIDUAL_NORM", "1") != "0",
+            "attn_v_pad": v_pad_enabled(),
+        }
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    """Hybrid harness (CPU reference + DEVICE_STEPS on the device) until the assemble step builds the all-device model."""
-    return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
+    device, host in / host out per step) for debugging."""
+    import os
+
+    if os.environ.get("BRINGUP_HYBRID") == "1":
+        return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
+    return MiMoDeviceModel(mesh, spec, layers, lm_head=lm_head)
