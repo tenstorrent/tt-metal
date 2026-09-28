@@ -537,3 +537,82 @@ def test_hardswish_bf16_compiled_contract(device):
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.hardswish(device_input, **{})).to(torch.bfloat16)
     assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _raw_to_reference_input(), ((), ()))
+
+
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
+)
+def test_softsign_bf16_compiled_contract(device):
+    import importlib
+    import numpy as np
+
+    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
+        "blackhole": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "pos_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "pos_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "pos_inf",
+            "neg_nan": "pos_inf",
+        },
+        "wormhole_b0": {
+            "finite_other": "finite_other",
+            "neg_inf": "neg_inf",
+            "neg_nan": "neg_inf",
+            "neg_subnormal": "pos_zero",
+            "neg_zero": "pos_zero",
+            "pos_inf": "pos_inf",
+            "pos_nan": "pos_inf",
+            "pos_subnormal": "pos_zero",
+            "pos_zero": "pos_zero",
+        },
+    }
+    _NUMERIC_TERMINALS = (
+        (),
+        (
+            ("below", -3.3895313892515355e38, False, "return_class", "nan"),
+            ("above", 3.3895313892515355e38, False, "return_class", "nan"),
+            ("below", -512.0, True, "constant", -1.0),
+            ("above", 512.0, True, "constant", 1.0),
+        ),
+    )
+
+    def _raw_to_reference_input():
+        if is_blackhole():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
+        if is_wormhole_b0():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
+        raise AssertionError("no compiled ingress contract for current architecture")
+
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(x / (1 + -x), dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x / (1 + x), dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((0.0,), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        return result
+
+    def _reference(values):
+        return torch.from_numpy(_declared_forward(values.numpy()))
+
+    def _real_domain_mask(values):
+        return np.ones(values.shape, dtype=bool)
+
+    host = generate_all_bfloat16_bitpatterns()
+    assert host.numel() == 65536
+    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.softsign(device_input, **{})).to(torch.bfloat16)
+    assert_bfloat16_compiled_contract(
+        host, result, _reference, _real_domain_mask, _raw_to_reference_input(), _NUMERIC_TERMINALS
+    )
