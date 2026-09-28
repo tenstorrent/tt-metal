@@ -65,6 +65,7 @@ class Qwen38Model:
     def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
         self.TP = resolve_mesh_tp(mesh_device)
         self.num_links = tp_policy(self.TP).get("num_links", 2)
+        self.head_readers = tp_policy(self.TP).get("head_readers", 2)
         self.precision = load_precision(precision_config)
         self.mesh = mesh_device
         self.snapshot = Path(snapshot or checkpoint_path())
@@ -273,7 +274,7 @@ class Qwen38Model:
                 in0_block_w=5,
                 per_core_M=1,
                 per_core_N=weight.memory_config().shard_spec.shape[1] // 32,
-                num_workers_per_dram_bank=2,
+                num_workers_per_dram_bank=self.head_readers,
                 fused_activation=None,
             )
             out = ttnn.linear(

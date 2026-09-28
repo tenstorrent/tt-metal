@@ -38,6 +38,19 @@ _TP_POLICY = {
         "rectangular_working": False,
         # The second ethernet link of each chip pair carries the dispatch datapath.
         "num_links": 1,
+        # DRAM-sharded matmul rejects num_workers_per_dram_bank > 1 outside Blackhole, so every
+        # projection and the LM head fall back to a single reader per bank.
+        "attention_readers": 1,
+        "output_readers": 1,
+        "gate_readers": 1,
+        "up_readers": 1,
+        "down_readers": 1,
+        "head_readers": 1,
+        # DRAM-sharded matmul takes its K block from the in0 shard width, which must divide K
+        # exactly. down_proj's per-device K is intermediate/TP, so halving TP halves it to 68
+        # tiles, and eight shards no longer fit; 34 is its largest divisor inside a 64-core grid.
+        "down_cores": 34,
+        "down_block": 2,
     },
 }
 
