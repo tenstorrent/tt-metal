@@ -1373,6 +1373,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 _TT_POLY_PACK_CONFIGS = {
     "relu": ("ckernel_sfpu_relu_bf16.h", "ttpoly_generated::ReluBf16Config"),
     "relu6": ("ckernel_sfpu_relu6_bf16.h", "ttpoly_generated::Relu6Bf16Config"),
+    "relu_max": ("ckernel_sfpu_relu_max_bf16.h", "ttpoly_generated::ReluMaxBf16Config"),
     "relu_min": ("ckernel_sfpu_relu_min_bf16.h", "ttpoly_generated::ReluMinBf16Config"),
 }
 _TT_POLY_NATIVE_CALLS = {
@@ -1410,6 +1411,7 @@ _TT_POLY_FP32_DEST = {
     "polygamma": (),
     "relu": (),
     "relu6": (),
+    "relu_max": (),
     "relu_min": (),
     "selu": (),
     "sigmoid": (),
@@ -1433,6 +1435,7 @@ _TT_POLY_ADAPTER_OPERATIONS = {
     "logsigmoid": "logsigmoid",
     "multigammaln": "tt_poly_aggregate_multigammaln",
     "relu6": "relu6",
+    "relu_max": "relu_max",
     "relu_min": "relu_min",
     "multigammaln_p4": "tt_poly_aggregate_multigammaln",
 }
@@ -1629,6 +1632,7 @@ _GENERATED_UNARY_CASES = [
     ),
     (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
     (None, "relu6", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
+    (MathOperation.ReluMax, "relu_max", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
     (MathOperation.ReluMin, "relu_min", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
     (MathOperation.Selu, "selu", False, False, 32, "None", "ckernel_sfpu_selu.h"),
     (MathOperation.Sigmoid, "sigmoid", True, True, 8, "RC", "ckernel_sfpu_sigmoid.h"),
@@ -1875,6 +1879,31 @@ def _tt_poly_reference_relu6(x):
     return torch.from_numpy(_declared_forward(x.double().numpy()))
 
 
+def _tt_poly_reference_relu_max(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
+
+    def _declared_piece_2(x):
+        return np.broadcast_to(np.asarray(6, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((0.0, 6.0), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        active = finite & (bins == 2)
+        result[active] = _declared_piece_2(x[active])
+        return result
+
+    return torch.from_numpy(_declared_forward(x.double().numpy()))
+
+
 def _tt_poly_reference_relu_min(x):
     def _declared_piece_0(x):
         return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
@@ -1970,6 +1999,12 @@ _TT_POLY_FORWARD_REFERENCES = {
     ),
     "relu6": (
         _tt_poly_reference_relu6,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (0, 16575, 16576, 16577),
+        (),
+    ),
+    "relu_max": (
+        _tt_poly_reference_relu_max,
         ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
         (0, 16575, 16576, 16577),
         (),
@@ -2313,6 +2348,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "polygamma",
     "relu",
     "relu6",
+    "relu_max",
     "relu_min",
     "selu",
     "sigmoid",
