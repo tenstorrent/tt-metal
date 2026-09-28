@@ -113,7 +113,9 @@ def _n300_dp_inputs(pad_token_id, batch, valid_len, seq_len=8192):
     """Build B x seq_len inputs. valid_len < seq_len -> pad the tail and pass a
     compact [B, 1] valid-length mask; valid_len == seq_len -> no mask."""
     input_ids = torch.full((batch, seq_len), pad_token_id, dtype=torch.long)
-    input_ids[:, :valid_len] = torch.randint(1, 1000, (batch, valid_len), dtype=torch.long)
+    # Ids start at 5, above the special ids, so no valid token is the pad id 1. The
+    # nomask runs state no_padding, which is correct only for such input.
+    input_ids[:, :valid_len] = torch.randint(5, 1000, (batch, valid_len), dtype=torch.long)
     token_type_ids = torch.zeros(batch, seq_len, dtype=torch.long)
     nonpad = (input_ids != pad_token_id).to(torch.int64)
     position_ids = torch.cumsum(nonpad, dim=1) * nonpad + pad_token_id
