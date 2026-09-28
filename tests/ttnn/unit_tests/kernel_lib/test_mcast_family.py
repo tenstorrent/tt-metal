@@ -19,7 +19,11 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
 def test_non_worker_gap_preserves_worker_holes(device, noc, counter, chain_link):
     # Three logical row segments become four rectangles if the virtual NoC gap is treated
     # as missing receivers. Spectators in the partial rows must still remain untouched.
-    receivers = [(x, 0) for x in range(2, 9)] + [(x, 1) for x in range(9)] + [(x, 2) for x in range(4)]
+    size = device.compute_with_storage_grid_size()
+    width = min(size.x - 1, 9)  # Leave one column for run_family_case's barrier core.
+    if width < 5 or size.y < 3:
+        pytest.skip("requires a worker grid of at least 5x3")
+    receivers = [(x, 0) for x in range(2, width)] + [(x, 1) for x in range(width)] + [(x, 2) for x in range(4)]
     run_family_case(device, [(receivers, [(2, 0)])], noc=noc, counter=counter, chain_link=chain_link, min_rectangles=3)
 
 
