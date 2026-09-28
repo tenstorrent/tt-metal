@@ -20,7 +20,7 @@ for _name in ("tokenizer", "hf_model", "hf_layers"):
 # Device steps of the hybrid harness, per block type: every step passed its component gate on the device (and its
 # swap gate, once run). Steps not listed run on the CPU reference.
 DEVICE_STEPS = {
-    "full_dense": {"attn_norm", "attention", "attn_residual"},
+    "full_dense": {"attn_norm", "attention", "attn_residual", "mlp"},
     "sliding_moe": set(),
     "full_moe": set(),
 }
@@ -81,6 +81,14 @@ def _residual_host_fn(mesh):
         return y.to(a.dtype)
 
     return fn
+
+
+def _mlp_module(mesh, spec, layer, loader=None):
+    """TtDenseMLP (TP=4 SwiGLU over the 2x2 mesh, all_reduce axis 1 then axis 0) for the dense layer; fp8 + 128x128
+    block scale dequantized to bf16 at load."""
+    from models.demos.mimo_v2_6_d_p_2x2.tt.model import build_mlp
+
+    return build_mlp(mesh, loader or _loader(spec), layer)
 
 
 def _rope_max_seq(spec):
@@ -153,6 +161,8 @@ def device_component(mesh, spec, layer, step):
             return c
 
         return _attention_host_fn(mesh, module, cache_of)
+    if step == "mlp":
+        return _host_fn(mesh, _mlp_module(mesh, spec, layer))
     raise NotImplementedError(f"implement step: no device module for {step} yet")
 
 
@@ -199,6 +209,8 @@ class HybridDeviceModel:
                 module, _ = _attention_module(mesh, spec, i, loader, self.cfg)
                 ov["attention"] = _attention_host_fn(mesh, module, lambda ctx: ctx.extra["dev_cache"])
                 self.attn_layers.append(i)
+            if "mlp" in steps:
+                ov["mlp"] = _host_fn(mesh, _mlp_module(mesh, spec, i, loader))
             self.overrides[i] = ov
         self.load_seconds = time.time() - t0
 
