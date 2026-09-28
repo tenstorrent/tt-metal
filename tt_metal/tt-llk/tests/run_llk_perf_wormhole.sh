@@ -13,7 +13,7 @@ set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-false}"
 
 case "$SPEED_OF_LIGHT" in
   true)
