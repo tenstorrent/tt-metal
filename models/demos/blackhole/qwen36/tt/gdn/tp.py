@@ -474,7 +474,8 @@ class TPGatedDeltaNet:
         _dram = ttnn.DRAM_MEMORY_CONFIG
         win = ttnn.slice(src, (0, base, 0), (1, base + W, C))
         win_t = ttnn.to_layout(win, ttnn.TILE_LAYOUT, memory_config=_dram)
-        ttnn.deallocate(win)
+        if win_t is not win:
+            ttnn.deallocate(win)
         idx = ttnn.arange(0, W, 1, dtype=ttnn.float32, device=self.mesh)
         idx = ttnn.reshape(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), (1, 1, W))
         picks = []
