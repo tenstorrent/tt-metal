@@ -286,6 +286,7 @@ struct H2HSocket::Impl {
     std::vector<std::chrono::steady_clock::time_point> put_at;
     std::vector<uint64_t> credit_closed;  // sequences already turned into samples
     std::vector<uint64_t> put_to_credit_ns;
+    uint64_t put_to_credit_w = 0;  // ring write cursor, once the cap is reached
     // Matched-estimator series, plus the per-host cycle marks us_per_frame is measured over.
     Series series;
     std::vector<std::chrono::steady_clock::time_point> cycle_at;
@@ -471,12 +472,16 @@ struct H2HSocket::Impl {
                 const uint64_t seen = credit_seen(c, h);
                 uint64_t& closed = credit_closed_at(c, h);
                 for (; closed < seen; ++closed) {
-                    if (put_to_credit_ns.size() >= kMaxTimingSamples) {
-                        continue;
-                    }
                     const auto d = now - put_at_of(c, h, closed);
-                    put_to_credit_ns.push_back(
-                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()));
+                    const uint64_t ns =
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+                    // Overwrite oldest rather than drop newest: a percentile ignores order,
+                    // and keeping the head meant reporting the ramp against a steady rate.
+                    if (put_to_credit_ns.size() < kMaxTimingSamples) {
+                        put_to_credit_ns.push_back(ns);
+                    } else {
+                        put_to_credit_ns[put_to_credit_w++ % kMaxTimingSamples] = ns;
+                    }
                 }
             }
         }
@@ -762,7 +767,14 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
 
     // Start what the window allows, round-robin across cores. A gated core is SKIPPED,
     // never broken on: that is the whole point of the per-core queues.
-    for (uint32_t k = 0; k < im.cfg.cores && im.tx_queued != 0 && im.in_flight < im.window_cap; ++k) {
+    bool window_blocked = false;
+    for (uint32_t k = 0; k < im.cfg.cores && im.tx_queued != 0; ++k) {
+        // Hoisted out of the loop guard: as a guard it left credit_blocked false, so a pass
+        // stopped by a full window was booked "nothing queued" -- the opposite remedy.
+        if (im.in_flight >= im.window_cap) {
+            window_blocked = true;
+            break;
+        }
         const uint32_t c = (im.rr + k) % im.cfg.cores;
         if (im.tx_queue.empty(c)) {
             continue;
@@ -870,14 +882,14 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         return progress;
     }
 
-    // After the starts, before the next pass's retire: that gap is what makes an acked frame
-    // mean "in the peer's window" -- see tt_uva_quiet(). Conditional: poll() is the spin loop.
-    const auto flush_t0 =
-        im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     // Before the flush, so counters noted this pass ride the flush already happening.
     if (!im.publish_credits()) {
         return progress;
     }
+    // Started HERE, not before publish_credits(): flush_ns is read as the cost of
+    // MPI_Win_flush, and bracketing the credit puts with it charged them to the flush.
+    const auto flush_t0 =
+        im.cfg.collect_timing ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     // No-supply only. Forcing on credit-gating too was measured to defeat the watermark:
     // holding a publish is what stops the peer crediting, so the batch never grows.
     im.flush_dirty(im.tx_queued == 0);
@@ -943,8 +955,12 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     }
     if (im.stats.posts == posts_before) {
         ++im.stats.starved;
+        // Three-way: credit says flush sooner, window says flush sooner AND stop posting,
+        // empty says batch harder. Folding the middle case into empty inverted the advice.
         if (credit_blocked) {
             ++im.stats.starved_credit;
+        } else if (window_blocked) {
+            ++im.stats.starved_window;
         } else {
             ++im.stats.starved_empty;
         }

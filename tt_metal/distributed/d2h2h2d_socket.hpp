@@ -91,6 +91,9 @@ public:
         uint64_t d2h_poll_ns = 0;
         uint64_t h2h_poll_ns = 0;
         uint64_t h2d_drain_ns = 0;
+        // The legs chain through callbacks, so h2h_poll_ns CONTAINS the D2H retire and the
+        // H2D publish. Subtract this to get the h2h leg's own time.
+        uint64_t h2h_cb_ns = 0;
     };
 
     const Counters& counters() const;
