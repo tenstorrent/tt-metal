@@ -61,6 +61,21 @@ class ModelCache:
     num_pages: int
 
 
+def head_decode_chunks(shard_vocab, banks, target=16384):
+    """Bank-exact chunk bounds for the DRAM head, and the leftover the interleaved head takes.
+
+    A DRAM-sharded matmul returns wrong values, without failing, unless the weight fills its
+    bank shards exactly, so no chunk may be wider than its banks can divide. A vocabulary
+    shard rarely ends on that boundary, and the remainder has no geometry to satisfy on the
+    interleaved path.
+    """
+    align = banks * 64
+    stride = max(align, (target // align) * align)
+    aligned = (shard_vocab // align) * align
+    chunks = [(start, min(start + stride, aligned)) for start in range(0, aligned, stride)]
+    return chunks, (aligned, shard_vocab) if aligned < shard_vocab else None
+
+
 class Qwen38Model:
     def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
         self.TP = resolve_mesh_tp(mesh_device)
@@ -137,18 +152,12 @@ class Qwen38Model:
             banks = mesh_device.dram_grid_size().x
             bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
             shard_vocab = self.config.vocab_size // self.TP
-            # A DRAM-sharded matmul returns wrong values, without failing, when the weight does
-            # not fill its bank shards exactly, so every chunk is cut on a banks*64 boundary.
-            # Whatever vocabulary is left over goes through the interleaved head, which has no
-            # bank geometry to satisfy.
-            align = banks * 64
-            stride = (16384 // align) * align
-            aligned = (shard_vocab // align) * align
-            if aligned < shard_vocab:
-                self.head_decode_tail = self.head_weight[:, aligned:shard_vocab]
-            for start in range(0, aligned, stride):
-                weight = self.head_weight[:, start : min(start + stride, aligned)]
-                width = weight.shape[-1] // banks
+            chunks, tail = head_decode_chunks(shard_vocab, banks)
+            if tail is not None:
+                self.head_decode_tail = self.head_weight[:, tail[0] : tail[1]]
+            for start, stop in chunks:
+                weight = self.head_weight[:, start:stop]
+                width = (stop - start) // banks
                 memory = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                     ttnn.BufferType.DRAM,
