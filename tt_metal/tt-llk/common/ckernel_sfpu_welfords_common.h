@@ -345,15 +345,37 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_block_()
     TTI_SFPNOP;
 }
 
+/** Accumulate four shifted vectors in order, interleaving independent work to cover SFPU latency. */
+sfpi_inline void _two_pass_accumulate_shifted_sum_single_block_()
+{
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG2, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG3, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPNOP;
+}
+
 /**
  * Accumulate the selected rows of an already-loaded four-row block.
  * @tparam dual_sum Whether odd rows use LREG6 instead of sharing LREG5.
+ * @tparam full_block Whether the caller guarantees all four rows are selected.
  * @param first First selected row within the block.
  * @param last One-past-last selected row within the block.
  */
-template <bool dual_sum>
+template <bool dual_sum, bool full_block = false>
 sfpi_inline void _two_pass_accumulate_shifted_sum_loaded_block_(std::uint32_t first, std::uint32_t last)
 {
+    if constexpr (full_block && !dual_sum)
+    {
+        // Keep this compile-time-only: runtime dispatch regresses partial-tile kernels.
+        _two_pass_accumulate_shifted_sum_single_block_();
+        return;
+    }
     if constexpr (dual_sum)
     {
         if (first == 0 && last == 4)
@@ -395,8 +417,9 @@ sfpi_inline void _two_pass_accumulate_shifted_sum_loaded_block_(std::uint32_t fi
  * @tparam dual_sum Whether to use two shifted-sum accumulators.
  * @tparam I Tile face-row index.
  * @tparam J Four-row block index within the face row.
+ * @tparam full_block Whether the caller guarantees all four rows are selected.
  */
-template <bool dual_sum, std::uint32_t I, std::uint32_t J>
+template <bool dual_sum, std::uint32_t I, std::uint32_t J, bool full_block = false>
 sfpi_inline void _two_pass_initialize_anchor_and_accumulate_block_(std::uint32_t start_row, std::uint32_t end_row)
 {
     TWO_PASS_BLOCK_ROW_INTERSECTION(I, J);
@@ -422,7 +445,7 @@ sfpi_inline void _two_pass_initialize_anchor_and_accumulate_block_(std::uint32_t
     {
         TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
     }
-    _two_pass_accumulate_shifted_sum_loaded_block_<dual_sum>(first, last);
+    _two_pass_accumulate_shifted_sum_loaded_block_<dual_sum, full_block>(first, last);
 }
 
 /** Accumulate one centred square into the serial LREG5 M2 chain. */
@@ -488,8 +511,9 @@ sfpi_inline void _two_pass_accumulate_m2_dual_block_()
  * @tparam shifted_mean Marks the only supported pass-one mode.
  * @tparam I Tile face-row index.
  * @tparam J Four-row block index within the face row.
+ * @tparam full_block Whether the caller guarantees all four rows are selected.
  */
-template <bool accumulate_m2, bool dual_accumulator, bool shifted_mean, std::uint32_t I, std::uint32_t J>
+template <bool accumulate_m2, bool dual_accumulator, bool shifted_mean, std::uint32_t I, std::uint32_t J, bool full_block = false>
 sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
     static_assert(accumulate_m2 || shifted_mean, "plain-sum accumulation is not a supported two-pass state");
@@ -532,7 +556,7 @@ sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t en
     }
     else
     {
-        _two_pass_accumulate_shifted_sum_loaded_block_<dual_accumulator>(first, last);
+        _two_pass_accumulate_shifted_sum_loaded_block_<dual_accumulator, full_block>(first, last);
     }
 }
 
@@ -613,19 +637,19 @@ sfpi_inline void _two_pass_update_shifted_rows_(std::uint32_t start_row, std::ui
     {
         if constexpr (initialize_anchor)
         {
-            _two_pass_initialize_anchor_and_accumulate_block_<dual_accumulator, 0, 0>(0, 32);
+            _two_pass_initialize_anchor_and_accumulate_block_<dual_accumulator, 0, 0, true>(0, 32);
         }
         else
         {
-            _two_pass_block_rows_<false, dual_accumulator, true, 0, 0>(0, 32);
+            _two_pass_block_rows_<false, dual_accumulator, true, 0, 0, true>(0, 32);
         }
-        _two_pass_block_rows_<false, dual_accumulator, true, 0, 1>(0, 32);
-        _two_pass_block_rows_<false, dual_accumulator, true, 0, 2>(0, 32);
-        _two_pass_block_rows_<false, dual_accumulator, true, 0, 3>(0, 32);
-        _two_pass_block_rows_<false, dual_accumulator, true, 1, 0>(0, 32);
-        _two_pass_block_rows_<false, dual_accumulator, true, 1, 1>(0, 32);
-        _two_pass_block_rows_<false, dual_accumulator, true, 1, 2>(0, 32);
-        _two_pass_block_rows_<false, dual_accumulator, true, 1, 3>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 0, 1, true>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 0, 2, true>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 0, 3, true>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 1, 0, true>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 1, 1, true>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 1, 2, true>(0, 32);
+        _two_pass_block_rows_<false, dual_accumulator, true, 1, 3, true>(0, 32);
         return;
     }
     const std::uint32_t end_row = start_row + num_rows;
