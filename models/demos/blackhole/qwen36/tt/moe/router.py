@@ -23,26 +23,25 @@ _FUSED_GATE_TOPK = (4, 6, 8)
 
 
 # TTMoEGate's four persistent sharded L1 buffers are layer-INDEPENDENT, so share one set: per-layer copies reserve enough L1 to clash with the GDN prefill CBs.
-_SHARED_GATE_BUFS = {}
+def _share_gate_buffers(gate, cache, config):
+    """Point ``gate`` at this model's buffer set for its shape, freeing its own copies.
 
-
-def _share_gate_buffers(gate, mesh_device, config):
-    """Point ``gate`` at the process-wide buffer set for its shape, freeing its own copies."""
+    ``cache`` is the owning model's dict (Qwen36ModelArgs.moe_gate_buffers), so the buffers live
+    exactly as long as the model does."""
     # The four buffers and the two key attributes are named literally rather than reached through
     # getattr/setattr over a name list: they are a fixed part of TTMoEGate's contract, so naming
     # them keeps every use greppable and makes an upstream rename an AttributeError here instead of
     # a silent None that would let two different shapes collide on one cache key.
     key = (
-        id(mesh_device),
         config.num_experts,
         config.top_k,
         config.hidden_size,
         gate._buffer_rows,
         gate.num_blocks,
     )
-    shared = _SHARED_GATE_BUFS.get(key)
+    shared = cache.get(key)
     if shared is None:
-        _SHARED_GATE_BUFS[key] = (gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices)
+        cache[key] = (gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices)
         return
     own = (gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices)
     gate.tt_bias, gate.tt_input_indices, gate.tt_output, gate.tt_output_indices = shared
@@ -52,7 +51,9 @@ def _share_gate_buffers(gate, mesh_device, config):
 
 
 class Qwen36Router:
-    def __init__(self, mesh_device, config, state_dict, tensor_cache_path=None, dtype=ttnn.bfloat16):
+    def __init__(
+        self, mesh_device, config, state_dict, tensor_cache_path=None, dtype=ttnn.bfloat16, gate_buf_cache=None
+    ):
         self.num_experts = config.num_experts
         self.top_k = config.top_k
         self.norm_topk_prob = config.norm_topk_prob
@@ -110,7 +111,9 @@ class Qwen36Router:
                 ),
                 state_dict["weight"].to(torch.float32).transpose(-2, -1).contiguous(),
             )
-            _share_gate_buffers(self.decode_gate, mesh_device, config)
+            # No cache (a standalone router, e.g. a unit test) -> keep our own buffers.
+            if gate_buf_cache is not None:
+                _share_gate_buffers(self.decode_gate, gate_buf_cache, config)
 
     def __call__(self, hidden_states):
         """hidden_states: [1,1,S,H] (replicated full hidden). Returns [1,1,S,E]."""
@@ -132,7 +135,13 @@ class Qwen36Router:
         top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
         top_k_indices.deallocate(True)
 
-        # Build the dense routing by thresholding at the k-th largest probability: ttnn.scatter is ROW_MAJOR-only, thresholding stays in TILE.
+        # Build the dense routing by thresholding at the k-th largest: ttnn.scatter is ROW_MAJOR-only, thresholding stays in TILE.
+        # `ge` is inclusive, so a token whose k-th and (k+1)-th probabilities are equal in bf16
+        # selects k+1 experts. That is real -- ~5% of tokens with this checkpoint's gate weights --
+        # but forcing exactly k (rank on probs minus a sub-ulp index ramp) was measured WORSE:
+        # model-level traced-vs-eager prefill PCC fell 0.99740 -> 0.98921, because breaking the tie
+        # makes the expert choice a knife-edge that tiny traced/eager numeric differences flip,
+        # whereas a tie selects the same superset on both paths. MoE PCC moved <1e-4 either way.
         kth = ttnn.slice(
             top_k_values,
             [0, 0, 0, self.top_k - 1],
@@ -141,6 +150,7 @@ class Qwen36Router:
         top_k_values.deallocate(True)
         above = ttnn.ge(router_probs, kth)
         kth.deallocate(True)
+        # Weights come from the untouched probabilities; the ramp only ever decided membership.
         dense_routing = ttnn.mul(router_probs, above)
         above.deallocate(True)
         router_probs.deallocate(True)

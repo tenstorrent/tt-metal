@@ -24,7 +24,14 @@ class Qwen36MoE:
         self.topology = topology
         self.num_devices = num_devices
 
-        self.router = Qwen36Router(mesh_device, config, substate(state_dict, "gate"), tensor_cache_path)
+        self.router = Qwen36Router(
+            mesh_device,
+            config,
+            substate(state_dict, "gate"),
+            tensor_cache_path,
+            # The gate buffers are shared across this model's MoE layers; the store belongs to args.
+            gate_buf_cache=args.moe_gate_buffers if args is not None else None,
+        )
         self.experts = Qwen36Experts(
             mesh_device,
             config,
