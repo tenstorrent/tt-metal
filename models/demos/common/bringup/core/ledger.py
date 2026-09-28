@@ -21,6 +21,9 @@ tasks.yaml:
 
 state.json: {task id: {status, attempts, last_run, duration_s, rc, metrics, log, history, agent, ...},
              "_run": {name, branch, created, forked_from}}
+
+DEFERRED (F46): a component the implement agent deferred to the op code generator (plan/op_request.py). It stays on
+the CPU reference through the bridge (testing/cpu_bridge.py), so for its dependents it counts like PASS.
 """
 
 from __future__ import annotations
@@ -33,7 +36,12 @@ from pathlib import Path
 
 import yaml
 
-STATUSES = ("TODO", "RUNNING", "PASS", "FAIL", "HANG", "BLOCKED", "STOPPED")
+STATUSES = ("TODO", "RUNNING", "PASS", "FAIL", "HANG", "BLOCKED", "STOPPED", "DEFERRED")
+DONE_STATUSES = ("PASS", "DEFERRED")  # a dependent may run after either
+
+
+def satisfied(status: str | None) -> bool:
+    return status in DONE_STATUSES
 
 
 class LedgerError(ValueError):
@@ -188,11 +196,16 @@ class Ledger:
         return self.state().get(tid, {}).get("status", "TODO")
 
     def runnable(self) -> list[str]:
-        """Tasks not PASS whose deps are all PASS, in topological order."""
+        """Tasks not PASS (or DEFERRED) whose deps are all PASS or DEFERRED, in topological order."""
         tasks, state = self.tasks(), self.state()
-        ok = lambda t: state.get(t, {}).get("status") == "PASS"  # noqa: E731
+        ok = lambda t: satisfied(state.get(t, {}).get("status"))  # noqa: E731
         return [t for t in self.topo_order() if not ok(t) and all(ok(d) for d in tasks[t].get("deps", []))]
 
     def first_unpassed(self) -> str | None:
         state = self.state()
-        return next((t for t in self.topo_order() if state.get(t, {}).get("status") != "PASS"), None)
+        return next((t for t in self.topo_order() if not satisfied(state.get(t, {}).get("status"))), None)
+
+    def deferred(self) -> list[str]:
+        """Tasks deferred to op-gen (on the CPU bridge), in topological order."""
+        state = self.state()
+        return [t for t in self.topo_order() if state.get(t, {}).get("status") == "DEFERRED"]
