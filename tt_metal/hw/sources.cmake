@@ -458,6 +458,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
     inc/api/compute/eltwise_unary/silu_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_softshrink_bf16.h
     inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_denominator.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_denominator_replay.h
