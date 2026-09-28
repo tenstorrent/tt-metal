@@ -1186,7 +1186,7 @@ def test_noc_event_profiler_linked_multicast_hang():
 
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole", "quasar"]
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
