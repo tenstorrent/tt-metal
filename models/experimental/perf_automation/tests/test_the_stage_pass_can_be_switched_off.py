@@ -3,7 +3,8 @@
 WH Galaxy, 2026-09-28: the pass ran every declared stage a second time and cost 10,458 of the 32,769
 ops tracy can record per chip, so the measured forward was cut off at 65%. With the pass off, each
 stage's own method -- read from the model's <stage>_trace_step hook -- is wrapped on the pipeline
-instance and emits its marks as the forward calls it. The pass stays the default and the fallback.
+instance and emits its marks as the forward calls it. That is the default; the pass is opt-in
+(PERF_MCP_STAGE_PASS=1) and remains the fallback for a pipeline whose stages cannot be matched.
 Stage names here are the fake pipeline's own; the code under test never types one.
 """
 
@@ -62,13 +63,13 @@ def marks(monkeypatch):
     return seen
 
 
-def test_the_pass_is_on_unless_switched_off(monkeypatch):
+def test_the_pass_is_off_unless_switched_on(monkeypatch):
     monkeypatch.delenv(sm.STAGE_PASS_ENV, raising=False)
-    assert sm.stage_pass_enabled()
-    monkeypatch.setenv(sm.STAGE_PASS_ENV, "1")
-    assert sm.stage_pass_enabled()
+    assert not sm.stage_pass_enabled()
     monkeypatch.setenv(sm.STAGE_PASS_ENV, "0")
     assert not sm.stage_pass_enabled()
+    monkeypatch.setenv(sm.STAGE_PASS_ENV, "1")
+    assert sm.stage_pass_enabled()
 
 
 def test_each_stage_resolves_to_its_own_method():
@@ -117,8 +118,8 @@ def test_a_stage_without_a_hook_is_not_guessed():
     assert sm.stage_methods(_Missing()) == {}
 
 
-def test_switched_off_the_scope_is_marked_without_the_pass(monkeypatch, marks):
-    monkeypatch.setenv(sm.STAGE_PASS_ENV, "0")
+def test_by_default_the_scope_is_marked_without_the_pass(monkeypatch, marks):
+    monkeypatch.delenv(sm.STAGE_PASS_ENV, raising=False)
     ran = []
     monkeypatch.setattr(sm, "mark_stages_for", lambda pipe, device: ran.append(pipe) or 9)
     p = _Pipe()
@@ -133,15 +134,15 @@ def test_switched_off_an_unmatched_pipeline_falls_back_to_the_pass(monkeypatch):
         def beta_trace_step(self):
             return self.run_a(self._prep())
 
-    monkeypatch.setenv(sm.STAGE_PASS_ENV, "0")
+    monkeypatch.delenv(sm.STAGE_PASS_ENV, raising=False)
     ran = []
     monkeypatch.setattr(sm, "mark_stages_for", lambda pipe, device: ran.append(pipe) or 3)
     assert sm.mark_stages_in_scope({"pipe": _Shared()}) == 3
     assert len(ran) == 1
 
 
-def test_left_on_the_pass_runs_as_before(monkeypatch):
-    monkeypatch.delenv(sm.STAGE_PASS_ENV, raising=False)
+def test_switched_on_the_pass_runs_as_before(monkeypatch):
+    monkeypatch.setenv(sm.STAGE_PASS_ENV, "1")
     ran = []
     monkeypatch.setattr(sm, "mark_stages_for", lambda pipe, device: ran.append(pipe) or 3)
     p = _Pipe()

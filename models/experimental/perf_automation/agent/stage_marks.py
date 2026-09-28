@@ -51,8 +51,9 @@ _UNKNOWN = object()
 _STAGE_MARK = "stage:%s"
 _STAGE_END_MARK = "stage:%s:end"
 
-# THE SEPARATE PER-STAGE PASS IS A SWITCH. On (the default, and unset) it runs every declared stage once
-# more, between marks, as it always has. Off ("0"), the same marks go on the MEASURED forward instead:
+# THE SEPARATE PER-STAGE PASS IS A SWITCH, OFF BY DEFAULT. On ("1") it runs every declared stage once
+# more, between marks, as it always used to. Off (unset, or anything else) the same marks go on the
+# MEASURED forward instead:
 # each stage's own method, found from the model's <stage>_trace_step hook, is wrapped on the pipeline
 # instance to emit its marks as the forward calls it. On a WH Galaxy (2026-09-28) the separate pass
 # cost 10,458 of the 32,769 ops tracy can record per chip, and the forward it was measuring for was
@@ -62,7 +63,7 @@ STAGE_PASS_ENV = "PERF_MCP_STAGE_PASS"
 
 
 def stage_pass_enabled() -> bool:
-    return os.environ.get(STAGE_PASS_ENV, "1") != "0"
+    return os.environ.get(STAGE_PASS_ENV, "0") == "1"
 
 
 def signpost(name: str) -> None:
@@ -489,14 +490,14 @@ def mark_stages_in_scope(scope: dict, device=None, bind=None) -> int:
         n = mark_stages_on_forward(pipe)
         if n:
             print(
-                "  [stage-marks] %s=0: %d stage(s) marked on the measured forward, no separate pass"
+                "  [stage-marks] %s off: %d stage(s) marked on the measured forward, no separate pass"
                 % (STAGE_PASS_ENV, n),
                 file=sys.stderr,
                 flush=True,
             )
             return n
         print(
-            "  [stage-marks] %s=0, but the stages could not be matched to the forward's own methods; "
+            "  [stage-marks] %s off, but the stages could not be matched to the forward's own methods; "
             "running the separate pass" % STAGE_PASS_ENV,
             file=sys.stderr,
             flush=True,
