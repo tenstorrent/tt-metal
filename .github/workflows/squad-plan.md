@@ -407,9 +407,10 @@ Never file a partial or speculative plan.
   bringup`): the agent never starts, nothing is posted on the issue, and the refusal
   is recorded in the run log / job summary. This is the enforcement of CONTRIBUTING.md
   "Bug Bounty Program - AI Tool Restrictions"; the prompt rule is only a backstop.
-- Edit this `.md` and recompile with `gh aw compile squad-plan` using gh-aw v0.86.2
-  (the version every lock file in this repo is compiled with; see
-  copilot-setup-steps.yml).
+- Edit this `.md` and recompile with `gh aw compile squad-plan` using gh-aw v0.89.21
+  (the version copilot-setup-steps.yml installs and the three copilot-loop lock files
+  are compiled with; the repo's older lock files are still at v0.86.2, so do not run
+  an unscoped `gh aw compile` — it would recompile those too).
 
 ## Guardrails
 

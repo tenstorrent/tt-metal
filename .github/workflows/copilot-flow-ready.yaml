@@ -19,8 +19,9 @@ name: "Copilot flow: mark finished Copilot PRs ready for review"
 # deterministic read of the PR timeline (did the last Copilot session finish, fail, or
 # is it still running?) plus a label lookup. No judgement is needed, so no model should
 # be in the loop — same house rule as issue-monster.md's pre-activation script. gh-aw
-# v0.86.2 does have a `mark-pull-request-as-ready-for-review` safe output, but using it
-# would mean starting an agent session to emit a value a script already knows.
+# (v0.86.2 and v0.89.21 alike) does have a `mark-pull-request-as-ready-for-review` safe
+# output, but using it would mean starting an agent session to emit a value a script
+# already knows.
 #
 # Why a schedule rather than `pull_request_target: review_requested`: Actions runs whose
 # triggering actor is Copilot are subject to "Require approval for workflow runs" (repo

@@ -787,10 +787,12 @@ safe-outputs:
     target: "*"           # checkpoints are posted by the pre-activation script, not here
     # Opt-out enforced at WRITE time too: the handler re-reads the issue's labels right
     # before posting, so removing `copilot-ready` while a run is in flight suppresses the
-    # comment from that run. `assign-to-agent` has no `required-labels` in gh-aw v0.86.2
-    # (schema-verified), so the assignment itself can only be label-gated at selection
-    # time; the window is the minutes between the pre-activation scan and the agent's
-    # safe-output call, and an unwanted assignment is reversible (unassign Copilot).
+    # comment from that run. `assign-to-agent` still has no `required-labels` in gh-aw
+    # v0.89.21 (its handler config builder emits none; assign-to-user/unassign-from-user
+    # do — upstream request: https://github.com/github/gh-aw/issues/63980), so the
+    # assignment itself can only be label-gated at selection time; the window is the
+    # minutes between the pre-activation scan and the agent's safe-output call, and an
+    # unwanted assignment is reversible (unassign Copilot).
     required-labels: [copilot-ready]
   missing-tool: false
   noop:
@@ -978,4 +980,6 @@ failures.
 - **Tuning knobs**: `schedule` (every 2h), `assign-to-agent.max` (2),
   `skip-if-match.max` (3 open Copilot drafts), `RETRY_HISTORY_DAYS` (90),
   `MAX_CANDIDATES` (500) and the label lists at the top of the pre-activation script.
-  Edit this `.md` and recompile with `gh aw compile issue-monster` using gh-aw v0.86.2.
+  Edit this `.md` and recompile with `gh aw compile issue-monster` using gh-aw v0.89.21
+  (the version copilot-setup-steps.yml installs; the repo's older lock files are still
+  at v0.86.2 — do not run an unscoped `gh aw compile`, it would recompile those too).

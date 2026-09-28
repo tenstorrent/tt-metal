@@ -196,14 +196,13 @@ safe-outputs:
   # the thread was opened (see `fixVerified`), from the prefilter's `resolvable_bot_threads`
   # list — which the prefilter caps at this same number across all selected PRs
   # (RESOLVE_THREADS_MAX), so the prompt never asks for more than the handler allows.
-  # The handler resolves each thread ID to its real PR before acting. `required-labels`
-  # is meant to make it re-check that PR's labels at write time too — but gh-aw v0.86.2
-  # accepts the key for this handler and then drops it (its parser reads only max/target;
-  # the compiled handler config carries `{"max":20}` only — verified in the lock). It is
-  # kept so it becomes effective on the next gh-aw bump; until then the residual window
-  # is the few minutes between the prefilter's label check and the write, and a thread
-  # resolution is reversible (any collaborator can un-resolve it). `add-comment`'s
-  # `required-labels` IS compiled and enforced at v0.86.2. Upstream also resolves human reviewers'
+  # The handler resolves each thread ID to its real PR before acting, then `required-labels`
+  # makes it re-read THAT PR's labels at write time (`checkRequiredFilter`, skipped with
+  # `success:false` when `copilot-flow` is gone) — the same kill-switch-at-write-time that
+  # `add-comment` has. This is live since the gh-aw v0.89.21 bump: v0.86.2 accepted the key
+  # for this handler and silently dropped it (compiled config was `{"max":20}`); v0.89.21
+  # compiles `{"max":20,"required_labels":["copilot-flow"]}` (verified in the lock and in
+  # the pinned handler source). Upstream also resolves human reviewers'
   # threads once the author replied; deliberately not ported — on tt-metal thread
   # resolution is not merge-gating (ruleset: required_review_thread_resolution=false) so
   # it buys nothing mechanically, and whether Copilot's reply actually addressed a human's
