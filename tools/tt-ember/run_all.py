@@ -89,10 +89,14 @@ def run_compare(
     cmd: List[str] = [
         sys.executable,
         str(compare_script),
-        "--out-root", str(out_root),
-        "--output-dir", str(output_dir),
-        "--filter", filter_prefix,
-        "--dpi", str(dpi),
+        "--out-root",
+        str(out_root),
+        "--output-dir",
+        str(output_dir),
+        "--filter",
+        filter_prefix,
+        "--dpi",
+        str(dpi),
     ]
     print(f"\n[COMPARE] Running: {' '.join(cmd)}", flush=True)
     result = subprocess.run(cmd)
@@ -130,16 +134,26 @@ def run_single(
     cmd: List[str] = [
         sys.executable,
         str(auto_script),
-        "--telemetry-exe", str(telemetry_exe),
-        "--telemetry-freq", str(telemetry_freq),
-        "--app-exe", str(app_exe),
-        "--parser-script", str(parser_script),
-        "--tt-venv-activate", str(tt_venv_activate),
-        "--tt-metal-root", str(tt_metal_root),
-        "--output-root", str(output_root),
-        "--subdir", spec.subdir,
-        "--slot-ms", str(slot_ms),
-        "--trim-ms", str(trim_ms),
+        "--telemetry-exe",
+        str(telemetry_exe),
+        "--telemetry-freq",
+        str(telemetry_freq),
+        "--app-exe",
+        str(app_exe),
+        "--parser-script",
+        str(parser_script),
+        "--tt-venv-activate",
+        str(tt_venv_activate),
+        "--tt-metal-root",
+        str(tt_metal_root),
+        "--output-root",
+        str(output_root),
+        "--subdir",
+        spec.subdir,
+        "--slot-ms",
+        str(slot_ms),
+        "--trim-ms",
+        str(trim_ms),
     ]
 
     if device_id is not None:
@@ -157,9 +171,7 @@ def run_single(
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(
-        description="Run all prefill and fixed-tpc telemetry sweeps sequentially via auto.py."
-    )
+    ap = argparse.ArgumentParser(description="Run all prefill and fixed-tpc telemetry sweeps sequentially via auto.py.")
 
     ap.add_argument(
         "--auto-script",
