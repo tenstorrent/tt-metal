@@ -122,12 +122,12 @@ def check_core_magic(
     magic_values: CoreMagicValues,
     run_checks: RunChecks,
 ):
-    location = risc_location.location
-    risc_name = risc_location.risc_name
     """
     Check if the core_magic_number matches the expected firmware type.
     If mismatch, try other firmware types to identify what's actually present.
     """
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     if not dispatcher_data.risc_enabled(risc_name):
         return
 
