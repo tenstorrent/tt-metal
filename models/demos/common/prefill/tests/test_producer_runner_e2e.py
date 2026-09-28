@@ -220,6 +220,22 @@ if _PROMPT_FILE:
     }
 
 
+# Opt-in traced-runner scenario (PREFILL_E2E_TRACE=1): the same full-depth single-user gate, but with the
+# runner capturing its chunk forward as a ttnn trace and replaying it per chunk. Off by default because it
+# roughly doubles this leg's wall clock; it is the ONLY e2e coverage of the traced path -- the persistent
+# inbound destination (#52451) that lets the H2D drain write straight to the captured address, and the
+# on-device metadata consumption plus D2H layer-ack under trace (#52464). Everything else is inherited,
+# including the LayerAck backend, so PREFILL_USE_TRACE is the single variable between the two arms.
+if os.environ.get("PREFILL_E2E_TRACE") == "1":
+    SCENARIOS["single_user_full_depth_traced"] = {
+        **SCENARIOS["single_user_full_depth"],
+        "env": {
+            **SCENARIOS["single_user_full_depth"].get("env", {}),
+            "PREFILL_USE_TRACE": "1",
+        },
+    }
+
+
 def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYERS, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
     for this scenario's runner+producer. `extra` layers on the runner (MOCK_MIGRATION) or producer

@@ -7,9 +7,14 @@
 // The backing output and metadata-output base addresses to are runtime args.
 // The host registers them as Buffer* BufferBindings
 // (KernelDescriptor::emplace_runtime_args), so the device-operation program
-// cache can patch the freshly-allocated output address on every dispatch
-// without recompiling the program. Everything stable for the service's
-// lifetime (sem addr, page counts, metadata addr) stays compile-time.
+// cache can patch the current output address on every dispatch without
+// recompiling the program. Everything stable for the service's lifetime (sem
+// addr, page counts, metadata addr) stays compile-time.
+//
+// Note that BufferBinding patching only happens on a dispatch. Inside a ttnn
+// trace the args are recorded once at capture and replayed verbatim, so a
+// capturable call must be handed PERSISTENT destination tensors (the op's
+// optional tokens_out / metadata_out) rather than letting it allocate.
 //
 // Per-iteration protocol (worker side):
 //   1. Wait on the local data_ready_sem until > 0 (multicast-inc'd by the

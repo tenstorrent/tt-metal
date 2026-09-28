@@ -203,9 +203,24 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service, n_mtp: int = 0) -> tuple:
+def _make_socket_metadata_buffer(mesh_device, metadata_size_bytes: int) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.zeros(1, 1, 1, metadata_size_bytes // 4, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _socket_next(h2d_service, metadata_buf, n_mtp: int = 0, tokens_out=None) -> tuple:
     outs = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES, overhang_size_bytes=n_mtp * TOKEN_ID_BYTES
+        h2d_service,
+        metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+        overhang_size_bytes=n_mtp * TOKEN_ID_BYTES,
+        metadata_out=metadata_buf,
+        tokens_out=tokens_out,
     )
     if n_mtp:
         tt_ids, tt_mtp_tokens, tt_metadata = outs
@@ -260,10 +275,10 @@ def build_d2d_pipeline_endpoints(
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
+def _d2d_recv(inbound, metadata_buf, tokens_out=None) -> tuple:
     t0 = time.perf_counter()
     act, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES
+        inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES, metadata_out=metadata_buf, tokens_out=tokens_out
     )
     meta = _decode_metadata(metadata_msg)
     if MTP_LEVELS:
@@ -431,13 +446,22 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    metadata_buf=None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
+    if metadata_buf is None:
+        raise ValueError("request mode requires the persistent metadata record buffer (_make_socket_metadata_buffer)")
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
+    )
+    _claim = getattr(runtime, "claim_persistent_input", None)
+    persistent_in = _claim() if _claim is not None else None
+    logger.info(
+        f"[pp rank {rank}] input destination = "
+        + ("runtime traced input (persistent, no per-chunk copy)" if persistent_in is not None else "per-chunk alloc")
     )
     t0 = time.perf_counter()
     c = 0
@@ -445,15 +469,17 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, mtp_tokens, meta, metadata_msg = _socket_next(h2d_service, NUM_MTP_TOKENS)
+            inp, mtp_tokens, meta, metadata_msg = _socket_next(
+                h2d_service, metadata_buf, n_mtp=NUM_MTP_TOKENS, tokens_out=persistent_in
+            )
             meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
         else:
-            inp, meta, metadata_msg = _d2d_recv(d2d_in)
+            inp, meta, metadata_msg = _d2d_recv(d2d_in, metadata_buf, tokens_out=persistent_in)
             mtp_tokens = None
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
-            ttnn.deallocate(inp)
-            ttnn.deallocate(metadata_msg)
+            if persistent_in is None:
+                ttnn.deallocate(inp)
             if mtp_tokens is not None:
                 ttnn.deallocate(mtp_tokens)
             if d2d_out is not None:
@@ -933,6 +959,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
+    # Persistent destination for the socket metadata record. Width follows the socket this rank
+    # actually drains: rank 0 reads the H2D chunk record, every other rank the (MTP-widened) D2D one.
+    metadata_buf = _make_socket_metadata_buffer(
+        mesh_device, CHUNK_METADATA_SIZE_BYTES if is_first_rank else D2D_METADATA_SIZE_BYTES
+    )
+
     if getattr(runtime, "capture_trace", None) and runtime.config.use_trace:
         runtime.capture_trace(kv_caches)
         if use_d2h and layer_ack_service is not None:
@@ -958,6 +990,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            metadata_buf=metadata_buf,
         )
     finally:
         import gc
