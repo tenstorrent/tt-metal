@@ -752,9 +752,7 @@ class Qwen3TTSPipeline:
                 break
             seen.append(first)
 
-            rest = self.predictor.generate(
-                ttnn.to_torch(last).float().reshape(1, 1, -1), first, pick=inner, watch=watch
-            )
+            rest = self.predictor.generate(last, first, pick=inner, watch=watch)
             frame = [first] + list(rest)
             frames.append(frame)
             if on_frame is not None:
