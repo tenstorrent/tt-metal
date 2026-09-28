@@ -604,5 +604,90 @@
       "bs16": 0.8144,
       "bs32": 0.8146
     }
+  },
+  "fused_swiglu_pack_thread_last_k_block_20260928": {
+    "ff13_us_standalone": {
+      "bs8_fused": {
+        "old_epilogue": 1435.0,
+        "in_loop_pack": 1049.8,
+        "plain_compute_same_shape": 745.2
+      },
+      "bs16_fused": {
+        "old_epilogue": 2704.8,
+        "in_loop_pack": 1958.7,
+        "plain_compute_same_shape": 1477.3
+      },
+      "bs32": {
+        "unfused_ff1_ff3_silu_mul": 4704,
+        "fused_old_epilogue_4_20_8": 5165.5,
+        "fused_in_loop_4_20_8": 3830.5
+      }
+    },
+    "epilogue_breakdown_bs16_us": {
+      "base": 2709,
+      "copy_pack_only": 1613,
+      "silu_only": 2287,
+      "mul_only": 1964,
+      "inits_hoisted": 2676
+    },
+    "pcc_vs_fp32_torch": {
+      "bs8": [
+        0.98697,
+        0.98697
+      ],
+      "bs16": [
+        0.9869,
+        0.98691
+      ]
+    },
+    "bs32_profile_ms": {
+      "ff1_ff3": 119.46,
+      "silu_mul": 49.11,
+      "ff2_wo": 77.28,
+      "qkv": 39.17,
+      "sdpa": 20.96,
+      "total": 340.5
+    },
+    "sustained_run_3_alternating_rounds": {
+      "bs8_chip0": {
+        "cold": [
+          98.63,
+          85.0
+        ],
+        "sustained": [
+          113.73,
+          103.7
+        ]
+      },
+      "bs16_chip1": {
+        "cold": [
+          185.13,
+          158.33
+        ],
+        "sustained": [
+          225.7,
+          210.4
+        ]
+      },
+      "bs32_chip2": {
+        "cold": [
+          364.13,
+          329.4
+        ],
+        "sustained": [
+          436.27,
+          410.97
+        ]
+      }
+    },
+    "stsb_spearman": {
+      "bs8": 0.8116,
+      "bs16": 0.815,
+      "bs32": 0.8135
+    },
+    "bs32_opt_out_confirm": {
+      "default_fused": 328.7,
+      "QWEN_FUSE_SWIGLU_0": 364.9
+    }
   }
 }

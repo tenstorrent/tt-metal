@@ -607,17 +607,18 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
         os.environ.setdefault("QWEN_MM_BLOCK_QKV", "8,4,8")
         os.environ.setdefault("QWEN_MM_BLOCK_WO", "16,8,8")
     apply_recommended_env(batched_l1=cfg["batched_l1"])
-    # Fused SwiGLU (tt/mlp.py PplxFusedSwigluMLP) folds FF1 + FF3 + the silu*mul
-    # BinaryNg into one minimal_matmul(fuse_swiglu=True). It is a win at moderate
-    # batch and a loss at bs=32, where doubling the packed weight width to
-    # 2*hidden_dim=19456 costs more in block shape than the removed BinaryNg
-    # saves. Measured on P150 ISL=512 (best prefill / best tok/s):
-    #   bs8   off 160.8 ms / 25.5k   on 158.3 ms / 25.9k   -1.6%
-    #   bs16  off 308.4 ms / 26.6k   on 290.9 ms / 28.2k   -5.7%
-    #   bs32  off 558.4 ms / 29.3k   on 570.5 ms / 28.7k   +2.2%  <- regression
-    # bs=1 never reaches it (legacy MatmulMultiCoreReuseMultiCast path).
-    # STS-B Spearman identical either way (0.8125).
-    os.environ.setdefault("QWEN_FUSE_SWIGLU", "1" if cfg.get("fuse_swiglu", 1 < batch_size <= 16) else "0")
+    # Fused SwiGLU (tt/mlp.py PplxFusedSwigluMLP) folds FF1 + FF3 + the silu*mul into one
+    # minimal_matmul(fuse_swiglu=True) on the packed gate/up weight. Since minimal_matmul applies silu(gate) * up
+    # on the pack thread during the last K block (overlapping the math thread's matmul) instead of in a math-thread
+    # epilogue pass (~2100 cycles per output tile), the fused kernel wins at every batch > 1, bs32 included (it lost
+    # there by 16% with the old epilogue, NEGATIVE_RESULTS 13 / 58). bs32 takes bs16's blocks: fused 3831 us per
+    # layer (4,20,8 1x4; 4129 at 8,8,8 1x8) vs FF1 + FF3 + silu_mul 4704. bs=1 never reaches it (legacy 2D path).
+    os.environ.setdefault("QWEN_FUSE_SWIGLU", "1" if cfg.get("fuse_swiglu", batch_size > 1) else "0")
+    if batch_size == 32 and seq_len == 512 and os.getenv("QWEN_FUSE_SWIGLU") == "1":
+        # fused only: the FF13 block knobs also drive the unfused FF1 / FF3, which want 8,8,8 1x8 (4,20,8 1x4 there
+        # costs +81 ms at bs32)
+        os.environ.setdefault("QWEN_MM_BLOCK_FF13", "4,20,8")
+        os.environ.setdefault("QWEN_MM_SUBBLOCK_FF13", "1,4")
     if cfg["dram_grid"]:
         os.environ.setdefault("QWEN_MM_GRID", DRAM_MM_GRID)
 
