@@ -54,7 +54,8 @@ def _env_list(name, default, cast=str):
     return [cast(v) for v in os.environ.get(name, default).split(",") if v]
 
 
-KDIR = "models/demos/mimo_v2_d_p/tests/perf/kernels/stream_mm"
+KDIR = "models/demos/mimo_v2_d_p/tests/perf/kernels/stream_mm"  # research-only kernels
+KDIR_OP = "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/flat_routed_expert/device/kernels"
 X_SLOTS_ENV = os.environ.get("MIMO_FL_X_SLOTS")  # x ring slots (default: 24 end to end, else 16)
 RELAY_CB = int(os.environ.get("MIMO_FL_RELAY_CB", "16"))  # x blocks buffered on a relay
 D_CHAINS = int(os.environ.get("MIMO_FL_DOWN_CHAINS", "7"))
@@ -329,6 +330,17 @@ class FlatExpert:
         NG = n_global if n_global is not None else 2 * E + 2
         self.device, self.E, self.H, self.I, self.m, self.n_dev = device, E, H, I, m, n_dev
         self.dyn, self.e2e, self.gids, self.NG = DYN, E2E, gids, NG
+        # the local experts' global ids, per device (the kernels read their row: one program for every device)
+        gid_host = torch.tensor(gids, dtype=torch.int32).reshape(n_dev, 1, E)
+        self.gidx = ttnn.from_torch(
+            gid_host if n_dev > 1 else gid_host[0],
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if n_dev > 1 else None,
+        )
+        gidx_addr = self.gidx.buffer_address()
         w_dtype, w_tile = W_DTYPES[wdtype]
         assert m % 32 == 0
         # rows per sub-block: M < 128 -> one sub-block of M rows; else 4 row tiles (MIMO_FL_MT overrides), the last
@@ -759,14 +771,14 @@ class FlatExpert:
                 )
             )
 
-        def make(x_addr, y_addr, c_addr, r_addr, base, words_addr, gids_d):
-            """One device's kernels / semaphores for the per-call buffer addresses (x, y, counts, regions, the arena
-            and the freed words) and that device's global expert ids, plus its CBs as a function of the arena."""
+        def make(x_addr, y_addr, c_addr, r_addr, base, words_addr):
+            """The kernels / semaphores for the per-call buffer addresses (x, y, counts, regions, the arena and the
+            freed words), plus the CBs as a function of the arena (the same program on every device)."""
             land_addr, x_ring_addr, h_all_addr = base, base + X_OFF, base + H_OFF
             word_of = {ci: words_addr + word_rel[ci] for ci in range(ngu)}
             done_addr = done.buffer_address()
             # the routing's outputs: per global expert token count and region row; static e2e: region / count tiles
-            dyn_args = [c_addr, r_addr, 4 * NG, band[0], band[1]] + list(gids_d) if DYN else []
+            dyn_args = [c_addr, r_addr, 4 * NG, band[0], band[1], gidx_addr, 4 * E] if DYN else []
             e2e_rt = (
                 dyn_args
                 if DYN
@@ -932,8 +944,9 @@ class FlatExpert:
                 n for n in (16, 32, 64) if E <= n
             )  # schedule arrays (se_meta.hpp); meta page 3 + 6 SE_MAX_E words
             META_BYTES = {16: 512, 32: 1024, 64: 2048}[SE_MAX_E]
-            DYN_HALF = int(os.environ.get("MIMO_FL_DYN_HALF", str(max(512, 1 << (4 * NG - 1).bit_length()))))
-            assert 4 * NG <= DYN_HALF, "the counts row must fit a scratch half (bytes)"
+            dyn_need = -(-4 * NG // 64) * 64 + -(-4 * E // 64) * 64  # counts row + the ids (se_dyn.hpp)
+            DYN_HALF = int(os.environ.get("MIMO_FL_DYN_HALF", str(max(512, 1 << (dyn_need - 1).bit_length()))))
+            assert dyn_need <= DYN_HALF, "the counts row + the ids must fit a scratch half (bytes)"
             # pinned down weights too when every down ring holds exactly NREG experts (MIMO_FL_DRING / _R = 2 with PIN)
             dn_reg = (
                 DYN
@@ -1011,7 +1024,7 @@ class FlatExpert:
                         )
                     kernels.append(
                         ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se9_rdown.cpp",
+                            kernel_source=f"{KDIR_OP}/se9_rdown.cpp",
                             source_type=FP,
                             core_ranges=_crs([readers[r] for _, r, _ in mine]),
                             compile_time_args=[
@@ -1054,7 +1067,7 @@ class FlatExpert:
                         rd_dc_rt[readers[r].x][readers[r].y] = [0]
                     kernels.append(
                         ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se6_dcompute.cpp",
+                            kernel_source=f"{KDIR_OP}/se6_dcompute.cpp",
                             source_type=FP,
                             core_ranges=_crs([readers[r] for _, r, _ in mine]),
                             compile_time_args=[MTG, G, It, kd_r, pcd_r, E, S, slot_dr, ring_dr] + x_ct,
@@ -1068,7 +1081,7 @@ class FlatExpert:
                 if plain:
                     kernels.append(
                         ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se_reader.cpp",
+                            kernel_source=f"{KDIR_OP}/se_reader.cpp",
                             source_type=FP,
                             core_ranges=_crs(plain),
                             compile_time_args=[0, w_tile, RG * slot, READ_BATCH, nk_gu, 0, 1, E, RG * slot, 0],
@@ -1108,7 +1121,7 @@ class FlatExpert:
                         )
                         if not FWD
                         else ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se10_fwd.cpp",
+                            kernel_source=f"{KDIR_OP}/se10_fwd.cpp",
                             source_type=FP,
                             core_ranges=_crs(grp),
                             compile_time_args=[
@@ -1137,7 +1150,7 @@ class FlatExpert:
                 + (
                     [
                         ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se11_xrd.cpp",
+                            kernel_source=f"{KDIR_OP}/se11_xrd.cpp",
                             source_type=FP,
                             core_ranges=rl_crs,
                             compile_time_args=[0, H * 2, E, MT, nsb, S, XRD_BATCH],
@@ -1156,7 +1169,7 @@ class FlatExpert:
                             ),
                         ),
                         ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se11_tz.cpp",
+                            kernel_source=f"{KDIR_OP}/se11_tz.cpp",
                             source_type=FP,
                             core_ranges=rl_crs,
                             compile_time_args=[0, 1, MT],
@@ -1165,7 +1178,7 @@ class FlatExpert:
                             config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi),
                         ),
                         ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/se11_xmc.cpp",
+                            kernel_source=f"{KDIR_OP}/se11_xmc.cpp",
                             source_type=FP,
                             core_ranges=_crs(relays[:NR]) if XHELP else rl_crs,
                             compile_time_args=[1, MT, BF8_TILE, X_SLOTS, XARR, WORD, KBLK, E, nsb],
@@ -1188,7 +1201,7 @@ class FlatExpert:
                     + (
                         [  # helper j of each rectangle bumps arrival semaphore (4, 7, 8, 10)[j] on its primary
                             ttnn.KernelDescriptor(
-                                kernel_source=f"{KDIR}/se13_xhelp.cpp",
+                                kernel_source=f"{KDIR_OP}/se13_xhelp.cpp",
                                 source_type=FP,
                                 core_ranges=_crs(relays[NR + NR * j_ : NR + NR * (j_ + 1)]),
                                 compile_time_args=[1, MT, BF8_TILE, LAND_SLOTS, (4, 7, 8, 10)[j_], 5, E, nsb],
@@ -1228,7 +1241,7 @@ class FlatExpert:
                 )
                 + [
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/se5_recv.cpp",
+                        kernel_source=f"{KDIR_OP}/se5_recv.cpp",
                         source_type=FP,
                         core_ranges=gu_crs,
                         compile_time_args=[
@@ -1289,7 +1302,7 @@ class FlatExpert:
                         ),
                     ),
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/se3_compute.cpp",
+                        kernel_source=f"{KDIR_OP}/se3_compute.cpp",
                         source_type=FP,
                         core_ranges=gu_crs,
                         compile_time_args=[KBLK, MTG, nk_gu, 0, 1, E, S, slot, 1, 1, NP, 0, ring_g],
@@ -1312,7 +1325,7 @@ class FlatExpert:
                 g_crs = _crs([down[d] for d in ds])
                 kernels += [
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/se6_drecv.cpp",
+                        kernel_source=f"{KDIR_OP}/se6_drecv.cpp",
                         source_type=FP,
                         core_ranges=g_crs,
                         compile_time_args=[
@@ -1346,7 +1359,7 @@ class FlatExpert:
                         config=dm(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1 if DN_NOC else ttnn.NOC.NOC_0),
                     ),
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/se6_dw.cpp",
+                        kernel_source=f"{KDIR_OP}/se6_dw.cpp",
                         source_type=FP,
                         core_ranges=g_crs,
                         compile_time_args=[
@@ -1369,7 +1382,7 @@ class FlatExpert:
                         config=dm(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0 if DN_NOC else ttnn.NOC.NOC_1),
                     ),
                     ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/se6_dcompute.cpp",
+                        kernel_source=f"{KDIR_OP}/se6_dcompute.cpp",
                         source_type=FP,
                         core_ranges=g_crs,
                         compile_time_args=[MTG, G, It, g_["kd"], p_, E, S, g_["slot"], g_["ring"]] + x_ct,
@@ -1526,7 +1539,7 @@ class FlatExpert:
         )
 
     def program(self, x, y, counts=None, regions=None, arena=None, words=None):
-        """ProgramDescriptor (one device) or MeshProgramDescriptor (per-device expert ids) for these tensors. The
+        """The ProgramDescriptor for these tensors (the same on every device: the kernels read their expert ids). The
         kernels are cached by the buffer addresses; the CBs are rebuilt every call (they bind the launch's arena)."""
         own = arena is None
         if own:  # (e.g. show_kernels: a throwaway arena)
@@ -1543,24 +1556,14 @@ class FlatExpert:
         if parts is None:
             if len(self._cache) > 16:
                 self._cache.clear()
-            built = [self._make(*key, g_) for g_ in self.gids]
-            # one descriptor per device, kept: a call only swaps in its CBs (same on every device)
-            parts = ([ttnn.ProgramDescriptor(kernels=k_, semaphores=s_, cbs=[]) for k_, s_, _ in built], built[0][2])
+            k_, s_, cbs_for = self._make(*key)
+            parts = (ttnn.ProgramDescriptor(kernels=k_, semaphores=s_, cbs=[]), cbs_for)  # kept: a call swaps its CBs
             self._cache[key] = parts
-        cbs = parts[1](arena)
-        progs = parts[0]
-        for p_ in progs:
-            p_.cbs = cbs
+        prog, cbs_for = parts
+        prog.cbs = cbs_for(arena)
         if own:
             ttnn.deallocate(arena)
             ttnn.deallocate(words)
-        if self.n_dev == 1:
-            return progs[0]
-        prog = ttnn.MeshProgramDescriptor()
-        rows, cols = tuple(self.device.shape)
-        for d_ in range(self.n_dev):
-            coord = ttnn.MeshCoordinate(d_ // cols, d_ % cols)
-            prog[ttnn.MeshCoordinateRange(coord, coord)] = progs[d_]
         return prog
 
     def alloc_scratch(self):
@@ -1600,7 +1603,7 @@ class FlatExpert:
         if not self.e2e:  # (end to end the relays zero their freed words themselves)
             ttnn.copy_host_to_device_tensor(self.words_zero, words)
         ttnn.generic_op(
-            [self.w_dev, self.wd_dev, x, arena, y, words, self.done]
+            [self.w_dev, self.wd_dev, x, arena, y, words, self.done, self.gidx]
             + ([self.wr_dev] if self.wr_dev is not None else [])
             + ([self.wx_dev] if self.wx_dev is not None else []),
             self.program(x, y, counts, regions, arena, words),
