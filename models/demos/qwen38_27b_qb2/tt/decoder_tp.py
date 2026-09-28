@@ -51,6 +51,10 @@ _TP_POLICY = {
         # tiles, and eight shards no longer fit; 34 is its largest divisor inside a 64-core grid.
         "down_cores": 34,
         "down_block": 2,
+        # The 1D prefill matmul needs in0_block_w to divide Kt, and down_proj's 68 tiles admit
+        # only {1,2,4,17,34,68}. Seventeen serves both layer kinds, where QB2 needed eight for
+        # the GDN layers and seventeen for the full-attention ones.
+        "prefill_1d_down_k": 17,
     },
 }
 
@@ -84,6 +88,59 @@ def native_mesh_shape():
         if key[1] == cluster and key[0].name.lower() == arch:
             return key[3]
     raise ValueError(f"Qwen3.8-27B requires {_SUPPORTED_MESH_TEXT}; got arch={arch}, cluster_type={cluster}")
+
+
+def measured_policy(kind):
+    """Policy measured on QB2 at TP=4, before any platform overlay or caller override."""
+    return dict(
+        # Measured TP4 policy; native descriptors resolve each physical coordinate.
+        attention_readers=2,
+        output_readers=2,
+        gate_readers=3,
+        up_readers=3,
+        down_readers=2,
+        attention_cores=10,
+        attention_block=16,
+        gate_cores=40,
+        gate_block=4,
+        up_cores=40,
+        up_block=4,
+        output_cores=8,
+        output_block=6,
+        down_cores=8,
+        down_block=17,
+        # Materialize the reader-alignment tail in the logical projection
+        # output.  Older release images require every DRAM reader to own
+        # an output shard; the wrapper crops this zero-padded tail back to
+        # projection_widths below.  The readers already compute these
+        # bank-alignment tiles, so this does not add matmul work.
+        pad_reader_outputs=True,
+        residual_cores=40,
+        allreduce_cores=40,
+        chunk_size=4096,
+        sdpa_k=128,
+        prefill_1d=True,
+        prefill_1d_min=64,
+        prefill_1d_max=256,
+        prefill_1d_k=20 if kind == "full_attention" else 8,
+        prefill_1d_output_k=24 if kind == "full_attention" else 8,
+        prefill_1d_down_k=17 if kind == "full_attention" else 8,
+        prefill_1d_l1=kind != "full_attention",
+        carry_input=True,
+        carry_output=True,
+        carry_residual=True,
+        residual_layout="replicated",
+        ccl_dtype="bfloat16",
+        num_links=2,
+        ring=True,
+        packed_mlp=True,
+        packed_decode_conv=True,
+        persistent_ccl=True,
+        direct_allreduce=True,
+        # Public TILE [B,1,H] expands to B*32 rows. Keep these batched
+        # boundaries out of L1 while the next layer retains its input.
+        public_dram_batch=2,
+    )
 
 
 def resolve_mesh_tp(mesh_device):
@@ -123,55 +180,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
         self.kind = hf_config.layer_types[layer_idx]
         self.eps = hf_config.rms_norm_eps
         self.policy = dict(DEFAULT_POLICY)
-        self.policy.update(
-            # Measured TP4 policy; native descriptors resolve each physical coordinate.
-            attention_readers=2,
-            output_readers=2,
-            gate_readers=3,
-            up_readers=3,
-            down_readers=2,
-            attention_cores=10,
-            attention_block=16,
-            gate_cores=40,
-            gate_block=4,
-            up_cores=40,
-            up_block=4,
-            output_cores=8,
-            output_block=6,
-            down_cores=8,
-            down_block=17,
-            # Materialize the reader-alignment tail in the logical projection
-            # output.  Older release images require every DRAM reader to own
-            # an output shard; the wrapper crops this zero-padded tail back to
-            # projection_widths below.  The readers already compute these
-            # bank-alignment tiles, so this does not add matmul work.
-            pad_reader_outputs=True,
-            residual_cores=40,
-            allreduce_cores=40,
-            chunk_size=4096,
-            sdpa_k=128,
-            prefill_1d=True,
-            prefill_1d_min=64,
-            prefill_1d_max=256,
-            prefill_1d_k=20 if self.kind == "full_attention" else 8,
-            prefill_1d_output_k=24 if self.kind == "full_attention" else 8,
-            prefill_1d_down_k=17 if self.kind == "full_attention" else 8,
-            prefill_1d_l1=self.kind != "full_attention",
-            carry_input=True,
-            carry_output=True,
-            carry_residual=True,
-            residual_layout="replicated",
-            ccl_dtype="bfloat16",
-            num_links=2,
-            ring=True,
-            packed_mlp=True,
-            packed_decode_conv=True,
-            persistent_ccl=True,
-            direct_allreduce=True,
-            # Public TILE [B,1,H] expands to B*32 rows. Keep these batched
-            # boundaries out of L1 while the next layer retains its input.
-            public_dram_batch=2,
-        )
+        self.policy.update(measured_policy(self.kind))
         self.policy.update(_TP_POLICY.get(self.TP, {}))
         self.policy.update(policy or {})
         self.CHUNK_SIZE = self.policy["chunk_size"]
