@@ -350,9 +350,12 @@ int64_t norm_cb_depth(bool has_gamma, bool has_bias, int64_t block_rows) {
     return block_rows == 1 ? 1 : 2;
 }
 
+// `qt` is the tile size of the two STATISTICS intermediates, cb_x_squared and cb_normalized (fp32 at
+// fp32_dest_acc_en, see stat_dtype); `it` is cb_x_sum's (the residual sum t).
 int64_t cb_block_bytes(
     int64_t bt,
     int64_t it,
+    int64_t qt,
     int64_t depth_x,
     int64_t depth_out,
     bool has_gamma,
@@ -360,7 +363,7 @@ int64_t cb_block_bytes(
     bool has_residual,
     int64_t depth_r,
     int64_t block_rows) {
-    int64_t total = depth_x * bt + it + norm_cb_depth(has_gamma, has_bias, block_rows) * it + depth_out * bt;
+    int64_t total = depth_x * bt + qt + norm_cb_depth(has_gamma, has_bias, block_rows) * qt + depth_out * bt;
     if (has_residual) {
         total += depth_r * bt + it;
     }
@@ -377,6 +380,15 @@ uint32_t f32_bits(double v) {
 bool is_bfp_dtype(DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; }
 
 DataType intermediate_dtype(DataType dt) { return is_bfp_dtype(dt) ? DataType::BFLOAT16 : dt; }
+
+// CHANGELOG 3: x^2 (cb_x_squared) and x * (1/rms) (cb_normalized) are held in fp32 when DEST is fp32,
+// as native ttnn.rms_norm holds its intermediates (`fp32_dest_acc_en ? Float32 : Float16_b`). In the
+// input's format they were rounded once on the pack and again on the output: the sum of squares
+// picked up a round-to-nearest-away bias (+2.4e-4 in the mean square at MiMo's shape), and y was
+// rounded twice. cb_x_sum stays intermediate_dtype: it IS the returned residual sum t.
+DataType stat_dtype(DataType dt, bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? DataType::FLOAT32 : intermediate_dtype(dt);
+}
 
 uint32_t tile_bytes(DataType dt) { return tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(dt)); }
 
@@ -1216,6 +1228,8 @@ ProgramDescriptor create_program_descriptor(
     const int64_t bt = tile_bytes(input.dtype());
     const DataType interm_dtype = intermediate_dtype(input.dtype());
     const int64_t it = tile_bytes(interm_dtype);
+    const DataType sq_dtype = stat_dtype(input.dtype(), compute_config.fp32_dest_acc_en);
+    const int64_t qt = tile_bytes(sq_dtype);
     const int64_t gt = has_gamma ? tile_bytes(weight->dtype()) : 0;
     const int64_t bit = has_bias ? tile_bytes(bias->dtype()) : 0;
     const int64_t st = tile_bytes(DataType::BFLOAT16);
@@ -1273,7 +1287,9 @@ ProgramDescriptor create_program_descriptor(
 
     const int64_t kernel_partial_w = plan.band ? 0 : partial_w;
     const int64_t scaler_pages = kernel_partial_w ? 2 : 1;
-    const DataType scaler_dtype = kernel_partial_w ? interm_dtype : DataType::BFLOAT16;
+    // The partial-W 0/1 mask is unpacked in cb_x_squared's format (the reduce input's), so it is written
+    // in that format: sq_dtype, which is fp32 at fp32_dest_acc_en (CHANGELOG 3).
+    const DataType scaler_dtype = kernel_partial_w ? sq_dtype : DataType::BFLOAT16;
     const int64_t scaler_tile_bytes = tile_bytes(scaler_dtype);
     const int64_t scaler_bytes = scaler_tile_bytes * scaler_pages;
     // `return_residual_sum`: cb_residual_sum is T_SUM_RING_BLOCKS of compute's pass-B DEST blocks -- at most
@@ -1347,6 +1363,7 @@ ProgramDescriptor create_program_descriptor(
             const int64_t mult = cb_block_bytes(
                 bt,
                 it,
+                qt,
                 dx0.value_or(depth),
                 do0.value_or(depth),
                 has_gamma,
@@ -1359,7 +1376,7 @@ ProgramDescriptor create_program_descriptor(
                                   (!is_tile ? rm_stage_rings * rm_depth * wt_core * bt : 0) + scaler_bytes +
                                   combine_fixed;
             const int64_t sq_wt = CB_SQ_EXACT ? x_squared_wt_of(wt_core, kernel_partial_w) : wt_core;
-            const int64_t per_tilerow = wt_core * mult - (wt_core - sq_wt) * it + per_row_bytes;
+            const int64_t per_tilerow = wt_core * mult - (wt_core - sq_wt) * qt + per_row_bytes;
             return std::max<int64_t>(0, floordiv(budget - fixed, std::max<int64_t>(1, per_tilerow)));
         };
 
@@ -1427,7 +1444,7 @@ ProgramDescriptor create_program_descriptor(
                 return held + scaler_bytes + per_row_bytes + combine_fixed;
             };
             const int64_t per_chunk_tile =
-                it * (1 + norm_cb_depth(has_gamma, has_bias, 1)) + bt * depth_out +
+                qt * (1 + norm_cb_depth(has_gamma, has_bias, 1)) + bt * depth_out +
                 (has_residual ? bt * (depth_x + residual_depth(depth_x)) : 0) + per_channel_bytes(0, 1, false) +
                 (!is_tile ? rm_stage_rings * CB_RM_STAGE_DEPTH * bt : 0) +
                 (compact ? PC_RING_CHUNKS * ((has_gamma ? gt : 0) + (has_bias ? bit : 0)) : 0);
@@ -1506,7 +1523,7 @@ ProgramDescriptor create_program_descriptor(
         // STREAM.
         const int64_t depth = depth_candidates[0];
         const int64_t mult =
-            cb_block_bytes(bt, it, depth, depth, has_gamma, has_bias, has_residual, residual_depth(depth), 1);
+            cb_block_bytes(bt, it, qt, depth, depth, has_gamma, has_bias, has_residual, residual_depth(depth), 1);
         const int64_t per_chunk_tile_bytes =
             mult + per_channel_bytes(1, 1, false) + (!is_tile ? rm_stage_rings * CB_RM_STAGE_DEPTH * bt : 0);
         const auto [stream_per_row, stream_combine_fixed] = f32_terms(false);
@@ -1647,7 +1664,7 @@ ProgramDescriptor create_program_descriptor(
         }
         cbs.push_back(make_cb(CB_X_SUM, it, block_rows * x_hold_wt, interm_dtype, all_cores));
     }
-    cbs.push_back(make_cb(CB_X_SQUARED, it, block_rows * x_squared_wt, interm_dtype, all_cores));
+    cbs.push_back(make_cb(CB_X_SQUARED, qt, block_rows * x_squared_wt, sq_dtype, all_cores));
     cbs.push_back(make_cb(CB_SCALER, scaler_tile_bytes, scaler_pages, scaler_dtype, all_cores));
     if (!combine) {
         cbs.push_back(make_cb(CB_ROW_STAT, ft, CB_ROW_STAT_DEPTH * block_rows, DataType::FLOAT32, all_cores));
@@ -1677,7 +1694,7 @@ ProgramDescriptor create_program_descriptor(
     }
     const int64_t norm_depth = norm_cb_depth(has_gamma, has_bias, block_rows);
     if (norm_depth) {
-        cbs.push_back(make_cb(CB_NORMALIZED, it, norm_depth * block_rows * wt_chunk, interm_dtype, all_cores));
+        cbs.push_back(make_cb(CB_NORMALIZED, qt, norm_depth * block_rows * wt_chunk, sq_dtype, all_cores));
     }
     if (plan.native_out) {
         const auto [osh_t, osw_t] = shard_tile_extent(output);
