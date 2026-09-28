@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone ring_mla replay that trips the dev10 GDDR EDC counters and corrupts bank 3.
+"""Standalone ring_mla replay that trips the GDDR EDC counters and corrupts the affected bank.
 
 Shapes, dtypes, memory configs, program configs and CCL setup are the Kimi-K2.6 8x4 fabric2d
 values captured from the Inspector runtime entries of the tripped run; nothing is imported from

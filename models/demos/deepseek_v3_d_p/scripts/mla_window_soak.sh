@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Soak for the dev10 GDDR bank-3 DRAM corruption. Each bulk resets the 32-chip mesh, replays
+# Soak for the GDDR EDC corruption this workload provokes. Each bulk resets the 32-chip mesh, replays
 # ring_mla, then reads the GDDR EDC counters before the next reset clears them. With EDC_PROBE=1
 # the test freezes the mesh at the offending op and the dispatch-timeout hook runs tt-triage
 # against it; the counter dump is the endpoint either way.
@@ -16,8 +16,6 @@ SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$SCRIPTS/../../../.." && pwd)}"
 OUT="${OUT:-/data/$USER/soaklogs/mla_window_$(date +%Y%m%d_%H%M%S)}"
 LOOPS="${LOOPS:-136}"
-WATCH_DEV="${WATCH_DEV:-10}"
-WATCH_INST="${WATCH_INST:-3}"
 NODE=models/demos/deepseek_v3_d_p/tests/test_mla_window_repro.py::test_mla_window_repro
 TRIAGE_ARGS="--run=dump_op_mesh --run=dump_callstacks --run=check_binary_integrity --llm-output -vv"
 
@@ -26,8 +24,8 @@ cd "$TT_METAL_HOME"
 source python_env/bin/activate
 
 TSV="$OUT/iterations.tsv"
-printf 'iter\tts\treset_s\trun_s\texit\tedc\tevent\n' > "$TSV"
-echo "mla window soak -> $OUT   ${ITERS:-30000} iters/bulk, $LOOPS bulks, watching dev $WATCH_DEV inst $WATCH_INST"
+printf 'iter\tts\treset_s\trun_s\texit\tedc\tevent\tedc_at[device:bank]\n' > "$TSV"
+echo "mla window soak -> $OUT   ${ITERS:-30000} iters/bulk, $LOOPS bulks"
 
 for i in $(seq 1 "$LOOPS"); do
   ts=$(date -Is)
@@ -51,20 +49,19 @@ for i in $(seq 1 "$LOOPS"); do
   # Read before the next bulk's reset zeroes the counters. MRISC zeroes them after training, so
   # any non-zero value happened during this bulk.
   python3 "$SCRIPTS/gddr_edc_counters.py" --all > "$OUT/edc_$i.log" 2>&1
+  sites=$(sed -n 's/^dev  *\([0-9]*\) inst \([0-9]*\):.*\*\*\* EDC \*\*\*.*/\1:\2/p' "$OUT/edc_$i.log" | paste -sd,)
   if ! grep -q 'instances checked' "$OUT/edc_$i.log"; then
     edc=READ_ERR
-  elif ! grep -q '\*\*\* EDC \*\*\*' "$OUT/edc_$i.log"; then
+  elif [ -z "$sites" ]; then
     edc=CLEAN
-  elif grep -q "^dev *$WATCH_DEV inst $WATCH_INST:.*\*\*\* EDC \*\*\*" "$OUT/edc_$i.log"; then
-    edc=DIRTY
   else
-    edc=OTHER
+    edc=DIRTY
   fi
 
   event=""
   [ "$edc" != CLEAN ] && event="EDC_$edc"
   [ "$rc" -ne 0 ] && event="${event:+$event,}EXIT_$rc"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$ts" "$reset_s" "$run_s" "$rc" "$edc" "${event:-CLEAN}" >> "$TSV"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$ts" "$reset_s" "$run_s" "$rc" "$edc" "${event:-CLEAN}" "${sites:--}" >> "$TSV"
   echo "  bulk $i: edc=$edc event=${event:-CLEAN}  run=${run_s}s exit=$rc"
 
   pkill -9 -f pytest 2>/dev/null || true
