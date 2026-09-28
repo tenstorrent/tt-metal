@@ -27,6 +27,8 @@ enum {
 template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
+    // Hoisted out of the row loop; only the bf16 RSUB arm uses it.
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
 
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
@@ -48,7 +50,8 @@ void calculate_binop_with_scalar(std::uint32_t param) {
             // truncate fp32->bf16 by default, but torch computes rsub result in bf16 with IEEE
             // round-to-nearest-even. The resulting small error is amplified by the log operation.
             if constexpr (!is_fp32_dest_acc_en) {
-                result = float32_to_bf16_rne(result);
+                // Low 16 bits left unspecified; the bf16 SFPSTORE below keeps only the high half.
+                result = float32_to_bf16_rne_for_store(result, rne_bias);
             }
         }
 

@@ -65,10 +65,11 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_sfpu": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "dest_acc",
+            "dst_rounding",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

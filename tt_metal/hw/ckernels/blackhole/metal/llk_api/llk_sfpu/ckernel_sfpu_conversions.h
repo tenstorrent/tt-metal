@@ -31,6 +31,10 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
 
 // Convert float32 to bfloat16 using IEEE 754 Round-to-Nearest-Even (RNE)
 // This implements the "add 0x7fff + LSB" algorithm for correct tie-breaking
+//
+// Reference form: 8 SFPU instructions per call, three of them SFPLOADI that the compiler
+// re-materialises in every row of a loop. Inside a row loop use bf16_rne_bias() +
+// float32_to_bf16_rne_for_store() below, which is the same algorithm at 4 instructions.
 sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // Get the float32 bits as unsigned integer
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
@@ -51,4 +55,33 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
 
     // Reinterpret back as float
     return sfpi::as<sfpi::vFloat>(bits);
+}
+
+// The 0x7fff addend of the RNE algorithm, to be created once before a row loop and passed to
+// float32_to_bf16_rne_for_store(). Kept in a vector register across the loop, it costs one
+// SFPLOADI per call instead of one per row.
+sfpi_inline sfpi::vUInt bf16_rne_bias() { return sfpi::vUInt(0x7fffU); }
+
+// fp32 -> bf16 round-to-nearest-even for a value that is about to be stored to a 16-bit Dest.
+//
+// Same "bits + 0x7fff + lsb" algorithm as float32_to_bf16_rne(), so the high 16 bits are
+// bit-identical to it for every input (ties to even, carry into the exponent up to +/-inf,
+// denormals, NaN payloads), at 4 SFPU instructions per row instead of 8:
+//   - the addend comes in as `bias` (from bf16_rne_bias(), hoisted out of the loop) instead of
+//     being re-materialised by SFPLOADI in every row;
+//   - the bf16 LSB is extracted with two immediate shifts, (bits << 15) >> 31, instead of a
+//     shift and an AND against a materialised 1;
+//   - the low 16 bits are NOT cleared. They are unspecified in the returned value: the caller
+//     must store it to a 16-bit (Float16_b) Dest, whose SFPSTORE keeps only the high half.
+// Do not use it for a value that stays in fp32 or that is read back before the store.
+//
+// The hardware alternative, SFPSTOCHRND FP32_TO_FP16B in "nearest" mode, was measured on
+// Blackhole silicon (2026-09-28, 4096 patterns) and is not a substitute: it rounds ties away
+// from zero (bf16-even lanes at exactly half a ULP round up), maps every NaN to +/-inf and
+// flushes denormals to +0.
+sfpi_inline sfpi::vFloat float32_to_bf16_rne_for_store(sfpi::vFloat in, const sfpi::vUInt bias) {
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
+    // Bit 16 of the fp32 pattern is the bf16 LSB; it breaks the tie towards even.
+    sfpi::vUInt lsb = (bits << 15) >> 31;
+    return sfpi::as<sfpi::vFloat>(bits + bias + lsb);
 }

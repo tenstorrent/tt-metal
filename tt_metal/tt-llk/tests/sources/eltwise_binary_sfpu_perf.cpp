@@ -212,7 +212,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
 
                         test_utils::
-                            call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
+                            call_binary_sfpu_operation<
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                APPROX_MODE,
+                                SFPU_BINARY_OPERATION,
+                                ITERATIONS,
+                                formats.math,
+                                SFPU_DST_ROUNDING_MODE>(
                                 block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
                     }
                 }
@@ -239,7 +246,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                         // Start SFPU binary operation
                         test_utils::
-                            call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
+                            call_binary_sfpu_operation<
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                APPROX_MODE,
+                                SFPU_BINARY_OPERATION,
+                                ITERATIONS,
+                                formats.math,
+                                SFPU_DST_ROUNDING_MODE>(
                                 block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
                     }
 

@@ -9,6 +9,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DstRoundingMode,
     MathOperation,
     Transpose,
 )
@@ -22,6 +23,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_DST_ROUNDING_MODE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
@@ -82,6 +84,66 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations,
     input_dimensions,
 ):
+    _run_float(
+        perf_report,
+        formats,
+        mathop,
+        approx_mode,
+        dest_acc,
+        loop_factor,
+        iterations,
+        input_dimensions,
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwrsub,
+    ],
+    loop_factor=[16],
+    iterations=[32],
+    input_dimensions=[[128, 64]],  # tile_cnt: 8
+)
+def test_perf_eltwise_binary_sfpu_float_rne(
+    perf_report,
+    formats,
+    mathop,
+    loop_factor,
+    iterations,
+    input_dimensions,
+):
+    # ADD/SUB/RSUB with DstRoundingMode::NearestEven, the arm binary_ng runs for every bf16
+    # ADD/SUB/RSUB it sends to the SFPU. Only meaningful with a bf16 Dest (dest_acc=No): the
+    # rounding is skipped when fp32 accumulation is on, so that variant would duplicate the
+    # Default one above.
+    _run_float(
+        perf_report,
+        formats,
+        mathop,
+        ApproximationMode.No,
+        DestAccumulation.No,
+        loop_factor,
+        iterations,
+        input_dimensions,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+    )
+
+
+def _run_float(
+    perf_report,
+    formats,
+    mathop,
+    approx_mode,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+    dst_rounding_mode=DstRoundingMode.Default,
+):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -98,6 +160,7 @@ def test_perf_eltwise_binary_sfpu_float(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -179,6 +242,7 @@ def test_perf_eltwise_binary_sfpu_int(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),
@@ -270,6 +334,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
             MATH_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             ITERATIONS(iterations),
+            SFPU_DST_ROUNDING_MODE(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

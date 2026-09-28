@@ -114,6 +114,8 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
+    // Hoisted out of the row loop; only the bf16 NearestEven ADD/SUB/RSUB arms use it.
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -202,7 +204,8 @@ inline void calculate_sfpu_binary(
         if constexpr (
             (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
             dst_rounding_mode == DstRoundingMode::NearestEven) {
-            result = float32_to_bf16_rne(result);
+            // Low 16 bits left unspecified; the bf16 SFPSTORE below keeps only the high half.
+            result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -215,6 +218,7 @@ inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -222,8 +226,8 @@ inline void calculate_sfpu_binary_mul(
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach:
-            result = float32_to_bf16_rne(result);
+            // software RNE approach; low 16 bits left unspecified for the bf16 SFPSTORE below
+            result = float32_to_bf16_rne_for_store(result, rne_bias);
 
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
@@ -240,6 +244,7 @@ inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const sfpi::vUInt rne_bias = bf16_rne_bias();
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
@@ -270,8 +275,8 @@ inline void calculate_sfpu_binary_div(
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // software RNE approach:
-            result = float32_to_bf16_rne(result);
+            // software RNE approach; low 16 bits left unspecified for the bf16 SFPSTORE below
+            result = float32_to_bf16_rne_for_store(result, rne_bias);
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
