@@ -348,8 +348,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create_retained_sharded_view(
     TT_FATAL(view_shard_spec.has_value(), "A sharded MeshBuffer view requires a shard spec");
     TT_FATAL(
         owner_shard_spec->grid().num_cores() > 0, "A sharded MeshBuffer view requires a non-empty owner shard grid");
-    TT_FATAL(
-        view_shard_spec->grid().num_cores() > 0, "A sharded MeshBuffer view requires a non-empty view shard grid");
+    TT_FATAL(view_shard_spec->grid().num_cores() > 0, "A sharded MeshBuffer view requires a non-empty view shard grid");
     for (const CoreCoord& core : corerange_to_cores(view_shard_spec->grid())) {
         TT_FATAL(
             owner_shard_spec->grid().contains(core),
@@ -585,7 +584,9 @@ void MeshBuffer::deallocate() {
             }
         }
 
-        if (std::holds_alternative<PerCoreOwnedState>(state_)) {
+        // Per-core device buffers own their allocations. A retained view can stay alive after deallocation while a
+        // view created from it references this MeshBuffer, so release its device buffers now as well.
+        if (std::holds_alternative<PerCoreOwnedState>(state_) || std::holds_alternative<RetainedViewState>(state_)) {
             for (auto& [coord, device_buffer] : buffers_) {
                 device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::remote();
             }

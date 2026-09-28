@@ -793,7 +793,12 @@ void BufferImpl::deallocate(Buffer& self) {
             // Guard on status: the explicit-call + destructor double-deallocate must remove once.
             if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0) {
                 if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
+                    // Explicit per-core addresses register one range per core under this owner, and each
+                    // remove() erases one range; removing an owner with no remaining ranges does nothing.
+                    const size_t registrations = std::max<size_t>(per_core_addresses_.size(), 1);
+                    for (size_t registration = 0; registration < registrations; ++registration) {
+                        tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
+                    }
                 } else if (buffer_type_ == BufferType::DRAM) {
                     tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), unique_id_);
                 }

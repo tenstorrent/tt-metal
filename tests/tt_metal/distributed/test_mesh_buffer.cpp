@@ -241,6 +241,35 @@ TEST_F(MeshBufferTestSuite, ShardedViewRetainsOwner) {
 }
 
 // Verifies interval validation and explicit deallocation behavior for retained views.
+// A deallocated view that a nested view still references must release its device buffers immediately.
+TEST_F(MeshBufferTestSuite, ShardedViewDeallocationReleasesDeviceBuffers) {
+    constexpr DeviceAddr page_size = 1024;
+    const CoreRangeSet shard_grid(CoreCoord(0, 0));
+    auto local_config = [&](DeviceAddr pages) {
+        return DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(
+                ShardSpecBuffer(shard_grid, {1, pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, pages}),
+                TensorMemoryLayout::WIDTH_SHARDED),
+            .bottom_up = false};
+    };
+    auto owner = MeshBuffer::create(ReplicatedBufferConfig{.size = 4 * page_size}, local_config(4), mesh_device_.get());
+    auto view = experimental::retained_buffer_view::create(
+        owner, ReplicatedBufferConfig{.size = 2 * page_size}, local_config(2), page_size);
+    auto nested_view = experimental::retained_buffer_view::create(
+        view, ReplicatedBufferConfig{.size = page_size}, local_config(1), page_size);
+    const MeshCoordinate test_coordinate(0, 0);
+    ASSERT_NE(view->get_device_buffer(test_coordinate), nullptr);
+
+    view->deallocate();
+
+    EXPECT_FALSE(view->is_allocated());
+    EXPECT_FALSE(nested_view->is_allocated());
+    EXPECT_ANY_THROW((void)view->get_device_buffer(test_coordinate));
+    EXPECT_TRUE(owner->is_allocated());
+}
+
 TEST_F(MeshBufferTestSuite, ShardedViewValidatesLifetimeAndBounds) {
     constexpr DeviceAddr page_size = 1024;
     constexpr DeviceAddr owner_pages = 4;
