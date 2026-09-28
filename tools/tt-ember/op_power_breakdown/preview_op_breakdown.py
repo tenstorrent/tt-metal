@@ -13,10 +13,13 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-RE_OP = re.compile(r"^# OP (?P<idx>\d+) (?P<name>\S+) iters=(?P<iters>\d+) flops_per_iter=(?P<flops>\d+)(?: batch=(?P<batch>\d+))?(?: bytes_per_iter=(?P<bytes>\d+))?")
+RE_OP = re.compile(
+    r"^# OP (?P<idx>\d+) (?P<name>\S+) iters=(?P<iters>\d+) flops_per_iter=(?P<flops>\d+)(?: batch=(?P<batch>\d+))?(?: bytes_per_iter=(?P<bytes>\d+))?"
+)
 
 
 def load(run_dir: Path):
@@ -24,9 +27,13 @@ def load(run_dir: Path):
     for line in (run_dir / "summary.txt").read_text(errors="ignore").splitlines():
         m = RE_OP.match(line)
         if m:
-            ops[m.group("idx")] = (m.group("name"), int(m.group("iters")),
-                                   int(m.group("flops")), int(m.group("batch") or 1),
-                                   int(m.group("bytes") or 0))
+            ops[m.group("idx")] = (
+                m.group("name"),
+                int(m.group("iters")),
+                int(m.group("flops")),
+                int(m.group("batch") or 1),
+                int(m.group("bytes") or 0),
+            )
 
     rows = []
     for r in csv.DictReader(open(run_dir / "program_intervals.csv")):
@@ -39,24 +46,30 @@ def load(run_dir: Path):
         total_w = float(r["avg_power_vi_w"])
         vcore = float(r["avg_vcore_v"])
         base_w = float(r["base_current_a"]) * vcore
-        rows.append({
-            "idx": int(idx), "name": name, "iters": iters, "flops": flops, "batch": batch,
-            "window_s": window,
-            "total_w": total_w,
-            "dynamic_w": dyn * vcore,
-            "base_w": base_w,
-            # Energy for one invocation of the op in a single block pass. "dyn" is the
-            # increment over the idle floor; "idle" is the floor the device burns anyway while
-            # this op holds it; "total" is what the op actually costs you in wall-clock terms.
-            "dyn_mj_per_call": dyn * vcore * window / iters / batch * 1e3,
-            "idle_mj_per_call": (total_w - dyn * vcore) * window / iters / batch * 1e3,
-            "total_mj_per_call": total_w * window / iters / batch * 1e3,
-            "us_per_call": window / iters / batch * 1e6,
-            "tflops": float(r["algo_time_s_reported"]) if False else None,
-            "pj_per_flop": (dyn * vcore * window / (flops * iters) * 1e12) if flops else None,
-            "pj_per_byte": (dyn * vcore * window / (nbytes * iters) * 1e12) if nbytes else None,
-            "intensity": (flops / nbytes) if nbytes else None,
-        })
+        rows.append(
+            {
+                "idx": int(idx),
+                "name": name,
+                "iters": iters,
+                "flops": flops,
+                "batch": batch,
+                "window_s": window,
+                "total_w": total_w,
+                "dynamic_w": dyn * vcore,
+                "base_w": base_w,
+                # Energy for one invocation of the op in a single block pass. "dyn" is the
+                # increment over the idle floor; "idle" is the floor the device burns anyway while
+                # this op holds it; "total" is what the op actually costs you in wall-clock terms.
+                "dyn_mj_per_call": dyn * vcore * window / iters / batch * 1e3,
+                "idle_mj_per_call": (total_w - dyn * vcore) * window / iters / batch * 1e3,
+                "total_mj_per_call": total_w * window / iters / batch * 1e3,
+                "us_per_call": window / iters / batch * 1e6,
+                "tflops": float(r["algo_time_s_reported"]) if False else None,
+                "pj_per_flop": (dyn * vcore * window / (flops * iters) * 1e12) if flops else None,
+                "pj_per_byte": (dyn * vcore * window / (nbytes * iters) * 1e12) if nbytes else None,
+                "intensity": (flops / nbytes) if nbytes else None,
+            }
+        )
     return sorted(rows, key=lambda d: d["idx"])
 
 
@@ -72,25 +85,31 @@ def normalised_chart(rows, out_path, dpi=150):
     fig, axes = plt.subplots(2, 1, figsize=(max(10, len(rows) * 1.05), 9), sharex=True)
 
     for ax, key, ylab, colour in [
-            (axes[0], "pj_per_flop", "Energy per FLOP [pJ], log", "tab:blue"),
-            (axes[1], "pj_per_byte", "Energy per byte touched [pJ], log", "tab:purple")]:
+        (axes[0], "pj_per_flop", "Energy per FLOP [pJ], log", "tab:blue"),
+        (axes[1], "pj_per_byte", "Energy per byte touched [pJ], log", "tab:purple"),
+    ]:
         v = [r[key] or 0.0 for r in rows]
         ax.bar(x, v, 0.8, color=colour)
         ax.set_yscale("log")
         ax.set_ylim(min(z for z in v if z) * 0.4, max(v) * 3)
         for i, z in enumerate(v):
-            ax.annotate(f"{z:.3g}", (i, z), ha="center", va="bottom", fontsize=8,
-                        xytext=(0, 2), textcoords="offset points")
+            ax.annotate(
+                f"{z:.3g}", (i, z), ha="center", va="bottom", fontsize=8, xytext=(0, 2), textcoords="offset points"
+            )
         ax.set_ylabel(ylab)
         ax.grid(axis="y", alpha=0.3)
 
     axes[0].set_title(
         "Energy per unit of work - transformer decoder block, Blackhole p100a\n"
-        "the two denominators rank the ops in opposite orders; intensity says which one applies")
+        "the two denominators rank the ops in opposite orders; intensity says which one applies"
+    )
     axes[1].set_xticks(x)
     axes[1].set_xticklabels(
-        [f"{n}\n{r['intensity']:.3g} F/B" if r["intensity"] else n
-         for n, r in zip(names, rows)], rotation=45, ha="right", fontsize=8)
+        [f"{n}\n{r['intensity']:.3g} F/B" if r["intensity"] else n for n, r in zip(names, rows)],
+        rotation=45,
+        ha="right",
+        fontsize=8,
+    )
     axes[1].set_xlabel("Operation, with arithmetic intensity in FLOP/byte")
     fig.tight_layout()
     fig.savefig(out_path, dpi=dpi)
@@ -115,16 +134,25 @@ def energy_chart(rows, out_path, dpi=150):
     ax.bar(x, dyn, 0.8, label="dynamic (work the op caused)")
     ax.bar(x, idle, 0.8, bottom=dyn, label="idle floor held during the op")
     for i, r in enumerate(rows):
-        ax.annotate(f"{100*tot[i]/tot.sum():.0f}%", (i, tot[i]), ha="center",
-                    va="bottom", fontsize=8, xytext=(0, 2), textcoords="offset points")
+        ax.annotate(
+            f"{100*tot[i]/tot.sum():.0f}%",
+            (i, tot[i]),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            xytext=(0, 2),
+            textcoords="offset points",
+        )
     ax.set_xticks(x)
     ax.set_xticklabels(names, rotation=45, ha="right")
     ax.set_xlabel("Operation (transformer decoder block)")
     ax.set_ylabel("Energy for one block pass [mJ]")
-    ax.set_title("Energy per op - transformer decoder block, Blackhole p100a\n"
-                 f"one block pass = {tot.sum():.0f} mJ total "
-                 f"({dyn.sum():.0f} mJ dynamic + {idle.sum():.0f} mJ idle floor), "
-                 f"{sum(r['us_per_call'] for r in rows):.0f} us")
+    ax.set_title(
+        "Energy per op - transformer decoder block, Blackhole p100a\n"
+        f"one block pass = {tot.sum():.0f} mJ total "
+        f"({dyn.sum():.0f} mJ dynamic + {idle.sum():.0f} mJ idle floor), "
+        f"{sum(r['us_per_call'] for r in rows):.0f} us"
+    )
     ax.legend()
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -153,8 +181,7 @@ def chart(rows, out_path, subtitle, dpi=150):
     ax.set_yscale("log")
     ax.set_ylim(0.5, max(pj) * 3)
     for i, v in enumerate(pj):
-        ax.annotate(f"{v:.3g}", (i, v), ha="center", va="bottom", fontsize=8,
-                    xytext=(0, 2), textcoords="offset points")
+        ax.annotate(f"{v:.3g}", (i, v), ha="center", va="bottom", fontsize=8, xytext=(0, 2), textcoords="offset points")
     # Matmul FLOP counts are exact; the rest use per-element conventions, so hatch them.
     for i, r in enumerate(rows):
         if not r["name"].startswith(("matmul", "attn")):
@@ -162,11 +189,15 @@ def chart(rows, out_path, subtitle, dpi=150):
     ax.set_ylabel("Energy per FLOP [pJ], log scale")
     ax.set_title(f"Per-op efficiency and cost - transformer decoder block, Blackhole p100a\n{subtitle}")
     ax.grid(axis="y", alpha=0.3)
-    ax.legend(handles=[
-        plt.Rectangle((0, 0), 1, 1, fc=bars[0].get_facecolor()),
-        plt.Rectangle((0, 0), 1, 1, fc=bars[0].get_facecolor(), hatch="//")],
+    ax.legend(
+        handles=[
+            plt.Rectangle((0, 0), 1, 1, fc=bars[0].get_facecolor()),
+            plt.Rectangle((0, 0), 1, 1, fc=bars[0].get_facecolor(), hatch="//"),
+        ],
         labels=["matmul: exact 2*M*N*K", "other: per-element convention (see workload script)"],
-        fontsize=8, loc="upper left")
+        fontsize=8,
+        loc="upper left",
+    )
 
     ax = axes[1]
     ax.bar(x, [r["dyn_mj_per_call"] for r in rows], 0.8, color="tab:orange")
@@ -197,13 +228,14 @@ def main():
     if not rows:
         raise SystemExit("no op rows found -- is this a ttnn_ops_workload run?")
 
-    print(f"{'op':<16} {'batch':>6} {'us/call':>9} {'total W':>8} {'dyn W':>7} "
-          f"{'mJ/activ':>9} {'pJ/FLOP':>9}")
+    print(f"{'op':<16} {'batch':>6} {'us/call':>9} {'total W':>8} {'dyn W':>7} " f"{'mJ/activ':>9} {'pJ/FLOP':>9}")
     print("-" * 82)
     for r in rows:
         pj = f"{r['pj_per_flop']:9.1f}" if r["pj_per_flop"] else "        -"
-        print(f"{r['name']:<16} {r['batch']:6d} {r['window_s']/r['iters']*1e6:9.0f} "
-              f"{r['total_w']:8.1f} {r['dynamic_w']:7.1f} {r['dyn_mj_per_call']:9.4f} {pj}")
+        print(
+            f"{r['name']:<16} {r['batch']:6d} {r['window_s']/r['iters']*1e6:9.0f} "
+            f"{r['total_w']:8.1f} {r['dynamic_w']:7.1f} {r['dyn_mj_per_call']:9.4f} {pj}"
+        )
 
     base = np.mean([r["base_w"] for r in rows])
     print("-" * 82)

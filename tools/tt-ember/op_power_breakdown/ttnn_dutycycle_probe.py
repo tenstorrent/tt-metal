@@ -33,9 +33,7 @@ def now_str() -> str:
 
 def build_cases(device):
     def T(*shape):
-        return ttnn.from_torch(
-            torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        return ttnn.from_torch(torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     cases = []
     # Elementwise: cost scales with element count, so size sweeps call duration directly.
@@ -90,11 +88,15 @@ def main():
         ttnn.close_device(device)
 
     print()
-    print(f"{'Grid':>8} {'Cores':>7} {'Iters':>10} {'Time [s]':>12} {'TFLOPS':>10} "
-          f"{'Per iter [ms]':>16} {'Start Time':>27} {'End Time':>27}")
+    print(
+        f"{'Grid':>8} {'Cores':>7} {'Iters':>10} {'Time [s]':>12} {'TFLOPS':>10} "
+        f"{'Per iter [ms]':>16} {'Start Time':>27} {'End Time':>27}"
+    )
     for idx, iters, elapsed, tflops, per_iter_ms, start, end in rows:
-        print(f"{f'{idx}x1':>8} {idx:>7} {iters:>10} {elapsed:>12.6f} {tflops:>10.2f} "
-              f"{per_iter_ms:>16.6f} {start:>27} {end:>27}")
+        print(
+            f"{f'{idx}x1':>8} {idx:>7} {iters:>10} {elapsed:>12.6f} {tflops:>10.2f} "
+            f"{per_iter_ms:>16.6f} {start:>27} {end:>27}"
+        )
     print()
     print("Test Passed")
     return 0
