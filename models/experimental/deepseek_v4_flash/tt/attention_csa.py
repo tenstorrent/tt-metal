@@ -39,12 +39,12 @@ import ttnn
 from .attention import (
     _StaticLayerCache,
     _apply_rope,
+    _check_update_row,
     _compressor_projections,
     _decode_activation,
     _one_row_per_user,
     _packed_users,
     _tp_cluster_axis,
-    _update_cache_at,
     _update_kv_at,
 )
 from .common import _profile, _signpost, width_sharded_l1_config
@@ -342,9 +342,13 @@ class DeepSeekV4CSACompressor:
         win_slot: ttnn.Tensor,
         win_row: ttnn.Tensor | None = None,
         pool: bool = True,
-    ) -> None:
+    ) -> ttnn.Tensor | None:
         """Trace-safe decode: :meth:`_step`, then append the pooled entry at row
         ``win_row`` of the layer's KV axis (``kv``, the dense ``[1, 1, rows, Dh]`` buffer).
+
+        With ``kv=None`` the pooled entry ``[1, B, 1, Dh]`` is returned instead, for the
+        caller to place (the indexer path writes it into ``scache.comp_kv``); the return
+        is ``None`` on a step that does not pool.
 
         ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered onto
         the decode activation grid when the caller used
@@ -354,12 +358,14 @@ class DeepSeekV4CSACompressor:
         """
         _signpost("CSA_START")
         pooled = self._step(tokens, cos_row, sin_row, scache, win_slot, pool)
-        if pooled is not None:
+        if pooled is not None and kv is not None:
             _update_kv_at(kv, pooled, win_row)
             ttnn.deallocate(pooled)
+            pooled = None
         if self.indexer is not None and getattr(scache, "idx_key_cache", None) is not None:
             self.indexer.write_keys(tokens, cos_row, sin_row, scache, win_slot, win_row, pool=pool)
         _signpost("CSA_END")
+        return pooled
 
 
 _INDEXER_WEIGHT_KEYS = {
@@ -595,17 +601,113 @@ class DeepSeekV4Indexer:
         pooled index keys into ``scache.idx_key_cache``.
 
         ``win_row`` addresses the attention KV axis (``sliding_window + w``). The index
-        cache holds only compressed keys, so the entry lands at row ``w``.
+        cache holds only compressed keys, so the entry lands at logical row ``w`` of the
+        ``[n_blocks, 1, block, D]`` pool, through ``scache.idx_page_table``.
         """
         idx_row = win_row
         if pool and win_row is not None:
             idx_row = ttnn.subtract(win_row, self.sliding_window)
         pooled = self.compressor._step(tokens, cos_row, sin_row, _IndexerWindowView(scache), win_slot, pool)
         if pooled is not None:
-            _update_cache_at(scache.idx_key_cache, pooled, idx_row)
+            _check_update_row(pooled)
+            ttnn.experimental.paged_update_cache(
+                scache.idx_key_cache, pooled, update_idxs_tensor=idx_row, page_table=scache.idx_page_table
+            )
             ttnn.deallocate(pooled)
         if idx_row is not win_row and idx_row is not None:
             ttnn.deallocate(idx_row)
+
+    def _replicate_heads(self, row: ttnn.Tensor, heads: int, width: int) -> ttnn.Tensor:
+        """Packed ``[1, 1, 1, heads*width]`` -> ROW_MAJOR HEIGHT_SHARDED
+        ``[num_cores, heads, 1, width]`` with one full ``[heads, width]`` replica per core of
+        :meth:`_select_grid`, the layout ``fused_lightning_select_kv`` scores from."""
+        grid = self._select_grid()
+        dram = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
+        _release_if_distinct(row, dram)
+        if dram.layout != ttnn.ROW_MAJOR_LAYOUT:
+            rm = ttnn.to_layout(dram, ttnn.ROW_MAJOR_LAYOUT)
+            _release_if_distinct(dram, rm)
+            dram = rm
+        heads_row = ttnn.reshape(dram, [1, heads, 1, width])
+        replicated = ttnn.repeat(heads_row, ttnn.Shape([grid.num_cores(), 1, 1, 1]))
+        _release_if_distinct(dram, replicated)
+        mem_cfg = ttnn.create_sharded_memory_config(
+            (heads, width),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        sharded = ttnn.to_memory_config(replicated, mem_cfg)
+        _release_if_distinct(replicated, sharded)
+        return sharded
+
+    def _select_grid(self) -> ttnn.CoreRangeSet:
+        """The whole compute grid. The op's top-k multicasts over a rectangle."""
+        grid = self.device.compute_with_storage_grid_size()
+        return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+
+    def select_kv(
+        self,
+        tokens: ttnn.Tensor,
+        q_a: ttnn.Tensor,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        scache: "_StaticLayerCache",
+        compress_pos: ttnn.Tensor,
+        new_row: ttnn.Tensor | None = None,
+        new_row_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """Score every closed window and write the top-``index_topk`` attention KV rows into
+        ``scache.sel_kv`` at ``[sliding_window, sliding_window + index_topk)``.
+
+        One ``fused_lightning_select_kv`` call replaces ``indexer_score_dsa`` +
+        ``topk_large_indices`` + the ``sparse_sdpa`` gather. It reads ``scache.idx_key_cache``
+        and ``scache.comp_kv`` through ``scache.idx_page_table`` and counts
+        ``(compress_pos + 1) // compress_rate`` closed windows on device. With fewer than
+        ``index_topk`` of them it selects them all, in window order, so the rows match the
+        dense ``[ring | entries]`` layout of ``scache.kv``.
+
+        ``new_row`` ``[1, B, 1, Dh]`` / ``new_row_index`` INT32 ``[B]`` are this step's pooled
+        entry and its window ``w``; the op writes it into ``comp_kv`` before selecting.
+        Batch 1 only. Returns ``scache.sel_kv``; its ring rows are the caller's to fill.
+        """
+        users = _packed_users(tokens)
+        assert users == 1, f"fused_lightning_select_kv decodes one user, got {users}"
+        q = self.q_b_proj(_decode_activation(self.q_b_proj, q_a))
+        q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
+        w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
+        query = self._replicate_heads(q, self.num_heads, self.head_dim)
+        weights = self._replicate_heads(w, 1, self.num_heads)
+        cur_pos = ttnn.reshape(compress_pos, [1])
+
+        extra = {}
+        if new_row is not None:
+            row = ttnn.to_memory_config(new_row, ttnn.DRAM_MEMORY_CONFIG)
+            if row.layout != ttnn.ROW_MAJOR_LAYOUT:
+                row = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)
+            extra = {
+                "new_kv_row": ttnn.reshape(row, [1, 1, 1, row.shape[-1]]),
+                "new_kv_row_index": ttnn.reshape(new_row_index, [1]),
+            }
+        sel_kv, scores = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            query,
+            scache.idx_key_cache,
+            weights,
+            scache.comp_kv,
+            scache.idx_page_table,
+            cur_pos,
+            self.index_topk,
+            output_tensor=scache.sel_kv,
+            output_row_offset=self.sliding_window,
+            **extra,
+        )
+        ttnn.deallocate(scores)
+        ttnn.deallocate(query)
+        ttnn.deallocate(weights)
+        if new_row is not None and extra["new_kv_row"].buffer_address() != new_row.buffer_address():
+            ttnn.deallocate(extra["new_kv_row"])
+        return sel_kv
 
     def select(
         self,

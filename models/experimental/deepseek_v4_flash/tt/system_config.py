@@ -174,8 +174,7 @@ class AttentionSettings:
     sdpa_exp_approx_mode: bool = False
     # CSA Lightning Indexer. ``True`` attaches it when the checkpoint has the
     # weights; ``False`` keeps dense causal CSA.
-    # TODO: off until the indexer's sparse attend is validated against the dense CSA KV.
-    indexer: bool = False
+    indexer: bool = True
     index_topk: int = 512
     # Sequence length below which CSA stays on dense causal SDPA. ``0`` means
     # ``compress_rate * index_topk``: fewer closed windows than ``index_topk``,

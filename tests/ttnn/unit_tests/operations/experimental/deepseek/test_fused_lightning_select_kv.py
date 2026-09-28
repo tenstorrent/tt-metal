@@ -186,6 +186,8 @@ def _run_op_with_scores(device, query, key_cache, weights, kv_cache, page_table,
     )
     assert list(out.shape) == [page_table.shape[0], kv_cache.shape[1], k, kv_cache.shape[3]]
     assert out.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     assert list(scores.shape) == [page_table.shape[0], 1, 1, page_table.shape[1] * key_cache.shape[2]]
     assert scores.dtype == ttnn.float32
     return ttnn.to_torch(out), ttnn.to_torch(scores).reshape(-1)
@@ -204,7 +206,7 @@ def test_index_scores_match_reference(device, heads, dim, length, block_size, nu
     """``scores[t] = sum_h ReLU(q_h . k_t) * w_h`` for every valid key, read through the page table."""
     torch.manual_seed(0)
     batch = 1
-    cur_pos = torch.tensor([num_keys * COMPRESS_RATE - 1], dtype=torch.int32)
+    cur_pos = torch.tensor([length * COMPRESS_RATE - 1], dtype=torch.int32)
 
     # bf16-round on host so the reference sees exactly what the device reads.
     query = torch.randn(batch, heads, 1, dim).to(torch.bfloat16).float()
@@ -228,6 +230,49 @@ def test_index_scores_match_reference(device, heads, dim, length, block_size, nu
     rel_err = max_err / expected.abs().max().item()
     logger.info(f"index scores: pcc {message}, max abs err {max_err:.4e} ({rel_err:.2%} of max |score|)")
     assert passing, f"index scores diverge from the reference: {message}"
+
+
+@pytest.mark.parametrize(
+    "heads, dim, length, block_size, num_keys",
+    [(V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 128 * 1024, 64, 512)],
+    ids=["v4_flash_full"],
+)
+def test_select_kv_rows_match_reference(device, heads, dim, length, block_size, num_keys) -> None:
+    """At least 95% of the gathered kv rows are rows of the reference top-k, in any order.
+
+    Same inputs as ``test_index_scores_match_reference[v4_flash_full]``. The op's top-k is
+    histogram-based and bf16-scored, so near-threshold keys may differ from torch top-k.
+    """
+    torch.manual_seed(0)
+    batch = 1
+    k = min(V4_INDEX_TOPK, num_keys)
+    cur_pos = torch.tensor([num_keys * COMPRESS_RATE - 1], dtype=torch.int32)
+
+    query = torch.randn(batch, heads, 1, dim).to(torch.bfloat16).float()
+    weights = (torch.randn(batch, 1, 1, heads) * dim**-0.5).to(torch.bfloat16).float()
+    kv_cache, page_table = _paged_inputs(batch, length, block_size, V4_KV_HEADS, V4_HEAD_DIM, seed=2)
+    key_cache = torch.randn(page_table.numel(), 1, block_size, dim).to(torch.bfloat16).float()
+    keys = _unpage_keys(key_cache, page_table)
+
+    scores = _reference_scores(query[0, :, 0], keys[0, 0], weights[0, 0, 0])[:num_keys]
+    expected_idx = torch.topk(scores, k).indices.reshape(batch, k)
+    expected = _paged_gather(kv_cache, page_table, expected_idx)[0, 0]  # [k, Dh]
+
+    got = _run_op(device, query, key_cache, weights, kv_cache, page_table, cur_pos, num_keys, k)
+    got = got.to(torch.bfloat16)[0, 0]  # [k, Dh]
+
+    # A got row matches if it equals some reference row; each reference row is claimed at most once.
+    equal = (got[:, None, :] == expected[None, :, :]).all(dim=-1)  # [k, k]
+    claimed = torch.zeros(k, dtype=torch.bool)
+    num_matched = 0
+    for i in range(k):
+        candidates = (equal[i] & ~claimed).nonzero()
+        if candidates.numel() != 0:
+            claimed[candidates[0, 0]] = True
+            num_matched += 1
+    match_ratio = num_matched / k
+    logger.info(f"kv rows: {num_matched}/{k} ({match_ratio:.2%}) match the reference top-k")
+    assert match_ratio >= 0.95, f"only {num_matched}/{k} ({match_ratio:.2%}) gathered kv rows match the reference"
 
 
 def test_select_kv_respects_closed_windows(device) -> None:
@@ -256,7 +301,8 @@ def test_select_kv_respects_closed_windows(device) -> None:
         scores = _reference_scores(query[b, :, TILE - 1], keys[b, 0], weights[b, 0, TILE - 1])
         scores[valid:] = float("-inf")
         expected_idx.append(torch.topk(scores, k).indices)
-    expected_idx = torch.stack(expected_idx)
+    # The op emits the selected rows in ascending key order.
+    expected_idx = torch.stack(expected_idx).sort(dim=-1).values
     assert 50 not in expected_idx.tolist()
     expected = _paged_gather(kv_cache, page_table, expected_idx)
 
@@ -267,6 +313,71 @@ def test_select_kv_respects_closed_windows(device) -> None:
     )
 
     assert torch.equal(got.to(torch.bfloat16), expected), "gathered rows differ from the exact top-k golden"
+
+
+@pytest.mark.parametrize("sliding_window, tail_rows", [(128, 0), (128, 32)], ids=["exact_fit", "with_tail"])
+def test_select_kv_writes_into_output_tensor_at_offset(device, sliding_window, tail_rows) -> None:
+    """``output_tensor`` + ``output_row_offset`` at V4-Flash CSA shapes.
+
+    The selected rows land in a preallocated ``[1, 1, sliding_window + k + tail_rows, Dh]``
+    buffer at row ``sliding_window`` (``exact_fit`` is the 640-row CSA combined buffer). The
+    ring rows before it and any tail rows after it must keep their prior contents. As in
+    ``test_select_kv_rows_match_reference``, the histogram top-k may pick different
+    near-threshold keys than torch top-k, so at least 95% of the rows must match, in any order.
+    """
+    torch.manual_seed(0)
+    batch, heads, dim, length, block_size = 1, V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 128 * 1024, 64
+    k, head_dim = V4_INDEX_TOPK, V4_HEAD_DIM
+    num_keys = length
+    cur_pos = torch.tensor([num_keys * COMPRESS_RATE - 1], dtype=torch.int32)
+
+    query = torch.randn(batch, heads, 1, dim).to(torch.bfloat16).float()
+    weights = (torch.randn(batch, 1, 1, heads) * dim**-0.5).to(torch.bfloat16).float()
+    kv_cache, page_table = _paged_inputs(batch, length, block_size, V4_KV_HEADS, head_dim, seed=2)
+    key_cache = torch.randn(page_table.numel(), 1, block_size, dim).to(torch.bfloat16).float()
+    keys = _unpage_keys(key_cache, page_table)
+
+    scores = _reference_scores(query[0, :, 0], keys[0, 0], weights[0, 0, 0])[:num_keys]
+    expected_idx = torch.topk(scores, k).indices.reshape(batch, k)
+    expected = _paged_gather(kv_cache, page_table, expected_idx)[0, 0]  # [k, Dh]
+
+    total_rows = sliding_window + k + tail_rows
+    prior = torch.randn(batch, V4_KV_HEADS, total_rows, head_dim).to(torch.bfloat16)
+    out_buf = ttnn.from_torch(
+        prior, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+        _replicated_rm_hs(query, device),
+        _block_sharded_key_cache(key_cache, device),
+        _replicated_rm_hs(weights, device),
+        _rm(kv_cache, device, ttnn.bfloat16),
+        _rm(page_table, device, ttnn.int32),
+        _rm(cur_pos, device, ttnn.int32),
+        k,
+        valid_length_tensor=_rm(torch.tensor([num_keys], dtype=torch.int32), device, ttnn.uint32),
+        output_tensor=out_buf,
+        output_row_offset=sliding_window,
+    )
+    assert out.buffer_address() == out_buf.buffer_address(), "op did not return the provided output_tensor"
+    got = ttnn.to_torch(out_buf).to(torch.bfloat16)[0, 0]  # [total_rows, Dh]
+
+    assert torch.equal(got[:sliding_window], prior[0, 0, :sliding_window]), "sliding-window rows were overwritten"
+    assert torch.equal(got[sliding_window + k :], prior[0, 0, sliding_window + k :]), "rows past the selection changed"
+
+    # A written row matches if it equals some reference row; each reference row is claimed at most once.
+    selected = got[sliding_window : sliding_window + k]
+    equal = (selected[:, None, :] == expected[None, :, :]).all(dim=-1)  # [k, k]
+    claimed = torch.zeros(k, dtype=torch.bool)
+    num_matched = 0
+    for i in range(k):
+        candidates = (equal[i] & ~claimed).nonzero()
+        if candidates.numel() != 0:
+            claimed[candidates[0, 0]] = True
+            num_matched += 1
+    match_ratio = num_matched / k
+    logger.info(f"output_tensor rows: {num_matched}/{k} ({match_ratio:.2%}) match the reference top-k")
+    assert match_ratio >= 0.95, f"only {num_matched}/{k} ({match_ratio:.2%}) written kv rows match the reference"
 
 
 @pytest.mark.parametrize(
@@ -307,7 +418,8 @@ def test_select_kv_matches_indexer_pipeline(device, length, k, block_size) -> No
     )
     topk = ttnn.experimental.topk_large_indices(scores, k=k, valid_length_tensor=valid_length)
     row = ttnn.slice(topk, [0, 0, TILE - 1, 0], [batch, 1, TILE, k])
-    pipeline_idx = _as_u32(ttnn.to_torch(row)).reshape(batch, k)
+    # The op emits the selected rows in ascending key order.
+    pipeline_idx = _as_u32(ttnn.to_torch(row)).reshape(batch, k).sort(dim=-1).values
     expected = _paged_gather(kv_cache, page_table, pipeline_idx)
 
     # The pipeline needs a tile-padded 32-row block; the fused op takes just the real row.
