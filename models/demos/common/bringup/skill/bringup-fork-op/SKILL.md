@@ -41,6 +41,44 @@ The source must be a C++ op folder with its own `CMakeLists.txt`. The script cop
 It prints any line still pointing at the source's sibling ops. Those are dependencies the fork shares with the
 original; leave them unless your change needs them.
 
+## 2b. Carry the source op's tests (best-effort)
+
+A fork must keep passing what its source op was tested on, not only the calls our models make. Otherwise a later model
+with another shape or placement can hit a regression nobody saw. The source op's tests stay where they are: the fork
+lists a selection in `tests/source.yaml` (fork_op.py writes the skeleton with the swap map), and
+`testing/fork_source.py` runs them in place with the original op's name pointing at the fork.
+
+An op's tests are scattered and mostly mixed with other ops' (rms_norm's sit in 8+ places, mostly in files that also
+test layernorm), so pick a reasonable set, not an exhaustive one:
+1. Find the call sites: grep the source's Python name (e.g. `ttnn.rms_norm(`,
+   `ttnn.experimental.deepseek_prefill.dispatch(`) and its thin wrappers (e.g. `TtDispatchModule`) under
+   `tests/ttnn/unit_tests`, `tests/ttnn/nightly`, and the op's own model folder (e.g.
+   `models/demos/deepseek_v3_d_p/tests/op_unit_tests`). The CI lists in `tests/pipeline_reorg/*.yaml` show which of them
+   the sanity and nightly tiers run.
+2. Keep op-level tests that run on this box. Take whole files that test only this op. From mixed files, take this op's
+   cases with a `k:` filter (a parametrize id or a test name). Skip:
+   - model tests (they need weights);
+   - tests for meshes this box does not have (T3K, Galaxy);
+   - tests that are already skipped;
+   - look-alike ops with their own kernels.
+3. Aim for minutes, not hours. A check (fork only, warm kernel cache) should take a few minutes; recording runs
+   everything twice, cold the first time. Prefer breadth (layouts, placements, dtypes, program configs) over many
+   shapes of one kind: the sanity-tier file and the nightly file of the op usually cover most of it. Note in `why:`
+   what each entry covers. For reference, `ttnn.bringup.rms_norm` carries 4 entries (263 tests: the sanity-tier
+   interleaved and sharded files, the nightly file, and the rms cases of the nightly ULP file). Recording took about
+   6 minutes in all; a check takes about 1 minute.
+4. Complete the `swap:` map. Every Python name the tests reach, including enum types they pass, points at the fork.
+5. Record the baseline: `python -m models.demos.common.bringup.testing.fork_source --fork <fork> --record`. It runs the
+   selection on the original op and on the fork, and writes `tests/source_baseline.json`. Everything runs in the
+   foreground, so when the selection is long, record one entry at a time (`--record --entry N`; the results merge into
+   the baseline). The swap also hands the fork the source op's golden function, because upstream tests take their
+   reference from `ttnn.get_golden_function(<source op>)`. The two should agree right
+   after forking. Every case the original passes and the fork does not is a gap: fix it, or explain it in the
+   changelog. Commit the manifest and the baseline.
+
+The same applies to an AI-generated drop-in (a new op that replaces an existing one, such as `ttnn.bringup.rms_norm`
+for `ttnn.rms_norm`): the replaced op's tests are its source tests.
+
 ## 3. Change it
 
 Make the change in the fork only. Keep it as small as the need; the smaller the diff, the easier the port back.
@@ -49,15 +87,17 @@ existing fork, whether it is a new feature, a new argument, a new output or a bu
 
 1. **Baseline first.** Before touching anything, run the fork's whole test suite and write down the counts: its own
    unit suite (`tests/unit/`, if it has one) and every model's cases (`tests/test_*.py`), with
-   `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests`. Known failures stay known; a new one after
-   your change is yours.
+   `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests`. Also check the source tests against their
+   recorded baseline: `python -m models.demos.common.bringup.testing.fork_source --fork <fork>`. Known failures stay
+   known; a new one after your change is yours.
 2. **Behind an option, default off.** The new behaviour is an argument or enum value whose default keeps today's
    behaviour, return type and program. When it is off, the program must be the one it was: the same kernels
    (e.g. new kernel code only behind a define that is absent when off), the same compile-time and runtime args, and
    the same circular buffers. If the option changes what the program compiles to, add it to the program-cache key
    (the op's `compute_program_hash` / attributes).
-3. **Old tests again, option off.** Rerun the same suite. The counts must match the baseline. Where the fork has a
-   program-level check (a parity or descriptor test), it must show the option-off program is unchanged.
+3. **Old tests again, option off.** Rerun the same suite and the source-test check. The counts must match the
+   baseline, and `fork_source` must report no regressions. Where the fork has a program-level check (a parity or
+   descriptor test), it must show the option-off program is unchanged.
 4. **New tests for the new setting.** Put them in the fork's own tests (`tests/unit/` for an op-level feature). Check
    the new output against a torch reference, cover the shapes, layouts and placements you claim, test the refusals,
    and show once, by hand, that a test fails when the new output is corrupted. A model that starts calling the new
