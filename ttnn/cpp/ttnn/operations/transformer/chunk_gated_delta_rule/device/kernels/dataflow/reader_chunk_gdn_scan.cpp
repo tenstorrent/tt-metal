@@ -370,7 +370,8 @@ void kernel_main() {
     };
 
     uint32_t next = 0;
-    for (; next < D && next < NC; next++) {
+    const auto nmin = std::min(D, NC);
+    for (; next < nmin; next++) {
         issue(next);
     }
     for (uint32_t c = 0; c < NC; c++) {
