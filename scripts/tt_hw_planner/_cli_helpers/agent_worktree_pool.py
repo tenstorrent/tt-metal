@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..profiler_zone_names import collision_free
 from ..worktree import _SHARED_HOST_DIRS, _base_dir, _slug
 
 _EXCLUDE_FROM_HARVEST_NAMES = (
@@ -77,7 +78,11 @@ class AgentWorktreePool:
         with self._lock:
             self._counter += 1
             n = self._counter
-        return _base_dir() / f"tt_hw_planner_{_slug(self.model_id)}_agent{slot}_{os.getpid()}_{n}"
+        # A name that makes two device-profiler zone labels collide breaks profiling there (see
+        # profiler_zone_names), so it is checked like the optimize checkout's.
+        return collision_free(
+            _base_dir() / f"tt_hw_planner_{_slug(self.model_id)}_agent{slot}_{os.getpid()}_{n}", self.main_repo
+        )
 
     def _symlink_shared(self, wt: Path) -> None:
         for d in _SHARED_HOST_DIRS:

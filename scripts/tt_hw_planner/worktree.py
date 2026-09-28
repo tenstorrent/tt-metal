@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .discovery import REPO_ROOT
+from .profiler_zone_names import collision_free
 
 
 _WORKTREE_BASE_DEFAULT = Path("/tmp")
@@ -68,6 +69,9 @@ def create(model_id: str) -> WorktreeSession:
     path = base / f"{_WORKTREE_PREFIX}{_slug(model_id)}_{ts}"
     if path.exists():
         path = base / f"{_WORKTREE_PREFIX}{_slug(model_id)}_{ts}_{os.getpid()}"
+    # The folder name is part of every device-profiler zone label; one that makes two collide breaks
+    # profiling for the whole run (see profiler_zone_names).
+    path = collision_free(path, REPO_ROOT)
 
     proc = subprocess.run(
         ["git", "worktree", "add", "--detach", str(path), "HEAD"],
