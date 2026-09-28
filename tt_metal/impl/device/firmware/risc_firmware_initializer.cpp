@@ -107,6 +107,10 @@ void RiscFirmwareInitializer::init(
 void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& device_ids) {
     ZoneScopedN("FW builds and Device Inits");
 
+    // Preserve the old ETH launch state until its completion check succeeds. This must run
+    // before the asynchronous tasks clear L1 or write RUN_MSG_INIT to the launch mailboxes.
+    request_early_exit_of_ethernet_cores(device_ids);
+
     std::vector<std::shared_future<void>> futures;
     futures.reserve(device_ids.size());
 
@@ -476,50 +480,52 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
     }
 }
 
-void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
+void RiscFirmwareInitializer::request_early_exit_of_ethernet_cores(const std::set<tt::ChipId>& device_ids) {
     ZoneScoped;
-    std::unordered_map<tt::ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
+    if (cluster_.is_mock_or_emulated() ||
+        !has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) ||
+        !hal_.get_eth_fw_is_cooperative()) {
+        return;
+    }
 
-    if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-        if (hal_.get_eth_fw_is_cooperative()) {
-            for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
-                CoreCoord virtual_core =
-                    cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-                if (erisc_app_still_running(device_id, virtual_core)) {
-                    log_info(
-                        tt::LogMetal,
-                        "While initializing device {}, active ethernet dispatch core {} detected as still "
-                        "running, issuing exit signal.",
-                        device_id,
-                        virtual_core.str());
-                    erisc_send_exit_signal(device_id, virtual_core, false);
-                    device_to_early_exit_cores[device_id].insert(virtual_core);
-                }
+    std::unordered_map<tt::ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
+    for (tt::ChipId device_id : device_ids) {
+        for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+            if (erisc_app_still_running(device_id, virtual_core)) {
+                log_info(
+                    tt::LogMetal,
+                    "While initializing device {}, active ethernet dispatch core {} detected as still "
+                    "running, issuing exit signal.",
+                    device_id,
+                    virtual_core.str());
+                erisc_send_exit_signal(device_id, virtual_core, false);
+                device_to_early_exit_cores[device_id].insert(virtual_core);
             }
-        } else {
-            assert_active_ethernet_cores_to_reset(device_id);
         }
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
         const int timeout_ms = firmware_wait_timeout_ms();
         if (!id_and_cores.second.empty()) {
-            try {
-                llrt::internal_::wait_until_cores_done(
-                    descriptor_->metal_context(),
-                    id_and_cores.first,
-                    dev_msgs::RUN_MSG_GO,
-                    id_and_cores.second,
-                    timeout_ms);
-            } catch (std::runtime_error&) {
-                log_warning(
-                    tt::LogAlways,
-                    "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
-                    "from time to time following a reset, continuing to FW initialization...");
-            }
+            // Do not clear or replace the old state if completion cannot be confirmed.
+            llrt::internal_::wait_until_cores_done(
+                descriptor_->metal_context(),
+                id_and_cores.first,
+                dev_msgs::RUN_MSG_GO,
+                id_and_cores.second,
+                timeout_ms);
         }
     }
+}
 
+void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
+    ZoneScoped;
+    if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+        !hal_.get_eth_fw_is_cooperative()) {
+        assert_active_ethernet_cores_to_reset(device_id);
+    }
     assert_tensix_workers_impl(device_id);
     assert_dram_cores(device_id);
     assert_dispatch_cores(device_id);
