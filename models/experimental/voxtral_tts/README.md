@@ -81,13 +81,9 @@ python -m models.experimental.voxtral_tts.demo.demo_server --voice neutral_male
 
 The REPL supports `\voice NAME`, `\voices`, `\seed N`, `\out PATH` and `\quit`.
 
-For the 15-prompt quality set and its scoring (what the gates use):
-
-```bash
-python models/experimental/voxtral_tts/scripts/generate_quality_set.py --tag mychange
-python models/experimental/voxtral_tts/scripts/score_quality_set_scipy.py \
-    models/experimental/voxtral_tts/generated/resultsmychange.json
-```
+The 15-prompt quality set, its WER scoring and the two-tag quality report are bringup tooling and
+live in the [bringup repo](https://github.com/acicovicTT/model-bringup) under `voxtral_tts/tools/`,
+run against this checkout through `TT_METAL_HOME` (see its README).
 
 ### Integration API
 
@@ -142,9 +138,8 @@ pytest models/experimental/voxtral_tts/tests/test_all_voices_smoke.py
 # Shipped TTNN configuration is what it is documented to be
 pytest models/experimental/voxtral_tts/tests/test_tt_defaults.py
 
-# Host-side contracts: sampling/seed/CFG, the WER scorer itself, request independence
+# Host-side contracts: sampling/seed/CFG, request independence
 pytest models/experimental/voxtral_tts/tests/test_sampling.py
-pytest models/experimental/voxtral_tts/tests/test_wer.py
 pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
 
 # Per-stage timings and RTF, gated against per-stage ceilings
@@ -162,7 +157,7 @@ pytest models/experimental/voxtral_tts/tests/test_wer_languages.py
 pytest models/experimental/voxtral_tts/tests/test_wer_languages.py -k hindi   # one language
 
 # Naturalness per language (DistillMOS) against fixed per-language floors, set from a three-seed
-# spread. Needs the isolated MOS venv once -- tests/probes/mos_setup.sh -- and FAILS without it
+# spread. Needs the isolated MOS venv once -- tests/mos_setup.sh -- and FAILS without it
 # rather than skipping. ~15 min.
 pytest models/experimental/voxtral_tts/tests/test_mos.py
 
@@ -213,11 +208,10 @@ no request pays a compile at request time. `TtVoxtralPipeline.warmed` records wh
   single-stream latency is nearly exhausted and batching is the only order-of-magnitude lever left.
 - **One voice-preset family**, the named presets shipped in the checkpoint; no zero-shot cloning
   from a reference clip.
-- **No demo CLI or server yet** (see Quick Start).
 - **Frame counts are not request-independent.** The pipeline object and its KV cache are reused
   across requests, and an utterance's frame count can depend on what ran before it in the same
   process — run a case alone before believing a changed frame count is a changed model.
-- **MOS scoring needs a second venv** (`tests/probes/mos_setup.sh` → `/tmp/mosvenv`), because
+- **MOS scoring needs a second venv** (`tests/mos_setup.sh` → `/tmp/mosvenv`), because
   DistillMOS pulls `torchaudio`, which must not enter the main venv.
 
 ## Directory layout
@@ -228,9 +222,9 @@ no request pays a compile at request time. `TtVoxtralPipeline.warmed` records wh
 | `frontend.py` | host front end: text + voice name -> prompt embeddings |
 | `demo/` | one-shot CLI + interactive REPL server |
 | `reference/` | pure-fp32 PyTorch implementation — the ground truth / PCC oracle |
-| `tests/` | per-block reference + on-device PCC tests, config gates, perf, WER (self-contained) |
-| `scripts/` | quality-set generation, WER scoring, the two-tag quality report |
+| `tests/` | reference invariants, on-device PCC (`pcc/`), perf (`perf/`), traced loop, WER, MOS |
 | `generated/` | run artifacts (gitignored) |
 
 Bringup history, per-block notes, known bugs and next steps live in the separate bringup repo as
-`voxtral_tts/VOXTRAL_TTS_*.md`.
+`voxtral_tts/VOXTRAL_TTS_*.md`, and the measurement tooling -- quality report, audio-set generators
+and scorers, fixture generators, upstream comparison, probes -- in its `voxtral_tts/tools/`.

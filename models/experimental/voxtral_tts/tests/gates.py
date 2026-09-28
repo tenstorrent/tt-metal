@@ -11,8 +11,9 @@ ONE implementation of every on-device comparison, with three consumers:
 
   - `tests/pcc/test_*_pcc.py` import the `compare_*` primitives and ASSERT on them (that is the
     pass/fail suite, and it is what CI runs);
-  - `scripts/quality_report.py` runs `--gate X --json` in a subprocess and reads the returned
-    metrics as JSON -- no prose scraping, and each gate keeps its own device and timeout;
+  - the quality report (bringup repo, `voxtral_tts/tools/quality_report.py`) runs `--gate X --json`
+    in a subprocess and reads the returned metrics as JSON -- no prose scraping, and each gate
+    keeps its own device and timeout;
   - a human runs `--gate X` for the printed tables when triaging by hand.
 
 The metric arithmetic lives in `compare_hidden` / `compare_codes_frame` so those three cannot

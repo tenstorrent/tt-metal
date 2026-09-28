@@ -1,13 +1,14 @@
-"""Per-language DistillMOS over the clips generate_language_set.py wrote. Runs in the MOS venv.
+"""Per-language DistillMOS over a directory of clips. Runs in the MOS venv, NOT the main one.
 
-Prints MOS_LANG_<code> lines for quality_report.py to parse, plus MOS_LANG_MIN, so a single language
-degrading is visible where a pooled mean hides it.
+Test infrastructure for `test_mos.py` (and the quality report in the bringup repo calls it too):
+DistillMOS needs torchaudio, which breaks transformers in the main venv (BUG-6), so it runs as a
+subprocess of `/tmp/mosvenv/bin/python` -- built once by `tests/mos_setup.sh`.
 
-    /tmp/mosvenv/bin/python tests/probes/mos_perlang.py base
-    /tmp/mosvenv/bin/python tests/probes/mos_perlang.py /path/to/clip_dir     # any manifest dir
+    /tmp/mosvenv/bin/python tests/mos_score.py /path/to/clip_dir     # a dir with manifest.json
+    /tmp/mosvenv/bin/python tests/mos_score.py base                  # = generated/lang_base
 
-Also prints one MOS_JSON line with every clip's score, for callers that must not depend on the
-table's formatting (tests/test_mos.py).
+Prints MOS_LANG_<code> lines, MOS_LANG_MIN / MOS_LANG_SPREAD, and one MOS_JSON line with every
+clip's score, for callers that must not depend on the table's formatting.
 """
 import json, os, sys
 
@@ -17,7 +18,7 @@ import torch
 import torchaudio
 import distillmos
 
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN = os.path.join(HERE, "generated")
 
 tag = sys.argv[1] if len(sys.argv) > 1 else "base"
