@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
-from models.demos.gemma4_d_p.tt.model import Gemma4Model
+from models.demos.gemma4_d_p.tt.model import Gemma4Model, prefill_chunk_geometry_error
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, resolve_cache_dir_from_tt_cache_path
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 
@@ -45,13 +45,9 @@ def create_tt_model(
         (model_args, model, tt_kv_cache, state_dict)
     """
     mesh_device = mesh_config.device
-    SLIDING_WINDOW_SIZE = 1024
-    if max_seq_len <= 0 or prefill_chunk_size <= 0:
-        raise ValueError("sequence and chunk lengths must be positive")
-    if prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
-        raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-    if prefill_chunk_size < SLIDING_WINDOW_SIZE * mesh_config.cp_degree:
-        raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+    geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+    if geometry_error:
+        raise ValueError(geometry_error)
 
     hf_model_id = hf_model_id or os.getenv("HF_MODEL")
     tt_cache_path = tt_cache_path or os.getenv("TT_CACHE_PATH")

@@ -688,7 +688,7 @@ private:
     };
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
-    uint32_t max_cbs_;  // Architecture-specific max CBs
+    uint32_t max_dfbs_;  // Architecture-specific max DFBs
     uint64_t id;        // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
