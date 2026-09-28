@@ -135,6 +135,9 @@ constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBOR
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
+#if defined(NOC_ATT_ENABLED)
+#error "ATT fast dispatch requires DRAM-backed command queues: no ATT window maps host memory"
+#endif
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 #endif
@@ -193,7 +196,7 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(sem_id).up(pages);
+        fd_semaphore<sem_id, fd_upstream_sem_scope>().up(pages);
 #else
         uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
@@ -427,6 +430,7 @@ void process_exec_buf_end_h() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+// Default mechanism rather than fd_upstream_sem_scope: dispatch_h's upstream stage is on another core.
 CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
 
 // Relay, potentially through the mux/dmux/tunneller path
@@ -757,7 +761,12 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
         uint32_t num_dests = mcast ? ((CQDispatchWritePackedMulticastSubCmd*)sub_cmd_ptr)->num_mcast_dests : 1;
         sub_cmd_ptr++;
-        uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
+        uint64_t dst;
+        if constexpr (mcast) {
+            dst = cq_mcast_noc_addr(dst_noc, dst_addr);
+        } else {
+            dst = get_noc_addr_helper(dst_noc, dst_addr);
+        }
         // Get a page if needed
         if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
             // Check for block completion and issue orphan writes for this block
@@ -887,7 +896,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
         // to determine linking
         if (init_state) {
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, cq_mcast_noc_addr(dst_noc, dst_addr));
             must_barrier = true;
         }
 
@@ -1091,6 +1100,7 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
+        // Worker completion counter, incremented by workers with a NoC atomic.
         volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr));
         // DPRINT("DISPATCH WAIT 0x{:08x} count {}\n", addr, count);
         do {
@@ -1125,11 +1135,12 @@ static void process_wait() {
     }
     if (clear_memory) {
         uintptr_t addr = load_aligned<uint32_t>(&cmd->wait.addr);
+        // Same counter as above; a cached store here would race the workers' atomics.
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(addr)) = 0;
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
+        fd_semaphore<upstream_sync_sem, fd_upstream_sem_scope>().up(1);
 #else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),
@@ -1170,7 +1181,7 @@ void process_go_signal_mcast_cmd() {
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
+            cq_mcast_noc_addr(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
         uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
@@ -1581,6 +1592,9 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
 }
 
 void kernel_main() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();
+#endif
     set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT("dispatch_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);

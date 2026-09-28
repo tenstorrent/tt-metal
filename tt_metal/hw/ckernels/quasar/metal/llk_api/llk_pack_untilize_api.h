@@ -78,6 +78,10 @@ inline void llk_pack_untilize(
     const std::uint32_t tile_dst_rt_offset = 0) {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        pack_bfd_resource,
+        pack_output,
+        "pack_untilize pack_output DFB differs from the one llk_pack_untilize_init programmed");
     const std::uint32_t output_id = get_output_id(pack_output);
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);

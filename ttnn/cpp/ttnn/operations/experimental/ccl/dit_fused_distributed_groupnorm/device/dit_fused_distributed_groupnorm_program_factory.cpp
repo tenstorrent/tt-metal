@@ -69,7 +69,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     Program program = CreateProgram();
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto* mesh_device = input_tensor.device();
 
     const bool is_local = (args.ring_size <= 1);

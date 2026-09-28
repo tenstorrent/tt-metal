@@ -134,6 +134,9 @@ class WarmupForwardMixin:
                 enable_trace=enable_trace,
                 read_from_device=read_from_device,
                 sampling_params=param,
+                # Each configuration is a new batch and must reload decode parameters.
+                reset_batch=True,
+                prompt_tokens=tokens,
             )
             if skip_trace_precompile:
                 decode_kwargs["skip_trace_precompile"] = True

@@ -12,17 +12,12 @@
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include "erisc_datamover_builder.hpp"
-#include <set>
 #include <vector>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <stdexcept>
-#include "fabric_context.hpp"
-#include <queue>
 #include <unordered_map>
-#include <unordered_set>
 #include <filesystem>
 #include <fstream>
 #include <fmt/format.h>
@@ -37,8 +32,8 @@ namespace {
 
 // Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
 // suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
-HostName hostname_for_mapping_export(const HostName& hostname) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
+HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled) {
+    if (!mock_enabled) {
         return hostname;
     }
     constexpr std::string_view cluster_desc_suffix = ".yaml";
@@ -195,7 +190,7 @@ void serialize_mesh_coordinates_to_file(
 }
 
 void serialize_asic_to_fabric_node_mapping_to_file(
-    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path) {
+    const TopologyMapper& topology_mapper, const std::filesystem::path& output_file_path, bool mock_enabled) {
     // Ensure output directory exists
     std::filesystem::create_directories(output_file_path.parent_path());
 
@@ -229,8 +224,8 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
 
                 // Get hostname for this fabric node (mock: cluster descriptor filename)
-                HostName hostname =
-                    hostname_for_mapping_export(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
+                HostName hostname = hostname_for_mapping_export(
+                    topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id), mock_enabled);
 
                 // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
                 AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};

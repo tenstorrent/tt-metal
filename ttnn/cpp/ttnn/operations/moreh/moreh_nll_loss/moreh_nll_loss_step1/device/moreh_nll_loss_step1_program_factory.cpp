@@ -86,7 +86,7 @@ ttnn::device_operation::ProgramArtifacts MorehNllLossStep1DeviceOperation::Facto
     // copy TILE per core
     uint32_t units_to_divide = target.physical_volume() / H / W * (Ht * Wt);
 
-    tt::tt_metal::IDevice* device = target.device();
+    tt::tt_metal::distributed::MeshDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -220,7 +220,7 @@ ttnn::device_operation::ProgramArtifacts MorehNllLossStep1DeviceOperation::Facto
         .compile_time_args = {{"weight_has_value", static_cast<uint32_t>(weight_has_value)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"ignore_index", "num_units_per_core", "start_id", "C", "weight_num_tile"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -239,7 +239,7 @@ ttnn::device_operation::ProgramArtifacts MorehNllLossStep1DeviceOperation::Facto
                 TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT, .accessor_name = "output"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_units_per_core", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     spec.kernels.push_back(std::move(reader));
