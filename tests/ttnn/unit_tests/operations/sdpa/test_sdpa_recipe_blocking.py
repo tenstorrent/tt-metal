@@ -452,3 +452,21 @@ def test_legacy_zero_chunks_raise_not_crash(device):
     assert config.q_chunk_size == 0 and config.k_chunk_size == 0
     with pytest.raises(RuntimeError):
         ttnn.transformer.chunked_scaled_dot_product_attention(q, paged, paged, page_table, 0, program_config=config)
+
+
+@pytest.mark.parametrize("variant", ["A", "B", "C", "E_bfp8"])
+def test_chooser_budgets_attn_mask_cb(variant):
+    """A dense attn_mask adds its CB (one QK row group of mask tiles minimum, two preferred) to the L1
+    estimate, so op-selected blocking never picks a masked geometry that overflows L1."""
+    precision, kv = precision_of(variant), KV_DTYPE.get(variant, ttnn.bfloat16)
+    page = 2048  # BF16 mask tile
+    plain = T._sdpa_recipe_l1_bytes("dense", precision, kv, 256, 512, 128)
+    masked = T._sdpa_recipe_l1_bytes("dense", precision, kv, 256, 512, 128, mask_page_bytes=page)
+    group = (1 if variant in ("C", "D") else 2) * (512 // 32) * page
+    assert masked[1] - plain[1] == group and masked[0] - plain[0] == 2 * group
+    # With a budget that only just holds the unmasked layouts, every masked pick still fits.
+    budget = plain[1] + group // 2
+    unmasked = choose("dense", variant, 8, 4096, 4096, l1=budget)
+    with_mask = choose("dense", variant, 8, 4096, 4096, l1=budget, mask_page_bytes=page)
+    assert unmasked is not None and with_mask is not None
+    assert with_mask[7] <= budget and (with_mask[0], with_mask[1]) != (256, 512)
