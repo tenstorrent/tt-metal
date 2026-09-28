@@ -254,7 +254,12 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
     return idx_in, idx_out
 
 
-def _d2d_recv_indices(idx_in) -> ttnn.Tensor:
+def _d2d_recv_indices(d2d_in, idx_in) -> ttnn.Tensor:
+    """Both inbound services on an edge open the same fabric router channel, so the activation
+    receiver is reclaimed before the index receiver is granted."""
+    if d2d_in is not None:
+        d2d_in.wait_for_fabric_links()
+    idx_in.release_fabric_links()
     t0 = time.perf_counter()
     indices, metadata_msg = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         idx_in, metadata_size_bytes=METADATA_SIZE_BYTES
@@ -264,7 +269,12 @@ def _d2d_recv_indices(idx_in) -> ttnn.Tensor:
     return indices
 
 
-def _d2d_send_indices(idx_out, indices: ttnn.Tensor, rank: int, meta: Optional[dict], metadata_msg=None) -> None:
+def _d2d_send_indices(
+    d2d_out, idx_out, indices: ttnn.Tensor, rank: int, meta: Optional[dict], metadata_msg=None
+) -> None:
+    """Both outbound services on an edge open the same fabric router channel, so the activation
+    transfer is drained before the index sender is granted."""
+    d2d_out.wait_for_fabric_links()
     backing_cfg = idx_out.get_backing_tensor().memory_config()
     staged = indices if indices.memory_config() == backing_cfg else ttnn.to_memory_config(indices, backing_cfg)
     _d2d_send(idx_out, staged, rank, meta, deallocate=staged is not indices, metadata_msg=metadata_msg)
@@ -340,17 +350,18 @@ def _forward_shutdown(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.create_mesh_mapper(dev, INDEX_MAPPER_CONFIG),
         )
+        d2d_out.wait_for_fabric_links()
         _d2d_send(idx_out, idx_dummy, rank, sentinel)
         idx_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
 
 def _lease_reclaim(d2d_in, d2d_out, idx_in=None, idx_out=None) -> None:
-    inbound = [s for s in (d2d_in, idx_in) if s is not None]
-    for service in [*inbound, *(s for s in (d2d_out, idx_out) if s is not None)]:
-        service.wait_for_fabric_links()
-    for service in inbound:
-        service.release_fabric_links()
+    for service in (d2d_in, idx_in, d2d_out, idx_out):
+        if service is not None:
+            service.wait_for_fabric_links()
+    if d2d_in is not None:
+        d2d_in.release_fabric_links()
 
 
 def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
@@ -405,8 +416,8 @@ def _compute_and_send(
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
         logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
         _record_chunk_timing(rank, c, t_start, compute_ms)
+    forward_md = None
     if not runtime.config.is_last_rank:
-        forward_md = None
         if runtime.config.use_trace:
             persistent_md = getattr(runtime, "trace_metadata_msg", None)
             forward_md = persistent_md if persistent_md is not None else metadata_msg
@@ -418,11 +429,10 @@ def _compute_and_send(
             deallocate=not runtime.config.use_trace,
             metadata_msg=forward_md,
         )
-        if idx_out is not None:
-            _d2d_send_indices(idx_out, runtime.outbound_indexer_indices, rank, meta, metadata_msg=forward_md)
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     if idx_out is not None:
+        _d2d_send_indices(d2d_out, idx_out, runtime.outbound_indexer_indices, rank, meta, metadata_msg=forward_md)
         idx_out.release_fabric_links()
     return t_start
 
@@ -469,7 +479,7 @@ def run_request_loop(
             inp, meta, metadata_msg = _socket_next(h2d_service)
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
-        indices = _d2d_recv_indices(idx_in) if idx_in is not None else None
+        indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
