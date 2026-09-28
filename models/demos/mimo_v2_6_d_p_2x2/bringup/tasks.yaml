@@ -552,6 +552,13 @@ tasks:
     kind: attention
     layer: 1
     stateful: true
+  frozen:
+    at: '2026-09-28T05:44:47'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attention.py: 6cee84151adb37a6c0eee4fd8632b4a69da549363a0535c938f41bef17dc6f84
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.sliding_moe.02
   title: 'sliding_moe block with steps 1-2 on device (last: attention)'
   step: implement
