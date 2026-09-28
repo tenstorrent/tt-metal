@@ -25,9 +25,10 @@ Refinement 3 entry and next to the constant itself.
      policy WON the re-measurement (coarser reads are 0.76-1.00x), so both stay derived.
      The legality filter is the load-bearing part: a forced granularity may never
      produce a TRUNCATED read on a dtype whose face offset is not 64-byte aligned.
-  5. CB_SQ_EXACT -- parked at 0, kept LIVE.  Charging cb_x_squared its real width under
-     the D12 fold coarsens BLOCK_ROWS on the 64-core BLOCK shard (20 -> 25) and measured
-     0.987x there, so the conservative price ships.
+  5. CB_SQ_EXACT -- ON since CHANGELOG 4, and applied at fp32_dest_acc_en only, where
+     cb_x_squared's format depends on the chunk.  At 16-bit DEST the conservative price
+     still ships: charging the real width there coarsens BLOCK_ROWS on the 64-core BLOCK
+     shard (20 -> 25) and measured 0.987x, so that program must not move.
 
 Nothing here dispatches; every assertion is on the host-built ProgramDescriptor.
 """
@@ -223,19 +224,19 @@ def test_the_trim_knobs_are_still_live(device, forced):
 
 
 def test_cb_x_squared_keeps_the_seeds_conservative_price(device):
-    """CB_SQ_EXACT = 1 is CORRECT (it can only ever shrink the price, never overflow L1)
-    but coarsens BLOCK_ROWS 20 -> 25 on the 64-core BLOCK shard and measured 0.987x
-    there, so the conservative price ships and the exact one stays a live knob."""
-    assert PD.CB_SQ_EXACT == 0
+    """CB_SQ_EXACT = 1 ships (CHANGELOG 4) but only reaches fp32_dest_acc_en: at 16-bit
+    DEST the exact price coarsens BLOCK_ROWS 20 -> 25 on the 64-core BLOCK shard and
+    measured 0.987x, so there the conservative price stays and the knob must not move the
+    program."""
+    assert PD.CB_SQ_EXACT == 1
     saved = PD.CB_SQ_EXACT
     try:
-        # A shape where the D12 fold is on and L1 binds: the two must DIFFER, or the
-        # knob has stopped doing anything.
+        # A shape where the D12 fold is on (16-bit DEST: _config()): the knob is inert.
         shape = (1, 1, 1024, 128)
         blocks = {}
         for value in (0, 1):
             PD.CB_SQ_EXACT = value
             blocks[value] = list(_build(device, shape).kernels[2].compile_time_args)[3]
-        assert blocks[1] >= blocks[0], "the exact price can only ever admit a COARSER block"
+        assert blocks[1] == blocks[0], "the exact price must not reach a 16-bit DEST build"
     finally:
         PD.CB_SQ_EXACT = saved
