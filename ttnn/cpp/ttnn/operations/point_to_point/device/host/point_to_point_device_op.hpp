@@ -79,32 +79,6 @@ private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
 };
 
-namespace detail {
-
-struct AlignedPacketDims {
-    const uint32_t packet_size_bytes;
-    const uint32_t max_num_pages_per_packet;
-    const uint32_t num_page_segments;
-    const uint32_t total_packets;
-};
-
-AlignedPacketDims compute_aligned_packet_dims(
-    const DataType& dtype, uint32_t page_size_bytes, uint32_t num_pages, uint32_t alignment);
-
-struct Fabric1DRoute {
-    const uint32_t num_hops;
-    const bool is_forward;
-    const tt::tt_fabric::FabricNodeId neighbor_id;
-};
-
-Fabric1DRoute fabric_1d_routing(
-    const MeshDevice* mesh_device,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& receiver_coord,
-    ::ttnn::ccl::Topology topology);
-
-}  // namespace detail
-
 tt::tt_metal::ProgramDescriptor send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
