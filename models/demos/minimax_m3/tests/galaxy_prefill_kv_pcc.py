@@ -59,6 +59,16 @@ Multi-run mode (load weights + compile ONCE, then run many specs against the res
                                                                                                    [default 0]
   PREFILL_COMPILE     "0" -> skip runtime.compile()'s three-variant warm-up entirely (then iteration 0 pays
                       the program-cache misses)                                                    [default 1]
+  PREFILL_NUM_USERS   cache user slots; >1 prefills every user per run (request-mode pattern, users
+                      interleaved per chunk) and PCCs each slot                                    [default 1]
+  PREFILL_USE_TRACE   "1" -> the served metal-trace path: capture_trace() once per run, then every
+                      prefill_chunk replays its depth bucket. Steady-state tok/s is passes >= 1, so use
+                      PREFILL_TPS_ITERS >= 2. Traced KV is compared to an eager pass of the same prompts
+                      (PREFILL_TRACE_VS_EAGER) and slot 0 to the golden                           [default 0]
+  PREFILL_TRACE_REGION_SIZE  bytes of device DRAM reserved for the trace pool (~45 MiB per depth bucket at
+                      60 layers); REQUIRED with PREFILL_USE_TRACE=1                                [default 0]
+  PREFILL_TRACE_VS_EAGER  "0" -> skip the eager reference pass + comparison in trace mode (perf-only) [default 1]
+  PREFILL_TRACE_VS_EAGER_PCC  min per-tensor PCC of traced vs eager KV (expected bit-exact)   [default 0.9999]
   The chunk size (PREFILL_CHUNK_SIZE) is FIXED for the process: it is baked into the MoE dispatch
   buffers at build time. Multi-run mode is therefore chunked-only (PREFILL_CHUNKED=0 is rejected); a
   one-shot run is just a trace whose padded length equals the chunk size. The cache capacity is NOT
@@ -153,7 +163,7 @@ def plan(n_tokens, chunk_size, chunked):
     return n_chunks, chunk, n_chunks * chunk
 
 
-def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, threshold=None):
+def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config, threshold=None, slot_id=0):
     """Per-layer K / V / index_k PCC: device cache vs the golden trace. The device stores K / index_k
     Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so permute the golden's
     rotary slice (identity tail) before comparing. V is raw (no swizzle).
@@ -189,7 +199,7 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
         f"KV cache capacity {kv_cache.max_seq_len} != runtime capacity {runtime.config.max_seq_len}: the un-rotation "
         f"below would decode the wrong block-cyclic layout (stale handle after a re-target?)"
     )
-    k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, 0, n_tokens)  # block-cyclic; un-rotated per layer below
+    k_blk, v_blk, ik_blk = runtime.read_slot_kv(kv_cache, slot_id, n_tokens)  # block-cyclic; un-rotated per layer
     sp, chunk, seq = runtime.config.sp_factor, runtime.config.chunk_size, runtime.read_seq_len(n_tokens)
     for L in range(num_layers):
         dev_k = naturalize_kv_block(k_blk[L], n_tokens, sp, chunk, seq).unsqueeze(0)
@@ -221,6 +231,160 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config,
     if min_pcc < threshold:
         raise GateFailure(f"KV-cache PCC {min_pcc:.5f} < threshold {threshold}")
     return mins
+
+
+def user_prompt(token_ids, user):
+    """User 0 keeps the golden prompt (so its slot still PCCs against the golden); every further user gets
+    the same tokens rolled by a prime, non-chunk-aligned offset so each slot holds DISTINCT content. With
+    identical prompts a cache read that lands in another user's slot reproduces the right output and passes;
+    with distinct prompts it changes the KV written from that chunk on and fails the traced-vs-eager check."""
+    if user == 0:
+        return list(token_ids)
+    shift = (997 * user) % len(token_ids)
+    return token_ids[shift:] + token_ids[:shift]
+
+
+def timed_passes(runtime, kv_cache, mesh, prompts, *, n_chunks, chunk, n_tokens, total, reps, label):
+    """`reps` full multi-user prefills with users interleaved PER CHUNK (chunk c of every user before chunk
+    c+1) -- the served request-mode order, and the one that re-targets the device-valued slot on every
+    traced replay. Returns steady-state tok/s: median over passes >= 1 (pass 0 pays JIT / first replay)."""
+    padded = [p + [0] * (total - n_tokens) for p in prompts]
+    n_users = len(prompts)
+    passes = []
+    for r in range(reps):
+        t0 = time.perf_counter()
+        for c in range(n_chunks):
+            a = c * chunk
+            for u, p in enumerate(padded):
+                inp = runtime.make_chunk_input(p[a : a + chunk])
+                runtime.prefill_chunk(
+                    inp, kv_cache, slot_id=u, actual_start=a, actual_end=min(a + chunk, n_tokens), request_id=c
+                )
+        ttnn.synchronize_device(mesh)
+        passes.append(time.perf_counter() - t0)
+        tok = n_users * n_chunks * chunk
+        print(
+            f"[prefill-pcc] {label} pass {r}: {passes[-1] * 1000:.1f} ms "
+            f"({tok / passes[-1]:.0f} tok/s, {n_users}u x {n_chunks} chunks)",
+            flush=True,
+        )
+    steady = statistics.median(passes[1:]) if reps > 1 else passes[0]
+    tps = n_users * n_chunks * chunk / steady
+    print(
+        f"[prefill-pcc] {label} steady-state (pass>=1): {steady * 1000:.1f} ms/seq ({tps:.0f} tok/s, {n_users}u)",
+        flush=True,
+    )
+    return tps
+
+
+def gather_slots(runtime, kv_cache, slots, n_tokens):
+    """Host copies of every layer's (K, V, index_k) per slot, in device convention; one slot readback each."""
+    return {s: runtime.gather_slot(kv_cache, slot_id=s, n_tokens=n_tokens) for s in slots}
+
+
+def check_trace_vs_eager(ref, got, threshold):
+    """Traced replay vs the eager reference, per slot / layer / tensor. Same programs on the same inputs, so
+    the expectation is bit-exact; the gate is a PCC floor rather than equality so a nondeterministic
+    reduction cannot flake it, while a stale bucket or a mis-targeted slot (PCC far below 1) still fails."""
+    from models.common.utility_functions import comp_pcc
+
+    worst, exact, count = 1.0, 0, 0
+    for s in ref:
+        for L, (r_layer, g_layer) in enumerate(zip(ref[s], got[s])):
+            for name, r, g in zip(("K", "V", "index_k"), r_layer, g_layer):
+                if r is None or g is None:
+                    continue
+                count += 1
+                if torch.equal(r, g):
+                    exact += 1
+                    continue
+                pcc = float(comp_pcc(r, g, 0.0)[1])
+                worst = min(worst, pcc)
+                logger.info(
+                    f"[trace-vs-eager] slot {s} layer {L:>2} {name}: not bit-exact, PCC={pcc:.6f} "
+                    f"max_abs={(r.float() - g.float()).abs().max().item():.3e}"
+                )
+    logger.info(
+        f"[trace-vs-eager] {exact}/{count} tensors bit-exact; worst non-exact PCC {worst:.6f} (threshold {threshold})"
+    )
+    if worst < threshold:
+        raise GateFailure(f"traced KV diverges from eager: PCC {worst:.6f} < {threshold}")
+
+
+def perf_gate(spec, measured_tps, what):
+    """spec.expected_tps +/- spec.perf_margin band on the measured tok/s; no-op without a baseline."""
+    if spec.expected_tps is None:
+        return
+    low, high = spec.expected_tps * (1.0 - spec.perf_margin), spec.expected_tps * (1.0 + spec.perf_margin)
+    print(
+        f"[prefill-pcc] PERF GATE ({what}): measured {measured_tps:.1f} tok/s vs baseline "
+        f"{spec.expected_tps:.1f} +/- {spec.perf_margin * 100:.1f}% band [{low:.1f}, {high:.1f}]",
+        flush=True,
+    )
+    if not (low <= measured_tps <= high):
+        raise GateFailure(
+            f"{what} throughput {measured_tps:.1f} tok/s outside baseline "
+            f"{spec.expected_tps:.1f} tok/s +/- {spec.perf_margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
+        )
+
+
+def run_users(runtime, kv_cache, mesh, spec, num_layers, hf_config, *, token_ids, n_tokens, n_pcc, n_chunks, total):
+    """Request-mode measurement of the resident model: every user slot prefilled, users interleaved per chunk.
+    Eager runs identical prompts (a write into the wrong slot leaves a slot empty and craters its PCC); the
+    served trace path (capture_trace() once per run, then per-chunk replay with the slot re-targeted) runs
+    DISTINCT prompts, so a read or write landing in another user's slot changes that user's KV instead of
+    reproducing it: traced KV must match the eager pass per slot / layer / tensor, and slot 0 (the golden
+    prompt) must still PCC against the golden. Returns the run_one result fields."""
+    chunk = runtime.config.chunk_size
+    num_users, use_trace = runtime.config.num_users, runtime.config.use_trace
+    pass_args = dict(n_chunks=n_chunks, chunk=chunk, n_tokens=n_tokens, total=total)
+    result = {"n_users": num_users, "traced": use_trace, "min_pcc": None}
+
+    def pcc(slot_id):
+        return min(
+            check_kv_pcc(
+                runtime, kv_cache, spec.trace_dir, n_pcc, num_layers, hf_config, spec.pcc_threshold, slot_id=slot_id
+            ).values()
+        )
+
+    if not use_trace:
+        prompts = [list(token_ids) for _ in range(num_users)]
+        label = f"{num_users}-user eager"
+        tps = timed_passes(runtime, kv_cache, mesh, prompts, reps=spec.tps_iters, label=label, **pass_args)
+        perf_gate(spec, tps, label)
+        result.update(whole_tps=tps, whole_ms=num_users * n_chunks * chunk / tps * 1000)
+        if spec.skip_pcc:
+            print("[prefill-pcc] skip_pcc -> skipping per-slot KV PCC", flush=True)
+        else:
+            mins = []
+            for uid in range(num_users):
+                print(f"[prefill-pcc] --- user {uid} (slot {uid}) KV PCC vs golden ---", flush=True)
+                mins.append(pcc(uid))
+            result["min_pcc"] = min(mins)
+        return result
+
+    prompts = [user_prompt(token_ids, u) for u in range(num_users)]
+    compare = os.getenv("PREFILL_TRACE_VS_EAGER", "1") == "1"
+    reference = None
+    if compare:
+        timed_passes(runtime, kv_cache, mesh, prompts, reps=1, label="eager reference", **pass_args)
+        reference = gather_slots(runtime, kv_cache, range(num_users), n_tokens)
+    runtime.capture_trace(kv_cache)
+    try:
+        tps = timed_passes(runtime, kv_cache, mesh, prompts, reps=spec.tps_iters, label="TRACE", **pass_args)
+        perf_gate(spec, tps, "traced")
+        result.update(whole_tps=tps, whole_ms=num_users * n_chunks * chunk / tps * 1000)
+        if compare:
+            traced = gather_slots(runtime, kv_cache, range(num_users), n_tokens)
+            check_trace_vs_eager(reference, traced, float(os.getenv("PREFILL_TRACE_VS_EAGER_PCC", "0.9999")))
+        if spec.skip_pcc:
+            print("[prefill-pcc] skip_pcc -> skipping KV PCC (perf only)", flush=True)
+        else:
+            print("[prefill-pcc] --- traced user 0 (slot 0) KV PCC vs golden ---", flush=True)
+            result["min_pcc"] = pcc(0)
+    finally:
+        runtime.release_trace()  # the next run captures afresh; a re-target frees the scalars it binds
+    return result
 
 
 @dataclass
@@ -426,11 +590,17 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         # that can raise: a failed re-target must leave state["kv_cache"] None, so the next spec
         # re-allocates instead of feeding a dead handle into prefill_chunk.
         if state["kv_cache"] is not None:
+            runtime.release_trace()  # captured buckets bind the old cache's slot scalars
             state["kv_cache"].deallocate()
             state["kv_cache"] = None
         runtime.reconfigure_capacity(capacity)  # on failure keeps the old capacity + rope
         state["kv_cache"] = allocate_kv_caches(
-            mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
+            mesh,
+            num_layers=num_layers,
+            max_seq_len=capacity,
+            num_users=runtime.config.num_users,
+            head_dim=hf_config.head_dim,
+            device_slot=runtime.config.use_trace and runtime.config.num_users > 1,
         )
         if os.getenv("PREFILL_COMPILE", "1") != "0":
             runtime.compile(state["kv_cache"])
@@ -443,6 +613,36 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
             f"{total}. KV PCC over the {n_tokens} real tokens stays valid; tok/s is pad-dominated — ignore it.",
             flush=True,
         )
+
+    result = {
+        "label": spec.name,
+        "trace": spec.trace_dir,
+        "n_tokens": n_tokens,
+        "trace_tokens": n_trace,
+        "chunk": chunk,
+        "n_chunks": n_chunks,
+        "capacity": capacity,
+        "recompile_s": recompile_s,
+        "warmup_iters": warmup_iters,
+        "tps_iters": tps_iters,
+    }
+    if runtime.config.num_users > 1 or runtime.config.use_trace:
+        result.update(
+            run_users(
+                runtime,
+                kv_cache,
+                mesh,
+                spec,
+                num_layers,
+                hf_config,
+                token_ids=token_ids,
+                n_tokens=n_tokens,
+                n_pcc=n_pcc,
+                n_chunks=n_chunks,
+                total=total,
+            )
+        )
+        return result
 
     # --- throughput. Each iteration re-fills slot 0 (valid for the PCC check after the loop) and
     # times two distinct full-prefill passes, each with syncs placed so it pays for no extra barrier:
@@ -506,24 +706,14 @@ def run_one(runtime, state: dict, mesh, spec: RunSpec, num_layers, hf_config) ->
         f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
         flush=True,
     )
-    result = {
-        "label": spec.name,
-        "trace": spec.trace_dir,
-        "n_tokens": n_tokens,
-        "trace_tokens": n_trace,
-        "chunk": chunk,
-        "n_chunks": n_chunks,
-        "capacity": capacity,
-        "recompile_s": recompile_s,
-        "warmup_iters": warmup_iters,
-        "tps_iters": tps_iters,
-        "whole_ms": w * 1000,
-        "whole_tps": whole_tps,
-        "last_chunk_ms": lc * 1000,
-        "last_chunk_tps": last_tps,
-        "last_chunk_real_tokens": last_real,
-        "min_pcc": None,
-    }
+    result.update(
+        whole_ms=w * 1000,
+        whole_tps=whole_tps,
+        last_chunk_ms=lc * 1000,
+        last_chunk_tps=last_tps,
+        last_chunk_real_tokens=last_real,
+        min_pcc=None,
+    )
 
     # --- perf gate: whole-sequence tok/s vs expected_tps +/- perf_margin ---
     if spec.expected_tps is not None:
@@ -556,9 +746,14 @@ def _fmt_result(r: dict) -> str:
     pcc = f"{r['min_pcc']:.5f}" if r.get("min_pcc") is not None else "-"
     if r.get("status") != "ok":
         return f"{r['label']:<28} {r.get('status', '?'):<6} {r.get('error', '')}"
+    tail = (
+        f"last {r['last_chunk_ms']:>8.1f} ms {r['last_chunk_tps']:>8.1f} tok/s"
+        if r.get("last_chunk_ms") is not None
+        else f"{r.get('n_users', 1)}u {'traced' if r.get('traced') else 'eager'} interleaved"
+    )
     return (
         f"{r['label']:<28} ok     {r['n_tokens']:>6} tok cap {r['capacity']:>6}  whole {r['whole_ms']:>9.1f} ms {r['whole_tps']:>8.1f} tok/s  "
-        f"last {r['last_chunk_ms']:>8.1f} ms {r['last_chunk_tps']:>8.1f} tok/s  minPCC {pcc}"
+        f"{tail}  minPCC {pcc}"
     )
 
 
@@ -681,8 +876,20 @@ def main():
     # match the production runner (1d, linear). 1d_ring / 2d_torus_xy need the torus_xy mesh graph
     # descriptor (the wrapper scripts pick it); measurements in PR #55668.
     ccl_topology = ccl_topology_from_env()
+    num_users = int(os.getenv("PREFILL_NUM_USERS", "1"))
+    use_trace = os.getenv("PREFILL_USE_TRACE") == "1"
+    # The trace pool lives in a DRAM region reserved at mesh open; 0 leaves the eager path byte-identical.
+    trace_region = int(os.getenv("PREFILL_TRACE_REGION_SIZE", "0"))
+    if use_trace and trace_region <= 0:
+        print(
+            "ERROR: PREFILL_USE_TRACE=1 needs PREFILL_TRACE_REGION_SIZE (bytes of DRAM for the trace pool)",
+            file=sys.stderr,
+        )
+        return 1
     ttnn.set_fabric_config(fabric_config_from_env())
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE)
+    mesh = ttnn.open_mesh_device(
+        ttnn.MeshShape(rows, cols), l1_small_size=L1_SMALL_SIZE, trace_region_size=trace_region
+    )
     print(
         f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()} "
         f"fabric={ttnn.get_fabric_config()} ccl_topology={ccl_topology}",
@@ -752,10 +959,11 @@ def main():
             max_seq_len=capacity,
             mesh_shape=(rows, cols),
             chunk_size=chunk,
-            num_users=1,
+            num_users=num_users,
             expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
             topology=ccl_topology,
+            use_trace=use_trace,
         )
         t_build = time.perf_counter()
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
@@ -767,7 +975,13 @@ def main():
         # Held in a dict because run_one re-allocates it when a spec needs a different capacity.
         state = {
             "kv_cache": allocate_kv_caches(
-                mesh, num_layers=num_layers, max_seq_len=capacity, num_users=1, head_dim=hf_config.head_dim
+                mesh,
+                num_layers=num_layers,
+                max_seq_len=capacity,
+                num_users=num_users,
+                head_dim=hf_config.head_dim,
+                # Only a trace replayed for more than one user needs the slot on-device; eager keeps the host int.
+                device_slot=use_trace and num_users > 1,
             )
         }
 
