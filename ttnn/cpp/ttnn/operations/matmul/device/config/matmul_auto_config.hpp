@@ -64,6 +64,29 @@ struct HardwareDesc {
     static HardwareDesc for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget);
 };
 
+// Choices made from measurements rather than derived from the hardware or the factories, each with what it rests
+// on. The selector's rules read them from here only, so a per-architecture table or a calibrated estimator can
+// replace them without touching the rules.
+struct EmpiricalDefaults {
+    // K block depth cap. The best in0_block_w balances a per-K-block cost (packing the block's partials) against
+    // the exposed first K block (its input can't overlap compute), which puts it near sqrt(Kt * h*w/(h+w)):
+    // about 8-32 tiles for common shapes. The cost is flat near the balance point (a factor of 2 either way
+    // costs only a few percent), so one cap in the middle is close to the best for most shapes. It also keeps
+    // the double-buffered input CBs of a typical block to about a third of L1, leaving room for L1-resident
+    // tensors. On the Wormhole and Blackhole fast suites it beat 32 and no cap on every suite. Data-bound 1D
+    // decode shapes want much shallower K blocks, set by per-block synchronisation rather than this balance,
+    // and are not covered.
+    uint32_t max_in0_block_w = 16;
+    // Kept free below the L1 budget, for allocator alignment and factory-side buffers the CB model doesn't count
+    uint32_t l1_headroom_bytes = 16 * 1024;
+    // Prefer subblocks at least two tiles on each side (2x4 over 1x8) unless B's tiles are smaller than A's: per
+    // K step an h x w subblock unpacks h tiles of A and h * w of B, and the single-row path's per-tile overhead
+    // cost up to 10% on large bf16 matmuls on Wormhole
+    bool prefer_two_wide_subblocks = true;
+
+    static EmpiricalDefaults for_arch(tt::ARCH arch);
+};
+
 enum class Layout { Interleaved, HeightSharded, WidthSharded, BlockSharded };
 
 // Where a tensor lives. Shard dimensions are in tiles; a sharded output may come without a shard spec, in
@@ -151,13 +174,16 @@ RooflineTerms roofline(const Problem& problem, const HardwareDesc& hw, Family fa
 double estimated_cycles(const Problem& problem, const HardwareDesc& hw, Family family, const Blocking& b);
 
 // The blocked candidate of each family that can run the problem and fits L1, in family order.
-std::vector<Candidate> candidates(const Problem& problem, const HardwareDesc& hw);
+std::vector<Candidate> candidates(
+    const Problem& problem, const HardwareDesc& hw, const EmpiricalDefaults& defaults = EmpiricalDefaults{});
 
 // The candidate the heuristics choose, or nullopt if none fits.
-std::optional<Candidate> choose_candidate(const Problem& problem, const HardwareDesc& hw);
+std::optional<Candidate> choose_candidate(
+    const Problem& problem, const HardwareDesc& hw, const EmpiricalDefaults& defaults = EmpiricalDefaults{});
 
 // The program config for the chosen candidate, or nullopt if the problem is unsupported or nothing fits.
-std::optional<MatmulProgramConfig> select_program_config(const Problem& problem, const HardwareDesc& hw);
+std::optional<MatmulProgramConfig> select_program_config(
+    const Problem& problem, const HardwareDesc& hw, const EmpiricalDefaults& defaults = EmpiricalDefaults{});
 
 // Builds the Problem and HardwareDesc from matmul's inputs and selects a config. Returns nullopt for inputs
 // the new selector does not handle, with the reason in `unsupported` when given.

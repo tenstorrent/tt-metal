@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -21,8 +20,6 @@ namespace ttnn::operations::matmul::auto_config {
 namespace {
 
 constexpr uint32_t TILE_DIM = 32;
-// Headroom kept free below the L1 budget, for allocator alignment and small factory-side buffers
-constexpr uint32_t L1_HEADROOM_BYTES = 16 * 1024;
 
 uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 uint32_t align_up(uint32_t a, uint32_t alignment) { return div_up(a, alignment) * alignment; }
@@ -151,13 +148,13 @@ bool is_block_float(tt::DataFormat format) {
     }
 }
 
-uint32_t k_depth_limit(const Problem& p, Family family) {
-    const char* cap = std::getenv("MM_KCAP");  // experiment only: a K depth cap to compare (0 = none)
-    const uint32_t limit = max_in0_block_w(p.Kt, family);
-    return cap && std::atoi(cap) > 0 ? std::min<uint32_t>(limit, std::atoi(cap)) : limit;
+uint32_t k_depth_limit(const Problem& p, const EmpiricalDefaults& d, Family family) {
+    return std::min(max_in0_block_w(p.Kt, family), d.max_in0_block_w);
 }
 
 }  // namespace
+
+EmpiricalDefaults EmpiricalDefaults::for_arch(tt::ARCH /*arch*/) { return {}; }
 
 HardwareDesc HardwareDesc::for_arch(tt::ARCH arch, CoreCoord grid, uint32_t l1_cb_budget) {
     HardwareDesc hw;
@@ -266,6 +263,7 @@ bool block_allowed(const BlockRules& rules, uint32_t per_core_N, uint32_t out_bl
 std::optional<Blocking> block_2d(
     const Problem& p,
     const HardwareDesc& hw,
+    const EmpiricalDefaults& d,
     uint32_t per_core_M,
     uint32_t per_core_N,
     bool fuse_batch,
@@ -277,7 +275,7 @@ std::optional<Blocking> block_2d(
     for (uint32_t h : divisors_desc(per_core_M)) {
         for (uint32_t w : divisors_desc(per_core_N)) {
             const uint64_t area = static_cast<uint64_t>(h) * w;
-            const uint32_t k_max = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, Family::Mcast2D);
+            const uint32_t k_max = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, d, Family::Mcast2D);
             if (best && !rules.prefers_other(best->in0_block_w) &&
                 area * std::max(k_max, rules.k_preferred) < best_product) {
                 break;  // narrower blocks for this h can't win
@@ -317,6 +315,7 @@ std::optional<Blocking> block_2d(
 std::optional<Blocking> block_1d(
     const Problem& p,
     const HardwareDesc& hw,
+    const EmpiricalDefaults& d,
     Family family,
     uint32_t per_core_M,
     uint32_t per_core_N,
@@ -336,7 +335,7 @@ std::optional<Blocking> block_1d(
         if (!block_allowed(rules, per_core_N, out_block_w)) {
             return std::nullopt;
         }
-        const uint32_t k_limit = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, family);
+        const uint32_t k_limit = rules.k_fixed != 0 ? rules.k_fixed : k_depth_limit(p, d, family);
         for (uint32_t k : divisors_desc(p.Kt)) {
             if ((k > k_limit && !rules.prefers(k)) || !k_allowed(rules, k)) {
                 continue;
@@ -418,7 +417,7 @@ std::optional<Blocking> block_reuse_sharded(const Problem& p, const HardwareDesc
 // every core a block (all of Mt when the batch alone fills the grid) and fits L1; in0_block_w is the largest
 // that fits within the K depth rule. Block-float B with A tiles under 16 rows needs a single K block: the
 // factory computes wrong values when it splits K for those.
-std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
+std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw, const EmpiricalDefaults& d) {
     const uint32_t cores = hw.grid.x * hw.grid.y;
     const bool single_k_block = is_block_float(p.in1_format) && p.in0_tile_h < 16;
     for (uint32_t per_core_M : divisors_desc(p.Mt)) {
@@ -427,7 +426,7 @@ std::optional<Blocking> block_reuse(const Problem& p, const HardwareDesc& hw) {
             continue;
         }
         for (uint32_t k : divisors_desc(p.Kt)) {
-            if (single_k_block ? k != p.Kt : k > k_depth_limit(p, Family::Reuse)) {
+            if (single_k_block ? k != p.Kt : k > k_depth_limit(p, d, Family::Reuse)) {
                 continue;
             }
             Blocking b{per_core_M, p.Nt, k, per_core_M, p.Nt, 0, 0};
@@ -511,9 +510,10 @@ uint32_t cores_used(const Problem& p, const HardwareDesc& hw, Family family, con
 // per 8 outputs, and avoids the single-row path, whose per-tile overhead shows as up to 10% on large
 // matmuls with bf16 B. Only when A is the heavier operand (e.g. bf16 A, block-float B) does the extra A
 // unpack cost more than it saves (1 x 8 then wins by ~5% on the Wormhole sweeps).
-void set_subblock(const Problem& p, Family family, Blocking& b) {
+void set_subblock(const Problem& p, const EmpiricalDefaults& d, Family family, Blocking& b) {
     const bool reuse = family == Family::Reuse;
-    const bool prefer_two_wide = tt::tile_size(p.in1_format) >= tt::tile_size(p.in0_format);
+    const bool prefer_two_wide =
+        d.prefer_two_wide_subblocks && tt::tile_size(p.in1_format) >= tt::tile_size(p.in0_format);
     // Reuse with batched A and B requires out_subblock_h | Mt
     const auto [h, w] = choose_subblock(
         reuse ? b.per_core_M : b.out_block_h,
@@ -532,7 +532,7 @@ namespace {
 
 // A sharded operand or output fixes the family, grid and per-core sizes; returns that layout's candidate, or
 // nothing when the combination isn't supported (or doesn't fit), in which case the caller falls back.
-std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& hw) {
+std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& hw, const EmpiricalDefaults& d) {
     std::vector<Candidate> result;
     auto add = [&](Family family,
                    std::optional<Blocking> b,
@@ -542,7 +542,7 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
         if (!b) {
             return;
         }
-        set_subblock(p, family, *b);
+        set_subblock(p, d, family, *b);
         HardwareDesc sub = hw;
         sub.grid = grid;
         result.push_back({family, *b, cores_used(p, sub, family, *b), grid, workers, transpose_mcast});
@@ -571,7 +571,7 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
             rules.k_preferred = a.shard_w;
             const auto per_core_N = div_up(p.Nt, a.shard_cores);
             add(Family::Mcast1DIn0,
-                block_1d(p, hw, Family::Mcast1DIn0, M, per_core_N, true, rules),
+                block_1d(p, hw, d, Family::Mcast1DIn0, M, per_core_N, true, rules),
                 grid,
                 a.shard_grid,
                 false);
@@ -599,7 +599,7 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
                 BlockRules rules = out_rules;
                 rules.k_fixed = p.Kt;
                 add(Family::Mcast1DIn1,
-                    block_1d(p, hw, Family::Mcast1DIn1, a.shard_h, p.Nt, true, rules),
+                    block_1d(p, hw, d, Family::Mcast1DIn1, a.shard_h, p.Nt, true, rules),
                     grid,
                     a.shard_grid,
                     false);
@@ -625,7 +625,11 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
             } else {
                 rules.k_fixed = 1;
             }
-            add(Family::Mcast2D, block_2d(p, hw, per_core_M, per_core_N, true, rules), grid, a.shard_grid, a.col_major);
+            add(Family::Mcast2D,
+                block_2d(p, hw, d, per_core_M, per_core_N, true, rules),
+                grid,
+                a.shard_grid,
+                a.col_major);
         }
         return result;
     }
@@ -652,18 +656,18 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
         const bool col_of_cores = out.layout == Layout::HeightSharded || (block && grid.x == 1 && grid.y > 1);
         if (row_of_cores && fits(1, out.shard_cores)) {
             add(Family::Mcast1DIn0,
-                block_1d(p, hw, Family::Mcast1DIn0, M, shard_w, true, rules),
+                block_1d(p, hw, d, Family::Mcast1DIn0, M, shard_w, true, rules),
                 grid,
                 out.shard_grid,
                 false);
         } else if (col_of_cores && fits(out.shard_cores, 1)) {
             add(Family::Mcast1DIn1,
-                block_1d(p, hw, Family::Mcast1DIn1, shard_h, p.Nt, true, rules),
+                block_1d(p, hw, d, Family::Mcast1DIn1, shard_h, p.Nt, true, rules),
                 grid,
                 out.shard_grid,
                 false);
         } else if (block && fits(grid.y, grid.x)) {
-            add(Family::Mcast2D, block_2d(p, hw, shard_h, shard_w, true, rules), grid, out.shard_grid, false);
+            add(Family::Mcast2D, block_2d(p, hw, d, shard_h, shard_w, true, rules), grid, out.shard_grid, false);
         }
         if (result.empty()) {
             // The spec's grid doesn't match the output (e.g. one core for several batches' worth of shards).
@@ -672,16 +676,16 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
             const uint32_t cols = div_up(p.Nt, shard_w);
             const auto workers = pinned_workers(hw);
             if (block && rows <= hw.grid.y && cols <= hw.grid.x) {
-                add(Family::Mcast2D, block_2d(p, hw, shard_h, shard_w, true, rules), hw.grid, workers, false);
+                add(Family::Mcast2D, block_2d(p, hw, d, shard_h, shard_w, true, rules), hw.grid, workers, false);
             } else if (out.layout != Layout::HeightSharded && rows == 1 && cols <= cores) {
                 add(Family::Mcast1DIn0,
-                    block_1d(p, hw, Family::Mcast1DIn0, M, shard_w, true, rules),
+                    block_1d(p, hw, d, Family::Mcast1DIn0, M, shard_w, true, rules),
                     hw.grid,
                     workers,
                     false);
             } else if (out.layout != Layout::WidthSharded && cols == 1 && rows <= cores) {
                 add(Family::Mcast1DIn1,
-                    block_1d(p, hw, Family::Mcast1DIn1, shard_h, p.Nt, true, rules),
+                    block_1d(p, hw, d, Family::Mcast1DIn1, shard_h, p.Nt, true, rules),
                     hw.grid,
                     workers,
                     false);
@@ -689,19 +693,19 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
         }
     } else if (out.layout == Layout::WidthSharded) {
         add(Family::Mcast1DIn0,
-            block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), true, rules),
+            block_1d(p, hw, d, Family::Mcast1DIn0, M, div_up(p.Nt, cores), true, rules),
             hw.grid,
             pinned_workers(hw),
             false);
     } else if (out.layout == Layout::HeightSharded) {
         add(Family::Mcast1DIn1,
-            block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, true, rules),
+            block_1d(p, hw, d, Family::Mcast1DIn1, div_up(M, cores), p.Nt, true, rules),
             hw.grid,
             pinned_workers(hw),
             false);
     } else if (out.layout == Layout::BlockSharded) {
         add(Family::Mcast2D,
-            block_2d(p, hw, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), true, rules),
+            block_2d(p, hw, d, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), true, rules),
             hw.grid,
             pinned_workers(hw),
             false);
@@ -711,9 +715,9 @@ std::vector<Candidate> sharded_candidates(const Problem& p, const HardwareDesc& 
 
 }  // namespace
 
-std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
+std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw, const EmpiricalDefaults& d) {
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
-        return sharded_candidates(p, hw);
+        return sharded_candidates(p, hw, d);
     }
     std::vector<Candidate> result;
     const uint32_t cores = hw.grid.x * hw.grid.y;
@@ -723,14 +727,14 @@ std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
         if (!b) {
             return;
         }
-        set_subblock(p, family, *b);
+        set_subblock(p, d, family, *b);
         result.push_back({family, *b, cores_used(p, hw, family, *b), hw.grid, workers, false});
     };
     // The mcast kernels can't take block-float B with A tiles shorter than 16 rows; Reuse can
     const bool mcast_ok = !(is_block_float(p.in1_format) && p.in0_tile_h < 16);
     if (broadcasts_a(p)) {
         if (mcast_ok && !p.no_mcast_1d) {
-            add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(p.Mt, cores), p.Nt, false));
+            add(Family::Mcast1DIn1, block_1d(p, hw, d, Family::Mcast1DIn1, div_up(p.Mt, cores), p.Nt, false));
         }
         return result;
     }
@@ -739,22 +743,22 @@ std::vector<Candidate> candidates(const Problem& p, const HardwareDesc& hw) {
     const bool fuse_batch = p.batch_b == 1 && !(p.transpose_a && p.batch_a > 1 && p.Mt > 1);
     // Reuse needs matching batches: batched B, or (when the mcast kernels can't run it) a single batch
     if (p.batch_a == p.batch_b && (p.batch_b > 1 || !mcast_ok)) {
-        add(Family::Reuse, block_reuse(p, hw));
+        add(Family::Reuse, block_reuse(p, hw, d));
     }
     if (!mcast_ok) {
         return result;
     }
     const uint32_t M = output_rows(p, fuse_batch);
-    add(Family::Mcast2D, block_2d(p, hw, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), fuse_batch));
+    add(Family::Mcast2D, block_2d(p, hw, d, div_up(M, hw.grid.y), div_up(p.Nt, hw.grid.x), fuse_batch));
     if (!p.no_mcast_1d) {
-        add(Family::Mcast1DIn0, block_1d(p, hw, Family::Mcast1DIn0, M, div_up(p.Nt, cores), fuse_batch));
-        add(Family::Mcast1DIn1, block_1d(p, hw, Family::Mcast1DIn1, div_up(M, cores), p.Nt, fuse_batch));
+        add(Family::Mcast1DIn0, block_1d(p, hw, d, Family::Mcast1DIn0, M, div_up(p.Nt, cores), fuse_batch));
+        add(Family::Mcast1DIn1, block_1d(p, hw, d, Family::Mcast1DIn1, div_up(M, cores), p.Nt, fuse_batch));
     }
     return result;
 }
 
-std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw) {
-    const auto all = candidates(p, hw);
+std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& hw, const EmpiricalDefaults& d) {
+    const auto all = candidates(p, hw, d);
     if (p.a.sharded() || p.b.sharded() || p.out.sharded()) {
         // The layout already fixed the family
         return all.empty() ? std::nullopt : std::optional<Candidate>(all.front());
@@ -775,11 +779,12 @@ std::optional<Candidate> choose_candidate(const Problem& p, const HardwareDesc& 
     return std::nullopt;
 }
 
-std::optional<MatmulProgramConfig> select_program_config(const Problem& p, const HardwareDesc& hw) {
+std::optional<MatmulProgramConfig> select_program_config(
+    const Problem& p, const HardwareDesc& hw, const EmpiricalDefaults& d) {
     if (p.Mt == 0 || p.Kt == 0 || p.Nt == 0 || hw.grid.x == 0 || hw.grid.y == 0) {
         return std::nullopt;
     }
-    const auto chosen = choose_candidate(p, hw);
+    const auto chosen = choose_candidate(p, hw, d);
     if (!chosen) {
         return std::nullopt;
     }
@@ -1041,12 +1046,13 @@ std::optional<MatmulProgramConfig> select_program_config(
             div_up(out_tiles, num_banks) * static_cast<uint64_t>(out_tile_bytes(p, p.out_format));
         budget = out_per_bank >= budget ? 0 : budget - static_cast<uint32_t>(out_per_bank);
     }
-    budget = budget > L1_HEADROOM_BYTES ? budget - L1_HEADROOM_BYTES : 0;
+    const auto d = EmpiricalDefaults::for_arch(arch);
+    budget = budget > d.l1_headroom_bytes ? budget - d.l1_headroom_bytes : 0;
 
     auto hw = HardwareDesc::for_arch(arch, grid, budget);
     hw.origin = origin;
     hw.pinned_origin = on_sub_device;
-    if (auto config = select_program_config(p, hw)) {
+    if (auto config = select_program_config(p, hw, d)) {
         return config;
     }
     // Nothing blocked fits: the non-reusing factory still runs all-interleaved 32x32 inputs on the device grid
