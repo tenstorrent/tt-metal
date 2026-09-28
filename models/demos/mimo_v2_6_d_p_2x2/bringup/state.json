@@ -1730,6 +1730,52 @@
   "started": "2026-09-28T04:41:16",
   "status": "PASS"
  },
+ "L.last": {
+  "attempts": 0,
+  "duration_s": 41.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T07:44:32"
+   }
+  ],
+  "last_run": "2026-09-28T07:44:32",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/L.last.log",
+  "metrics": {
+   "chunk_seconds_c10": 12.428,
+   "covered_layers": 6,
+   "device_model_hybrid": 0,
+   "model_load_s": 9.8,
+   "pcc_layer_L00": 0.9985599122946943,
+   "pcc_layer_L01": 0.998429170702674,
+   "pcc_layer_L02": 0.998402981285718,
+   "pcc_layer_L03": 0.9984891629157037,
+   "pcc_layer_L04": 0.9987672772980437,
+   "pcc_layer_L05": 0.9984311765739958,
+   "pcc_state_key_L00": 0.9999995888247332,
+   "pcc_state_key_L01": 0.9996959598023176,
+   "pcc_state_key_L02": 0.9993949653270995,
+   "pcc_state_key_L03": 0.9994639055254232,
+   "pcc_state_key_L04": 0.9997615968357533,
+   "pcc_state_key_L05": 0.999884839323949,
+   "pcc_state_min": 0.999276662148839,
+   "pcc_state_value_L00": 0.9999996055146538,
+   "pcc_state_value_L01": 0.9996397457596108,
+   "pcc_state_value_L02": 0.999276662148839,
+   "pcc_state_value_L03": 0.9993548715246563,
+   "pcc_state_value_L04": 0.9995290016788023,
+   "pcc_state_value_L05": 0.9995445946675551,
+   "prefill_seconds": 12.428,
+   "rung_chunk": 5120,
+   "rung_seq": 56320,
+   "rung_start": 51200,
+   "subset": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T07:43:51",
+  "status": "PASS"
+ },
  "L.s16384": {
   "attempts": 0,
   "duration_s": 45.4,
