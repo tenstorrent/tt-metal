@@ -1407,6 +1407,7 @@ _TT_POLY_FP32_DEST = {
     "selu": (),
     "sigmoid": (),
     "softsign": (),
+    "sqrt": (),
     "multigammaln_p4": ("blackhole", "wormhole"),
 }
 _TT_POLY_COPY_REBASE = {}
@@ -1595,6 +1596,7 @@ _GENERATED_UNARY_CASES = [
         "None",
         "ckernel_sfpu_softsign.h",
     ),
+    (MathOperation.Sqrt, "sqrt", True, True, 32, "None", "ckernel_sfpu_sqrt.h"),
 ]
 
 
@@ -1872,6 +1874,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "selu",
     "sigmoid",
     "softsign",
+    "sqrt",
 )
 
 _TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
@@ -2121,4 +2124,5 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "selu",
     "sigmoid",
     "softsign",
+    "sqrt",
 )
