@@ -2223,10 +2223,6 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
         MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
-        # Reciprocal + Newton-Raphson, with the non-finite arms stated in the kernel: the
-        # residual refinement is skipped for a non-finite divisor, a NaN operand propagates
-        # and a finite dividend over +/-inf is a zero signed by the operand signs.
-        MathOperation.SfpuElwdiv,  # x/inf = +/-0, inf/inf = 0/0 = NaN, NaN/x = x/NaN = NaN
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
         # first. The golden models sfpu_max/min, not torch's, which propagate.
@@ -2250,7 +2246,8 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all seven.
+        # all eight.
+        MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
