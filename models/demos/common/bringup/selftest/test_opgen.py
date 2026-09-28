@@ -577,3 +577,242 @@ def test_an_opgen_tag_makes_the_task_defer_from_the_start(orch, sandbox):
     )
     text = o.brief(dict(o.led.task("C.1"), id="M.1", step="assemble", brief={}), "assemble", 1).read_text()
     assert "## Steps deferred to op-gen" in text and "- C.1: `blk.attn_norm`" in text and "CpuBridge" in text
+
+
+# ---------------------------------------------------------------- approval, export, delivery
+def _mlp(s):
+    return request(
+        s, "fixture_mlp", "C.blk.mlp", ref=MLP_REF, bind=MLP_BIND, weights=[("w1", [128, 64]), ("w2", [64, 128])]
+    )
+
+
+def _fake_ttnn_module():
+    ttnn = types.ModuleType("ttnn")
+    for k in ("bfloat16", "float32", "bfloat8_b", "uint32", "int32", "TILE_LAYOUT", "ROW_MAJOR_LAYOUT"):
+        setattr(ttnn, k, f"<{k}>")
+    ttnn.TensorMemoryLayout = types.SimpleNamespace(INTERLEAVED="<INTERLEAVED>")
+    return ttnn
+
+
+def test_approval_is_voided_by_an_edit_and_kept_by_the_lifecycle(gspec):
+    from models.demos.common.bringup.plan import approvals
+
+    s = gspec()
+    d = _mlp(s)
+    assert not approvals.op_request_approved(s, "fixture_mlp")
+    approvals.approve_op_request(s, "fixture_mlp", by="owner")
+    assert approvals.op_request_approved(s, "fixture_mlp") and OR.load(d)["status"] == "approved"
+    OR.set_status(d, "exported", exported={"at": "now"})  # lifecycle fields do not void it
+    assert approvals.op_request_approved(s, "fixture_mlp")
+    (d / "op_prompt.txt").write_text((d / "op_prompt.txt").read_text() + "\nMore.\n")
+    assert not approvals.op_request_approved(s, "fixture_mlp")
+
+
+def test_op_export_writes_the_prompt_and_a_suite_whose_reference_is_the_requests(gspec, tmp_path, monkeypatch, capsys):
+    import ast
+    import sys
+
+    from models.demos.common.bringup.__main__ import main
+    from models.demos.common.bringup.plan import approvals
+    from models.demos.common.bringup.plan.op_export import export
+
+    s = gspec()
+    _mlp(s)
+    root = tmp_path / "codegen"
+    (root / "eval").mkdir(parents=True)
+    with pytest.raises(PermissionError, match="not approved"):
+        export(s, "fixture_mlp", root)
+    approvals.approve_op_request(s, "fixture_mlp", by="owner")
+    assert main(["op-export", "fixture_mlp", "--spec", str(s.path), "--codegen-root", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "Nothing was committed, pushed or launched" in out and "run_eval.py .claude/eval/prompts/fixture_mlp.txt" in out
+    )
+    assert OR.load(OR.request_dir(s, "fixture_mlp"))["status"] == "exported"
+    g = root / "eval/golden_tests/fixture_mlp"
+    names = {
+        "__init__.py",
+        "feature_spec.py",
+        "helpers.py",
+        "axes.py",
+        "test_golden.py",
+        "conftest.py",
+        "test_regression.py",
+    }
+    assert {p.name for p in g.iterdir()} == names
+    for p in g.iterdir():
+        ast.parse(p.read_text())  # every file parses
+    assert (root / "eval/prompts/fixture_mlp.txt").read_text().splitlines()[0] == "# golden: fixture_mlp"
+    monkeypatch.setitem(sys.modules, "ttnn", _fake_ttnn_module())
+    fs = OR._import_file(g / "feature_spec.py", "exported_fs")
+    assert fs.TARGET == {"dtype": ["<bfloat16>"], "layout": ["<TILE_LAYOUT>"], "memory_layout": ["<INTERLEAVED>"]}
+    assert fs.INPUTS == [((64, 64), (128, 64), (64, 128)), ((128, 64), (128, 64), (64, 128))] and fs.INVALID == []
+    helpers = (g / "helpers.py").read_text()
+    assert "TOLERANCES = {ttnn.bfloat16: (0.99, 0.141)}" in helpers and "from eval.metrics import" in helpers
+    assert "import models" not in helpers and "from models" not in helpers
+    # the suite's reference is the request's reference.py, verbatim
+    fn = next(n for n in ast.parse(helpers).body if isinstance(n, ast.FunctionDef) and n.name == "pytorch_fixture_mlp")
+    ns = {"torch": torch}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "helpers", "exec"), ns)
+    ref = OR._import_file(OR.request_dir(s, "fixture_mlp") / "reference.py", "req_ref").pytorch_fixture_mlp
+    x, w1, w2 = torch.randn(8, 64), torch.randn(128, 64), torch.randn(64, 128)
+    assert torch.equal(ns["pytorch_fixture_mlp"](x, w1, w2), ref(x, w1, w2))
+    assert "run_fixture_mlp(inputs, device=device, **axes)" in (g / "test_golden.py").read_text()
+    assert "from ttnn.operations.fixture_mlp import fixture_mlp as _raw, INPUT_TAGGERS" in (g / "axes.py").read_text()
+
+
+def _generated_op(root, op):
+    d = root / "ttnn/ttnn/operations" / op
+    (d / "kernels").mkdir(parents=True)
+    (d / "__init__.py").write_text(f"from ttnn.operations.{op}.{op} import {op}\n")
+    (d / f"{op}.py").write_text(
+        f'KERNEL = "ttnn/ttnn/operations/{op}/kernels/compute.cpp"\n\ndef {op}(x):\n    return x\n'
+    )
+    (d / "kernels/compute.cpp").write_text("// kernel\n")
+    return d
+
+
+def test_op_ready_registers_the_ops_and_resets_the_deferred_tasks_and_their_dependents(gspec, tmp_path, capsys):
+    import ast
+    import shutil as sh
+
+    from models.demos.common.bringup.__main__ import main
+    from models.demos.common.bringup.core.spec import CODE_ROOT
+    from models.demos.common.bringup.plan import approvals
+    from models.demos.common.bringup.plan.op_export import export
+
+    s = gspec()
+    bops = s.repo / "ttnn/ttnn/bringup"  # a copy of the real registry; the real tree is never touched
+    bops.mkdir(parents=True)
+    sh.copy(CODE_ROOT / "ttnn/ttnn/bringup/__init__.py", bops / "__init__.py")
+    sh.copy(CODE_ROOT / "ttnn/ttnn/bringup/INDEX.md", bops / "INDEX.md")
+    before_init = (bops / "__init__.py").read_text()
+    codegen = tmp_path / "codegen"
+    (codegen / "eval").mkdir(parents=True)
+    led = Ledger(s.bringup_dir)
+    for op, tid, kw in (("fixture_norm", "C.blk.attn_norm", {}), ("fixture_mlp", "C.blk.mlp", None)):
+        request(s, op, tid, **kw) if kw is not None else _mlp(s)
+        approvals.approve_op_request(s, op, by="owner")
+        export(s, op, codegen)
+        led.update(tid, status="DEFERRED", deferred={"op": op})
+    for tid in led.topo_order():
+        if led.status(tid) != "DEFERRED":
+            led.update(tid, status="PASS")
+    clone = tmp_path / "clone"
+    _generated_op(clone, "fixture_norm")
+    _generated_op(clone, "fixture_mlp")
+    args = [
+        "op-ready",
+        "fixture_norm",
+        "fixture_mlp",
+        "--from",
+        str(clone / "ttnn/ttnn/operations"),
+        "--spec",
+        str(s.path),
+    ]
+    assert main(args + ["--no-commit"]) == 0
+    out = capsys.readouterr().out
+    assert "delivered: ttnn.bringup.fixture_norm, ttnn.bringup.fixture_mlp" in out and "orchestrator resume" in out
+    tree = ast.parse((bops / "__init__.py").read_text())
+    node = next(n for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "PYTHON_OPS")
+    assert ast.literal_eval(node.value) == {
+        "fixture_norm": ("fixture_norm", "fixture_norm"),
+        "fixture_mlp": ("fixture_mlp", "fixture_mlp"),
+    }
+    assert "def __getattr__(name):" in (bops / "__init__.py").read_text()
+    assert before_init.split("PYTHON_OPS")[0] == (bops / "__init__.py").read_text().split("PYTHON_OPS")[0]
+    code = (bops / "fixture_mlp/fixture_mlp.py").read_text()
+    assert "ttnn/ttnn/bringup/fixture_mlp/kernels" in code and "operations" not in code
+    assert (
+        bops / "fixture_mlp/__init__.py"
+    ).read_text() == "from ttnn.bringup.fixture_mlp.fixture_mlp import fixture_mlp\n"
+    cl = (bops / "fixture_mlp/CHANGELOG.md").read_text()
+    assert "generated by op-gen from op request fixture/fixture_mlp" in cl and "## Changes" in cl
+    assert "| `fixture_mlp` | op-gen, op request `fixture/fixture_mlp`" in (bops / "INDEX.md").read_text()
+    assert OR.load(OR.request_dir(s, "fixture_mlp"))["status"] == "delivered"
+    st = led.state()
+    reset = set(led.downstream("C.blk.attn_norm")) | set(led.downstream("C.blk.mlp"))
+    assert {"S.blk.01", "S.blk.05", "M.1", "L.s256", "K.1", "X.1", "X.3", "O.1"} <= reset
+    assert all(st[t]["status"] == "TODO" for t in reset)
+    assert st["C.blk.attention"]["status"] == "PASS" and st["R.3"]["status"] == "PASS"  # upstream / unrelated keep
+    assert led.task("C.blk.mlp")["brief"]["details"].startswith("use ttnn.bringup.fixture_mlp (op-gen, request ")
+    with pytest.raises(ValueError, match="delivered"):
+        main(args + ["--no-commit"])
+
+
+# ---------------------------------------------------------------- dashboard
+def test_dashboard_shows_deferred_steps(gspec, tmp_path, monkeypatch):
+    import shutil as sh
+    import subprocess
+
+    from models.demos.common.bringup.core import metrics as M
+    from models.demos.common.bringup.dashboard.export import build, main
+    from models.demos.common.bringup.reference.check_reference import write_graphs
+    from models.demos.common.bringup.selftest.test_dashboard import SHIM
+    from models.demos.common.bringup.selftest.test_dashboard_prior import TT_TEXT
+
+    s = gspec()
+    _mlp(s)
+    led = Ledger(s.bringup_dir)
+    led.update("C.blk.mlp", status="DEFERRED", deferred={"op": "fixture_mlp"})
+    monkeypatch.setenv(M.RESULTS_ENV, str(led.results_dir))
+    M.record("deferred_cpu_steps", 3, task="X.1")
+    for k, v in dict(
+        chunk_wall_ms=800, chunk_start=192, chunk_len=64, device_model_hybrid=0, deferred_cpu_ms=12
+    ).items():
+        M.record(k, v, task="X.1")
+    write_graphs(fixture_model.Reference(), {"blk": 0})
+    prof = {
+        "chunk": [192, 256],
+        "layers": [0],
+        "wall_ms": 9.0,
+        "sections_ms": {"mlp": 1.0, "attention": 4.0},
+        "sections_ms_per_chip": {},
+        "programs": {},
+        "bridged_steps": ["mlp"],
+        "deferred_cpu_ms": 5.0,
+    }
+    (led.results_dir / "X.1_profile.json").write_text(json.dumps(prof))
+    d = build(s)
+    assert [(r["task"], r["op"], r["status"], r["layers"]) for r in d["deferred"]] == [
+        ("C.blk.mlp", "fixture_mlp", "draft", "L0–2")
+    ]
+    assert d["deferred"][0]["tried"][0].startswith("ttnn.rms_norm: C.blk.x gate FAIL")
+    assert next(st for st in d["graphs"]["blk"] if st["name"] == "mlp")["deferred"]
+    assert "3 CPU steps (deferred to op-gen" in d["timing"][0]["model"]
+    steps = {x["key"]: x for x in d["profile"]["steps"]}
+    assert steps["mlp"]["cpu_bridge"] and "(CPU bridge" in steps["mlp"]["name"] and not steps["attention"]["cpu_bridge"]
+    assert "deferred to op-gen (mlp)" in d["profile"]["note"]
+    if not sh.which("node"):
+        pytest.skip("node not installed")
+    outs = main(["--spec", str(s.path), "--style", "both", "--out", str(tmp_path)])
+    r = subprocess.run(["node", str(SHIM), str(tmp_path / "index.html")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    els = json.loads(r.stdout)
+    assert not els["#def-sec"]["hidden"] and els["#deferred tbody"]["html"] > 0
+    assert not els["#def-banner"]["hidden"] and "include 1 step on the CPU" in els["#def-banner"]["text"]
+    r = subprocess.run(
+        ["node", "-e", TT_TEXT.replace("p107: (B[107]", "p107: (B[108]"), str(tmp_path / "teletext.html")],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    tt = json.loads(r.stdout)
+    assert 108 in tt["pages"] and "DEFERRED TO OP-GEN" in tt["p107"][0] and "PAGE ERROR" not in " ".join(tt["p107"])
+    assert len(outs) == 2
+
+
+def test_status_and_op_requests_show_deferrals(gspec, capsys):
+    from models.demos.common.bringup.__main__ import main
+
+    s = gspec()
+    _mlp(s)
+    Ledger(s.bringup_dir).update("C.blk.mlp", status="DEFERRED", deferred={"op": "fixture_mlp", "request": "x"})
+    assert main(["status", "--spec", str(s.path)]) == 0
+    out = capsys.readouterr().out
+    assert "C.blk.mlp DEFERRED" in out and "1 deferred to op-gen" in out and "C.blk.mlp: fixture_mlp (x)" in out
+    assert main(["op-requests", "--spec", str(s.path)]) == 0
+    out = capsys.readouterr().out
+    assert (
+        "fixture_mlp" in out and "draft" in out and "blk.mlp [C.blk.mlp DEFERRED]" in out and "searched 2 places" in out
+    )
