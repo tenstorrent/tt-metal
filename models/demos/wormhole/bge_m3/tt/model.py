@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding, BgeM3EmbeddingsConfig
 from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock
+from models.demos.wormhole.bge_m3.tt.grid import is_galaxy_grid
 from models.demos.wormhole.bge_m3.tt.norm import LayerNorm1D, LayerNorm1DConfig
 from models.demos.wormhole.bge_m3.tt.tiny_model import ColBERTLinear, SparseLinear, TinyLinearConfig
 from models.demos.wormhole.bge_m3.tt.weight_adapter import (
@@ -26,7 +27,7 @@ def _embedding_output_memcfg(args, mesh_device):
         return None
     if getattr(args, "data_parallel", False) or not ttnn.device.is_blackhole(mesh_device):
         return None
-    if int(mesh_device.compute_with_storage_grid_size().x) >= 13:
+    if not is_galaxy_grid(mesh_device):
         return None
     return ttnn.L1_MEMORY_CONFIG
 

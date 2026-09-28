@@ -1,12 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""BGE-M3 exact-shape encoder SDPA parity scaffold.
+"""BGE-M3 model-local encoder SDPA.
 
-The experimental path mirrors the production ``SDPAProgramFactory`` for the
-retained N300 DP=2 shape, while dispatching through ``ttnn.generic_op`` and
-model-local JIT entrypoints.  It is intentionally not wired into attention.py;
-the next owner must validate it on silicon before enabling it in the model.
+The op follows the production ``SDPAProgramFactory`` and dispatches through
+``ttnn.generic_op`` with model-local reader and writer kernels. attention.py
+uses it on two paths:
+
+- N300 DP=2 B12/S8192 (BgeM3AttentionJit._attend): the local legacy compute
+  kernel (use_streaming=False).
+- S512 without a mask (_concat_sdpa_config): the stock streaming compute kernel
+  (use_streaming=True). It reads Q/K/V from the fused QKV output and writes the
+  concat-heads layout. Its output is bit-identical to stock SDPA + concat heads.
 
 No code in this directory requires rebuilding ``_ttnn.so``.  The C++ kernel
 entrypoints are compiled by the normal device-kernel JIT on first use.

@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
+from models.demos.wormhole.bge_m3.tt.grid import is_galaxy_grid
 
 SHARD_HEIGHT = TILE_SIZE
 
@@ -178,7 +179,7 @@ def _use_balanced_layernorm(x, residual, config) -> bool:
     device = config.mesh_device
     if device is None or not ttnn.device.is_blackhole(device):
         return False
-    return int(device.compute_with_storage_grid_size().x) < 13
+    return is_galaxy_grid(device)
 
 
 def _load_input_device_tensor(x, config):

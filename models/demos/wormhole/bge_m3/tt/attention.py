@@ -10,6 +10,7 @@ from ttnn.device import is_blackhole as ttnn_is_blackhole
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
+from models.demos.wormhole.bge_m3.tt.grid import P150_GRID_COLUMNS, is_galaxy_grid
 
 # SDPA chunk selection constants
 _SDPA_Q_CHUNK_MAIN = 128
@@ -178,12 +179,13 @@ class BgeM3Attention(LightweightModule):
         # Without a mask, the shapes in _concat_sdpa_config run the model-local SDPA. It
         # reads Q/K/V from the QKV output and writes the concat-heads layout, so Stages
         # 2, 3 and 5 do not run.
-        fused_sdpa_config = None
-        if (
+        nomask_bf8_attention = (
             attention_mask is None
             and qkv_fused.dtype == ttnn.bfloat8_b
             and self.config.score_dtype in (None, ttnn.bfloat8_b)
-        ):
+        )
+        fused_sdpa_config = None
+        if nomask_bf8_attention:
             fused_sdpa_config = _concat_sdpa_config(
                 seq_len, batch_size, self.config.mesh_device, self.config.attention_scale
             )
@@ -511,7 +513,7 @@ def _concat_sdpa_config(seq_len, batch_size, mesh_device, scale):
     """
     if seq_len != 512 or batch_size not in (1, 8, 16, 32) or mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
-    if batch_size in (8, 16, 32) and int(mesh_device.compute_with_storage_grid_size().x) >= 13:
+    if batch_size in (8, 16, 32) and not is_galaxy_grid(mesh_device):
         return None
     from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import EncoderSDPAConfig
 
@@ -565,7 +567,7 @@ def _galaxy_s512_chunks(batch_size, grid_x, q_chunk, k_chunk):
       17.99 to 17.77 ms, nomask 13.339 to 13.039 ms sustained.
     - B32: k256. The k512 circular buffers overlap the L1 heads by 30 KB.
     """
-    if grid_x >= 13:
+    if grid_x >= P150_GRID_COLUMNS:
         return q_chunk, k_chunk
     if batch_size == 8:
         q_chunk = 128
