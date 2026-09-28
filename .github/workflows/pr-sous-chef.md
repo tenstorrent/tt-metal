@@ -5,22 +5,25 @@ description: |
   `/souschef` posted on such a PR) a deterministic pre-activation script scans open,
   non-draft PRs labeled `copilot-flow` and authored by the Copilot coding agent, drops
   the ones where nothing useful can be said (checks still running, Copilot session in
-  progress, already nudged with no new push since, inside the cooldown, or handed off to
-  humans after too many nudges, or simply green and waiting on a human with nothing for
-  Copilot or this workflow to do), ranks the rest (merge conflicts first, then zero-diff
-  stalls, then PRs that need a nudge — failed checks or review threads whose latest
-  comment is not Copilot's —, then PRs where only bot threads remain to be resolved, then
-  most recently updated) and hands at most 4 of them, with all the context already gathered (failed
-  checks split into "Copilot can fix" vs "a maintainer must approve the run", unresolved
-  review threads with reviewer and link, resolvable bot threads), to a small agent whose
-  only job is to write one specific, actionable `@copilot` nudge per PR and to resolve
-  bot-authored review threads that Copilot has already answered. Ported from
-  github/gh-aw's dogfooded pr-sous-chef.md and cut down hard for tt-metal: no repo-wide
-  sweep, no formatter pushes, no branch updates, no workflow-run approvals, no report
-  issues, no human review-thread resolution — see the frontmatter comments for why each
-  was dropped. Operates for real (no staged mode), same posture as issue-monster.md; the
-  safety mechanism is the label scope, the deterministic filters, the per-run and per-PR
-  caps and the fact that the only writes are comments and bot-thread resolutions.
+  progress, already nudged with no new push since, inside the cooldown, handed off to
+  humans after too many nudges, Copilot no longer assigned, or simply green and waiting
+  on a human with nothing for Copilot or this workflow to do), ranks the rest (merge
+  conflicts first, then zero-diff stalls, then PRs that need a nudge — failed checks or
+  review threads whose latest comment is not Copilot's —, then PRs where only bot
+  threads remain to be resolved, then most recently updated) and hands at most 4 of
+  them, with all the context already gathered (failed checks split into "Copilot can
+  fix" vs "a maintainer must approve the run", the oldest unanswered review threads with
+  reviewer and link, bot threads whose fix Copilot's reply verifiably points at), to a
+  small agent whose only job is to write one specific, actionable `@copilot` nudge per
+  PR and to resolve those bot-authored review threads. After 6 nudges on one PR the
+  pre-activation script itself posts a hand-off comment for maintainers and stops.
+  Ported from github/gh-aw's dogfooded pr-sous-chef.md and cut down hard for tt-metal:
+  no repo-wide sweep, no formatter pushes, no branch updates, no workflow-run
+  approvals, no report issues, no human review-thread resolution — see the frontmatter
+  comments for why each was dropped. Operates for real (no staged mode), same posture
+  as issue-monster.md; the safety mechanism is the label scope (checked again at write
+  time), the deterministic filters, the per-run and per-PR caps and the fact that the
+  only writes are comments, one label and bot-thread resolutions.
 
 on:
   # Upstream runs every 15 minutes too. The pre-activation script is plain code (no model,
@@ -41,317 +44,74 @@ on:
   # (assigned by a human, Issue Monster or via a Squad Plan sub-issue). Human PRs and
   # Copilot PRs from unrelated flows (ClangSA autofix, "fix with Copilot" on a CI failure,
   # chat-created tasks) are never touched. The label is a snapshot taken at flip time, so
-  # this query stays cheap and does not re-derive provenance every 15 minutes.
+  # this query stays cheap and does not re-derive provenance every 15 minutes. PRs this
+  # workflow already handed off to maintainers (`copilot-flow-handoff`) are out too.
   # Note: this check runs for every trigger, including `/souschef`; if no flow PR is open
   # and non-draft at all, the slash command is a silent no-op (the 👀 reaction still lands).
-  skip-if-no-match: "is:pr is:open -is:draft label:copilot-flow author:app/copilot-swe-agent"
+  skip-if-no-match: "is:pr is:open -is:draft label:copilot-flow -label:copilot-flow-handoff author:app/copilot-swe-agent"
+  # `pull-requests: write` is for the pre-activation script only (plain code, no agent):
+  # after the per-PR nudge cap it posts the hand-off comment and applies
+  # `copilot-flow-handoff` itself, deterministically, on the PR it just evaluated. Same
+  # pattern as issue-monster.md's retry checkpoint. The agent job stays read-only.
   permissions:
-    pull-requests: read
+    pull-requests: write
     issues: read
     checks: read
   steps:
-    - name: Prefilter and rank copilot-flow PRs
-      id: prefilter
-      # Deterministic port of upstream's `fetch-prs` bash step, rewritten as github-script
-      # (house style: issue-monster.md) because most of the data comes from one GraphQL
-      # query per PR rather than `gh pr list`. Everything the agent later needs is gathered
-      # here, so the agent job can run with only the `pull_requests` + `actions` toolsets and
-      # no bash. Fails closed per PR: a PR whose state could not be read is skipped this tick.
+    - name: Resolve the identity Sous Chef nudges are posted as
+      id: identity
+      # The `add-comment` safe output below posts with GH_AW_AGENT_TOKEN when that secret
+      # is provisioned (a PAT of a Copilot-enabled maintainer — the only kind of author
+      # whose `@copilot` mention actually starts a coding-agent session, see the
+      # safe-outputs comment) and, through gh-aw's handler fallback, with GITHUB_TOKEN
+      # (`github-actions[bot]`) otherwise. The prefilter has to know which login that is:
+      # its own earlier nudges are the persistence for the per-PR cap and the cooldown.
+      # Same token expression as the handler's, so the two cannot disagree. Fails closed:
+      # a set-but-unresolvable token means nothing is nudged this tick, because a
+      # prefilter blind to its own history would nudge MORE often, not less.
       uses: actions/github-script@v9.0.0
+      env:
+        AGENT_TOKEN_SET: ${{ secrets.GH_AW_AGENT_TOKEN != '' }}
       with:
+        github-token: ${{ secrets.GH_AW_AGENT_TOKEN || github.token }}
         script: |
-          const { owner, repo } = context.repo;
-
-          // ---- tt-metal configuration -------------------------------------------------
-          // Provenance label applied by copilot-flow-ready.yaml (see that file's header).
-          const FLOW_LABEL = 'copilot-flow';
-          // Hidden markers. NUDGE_MARKER + "@copilot" = an actionable nudge (counts for
-          // cooldown, "no two in a row" and the per-PR cap); NUDGE_MARKER without "@copilot"
-          // = informational (slash-command replies), counts for nothing. HANDOFF_MARKER =
-          // the one comment posted when the per-PR cap is hit; a PR that has it is never
-          // nudged again by this workflow.
-          const NUDGE_MARKER = '<!-- gh-aw-pr-sous-chef-nudge -->';
-          const HANDOFF_MARKER = '<!-- gh-aw-pr-sous-chef-handoff -->';
-          // Upstream: 30 min. A tt-metal Copilot session runs up to 59 min and pr-gate ~20
-          // min, and the session-in-progress filter below already covers "Copilot is on
-          // it"; 60 min is for the case where the mention did not start a session at all.
-          const COOLDOWN_MS = 60 * 60 * 1000;
-          // Upstream ignores checks that have been running for >1h so long agentic checks do
-          // not block nudges forever. pr-gate on a Copilot PR takes ~20 min, but tt-metal's
-          // hardware queues can hold a job QUEUED much longer; 90 min keeps nudges from
-          // firing during a merely slow (not stuck) pipeline.
-          const PENDING_CHECK_MAX_AGE_MS = 90 * 60 * 1000;
-          // Upstream default: a PR with zero changed files 24h after creation is "stalled".
-          const ZERO_DIFF_AGE_MS = 24 * 60 * 60 * 1000;
-          // NEW vs upstream: after this many actionable nudges on one PR, stop mentioning
-          // Copilot and post one hand-off comment for humans instead. Without a cap, a PR
-          // whose CI keeps failing would burn one Copilot session per hour indefinitely.
-          const MAX_NUDGES_PER_PR = 6;
-          // Upstream: 4 nudges per run. Also the hard cap on how many PRs' context goes into
-          // the agent prompt (each PR ~2-4 KB with thread excerpts; the step-output limit is
-          // 1 MB but every excerpt is untrusted text in the prompt).
-          const MAX_ELIGIBLE = 4;
-          // Untrusted review-comment text placed in the agent prompt is truncated to this.
-          const EXCERPT_MAX = 300;
-          // Threads per PR carried into the prompt (newest first).
-          const MAX_THREADS_PER_PR = 10;
-          // Combined cap on thread IDs handed to the agent for resolution per run. MUST equal
-          // `safe-outputs.resolve-pull-request-review-thread.max` below: the prompt says
-          // "resolve every listed ID", so the list has to fit the handler's budget or the
-          // last calls of a large backlog would be rejected nondeterministically. IDs beyond
-          // the cap are simply deferred to the next tick.
-          const RESOLVE_THREADS_MAX = 20;
-          // Same predicate as issue-monster.md / copilot-flow-ready.yaml.
-          const isCopilotActor = (login) => /^copilot/i.test(login || '');
-          // Explicit allowlist of review-bot logins whose unresolved threads may be resolved
-          // once Copilot's reply is the latest comment. Case-normalized, `[bot]` suffix
-          // stripped, and the actor must be GraphQL type Bot. Verified against real Copilot
-          // PRs in this repo (2026-09-28):
-          //   copilot-pull-request-reviewer  Copilot code review (ruleset "Automatic Copilot PR Review")
-          //   github-actions                 the gh-aw reviewers (tenstorrent-skills-reviewer,
-          //                                  mattpocock-skills-reviewer) post their review threads
-          //                                  with GITHUB_TOKEN, so this is their GraphQL login;
-          //                                  the repo has no GH_AW_GITHUB_TOKEN secret that would
-          //                                  change it. Any other repo workflow posting review
-          //                                  threads as github-actions is repo-controlled code.
-          // NOT on the list, and seen on Copilot PRs here: `cycode-security` (Bot). Its
-          // threads — and any other bot's — are treated exactly like a human reviewer's:
-          // listed for Copilot to answer, never resolved by this workflow.
-          const RESOLVABLE_REVIEWER_BOTS = new Set(['copilot-pull-request-reviewer', 'github-actions']);
-          const isResolvableReviewerBot = (node) => node?.__typename === 'Bot'
-            && RESOLVABLE_REVIEWER_BOTS.has((node?.login || '').toLowerCase().replace(/\[bot\]$/, ''));
-          // Identity this workflow's own safe-output comments are posted under. gh-aw uses
-          // GH_AW_GITHUB_MCP_SERVER_TOKEN || GH_AW_GITHUB_TOKEN || GITHUB_TOKEN; tt-metal has
-          // neither GH_AW_* secret, so comments come from github-actions[bot] (REST login).
-          // The hidden NUDGE/HANDOFF markers are public strings (they are in this file), so
-          // they are only trusted in comments from this identity — a forged marker from any
-          // other commenter is ignored (and counted, see `ignored_untrusted_markers`). If a
-          // GH_AW_* token is ever provisioned, update this login or the cap/cooldown will
-          // stop seeing the workflow's own history and nudge MORE often, not less.
-          const SOUS_CHEF_LOGIN = 'github-actions[bot]';
-          const isOwnComment = (c) => c?.user?.type === 'Bot' && (c.user.login || '').toLowerCase() === SOUS_CHEF_LOGIN;
-          // ------------------------------------------------------------------------------
-
-          const now = Date.now();
-          const counters = {
-            fetched: 0, filtered_checks_pending: 0, filtered_copilot_session_active: 0,
-            filtered_handed_off: 0, filtered_last_comment_from_sous_chef: 0, filtered_cooldown: 0,
-            filtered_nothing_actionable: 0, filtered_error: 0, eligible: 0, nudge_capped: 0,
-            ignored_untrusted_markers: 0, resolvable_threads_deferred: 0
-          };
-          const reasons = {}; // number -> why it was filtered (for the /souschef reply)
-          const eligible = [];
-          // Marker predicates take the whole REST comment so authorship is always checked.
-          const hasMarker = (c, marker) => (c?.body || '').includes(marker);
-          const isNudge = (c) => isOwnComment(c) && hasMarker(c, NUDGE_MARKER) && (c.body || '').includes('@copilot');
-          const isHandoff = (c) => isOwnComment(c) && hasMarker(c, HANDOFF_MARKER);
-
-          const q = `repo:${owner}/${repo} is:pr is:open draft:false label:${FLOW_LABEL} author:app/copilot-swe-agent`;
-          const search = await github.rest.search.issuesAndPullRequests({ q, per_page: 50, sort: 'updated', order: 'desc' });
-          counters.fetched = search.data.items.length;
-          core.info(`Candidates: ${counters.fetched}`);
-
-          for (const item of search.data.items) {
-            const number = item.number;
+          let login = 'github-actions[bot]';
+          if (process.env.AGENT_TOKEN_SET === 'true') {
             try {
-              // One GraphQL query per PR for everything except the Copilot session events.
-              // statusCheckRollup contexts are paginated: pr-gate alone fans out into dozens
-              // of check runs.
-              const fetchPr = (after) => github.graphql(`
-                query($owner: String!, $repo: String!, $number: Int!, $after: String) {
-                  repository(owner: $owner, name: $repo) {
-                    pullRequest(number: $number) {
-                      number title url isDraft state createdAt updatedAt changedFiles
-                      mergeStateStatus reviewDecision headRefOid headRefName
-                      author { login }
-                      commits(last: 1) {
-                        nodes { commit { committedDate
-                          statusCheckRollup { contexts(first: 100, after: $after) {
-                            pageInfo { hasNextPage endCursor }
-                            nodes {
-                              __typename
-                              ... on CheckRun { name status conclusion startedAt detailsUrl }
-                              ... on StatusContext { context state targetUrl }
-                            } } } } }
-                      }
-                      reviewThreads(first: 50) {
-                        nodes { id isResolved isOutdated path
-                          comments { totalCount }
-                          firstComment: comments(first: 1) { nodes { author { login __typename } body createdAt url } }
-                          lastComment: comments(last: 1) { nodes { author { login __typename } createdAt } } }
-                      }
-                    }
-                  }
-                }`, { owner, repo, number, after });
-              let data = await fetchPr(null);
-              let pr = data?.repository?.pullRequest;
-              if (!pr || pr.state !== 'OPEN' || pr.isDraft) { reasons[number] = 'no longer open and non-draft'; continue; }
-              let contexts = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
-              let checks = [...(contexts?.nodes || [])];
-              let guard = 0;
-              while (contexts?.pageInfo?.hasNextPage && guard++ < 10) {
-                data = await fetchPr(contexts.pageInfo.endCursor);
-                contexts = data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
-                checks.push(...(contexts?.nodes || []));
-              }
-
-              // Filter 1 — checks still running (young enough to be genuinely in flight).
-              const pendingCutoff = now - PENDING_CHECK_MAX_AGE_MS;
-              const checksPending = checks.some(c => {
-                if (c.__typename === 'CheckRun') {
-                  const pending = ['QUEUED', 'IN_PROGRESS', 'REQUESTED', 'PENDING'].includes(c.status || 'COMPLETED');
-                  if (!pending) return false;
-                  const ts = c.startedAt ? new Date(c.startedAt).getTime() : null;
-                  return ts === null || ts > pendingCutoff;
-                }
-                return c.__typename === 'StatusContext' && c.state === 'PENDING';
-              });
-              if (checksPending) { counters.filtered_checks_pending++; reasons[number] = 'checks still running'; continue; }
-
-              // Filter 2 (new vs upstream) — Copilot is working on it right now. Exact signal:
-              // the latest copilot_work_* timeline event is copilot_work_started.
-              const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: number, per_page: 100 });
-              let session = 'none';
-              for (const ev of timeline) if (typeof ev.event === 'string' && ev.event.startsWith('copilot_work_')) session = ev.event;
-              if (session === 'copilot_work_started') { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
-
-              // ALL issue comments (REST, paginated, newest first). They are the persistence
-              // for the nudge cap, the cooldown and the hand-off marker, so a recency window
-              // is not acceptable: on a busy PR thirty newer comments would hide the history
-              // and restart a fresh nudge cycle. Marker predicates above also require the
-              // comment to be authored by this workflow's identity.
-              const comments = (await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }))
-                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-              const forged = comments.filter(c => !isOwnComment(c) && (hasMarker(c, NUDGE_MARKER) || hasMarker(c, HANDOFF_MARKER)));
-              if (forged.length) {
-                counters.ignored_untrusted_markers += forged.length;
-                core.warning(`#${number}: ignored ${forged.length} sous-chef marker(s) in comments not authored by ${SOUS_CHEF_LOGIN} (${[...new Set(forged.map(c => c.user?.login))].join(', ')})`);
-              }
-              // Filter 3 (new) — handed off to humans after the nudge cap.
-              if (comments.some(isHandoff)) { counters.filtered_handed_off++; reasons[number] = `handed off to maintainers after ${MAX_NUDGES_PER_PR} nudges`; continue; }
-
-              const conflicting = pr.mergeStateStatus === 'CONFLICTING';
-              const headDate = new Date(pr.commits?.nodes?.[0]?.commit?.committedDate || 0).getTime();
-              const nudges = comments.filter(isNudge);
-              const lastNudgeAt = nudges.length ? new Date(nudges[0].created_at).getTime() : null;
-              // Filter 4 — upstream: never two actionable nudges in a row (except when
-              // CONFLICTING). tt-metal refinement: a nudge followed by a Copilot push that
-              // changed the head is a NEW state (CI ran again on new code) and may be
-              // re-evaluated; only an unanswered nudge (head unchanged since) blocks.
-              if (comments.length && isNudge(comments[0]) && !conflicting && headDate <= new Date(comments[0].created_at).getTime()) {
-                counters.filtered_last_comment_from_sous_chef++; reasons[number] = 'last comment is an unanswered sous-chef nudge (no push since)'; continue;
-              }
-              // Filter 5 — cooldown since the last actionable nudge.
-              if (lastNudgeAt !== null && now - lastNudgeAt < COOLDOWN_MS) { counters.filtered_cooldown++; reasons[number] = 'inside the 60 min cooldown'; continue; }
-
-              // Context for the agent.
-              const failedForCopilot = [];
-              const needsMaintainerApproval = [];
-              for (const c of checks) {
-                if (c.__typename === 'CheckRun') {
-                  if (c.status === 'WAITING' || c.conclusion === 'ACTION_REQUIRED') needsMaintainerApproval.push({ name: c.name, url: c.detailsUrl || null });
-                  else if (['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE'].includes(c.conclusion || '')) failedForCopilot.push({ name: c.name, conclusion: c.conclusion, url: c.detailsUrl || null });
-                } else if (c.__typename === 'StatusContext' && ['FAILURE', 'ERROR'].includes(c.state || '')) {
-                  failedForCopilot.push({ name: c.context, conclusion: c.state, url: c.targetUrl || null });
-                }
-              }
-              const excerpt = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, EXCERPT_MAX);
-              // `copilot_replied` is decided by the thread's LATEST comment only: a thread is
-              // answered when the last word is Copilot's. A reviewer follow-up after Copilot's
-              // reply makes it unanswered again (and un-resolvable), however long the thread.
-              const threads = (pr.reviewThreads?.nodes || []).filter(t => !t.isResolved).map(t => {
-                const first = t.firstComment?.nodes?.[0];
-                const last = t.lastComment?.nodes?.[0];
-                const total = t.comments?.totalCount ?? 0;
-                const copilotReplied = total > 1 && isCopilotActor(last?.author?.login);
-                return {
-                  id: t.id, path: t.path || null, url: first?.url || null, outdated: !!t.isOutdated,
-                  reviewer: first?.author?.login || 'unknown', reviewer_is_resolvable_bot: isResolvableReviewerBot(first?.author),
-                  excerpt: excerpt(first?.body), comment_count: total, copilot_replied: copilotReplied,
-                  last_reply_by: total > 1 ? (last?.author?.login || 'unknown') : null
-                };
-              }).sort((a, b) => (b.url || '').localeCompare(a.url || '')).slice(0, MAX_THREADS_PER_PR);
-              const resolvableBotThreads = threads.filter(t => t.reviewer_is_resolvable_bot && t.copilot_replied && !t.outdated).map(t => t.id);
-              const unansweredThreads = threads.filter(t => !t.copilot_replied);
-              const zeroDiffStalled = (pr.changedFiles ?? -1) === 0 && now - new Date(pr.createdAt).getTime() >= ZERO_DIFF_AGE_MS;
-              const nudgeCapped = nudges.length >= MAX_NUDGES_PER_PR;
-
-              // Filter 6 (new) — nothing actionable. A PR that is green and merely waiting
-              // for a human reviewer (or only has runs stuck on the maintainer approval gate)
-              // has nothing for Copilot to do and nothing for this workflow to resolve; the
-              // prompt's rule 4 would end in `noop`, so do not start a paid agent session for
-              // it. Same for a nudge-capped PR: the hand-off is only worth posting when
-              // something is actually still wrong.
-              const needsNudge = conflicting || zeroDiffStalled || failedForCopilot.length > 0 || unansweredThreads.length > 0;
-              if (!needsNudge && resolvableBotThreads.length === 0) {
-                counters.filtered_nothing_actionable++;
-                reasons[number] = needsMaintainerApproval.length
-                  ? 'nothing for Copilot to do: only runs waiting on a maintainer to approve them'
-                  : 'nothing for Copilot to do: green and waiting on a human';
-                continue;
-              }
-              if (nudgeCapped) counters.nudge_capped++;
-              // Priority: 0 conflict, 1 zero-diff stall, 2 needs a nudge (failed checks or
-              // threads whose latest comment is not Copilot's), 3 only bot threads to resolve.
-              const bucket = conflicting ? 0 : zeroDiffStalled ? 1 : needsNudge ? 2 : 3;
-
-              eligible.push({
-                number, title: pr.title, url: pr.url, headRefOid: pr.headRefOid, headRefName: pr.headRefName,
-                createdAt: pr.createdAt, updatedAt: pr.updatedAt, changedFiles: pr.changedFiles,
-                mergeStateStatus: pr.mergeStateStatus, reviewDecision: pr.reviewDecision,
-                copilot_session: session, zero_diff_stalled: zeroDiffStalled,
-                nudge_count: nudges.length, nudge_capped: nudgeCapped, needs_nudge: needsNudge,
-                failed_checks_for_copilot: failedForCopilot, checks_needing_maintainer_approval: needsMaintainerApproval,
-                unresolved_threads: threads, resolvable_bot_threads: resolvableBotThreads,
-                priority_bucket: bucket
-              });
+              login = (await github.rest.users.getAuthenticated()).data.login;
             } catch (error) {
-              counters.filtered_error++; reasons[number] = `could not evaluate: ${error.message}`;
-              core.warning(`#${number}: ${error.message}`);
+              core.setFailed(`GH_AW_AGENT_TOKEN is set but its user could not be resolved (${error.message}); no nudges this run`);
+              return;
             }
           }
-
-          // Deterministic priority (applied here instead of by the agent): conflicts,
-          // zero-diff stalls, PRs that need a nudge, PRs with only bot threads to resolve,
-          // then most recently updated; lower PR number breaks ties. (Upstream ranks "human
-          // threads the author answered" third because it resolves those; this port never
-          // resolves human threads, so an answered thread is not actionable here.)
-          eligible.sort((a, b) => a.priority_bucket - b.priority_bucket
-            || new Date(b.updatedAt) - new Date(a.updatedAt) || a.number - b.number);
-          const selected = eligible.slice(0, MAX_ELIGIBLE);
-          counters.eligible = selected.length;
-
-          // Keep the total number of thread IDs the prompt asks the agent to resolve within
-          // the safe-output handler's budget (RESOLVE_THREADS_MAX == resolve-pull-request-
-          // review-thread.max). Higher-priority PRs keep theirs; the rest are deferred.
-          let resolveBudget = RESOLVE_THREADS_MAX;
-          for (const p of selected) {
-            const keep = p.resolvable_bot_threads.slice(0, Math.max(0, resolveBudget));
-            counters.resolvable_threads_deferred += p.resolvable_bot_threads.length - keep.length;
-            p.resolvable_bot_threads = keep;
-            resolveBudget -= keep.length;
-          }
-          if (counters.resolvable_threads_deferred) core.info(`${counters.resolvable_threads_deferred} resolvable bot thread(s) deferred to the next run (cap ${RESOLVE_THREADS_MAX})`);
-
-          // Slash-command context: what happened to the PR the command was posted on.
-          let trigger = null;
-          if (context.eventName === 'issue_comment' && context.payload?.issue?.number) {
-            const n = context.payload.issue.number;
-            const status = selected.some(p => p.number === n) ? 'eligible'
-              : eligible.some(p => p.number === n) ? `eligible but beyond the ${MAX_ELIGIBLE}-PR per-run cap`
-              : reasons[n] || `not an open, non-draft, ${FLOW_LABEL}-labeled Copilot PR`;
-            trigger = { number: n, status };
-          }
-
-          core.setOutput('eligible_count', String(selected.length));
-          core.setOutput('eligible_numbers', selected.map(p => p.number).join(','));
-          core.setOutput('eligible_context', JSON.stringify(selected));
-          core.setOutput('trigger_context', trigger ? JSON.stringify(trigger) : '');
-          core.setOutput('counters', JSON.stringify(counters));
-          const rows = Object.entries(counters).map(([k, v]) => `| ${k} | ${v} |`).join('\n');
-          await core.summary.addHeading('PR Sous Chef — prefilter', 3)
-            .addRaw(`\n| Metric | Count |\n|---|---|\n${rows}\n\nSelected: ${selected.map(p => `#${p.number} (bucket ${p.priority_bucket})`).join(', ') || 'none'}\n`)
-            .write();
+          core.info(`Sous Chef comments are authored as: ${login} (GH_AW_AGENT_TOKEN ${process.env.AGENT_TOKEN_SET === 'true' ? 'set' : 'not set'})`);
+          core.setOutput('login', login);
+    - name: Check out the prefilter script
+      # The prefilter is a repo file (.github/scripts/pr-sous-chef/prefilter.js), not an
+      # inline script: GitHub Actions caps a step input at 21 KB (gh-aw enforces it at
+      # compile time) and a file can be unit-tested against the real gh-aw sanitizer
+      # (prefilter.test.js). Sparse checkout of that directory only, from the default
+      # branch (schedule / workflow_dispatch / issue_comment never check out PR code).
+      # Same pinned checkout as sanity-tests-slack-notify.yaml.
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      timeout-minutes: 5
+      with:
+        sparse-checkout: |
+          .github/scripts/pr-sous-chef
+        sparse-checkout-cone-mode: true
+        persist-credentials: false
+    - name: Prefilter and rank copilot-flow PRs
+      id: prefilter
+      # See .github/scripts/pr-sous-chef/prefilter.js for the logic and every constant
+      # (cooldown, caps, allowlists). It fails closed per PR: a PR whose state could not be
+      # read is skipped this tick.
+      uses: actions/github-script@v9.0.0
+      env:
+        SOUS_CHEF_LOGIN: ${{ steps.identity.outputs.login }}
+      with:
+        script: |
+          const { run } = require('./.github/scripts/pr-sous-chef/prefilter.js');
+          await run({ github, context, core });
 
 # Serialize runs: a `/souschef` overlapping a scheduled run must not double-nudge.
 concurrency:
@@ -410,19 +170,47 @@ safe-outputs:
   mentions:
     allowed: ["@copilot"]
   add-comment:
-    max: 5                # 4 nudges/hand-offs + 1 slash-command reply
+    max: 5                # 4 nudges + 1 slash-command reply (hand-offs are posted by the prefilter)
     target: "*"           # requires explicit pull_request_number in agent output
+    # Kill switch enforced at WRITE time, not only at selection time: the handler re-reads
+    # the PR's labels right before posting, so a maintainer who removes `copilot-flow`
+    # while a run is in flight gets no comment from that run (the prefilter's selection
+    # would otherwise still be honoured minutes later).
+    required-labels: [copilot-flow]
+    # WHO posts the nudge decides whether it does anything. GitHub: "Copilot only responds
+    # to comments from people who have write access to the repository" (coding-agent
+    # troubleshooting docs), and every `copilot_work_started` event on this repo's Copilot
+    # PRs has a human actor; the 10 `@Copilot` mentions posted here by github-actions[bot]
+    # and by the admin machine user tenstorrent-github-bot (no Copilot seat) started 0
+    # sessions (checked 2026-09-28). A GITHUB_TOKEN nudge is therefore inert. Post with the
+    # same PAT `assign-to-agent` in issue-monster.md already requires (a Copilot-enabled
+    # user with write access) — upstream does the same with its AWI_MAINTENANCE_TOKEN.
+    # While the secret is unprovisioned the pinned handler falls back to GITHUB_TOKEN, so
+    # comments still land (visible, but they will not wake Copilot). The `identity` step
+    # above resolves which login this is. One real nudge should be observed to start a
+    # session (👀 reaction + `Copilot started work` timeline event) once the PAT exists.
+    github-token: ${{ secrets.GH_AW_AGENT_TOKEN }}
   # Only threads opened by an allowlisted review bot (copilot-pull-request-reviewer, and
   # github-actions = the gh-aw skills reviewers; see RESOLVABLE_REVIEWER_BOTS in the
-  # prefilter) whose LATEST comment is Copilot's, from the prefilter's
-  # `resolvable_bot_threads` list — which the prefilter caps at this same number across
-  # all selected PRs (RESOLVE_THREADS_MAX), so the prompt never asks for more than the
-  # handler allows. Upstream also resolves human reviewers' threads once the author replied;
-  # deliberately not ported — on tt-metal thread resolution is not merge-gating
-  # (ruleset: required_review_thread_resolution=false) so it buys nothing mechanically,
-  # and whether Copilot's reply actually addressed a human's point is the human's call.
+  # prefilter) whose LATEST comment is Copilot's AND cites a commit of the PR made after
+  # the thread was opened (see `fixVerified`), from the prefilter's `resolvable_bot_threads`
+  # list — which the prefilter caps at this same number across all selected PRs
+  # (RESOLVE_THREADS_MAX), so the prompt never asks for more than the handler allows.
+  # The handler resolves each thread ID to its real PR before acting. `required-labels`
+  # is meant to make it re-check that PR's labels at write time too — but gh-aw v0.86.2
+  # accepts the key for this handler and then drops it (its parser reads only max/target;
+  # the compiled handler config carries `{"max":20}` only — verified in the lock). It is
+  # kept so it becomes effective on the next gh-aw bump; until then the residual window
+  # is the few minutes between the prefilter's label check and the write, and a thread
+  # resolution is reversible (any collaborator can un-resolve it). `add-comment`'s
+  # `required-labels` IS compiled and enforced at v0.86.2. Upstream also resolves human reviewers'
+  # threads once the author replied; deliberately not ported — on tt-metal thread
+  # resolution is not merge-gating (ruleset: required_review_thread_resolution=false) so
+  # it buys nothing mechanically, and whether Copilot's reply actually addressed a human's
+  # point is the human's call.
   resolve-pull-request-review-thread:
     max: 20
+    required-labels: [copilot-flow]
   missing-tool: false
   noop:
     report-as-issue: false
@@ -438,8 +226,8 @@ safe-outputs:
 
 You keep Copilot-authored pull requests from the `copilot-ready` flow moving. The
 pre-activation job already selected which PRs need attention and gathered their state;
-your job is to write **one specific, actionable nudge per PR**, resolve bot review threads
-Copilot has already answered, and nothing else. Keep it short.
+your job is to write **one specific, actionable nudge per PR**, resolve the bot review
+threads it lists, and nothing else. Keep it short.
 
 ## Context
 
@@ -455,54 +243,57 @@ Copilot has already answered, and nothing else. Keep it short.
 ${{ needs.pre_activation.outputs.eligible_context }}
 ```
 
-Per PR: `mergeStateStatus` (`CONFLICTING` = merge conflict with `main`), `reviewDecision`,
-`zero_diff_stalled`, `nudge_count` / `nudge_capped`, `failed_checks_for_copilot` (things
-Copilot can fix), `checks_needing_maintainer_approval` (runs stuck on GitHub's
-"Approve and run workflows" gate — Copilot cannot fix these), `needs_nudge`,
-`unresolved_threads` (reviewer, `reviewer_is_resolvable_bot`, excerpt, `copilot_replied`
-= the thread's latest comment is Copilot's, `last_reply_by`, link) and
-`resolvable_bot_threads` (thread IDs you may resolve, verbatim; at most 20 across all PRs).
+Per PR: `merge_conflict` (true = merge conflict with `main`; derived from
+`mergeStateStatus == DIRTY` / `mergeable == CONFLICTING`), `reviewDecision`,
+`zero_diff_stalled`, `nudge_count`, `failed_checks_for_copilot` (things Copilot can fix),
+`checks_needing_maintainer_approval` (runs stuck on GitHub's "Approve and run workflows"
+gate — Copilot cannot fix these), `needs_nudge`, `unanswered_threads` (review threads
+whose latest comment is not Copilot's — reviewer, excerpt, `last_reply_by`, link — oldest
+first, at most 10; `unanswered_thread_count` and `unanswered_threads_not_shown` give the
+full count) and `resolvable_bot_threads` (thread IDs you may resolve, verbatim; at most 20
+across all PRs).
 
 ### What the prefilter already guaranteed
 
 Every eligible PR is open, non-draft, labeled `copilot-flow`, authored by the Copilot
 coding agent, has no check younger than 90 minutes still running, has no Copilot session
 in progress, was not already nudged in the last 60 minutes, either has no unanswered
-sous-chef nudge as its last comment or has a merge conflict, and has at least one
-actionable condition (`needs_nudge` is true, or `resolvable_bot_threads` is non-empty).
+sous-chef nudge as its last comment or has a merge conflict, is below the per-PR nudge cap
+(PRs at the cap were handed off to maintainers by the prefilter itself), and has at least
+one actionable condition (`needs_nudge` is true, or `resolvable_bot_threads` is non-empty).
 Green PRs that are only waiting on a human never reach you. Do not re-check these.
 
 ## Rules
 
 1. **If `/souschef` triggered this run**, first look at the slash-command target. If that
    PR is in the eligible list, its nudge (below) is the reply. Otherwise post exactly one
-   comment on that PR: start with `<!-- gh-aw-pr-sous-chef-nudge -->`, do **not** mention
-   `@copilot`, and say in one or two sentences why there is nothing to do right now (use
-   the `status` text from the target context verbatim). Then continue with the eligible
-   list, if any.
+   comment on that PR: do **not** mention `@copilot`, and say in one or two sentences why
+   there is nothing to do right now (use the `status` text from the target context
+   verbatim). Then continue with the eligible list, if any.
 2. **One comment per PR per run, at most 4 PRs**, in the order given. Every `add_comment`
    must carry the numeric `pull_request_number` of the PR it belongs to.
 3. **Never mention anyone but `@copilot`.** Maintainer-facing text goes in a separate
    section with no at-mention at all (reviewers are already subscribed to the PR).
 4. **Post nothing when there is nothing for Copilot to do** (`needs_nudge` false: no
-   failed checks Copilot can fix, no merge conflict, no unresolved thread whose latest
-   comment is not Copilot's, not zero-diff stalled, only maintainer-side items). Such a PR
-   is in your list only because it has bot threads to resolve — resolve them, record the
-   PR under `no_action_needed` in the `noop` summary, and write no comment. Silence is the
-   correct output for a PR that is simply waiting for a human.
+   failed checks Copilot can fix, no merge conflict, no unanswered review thread, not
+   zero-diff stalled, only maintainer-side items). Such a PR is in your list only because
+   it has bot threads to resolve — resolve them, record the PR under `no_action_needed` in
+   the `noop` summary, and write no comment. Silence is the correct output for a PR that is
+   simply waiting for a human.
 5. **Never write anything Copilot would need to guess at.** Quote the failing job's actual
    error: for each entry in `failed_checks_for_copilot` (at most 2 per PR), use the
    `actions` tool to fetch the run's failed job logs (`failed_only`) and put the decisive
    lines (compiler error, failing test name, linter output) in the comment. If logs are
    unavailable, give the check name and link and say so.
 
-## The nudge (when `nudge_capped` is false)
+## The nudge (when `needs_nudge` is true)
 
-Start the comment with the hidden marker line `<!-- gh-aw-pr-sous-chef-nudge -->` and then
-`@copilot` — that mention is what starts the new session. Then, in this order, only the
+Start the comment with `@copilot` — that mention is what starts the new session. (Do not
+write hidden HTML comments or markers; they are stripped before posting. The workflow
+recognises its own comments by the footer it appends.) Then, in this order, only the
 sections that apply:
 
-- **Merge conflict** (`mergeStateStatus == CONFLICTING`): ask Copilot to merge `main`
+- **Merge conflict** (`merge_conflict` true): ask Copilot to merge `main`
   into the branch (`git fetch origin main && git merge origin/main`), resolve the
   conflicts, rebuild if C++/CMake changed (`.github/scripts/copilot-build.sh`, narrowest
   flag per `.github/instructions/copilot-cloud.instructions.md`), and push. tt-metal has
@@ -521,10 +312,12 @@ sections that apply:
   - test failures → name the failing test(s) from the log; on-device failures cannot be
     reproduced in Copilot's environment (no accelerator), so ask for a host-side fix with
     reasoning, not a claim of having run the device test.
-- **Unresolved review threads whose latest comment is not Copilot's** (`copilot_replied`
-  false): list reviewer + direct link (+ the excerpt if short); ask Copilot to address
-  each and **reply in the thread** saying what changed. Threads where Copilot has the
-  last word are not listed again.
+- **Unresolved review threads whose latest comment is not Copilot's**
+  (`unanswered_threads`): list reviewer + direct link (+ the excerpt if short); ask Copilot
+  to address each and **reply in the thread** saying what changed and in which commit. If
+  `unanswered_threads_not_shown` is greater than 0, add one line: "and N more unanswered
+  threads — see the Files changed tab". Threads where Copilot has the last word are not
+  listed again.
 - **Maintainer notes** (no at-mention; only if there is also a Copilot section above,
   otherwise this is a rule-4 no-comment case): runs in `checks_needing_maintainer_approval`
   need a maintainer to click **Approve and run workflows** (or to disable "Require approval
@@ -533,15 +326,6 @@ sections that apply:
 
 Close with one line telling Copilot to push, wait for pr-gate, and reply here with what it
 changed. Keep the whole comment under ~40 lines.
-
-## The hand-off (when `nudge_capped` is true)
-
-Do **not** mention `@copilot`. Post one comment starting with
-`<!-- gh-aw-pr-sous-chef-handoff -->` that says this PR has received `nudge_count`
-automated nudges without becoming mergeable, lists what is still wrong (same sections as
-above, without the instructions to Copilot), and states that PR Sous Chef will not nudge it
-again — a maintainer should either take it over, give Copilot direct guidance in a comment,
-or close it. After this comment the prefilter excludes the PR permanently.
 
 ## Resolve bot review threads
 
@@ -554,5 +338,5 @@ list; never construct or edit an ID.
 ## Run summary
 
 Finish with exactly one `noop` whose message is a compact line, e.g.
-`processed=3; nudged=2; handed_off=0; no_action_needed=1; resolved_bot_threads=4; slash_reply=0`.
+`processed=3; nudged=2; no_action_needed=1; resolved_bot_threads=4; slash_reply=0`.
 No issues, no other comments, no summaries anywhere else.

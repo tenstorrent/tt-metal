@@ -277,6 +277,13 @@ Rules:
 - The final "delete the deprecated definition / shim / manifest entry" step is its
   own sub-issue, marked as depending on all the others. It is the **only** part that
   edits `.github/deprecations.json` (see "Deprecations" above).
+- Dependencies are **machine-checked**, not just prose: Issue Monster reads the
+  `Depends-on-parts:` line of each sub-issue body (Phase 4 template) and dispatches a
+  part only after every listed part is closed as completed — whoever did it. Write
+  `Depends-on-parts: none` for independently mergeable parts and the exact part numbers
+  otherwise (the final "delete" part lists every other part). If the line is missing,
+  Issue Monster assumes the final part N/N depends on all earlier parts and every other
+  part on nothing.
 
 ### Worked example (shape, not content)
 
@@ -335,7 +342,8 @@ reproduce the inner content, not the outer fence):
 - [ ] [Batch-specific criteria]
 
 ## Dependencies / ordering
-- [None — independently mergeable | Must land after parts X, Y | Blocks part Z]
+Depends-on-parts: [none | 1, 2, 3]
+- [Prose: None — independently mergeable | Must land after parts X, Y | Blocks part Z]
 
 ## Owners (for the human reviewer)
 - [CODEOWNERS teams/handles for the scope paths, as plain text, e.g. `tenstorrent/metalium-developers-ttnn-core`]

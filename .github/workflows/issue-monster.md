@@ -74,9 +74,12 @@ on:
           const RETRY_APPROVED_LABEL = 'copilot-retry-approved';
           // Single source of truth for "is this actor the Copilot coding agent?". Used for
           // both PR authors (`copilot-swe-agent`, search: `app/copilot-swe-agent`) and
-          // issue assignees (login `Copilot`). Keep the two call sites on this helper so
-          // they cannot drift if GitHub renames the bot or adds a second identity.
-          const isCopilotActor = (login) => /^copilot/i.test(login || '');
+          // issue assignees (login `Copilot`). EXACT match, deliberately not a prefix:
+          // `copilot-pull-request-reviewer` (Copilot code review) also starts with
+          // "copilot" and is a different bot. Keep the call sites on this helper so they
+          // cannot drift if GitHub renames the bot or adds a second identity.
+          const COPILOT_CODING_AGENT_LOGINS = new Set(['copilot-swe-agent', 'copilot']);
+          const isCopilotActor = (login) => COPILOT_CODING_AGENT_LOGINS.has((login || '').toLowerCase());
           // Labels that mean "do not auto-assign". All exist in tenstorrent/tt-metal today
           // except `copilot-retry-blocked`, which this workflow introduces.
           const excludeLabels = [
@@ -340,7 +343,7 @@ on:
                         subIssues(first: 50, after: $cursor) {
                           pageInfo { hasNextPage endCursor }
                           nodes {
-                            number state
+                            number state stateReason title
                             assignees(first: 10) { nodes { login } }
                             timelineItems(first: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
                               nodes {
@@ -369,10 +372,12 @@ on:
               return nodes;
             };
             const busyParents = new Map(); // parent -> reason
+            const siblingsByParent = new Map(); // parent -> ALL sub-issues (for the dependency gate)
             const distinctParents = [...new Set(issuesWithDetails.map(i => i.parentNumber).filter(Boolean))];
             for (const parent of distinctParents) {
               try {
                 const siblings = await fetchAllSubIssues(parent);
+                siblingsByParent.set(parent, siblings);
                 core.info(`Parent #${parent}: inspected ${siblings.length} sub-issue(s)`);
                 for (const sub of siblings) {
                   if (sub.state !== 'OPEN') continue;
@@ -392,6 +397,57 @@ on:
                 busyParents.set(parent, 'sibling state unknown');
               }
             }
+
+            // 4b. Dependency gate (tt-metal addition): plan parts that depend on earlier
+            //     parts are dispatched only once those parts are DONE — whoever owns them.
+            //     Siblings that are closed, human-assigned or label-excluded are not
+            //     "out of the way": a part that removes a deprecated definition must not go
+            //     to Copilot while the caller-migration part is still open with a human.
+            //     The dependency is machine-readable: squad-plan.md titles parts
+            //     `... (part N/M of #P)` and writes a `Depends-on-parts: none | 1, 2` line in
+            //     the body (see its Phase 4 template). Resolution, fail closed:
+            //       - explicit line             -> every listed part must exist among the
+            //                                      parent's sub-issues and be closed as
+            //                                      COMPLETED (not NOT_PLANNED: an unplanned
+            //                                      prerequisite means the work was NOT done);
+            //       - no line, title is N/M, N==M -> the final part of a plan depends on all
+            //                                      others (the documented squad-plan shape);
+            //       - no line, N<M or no N/M title -> no dependency (hand-written sub-issue).
+            //     A maintainer overrides by editing the dependent issue's Depends-on-parts
+            //     line (e.g. to `none`), or by closing a skipped prerequisite as completed.
+            const partOf = (title) => {
+              const m = /\(part\s+(\d+)\s*\/\s*(\d+)\s+of\s+#\d+\)\s*$/i.exec(title || '');
+              return m ? { n: Number(m[1]), m: Number(m[2]) } : null;
+            };
+            const dependsOnParts = (body) => {
+              const m = /^\s*(?:[-*]\s*)?Depends-on-parts:\s*(.+?)\s*$/im.exec(body || '');
+              if (!m) return null;                                  // no line
+              const v = m[1].trim().replace(/\.$/, '');
+              if (/^none$/i.test(v)) return [];
+              const parts = v.split(/[\s,]+/).filter(Boolean);
+              if (!parts.length || parts.some(p => !/^\d+$/.test(p))) return { invalid: v };
+              return [...new Set(parts.map(Number))];
+            };
+            const dependencyGate = (issue) => {
+              const siblings = siblingsByParent.get(issue.parentNumber);
+              if (!siblings) return { ok: false, reason: `sibling state of parent #${issue.parentNumber} unknown` };
+              const self = partOf(issue.title);
+              let deps = dependsOnParts(issue.body);
+              if (deps && deps.invalid !== undefined) return { ok: false, reason: `unparsable "Depends-on-parts: ${deps.invalid}" (use "none" or part numbers)` };
+              if (deps === null) deps = (self && self.m > 1 && self.n === self.m) ? Array.from({ length: self.m - 1 }, (_, i) => i + 1) : [];
+              if (!deps.length) return { ok: true };
+              const byPart = new Map();
+              for (const s of siblings) { const p = partOf(s.title); if (p && !byPart.has(p.n)) byPart.set(p.n, s); }
+              for (const n of deps) {
+                if (self && n === self.n) continue;
+                const s = byPart.get(n);
+                if (!s) return { ok: false, reason: `depends on part ${n}, which is not among parent #${issue.parentNumber}'s sub-issues` };
+                if (s.state !== 'CLOSED' || s.stateReason !== 'COMPLETED') {
+                  return { ok: false, reason: `depends on part ${n} (#${s.number}), which is ${s.state === 'CLOSED' ? `closed as ${s.stateReason || 'unknown'}` : 'still open'} - prerequisite not done` };
+                }
+              }
+              return { ok: true };
+            };
 
             // 5. Retry-block map: topics Copilot already attempted (recently) and had closed
             //    without merging. Repeated attempts burn a full agent session each time and
@@ -485,9 +541,18 @@ on:
               if (issue.subIssuesCount > 0) {
                 core.info(`Skipping #${issue.number}: has ${issue.subIssuesCount} sub-issue(s) - parent issues organize, they are not tasks`); return false;
               }
-              const closedPRs = issue.linkedPRs.filter(pr => pr.state === 'CLOSED' || pr.state === 'MERGED');
-              if (closedPRs.length > 0) {
-                core.info(`Skipping #${issue.number}: has ${closedPRs.length} closed/merged PR(s) - treating as complete or human-handled`); return false;
+              // Linked PRs. MERGED = the work landed: always done, never re-dispatched.
+              // CLOSED (unmerged) = a failed or abandoned attempt: excluded by default, but
+              // this is exactly the state the maintainer override exists for, so the
+              // override is honoured HERE, before the exclusion — otherwise an issue with
+              // a failed Copilot PR could never be retried however the labels were set.
+              const retryApproved = issueLabels.includes(RETRY_APPROVED_LABEL.toLowerCase());
+              if (issue.linkedPRs.some(pr => pr.state === 'MERGED')) {
+                core.info(`Skipping #${issue.number}: has a merged linked PR - treating as complete`); return false;
+              }
+              const closedUnmerged = issue.linkedPRs.filter(pr => pr.state === 'CLOSED');
+              if (closedUnmerged.length > 0 && !retryApproved) {
+                core.info(`Skipping #${issue.number}: has ${closedUnmerged.length} closed-unmerged linked PR(s) (#${closedUnmerged.map(p => p.number).join(', #')}) - a prior attempt failed or was abandoned; add ${RETRY_APPROVED_LABEL} to allow one more`); return false;
               }
               if (issue.linkedPRs.some(openCopilotPR)) {
                 core.info(`Skipping #${issue.number}: already has an open Copilot PR`); return false;
@@ -495,13 +560,17 @@ on:
               if (issue.parentNumber && busyParents.has(issue.parentNumber)) {
                 core.info(`Skipping #${issue.number}: parent #${issue.parentNumber} busy (${busyParents.get(issue.parentNumber)})`); return false;
               }
+              if (issue.parentNumber) {
+                const dep = dependencyGate(issue);
+                if (!dep.ok) { core.info(`Skipping #${issue.number}: ${dep.reason}`); return false; }
+              }
               const superseding = findSupersedingIssue(issue);
               if (superseding) {
                 core.info(`Skipping #${issue.number}: superseded by newer issue #${superseding.number} with the same topic`); return false;
               }
-              if (issueLabels.includes(RETRY_APPROVED_LABEL.toLowerCase())) {
+              if (retryApproved) {
                 // Maintainer override: they reviewed the prior PRs and approved one more try.
-                core.info(`#${issue.number}: carries ${RETRY_APPROVED_LABEL}; retry-block heuristic skipped`);
+                core.info(`#${issue.number}: carries ${RETRY_APPROVED_LABEL}; closed-PR exclusion and retry-block heuristic skipped`);
                 return true;
               }
               const retryBlock = findRetryBlock(issue.title);
@@ -571,7 +640,9 @@ on:
             }
 
             // 8. One sibling per parent per run: among surviving children of the same parent,
-            //    keep only the oldest (lowest number) so plan parts are dispatched in order.
+            //    keep only the oldest (lowest number). This is a throughput rule (one part of
+            //    a plan with Copilot at a time), NOT the ordering guarantee — that is the
+            //    dependency gate in 4b, which holds however the earlier parts are owned.
             const seenParents = new Set();
             filtered = filtered
               .sort((a, b) => a.number - b.number)
@@ -714,6 +785,13 @@ safe-outputs:
   add-comment:
     max: 2                # one "selected for Copilot" comment per assignment; retry
     target: "*"           # checkpoints are posted by the pre-activation script, not here
+    # Opt-out enforced at WRITE time too: the handler re-reads the issue's labels right
+    # before posting, so removing `copilot-ready` while a run is in flight suppresses the
+    # comment from that run. `assign-to-agent` has no `required-labels` in gh-aw v0.86.2
+    # (schema-verified), so the assignment itself can only be label-gated at selection
+    # time; the window is the minutes between the pre-activation scan and the agent's
+    # safe-output call, and an unwanted assignment is reversible (unassign Copilot).
+    required-labels: [copilot-ready]
   missing-tool: false
   noop:
     report-as-issue: false
@@ -748,13 +826,16 @@ pre-activation job. Your job is selection and bookkeeping; keep it short.
 - Kept only open issues labeled `copilot-ready` (whole queue, oldest first).
 - Dropped any candidate whose sub-issue/parent/linked-PR metadata could not be read
   (unchecked is not safe).
-- Excluded: assigned issues; issues with sub-issues (parents); issues with any
-  closed/merged linked PR; issues with an open Copilot PR; issues labeled `wontfix`,
-  `duplicate`, `question`, `support`, `Spike`, `idea`, `parent-issue`, `XFN`,
+- Excluded: assigned issues; issues with sub-issues (parents); issues with a merged
+  linked PR; issues with a closed-unmerged linked PR (a failed attempt) unless they
+  carry `copilot-retry-approved`; issues with an open Copilot PR; issues labeled
+  `wontfix`, `duplicate`, `question`, `support`, `Spike`, `idea`, `parent-issue`, `XFN`,
   `VIOLATION`, `🚩.` (blocked), `copilot-retry-blocked`; **any `bounty*` or
   `model bringup` label** (bug-bounty work is never automated, per CONTRIBUTING.md);
   sub-issues whose parent already has a sibling assigned to Copilot or with an open
-  Copilot PR (every sibling inspected, fail-closed);
+  Copilot PR (every sibling inspected, fail-closed); sub-issues whose prerequisite parts
+  (`Depends-on-parts:` line, or all earlier parts for the final part N/N of a plan) are
+  not yet closed as completed — whoever owns those parts;
   all but the oldest surviving sub-issue per parent; stale duplicates by normalized
   title; and **retry-blocked topics** (two or more Copilot PRs on the same normalized
   topic closed without merging in the last 90 days, unless the issue carries the
@@ -877,7 +958,17 @@ failures.
   again). To approve one more attempt, add
   `copilot-retry-approved` **and** remove `copilot-retry-blocked`. Removing the block
   label alone does nothing useful: the title-history heuristic is independent of the
-  label and will re-apply it (with a fresh comment) on the next run.
+  label and will re-apply it (with a fresh comment) on the next run. The override also
+  lifts the closed-unmerged-PR exclusion for that issue (the failed attempt's PR stays
+  linked; a merged PR still excludes the issue for good); unassign Copilot first if it
+  is still assigned.
+- **Plan ordering is machine-checked.** A sub-issue titled `… (part N/M of #P)` is
+  dispatched only when every part named in its `Depends-on-parts:` body line (written
+  by squad-plan.md; the final part N/N depends on all earlier parts when the line is
+  absent) is closed as *completed* — whether a human or Copilot did it. To skip a
+  prerequisite on purpose, close it as completed or edit the dependent issue's
+  `Depends-on-parts:` line (e.g. to `none`). A prerequisite closed as *not planned*
+  keeps its dependents blocked, by design.
 - **Emergency stop**: disable the workflow in the Actions tab, or remove the
   `copilot-ready` label from the affected issues. `skip-if-no-match` makes an empty
   queue cost nothing.
