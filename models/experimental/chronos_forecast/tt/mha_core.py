@@ -113,19 +113,18 @@ class TtMhaCore:
 
     @staticmethod
     def _can_fuse_rope(cos, head_dim: int) -> bool:
-        """``ttnn.experimental.rotary_embedding`` needs batch-shared (1,1,S,Dh)
-        cos/sin and a rotate_half midpoint on a tile boundary."""
-        return cos.shape[0] == 1 and cos.shape[1] == 1 and (head_dim == 32 or head_dim % 64 == 0)
+        """``ops.rotary_embedding`` needs batch-shared (1,1,S,Dh) cos/sin and a
+        rotate_half midpoint on a tile boundary."""
+        return cos.shape[0] == 1 and cos.shape[1] == 1 and head_dim % 64 == 0
 
     @staticmethod
     def _fused_rope(x, cos, sin, memory_config):
-        """Rotate and deallocate ``x``; keeps x's logical seq length (the op
-        returns the tile-padded one, which SDPA would treat as real keys)."""
+        """Rotate and deallocate ``x``; the output keeps x's logical seq length."""
         import ttnn
 
-        out = ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=memory_config)
-        if tuple(out.shape) != tuple(x.shape):
-            out = ttnn.reshape(out, x.shape, x.padded_shape, skip_padding_fill=True)
+        from models.experimental.chronos_forecast import ops
+
+        out = ops.rotary_embedding(x, cos, sin, memory_config=memory_config)
         ttnn.deallocate(x)
         return out
 

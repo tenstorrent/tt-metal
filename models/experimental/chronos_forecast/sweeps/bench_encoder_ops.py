@@ -12,6 +12,7 @@ import sys
 import torch
 import ttnn
 
+from models.experimental.chronos_forecast import ops
 from models.experimental.chronos_forecast.sweeps.sweep_matmul_l1 import pcc, trace_us
 
 SERIES, H, T, DH = 64, 12, 133, 64
@@ -34,22 +35,34 @@ def bench_rope(dev):
     sin = to_dev(torch.randn(1, 1, T, DH), ttnn.bfloat16, dev)
     x_h, cos_h, sin_h = (ttnn.to_torch(t).float() for t in (x, cos, sin))
     ref = x_h * cos_h + rotate_half(x_h) * sin_h
-    fn = lambda: ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=L1)
-    out = fn()
-    got = ttnn.to_torch(out).float()[..., :T, :]
-    ttnn.deallocate(out)
-    yield "rope", trace_us(dev, fn), pcc(ref, got)
+    for name, fn in (
+        ("rope ttnn", lambda: ttnn.experimental.rotary_embedding(x, cos, sin, memory_config=L1)),
+        ("rope chronos op", lambda: ops.rotary_embedding(x, cos, sin, memory_config=L1)),
+    ):
+        out = fn()
+        got = ttnn.to_torch(out).float()[..., :T, :]
+        ttnn.deallocate(out)
+        yield name, trace_us(dev, fn), pcc(ref, got)
 
 
 def bench_add(dev):
     a = to_dev(torch.randn(SERIES, T, D), ttnn.bfloat16, dev)
     b = to_dev(torch.randn(SERIES, T, D), ttnn.bfloat8_b, dev)
     ref = ttnn.to_torch(a).float() + ttnn.to_torch(b).float()
-    fn = lambda: ttnn.add(a, b, memory_config=L1)
-    out = fn()
-    got = ttnn.to_torch(out).float()
-    ttnn.deallocate(out)
-    yield "add bf16+bf8", trace_us(dev, fn), pcc(ref, got)
+    cases = [("add bf16+bf8 ttnn", lambda: ttnn.add(a, b, memory_config=L1))]
+    cases += [
+        (
+            f"add chronos {'bank' if local else 'rows'} b={n}",
+            lambda n=n, local=local: ops.add(a, b, memory_config=L1, batch=n, bank_local=local),
+        )
+        for local in (False, True)
+        for n in (2, 4, 8)
+    ]
+    for name, fn in cases:
+        out = fn()
+        got = ttnn.to_torch(out).float()
+        ttnn.deallocate(out)
+        yield name, trace_us(dev, fn), pcc(ref, got)
 
 
 def bench_rms_norm(dev):

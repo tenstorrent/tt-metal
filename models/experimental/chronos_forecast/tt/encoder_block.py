@@ -211,9 +211,11 @@ class TtEncoderBlock:
     def _residual_add(x, out):
         import ttnn
 
+        from models.experimental.chronos_forecast import ops
+
         if out.memory_config() != x.memory_config():
             out = ttnn.to_memory_config(out, x.memory_config())
-        y = ttnn.add(x, out, memory_config=x.memory_config())
+        y = ops.add(x, out, memory_config=x.memory_config())
         ttnn.deallocate(x)
         ttnn.deallocate(out)
         return y
