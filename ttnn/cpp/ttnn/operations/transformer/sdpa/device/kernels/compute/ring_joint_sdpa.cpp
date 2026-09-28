@@ -698,7 +698,7 @@ void kernel_main() {
                     }
                     const AccumulatorHalf& a = acc_state.prev;
                     const AccumulatorHalf& merged = acc_state.cur;
-                    max_block(a.max, incoming.max, merged.max, Sq_chunk_t);
+                    max_block_sfpi(a.max, incoming.max, merged.max, Sq_chunk_t);
                     // merged = exp(a.max - m) * a + exp(in.max - m) * in, via the K loop's SALAD correction.
                     CircularBuffer(merged.out).reserve_back(out_tiles);
                     CircularBuffer(merged.sum).reserve_back(Sq_chunk_t);
