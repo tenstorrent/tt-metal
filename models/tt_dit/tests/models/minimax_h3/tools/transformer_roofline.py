@@ -1072,7 +1072,9 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
         )
         if code == "AllGatherMinimalMatmulAsyncOp":
             m_rows, k_g, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
-            op = {s.N: s for s in AGMM_OPS}.get(n, Op.adhoc(f"agmm N{n}", k_g, n, "?"))
+            # Name the AGMM by its per-device N at the ring size the profile ran (TP=8 halves every N of the TP=4
+            # registry), so the block figures read to_qkv / to_out / ff1 at either TP instead of "agmm N2688".
+            op = {s.N: s for s in ops_for(R, ops=AGMM_OPS)}.get(n, Op.adhoc(f"agmm N{n}", k_g, n, "?"))
             rl = roofline(m_rows, op, arch, fidelity, num_links=L)
             name, klass, tc, td, tf = f"AGMM {op.name}", rl.limiter, rl.t_compute, rl.t_dram, rl.t_fabric
             formula = f"AGMM roofline: 2·{m_rows}·{k_g}·{n} FLOP on {arch.ring_matmul_cores} cores; gather (R−1)·M·K_local·2B/(2·{L})"
