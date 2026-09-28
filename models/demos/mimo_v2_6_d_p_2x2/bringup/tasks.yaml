@@ -438,6 +438,13 @@ tasks:
     kind: residual
     layer: 0
     stateful: false
+  frozen:
+    at: '2026-09-28T05:30:38'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp_residual.py: 725ae85e5c3dc959751614c3554a20561fac95c3fa7665a06ab4deab3a9c318f
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: S.full_dense.06
   title: 'full_dense block with steps 1-6 on device (last: mlp_residual)'
   step: implement
