@@ -7,6 +7,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/experimental/sharded_tensor_view.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
@@ -124,6 +125,13 @@ Tensor create_device_tensor(
     return output;
 }
 
+class RetainedTensorViewFactory {
+public:
+    static DeviceStorage create(const DeviceStorage& owning_storage, MeshTensor view_mesh_tensor) {
+        return DeviceStorage::create_retained_view(owning_storage, std::move(view_mesh_tensor));
+    }
+};
+
 Tensor experimental::create_sharded_tensor_view(
     const Tensor& owner, const TensorSpec& tensor_spec, DeviceAddr shard_offset) {
     TT_FATAL(owner.storage_type() == StorageType::DEVICE, "A sharded tensor view requires device storage");
@@ -146,7 +154,7 @@ Tensor experimental::create_sharded_tensor_view(
         shard_offset);
     MeshTensor view_tensor =
         mesh_tensor_from_buffer_with_topology(std::move(*view_buffer), tensor_spec, owner.tensor_topology());
-    return Tensor(DeviceStorage::create_retained_view(owner_storage, std::move(view_tensor)));
+    return Tensor(RetainedTensorViewFactory::create(owner_storage, std::move(view_tensor)));
 }
 
 }  // namespace ttnn

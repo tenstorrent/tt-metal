@@ -14,6 +14,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/experimental/sharded_tensor_view.hpp"
 
 namespace ttnn::distributed::test {
 namespace {

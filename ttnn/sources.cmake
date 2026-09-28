@@ -228,6 +228,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/operation_concepts.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
+    api/ttnn/tensor/experimental/sharded_tensor_view.hpp
     api/ttnn/tensor/layout/alignment.hpp
     api/ttnn/tensor/layout/layout.hpp
     api/ttnn/tensor/layout/page_config.hpp

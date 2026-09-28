@@ -33,7 +33,7 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/overlapped_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/experimental/sharded_tensor_view.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/base_types.hpp>

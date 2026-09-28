@@ -21,13 +21,6 @@
 
 namespace ttnn {
 
-class Tensor;
-
-namespace experimental {
-Tensor create_sharded_tensor_view(
-    const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
-}  // namespace experimental
-
 class HostStorage {
 public:
     // Creates HostStorage from a HostTensor.
@@ -216,8 +209,9 @@ private:
     // it depends on invalidates the view.
     static DeviceStorage create_retained_view(
         const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
-    friend Tensor experimental::create_sharded_tensor_view(
-        const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
+    // Defined only in tensor_ops.cpp, for ttnn::experimental::create_sharded_tensor_view. A friend class keeps
+    // ttnn::experimental out of this widely included header.
+    friend class RetainedTensorViewFactory;
 
     // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
