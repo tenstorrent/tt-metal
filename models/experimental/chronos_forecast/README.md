@@ -83,7 +83,9 @@ PYTHONPATH=. pytest -s \
 while replay i runs, for back-to-back batches.
 
 Paper shape (1024 series, performance precision, L1-resident, unique groups) on
-p150a cards:
+p150a cards, at `86be1507afa`:
+
+Note: over PCIe gen4, benchmarks start on host
 
 | Chips | Series per chip | Replay | Serial end-to-end | Streamed per batch | Streamed series/s |
 |---|---|---|---|---|---|
@@ -96,6 +98,42 @@ remaining host cost is serial readback (about 20 ms) and upload (about 9 ms).
 Per-chip replay times from single-chip runs put 8, 16 and 32 chips at about
 32, 16 and 9 ms, so from 16 chips up the host limits throughput unless readback
 also overlaps the replay.
+
+### After the optimization round (`10ec7ff655e`)
+
+Same shape and configuration (`performance_l1`), measured at `10ec7ff655e` on
+`avan/chronos-forecast-experi`:
+
+| Chips | Series per chip | Replay | Serial end-to-end | Streamed per batch | Streamed series/s |
+|---|---|---|---|---|---|
+| 1 | 1024 | 153 ms | 199 ms | 188 ms | 5,440 |
+| 4 | 256 | 35 ms | 82 ms | 54 ms | 18,900 |
+
+The changes since `86be1507afa`:
+
+- Sweep-tuned L1 matmul configs, with the RMSNorm gamma folded into the
+  following linears.
+- LoFi attention matmuls.
+- Model-local `generic_op` kernels in `ops/`: RoPE, a bank-local residual add,
+  the QKV head split fused with RoPE, and an RMSNorm that writes bfloat8_b.
+- The input embedding and the output head run inside the L1 chunks.
+
+On 4 chips, replay is 4.36× one chip at the full batch. A chip holding 256
+series is slightly more efficient per series than one holding 1024; against a
+single chip at 256 series, 4 chips reach 99%.
+
+With groups of 4:
+
+| Chips | Replay | Streamed per batch | Replay speedup |
+|---|---|---|---|
+| 1 | 269 ms | 300 ms | 1× |
+| 4 | 68 ms | 86 ms | 3.95× |
+
+On 4 chips the host now limits streaming. The 35 ms replay is followed by a
+serial readback of about 17 ms and an upload of about 3 ms. Host prepare
+(about 17 ms) overlaps the replay. Single-chip replay at 128, 64 and 32 series
+takes 17.5, 8.8 and 6.1 ms, which is roughly where 8, 16 and 32 chips would
+land on replay alone.
 
 Blackhole Galaxy bring-up:
 

@@ -26,20 +26,20 @@ STAGE_ITERS = 10
 
 # Scaling baselines: one p150a, performance precision, L1-resident; keyed by (group_size, batch).
 SINGLE_CHIP_REPLAY_S = {
-    (None, BATCH): 0.2602,
-    (None, BATCH // 4): 0.0665,
-    (None, BATCH // 8): 0.0322,
-    (None, BATCH // 16): 0.0162,
-    (None, BATCH // 32): 0.00907,
-    (4, BATCH): 0.3833,
+    (None, BATCH): 0.1535,
+    (None, BATCH // 4): 0.0349,
+    (None, BATCH // 8): 0.0175,
+    (None, BATCH // 16): 0.00878,
+    (None, BATCH // 32): 0.00609,
+    (4, BATCH): 0.2691,
 }
 SINGLE_CHIP_E2E_S = {
-    (None, BATCH): 0.3211,
-    (None, BATCH // 4): 0.0862,
-    (None, BATCH // 8): 0.0447,
-    (None, BATCH // 16): 0.0246,
-    (None, BATCH // 32): 0.0128,
-    (4, BATCH): 0.4627,
+    (None, BATCH): 0.1992,
+    (None, BATCH // 4): 0.0527,
+    (None, BATCH // 8): 0.0267,
+    (None, BATCH // 16): 0.0138,
+    (None, BATCH // 32): 0.00983,
+    (4, BATCH): 0.3300,
 }
 
 TRACE_DEVICE_PARAMS = [{"trace_region_size": 200_000_000, "num_command_queues": 2}]
