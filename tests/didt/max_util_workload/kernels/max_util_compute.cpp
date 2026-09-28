@@ -20,6 +20,7 @@
 //   5: cycles_to_wait      – number of cycles to wait before running the next inner loop
 //   6: super_sync          - super sync enabled
 //   7: l1_super_sync_addr  - L1 destination for super sync semaphore
+//   8: l1_fpu_timing_addr  - L1 destination for compute-pipeline timestamps
 
 #ifdef TRISC_UNPACK
 template <bool super_sync>
@@ -28,7 +29,8 @@ ALWI void max_util_unpack(
     uint32_t num_tiles,
     uint32_t l1_buffer0_addr,
     uint32_t l1_buffer1_addr,
-    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr) {
+    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr,
+    uint32_t l1_fpu_timing_addr) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
     constexpr uint32_t face_r_dim = 16;
@@ -120,6 +122,9 @@ ALWI void max_util_unpack(
         } while ((*l1_super_sync_addr_ptr) != 0);
     }
 
+    volatile tt_l1_ptr uint32_t* timing = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_fpu_timing_addr);
+    const uint64_t t0 = ckernel::read_wall_clock();
+
     for (uint32_t i = 0; i < num_loops; i++) {
         DeviceZoneScopedN("MATH-BLOCK");
         for (uint32_t j = 0; j < num_tiles; j++) {
@@ -160,6 +165,12 @@ ALWI void max_util_unpack(
             switch_config_context(unp_cfg_context);
         }
     }
+
+    const uint64_t t1 = ckernel::read_wall_clock();
+    timing[0] = static_cast<uint32_t>(t0);
+    timing[1] = static_cast<uint32_t>(t0 >> 32);
+    timing[2] = static_cast<uint32_t>(t1);
+    timing[3] = static_cast<uint32_t>(t1 >> 32);
 }
 #endif
 
@@ -398,8 +409,6 @@ ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buff
 #endif
 
 void kernel_main() {
-    // std::uint64_t t0 = ckernel::read_wall_clock();
-
     constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
     constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
     constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
@@ -408,20 +417,17 @@ void kernel_main() {
     constexpr uint32_t cycles_to_wait = get_compile_time_arg_val(5);
     constexpr uint32_t super_sync = get_compile_time_arg_val(6);
     constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(7);
+    constexpr uint32_t l1_fpu_timing_addr = get_compile_time_arg_val(8);
     volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
 
     // TRISC0: perform unpack A (float16_b) and unpack B (float16_b) to SRC_A and SRC_B
-    UNPACK(
-        (max_util_unpack<super_sync>(num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr, l1_super_sync_addr_ptr)));
+    UNPACK((max_util_unpack<super_sync>(
+        num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr, l1_super_sync_addr_ptr, l1_fpu_timing_addr)));
 
     // TRISC1: perform MVMUL to DST
     MATH((max_util_math<cycles_to_wait>(num_loops, num_tiles)));
 
     // TRISC2: perform pack to output L1 addr or SFPU programming
     PACK((max_util_pack(num_loops, num_tiles, l1_buffer2_addr)));
-
-    // std::uint64_t t1 = ckernel::read_wall_clock();
-    // std::uint64_t kernel_fpu_cycles = (16*8)*num_loops*num_tiles;
-    // MATH((DPRINT << "Kernel FPU utilization: " << (kernel_fpu_cycles*100) / (t1 - t0) << "%" << ENDL()));
 }

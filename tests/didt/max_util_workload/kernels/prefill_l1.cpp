@@ -4,7 +4,6 @@
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 
 // Pre-fill kernel: reads from DRAM into L1 buffers.
 // Runs on BRISC only.
@@ -12,47 +11,33 @@
 // Compile-time args:
 //   0: dram_buffer0_addr        - DRAM address of buffer 0 (bfloat16)
 //   1: dram_buffer1_addr        - DRAM address of buffer 1 (bfloat16)
-//   2: dram_buffer_0xAAAA_addr  - DRAM address of 0xAAAAAAAA pattern
-//   3: dram_buffer_0x5555_addr  - DRAM address of 0x55555555 pattern
-//   4: l1_buffer0_addr          - L1 destination for buffer 0 (bfloat16)
-//   5: l1_buffer1_addr          - L1 destination for buffer 1 (bfloat16)
-//   6: l1_buffer3_addr          - L1 destination for 0xAAAA pattern
-//   7: l1_buffer4_addr          - L1 destination for 0x5555 pattern
-//   8: l1_buffer5_addr          - L1 destination for 0xAAAA pattern
-//   9: l1_buffer6_addr          - L1 destination for 0x5555 pattern
-//   10: tile_size_bytes         - 2048 for bfloat16
-//   11: transfer_size           - transfer size (8KB)
-//   12: num_tiles               - number of tiles to read (8)
-//   13: l1_super_sync_addr      - L1 destination for super sync semaphore
-// Buffers 2, 7, 8, 9, 10: addr in cfg only, no init in prefill kernel.
+//   2: l1_buffer0_addr          - L1 destination for buffer 0 (bfloat16)
+//   3: l1_buffer1_addr          - L1 destination for buffer 1 (bfloat16)
+//   4: tile_size_bytes          - 2048 for bfloat16
+//   5: num_tiles                - number of tiles to read (8)
+//   6: l1_super_sync_addr       - L1 destination for super sync semaphore
+//   7: l1_fpu_timing_addr       - L1 destination for FPU timing results
 
 void kernel_main() {
     constexpr uint32_t dram_buffer0_addr = get_compile_time_arg_val(0);
     constexpr uint32_t dram_buffer1_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t dram_buffer_0xAAAA_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t dram_buffer_0x5555_addr = get_compile_time_arg_val(3);
-    constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(5);
-    constexpr uint32_t l1_buffer3_addr = get_compile_time_arg_val(6);
-    constexpr uint32_t l1_buffer4_addr = get_compile_time_arg_val(7);
-    constexpr uint32_t l1_buffer5_addr = get_compile_time_arg_val(8);
-    constexpr uint32_t l1_buffer6_addr = get_compile_time_arg_val(9);
-    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t transfer_size = get_compile_time_arg_val(11);
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(12);
-    constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(13);
+    constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(2);
+    constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(6);
+    constexpr uint32_t l1_fpu_timing_addr = get_compile_time_arg_val(7);
     volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
 
-    constexpr auto dram0_args = TensorAccessorArgs<14>();
+    volatile tt_l1_ptr uint32_t* l1_fpu_timing_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_fpu_timing_addr);
+
+    constexpr auto dram0_args = TensorAccessorArgs<8>();
     constexpr auto dram1_args = TensorAccessorArgs<dram0_args.next_compile_time_args_offset()>();
-    constexpr auto dram_0xAAAA_args = TensorAccessorArgs<dram1_args.next_compile_time_args_offset()>();
-    constexpr auto dram_0x5555_args = TensorAccessorArgs<dram_0xAAAA_args.next_compile_time_args_offset()>();
 
     const auto dram0_addr_gen = TensorAccessor(dram0_args, dram_buffer0_addr);
     const auto dram1_addr_gen = TensorAccessor(dram1_args, dram_buffer1_addr);
-    const auto dram_0xAAAA_addr_gen = TensorAccessor(dram_0xAAAA_args, dram_buffer_0xAAAA_addr);
-    const auto dram_0x5555_addr_gen = TensorAccessor(dram_0x5555_args, dram_buffer_0x5555_addr);
 
     // Read buffer 0 from DRAM to L1
     for (uint32_t t = 0; t < num_tiles; ++t) {
@@ -68,17 +53,8 @@ void kernel_main() {
         noc_async_read_barrier();
     }
 
-    // Read buffer 3 and 5 from same DRAM (0xAAAA pattern)
-    noc_async_read_page(0, dram_0xAAAA_addr_gen, l1_buffer3_addr);
-    noc_async_read_barrier();
-    noc_async_read_page(0, dram_0xAAAA_addr_gen, l1_buffer5_addr);
-    noc_async_read_barrier();
-
-    // Read buffer 4 and 6 from same DRAM (0x5555 pattern)
-    noc_async_read_page(0, dram_0x5555_addr_gen, l1_buffer4_addr);
-    noc_async_read_barrier();
-    noc_async_read_page(0, dram_0x5555_addr_gen, l1_buffer6_addr);
-    noc_async_read_barrier();
-
     *(l1_super_sync_addr_ptr) = 0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        l1_fpu_timing_addr_ptr[i] = 0;
+    }
 }

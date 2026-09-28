@@ -93,15 +93,11 @@ ALWI void slow_cos_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_bu
 // ---------------------------------------------------------------------------
 // TRISC_MATH – SFPU cosine applied to each tile.
 //
-// cos_tile(j) calls _llk_math_eltwise_unary_sfpu_params_ which:
-//   1. Sets DEST_TARGET_REG_CFG_MATH_Offset to tile j (SrcRegs mode –
-//      SFPU reads from the SRC register file populated by UNPACK).
-//   2. Applies calculate_cosine<false, false, 8>() for all 4 faces (RC mode).
-//   3. Writes results to DST for PACK to consume.
+// cos_tile(j) uses the current public compute API to apply cosine to all four
+// faces and write the result to DST for PACK to consume.
 // ---------------------------------------------------------------------------
 
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_trigonometry.h"
 ALWI void slow_cos_math(uint32_t num_loops, uint32_t num_tiles) {
     constexpr bool is_fp32_dest_acc_en = false;
     _llk_math_hw_configure_<is_fp32_dest_acc_en>((uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b);
@@ -118,8 +114,7 @@ ALWI void slow_cos_math(uint32_t num_loops, uint32_t num_tiles) {
     tmp.program();
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::cosine>();
-    ckernel::sfpu::cosine_init<false>();
+    cos_tile_init();
 
     for (uint32_t i = 0; i < num_loops; i++) {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -127,9 +122,7 @@ ALWI void slow_cos_math(uint32_t num_loops, uint32_t num_tiles) {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(j);
             ckernel_template::run();
 
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(j);
-            ckernel::sfpu::calculate_cosine<false, is_fp32_dest_acc_en, 32>();
-            _llk_math_eltwise_unary_sfpu_done_();
+            cos_tile<is_fp32_dest_acc_en>(j);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }

@@ -7,12 +7,11 @@
 //   1. Pre-fill phase: BRISC runs on each core to read 2 DRAM buffers into L1
 //      - Buffer 0: 8 tiles of bfloat16 from DRAM
 //      - Buffer 1: 8 tiles of bfloat16 from DRAM
-//   2. Main phase: Three decoupled kernels run simultaneously:
-//      - BRISC (NOC0): Sends 8KB to right/down neighbors only
-//      - NCRISC (NOC1): Sends 8KB to left/up neighbors only
-//      - TRISC: Uses pre-filled L1 buffers directly, runs compute at full speed
-//   No CB dependencies between data movement and compute.
+//   2. Main phase: TRISC compute and active-ETH DRAM streaming run concurrently.
+//      An optional BRISC kernel synchronizes TRISC launch across worker cores.
+//   No CB dependencies between DRAM streaming and compute.
 
+#include <cmath>
 #include <cstdio>
 #include <memory>
 
@@ -69,22 +68,12 @@ struct MaxUtilConfig {
     // Controlled via the duty-cycle map; 0 means no slow workload is run.
     uint32_t num_slow_wl_loops = 0;
 
-    // Data transfer size in bytes.
-    uint32_t data_transfer_size = 2048;  // 2KB
-
     // L1 buffer addresses (filled by pre-fill phase, passed to main phase).
     uint32_t l1_buffer0_addr = 0;     // input 0 bfloat16 data
     uint32_t l1_buffer1_addr = 0;     // input 1 bfloat16 data
     uint32_t l1_buffer2_addr = 0;     // output bfloat16 data
-    uint32_t l1_buffer3_addr = 0;     // NOC0 send data pattern A
-    uint32_t l1_buffer4_addr = 0;     // NOC0 send data pattern B
-    uint32_t l1_buffer5_addr = 0;     // NOC1 send data pattern A
-    uint32_t l1_buffer6_addr = 0;     // NOC1 send data pattern B
-    uint32_t l1_buffer7_addr = 0;     // rx buffer from left neighbor
-    uint32_t l1_buffer8_addr = 0;     // rx buffer from up neighbor
-    uint32_t l1_buffer9_addr = 0;     // rx buffer from right neighbor
-    uint32_t l1_buffer10_addr = 0;    // rx buffer from down neighbor
     uint32_t l1_super_sync_addr = 0;  // super sync semaphore
+    uint32_t l1_fpu_timing_addr = 0;  // compute-pipeline start/end timestamps
 
     // FPU utilization target percentage [1, 92].
     // Passed to the compute kernel as compile-time arg 5.
@@ -109,8 +98,7 @@ struct MaxUtilConfig {
     // eth_dram_util_pct by setup_eth_stream_config via kDramUtilToCyclesMap.
     uint32_t eth_noc_wait_cycles = 0;
 
-    // When true, all kernels perform a super-sync barrier at program start
-    // before entering their main loop.
+    // When true, compute kernels perform a super-sync barrier at program start.
     bool super_sync = false;
 };
 
@@ -438,29 +426,11 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
         .buffer_type = BufferType::DRAM,
     };
 
-    // Buffers 3,4,5,6: uint32 pattern data
-    const uint32_t buffer_size_uint32 = cfg.data_transfer_size;
-
-    // Buffers 7,8,9,10: rx buffers (no init)
-    const uint32_t rx_buffer_size = buffer_size_uint32;
-
     auto dram_buffer0 = CreateBuffer(dram_cfg_bfloat16);
     auto dram_buffer1 = CreateBuffer(dram_cfg_bfloat16);
 
-    // DRAM buffers for uint32 patterns: one for 0xAAAA, one for 0x5555
-    auto dram_cfg_uint32 = InterleavedBufferConfig{
-        .device = device,
-        .size = buffer_size_uint32,
-        .page_size = buffer_size_uint32,
-        .buffer_type = BufferType::DRAM,
-    };
-    auto dram_buffer_0xAAAA = CreateBuffer(dram_cfg_uint32);
-    auto dram_buffer_0x5555 = CreateBuffer(dram_cfg_uint32);
-
     uint32_t dram_buffer0_addr = dram_buffer0->address();
     uint32_t dram_buffer1_addr = dram_buffer1->address();
-    uint32_t dram_buffer_0xAAAA_addr = dram_buffer_0xAAAA->address();
-    uint32_t dram_buffer_0x5555_addr = dram_buffer_0x5555->address();
 
     // Fill buffer 0 with random data
     std::vector<uint32_t> data0 =
@@ -471,12 +441,6 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
     std::vector<uint32_t> data1 =
         rng_bfp16(buffer_size_bfloat16, tile_rows, tile_cols, /*mean=*/0.0f, /*stdev=*/1.0f, /*seed=*/43);
     detail::WriteToBuffer(dram_buffer1, data1);
-
-    // Fill pattern buffers: 0xAAAAAAAA and 0x55555555 (32-bit patterns)
-    std::vector<uint32_t> data_0xAAAA(buffer_size_uint32 / sizeof(uint32_t), 0xAAAAAAAAu);
-    std::vector<uint32_t> data_0x5555(buffer_size_uint32 / sizeof(uint32_t), 0x55555555u);
-    detail::WriteToBuffer(dram_buffer_0xAAAA, data_0xAAAA);
-    detail::WriteToBuffer(dram_buffer_0x5555, data_0x5555);
 
     // Get L1 base address and pack all buffers densely
     uint64_t l1_base_addr = MetalContext::instance().hal().get_dev_addr(
@@ -489,63 +453,33 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
     addr += buffer_size_bfloat16;
     cfg.l1_buffer2_addr = addr;  // output, 8 float16_b tiles, no init
     addr += buffer_size_bfloat16;
-    cfg.l1_buffer3_addr = addr;  // pattern 0xAAAA
-    addr += buffer_size_uint32;
-    cfg.l1_buffer4_addr = addr;  // pattern 0x5555
-    addr += buffer_size_uint32;
-    cfg.l1_buffer5_addr = addr;  // pattern 0xAAAA
-    addr += buffer_size_uint32;
-    cfg.l1_buffer6_addr = addr;  // pattern 0x5555
-    addr += buffer_size_uint32;
-    cfg.l1_buffer7_addr = addr;  // rx from left, no init
-    addr += rx_buffer_size;
-    cfg.l1_buffer8_addr = addr;  // rx from up, no init
-    addr += rx_buffer_size;
-    cfg.l1_buffer9_addr = addr;  // rx from right, no init
-    addr += rx_buffer_size;
-    cfg.l1_buffer10_addr = addr;  // rx from down, no init
-    addr += rx_buffer_size;
     cfg.l1_super_sync_addr = addr;  // super sync semaphore
+    addr += 16;
+    cfg.l1_fpu_timing_addr = addr;  // four uint32 words: t0 low/high, t1 low/high
 
-    // Pre-fill: L1 buf0..10=0x1b200, 0x1f200, 0x21400, 0x25400, 0x27400, 0x29400, 0x2b400, 0x2d400, 0x2f400, 0x31400,
-    // 0x33400
     log_info(
         LogTest,
-        "Pre-fill: L1 buf0..10=0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}, 0x{:x}",
+        "Pre-fill: L1 inputs=0x{:x},0x{:x}, output=0x{:x}, super_sync=0x{:x}, fpu_timing=0x{:x}",
         cfg.l1_buffer0_addr,
         cfg.l1_buffer1_addr,
         cfg.l1_buffer2_addr,
-        cfg.l1_buffer3_addr,
-        cfg.l1_buffer4_addr,
-        cfg.l1_buffer5_addr,
-        cfg.l1_buffer6_addr,
-        cfg.l1_buffer7_addr,
-        cfg.l1_buffer8_addr,
-        cfg.l1_buffer9_addr,
-        cfg.l1_buffer10_addr);
+        cfg.l1_super_sync_addr,
+        cfg.l1_fpu_timing_addr);
 
     Program program = CreateProgram();
 
     std::vector<uint32_t> prefill_compile_args = {
-        dram_buffer0_addr,        // 0: dram_buffer0_addr
-        dram_buffer1_addr,        // 1: dram_buffer1_addr
-        dram_buffer_0xAAAA_addr,  // 2: dram_buffer_0xAAAA_addr
-        dram_buffer_0x5555_addr,  // 3: dram_buffer_0x5555_addr
-        cfg.l1_buffer0_addr,      // 4: l1_buffer0_addr
-        cfg.l1_buffer1_addr,      // 5: l1_buffer1_addr
-        cfg.l1_buffer3_addr,      // 6: l1_buffer3_addr
-        cfg.l1_buffer4_addr,      // 7: l1_buffer4_addr
-        cfg.l1_buffer5_addr,      // 8: l1_buffer5_addr
-        cfg.l1_buffer6_addr,      // 9: l1_buffer6_addr
-        tile_bytes_bfloat16,      // 10: tile_size_bytes (bfloat16, 2048)
-        buffer_size_uint32,       // 11: data_transfer_size (8KB)
-        cfg.num_tiles,            // 12: num_tiles (8)
-        cfg.l1_super_sync_addr,   // 13: l1_super_sync_addr
+        dram_buffer0_addr,       // 0: dram_buffer0_addr
+        dram_buffer1_addr,       // 1: dram_buffer1_addr
+        cfg.l1_buffer0_addr,     // 2: l1_buffer0_addr
+        cfg.l1_buffer1_addr,     // 3: l1_buffer1_addr
+        tile_bytes_bfloat16,     // 4: tile_size_bytes (bfloat16, 2048)
+        cfg.num_tiles,           // 5: num_tiles (8)
+        cfg.l1_super_sync_addr,  // 6: l1_super_sync_addr
+        cfg.l1_fpu_timing_addr,  // 7: l1_fpu_timing_addr
     };
     TensorAccessorArgs(*dram_buffer0).append_to(prefill_compile_args);
     TensorAccessorArgs(*dram_buffer1).append_to(prefill_compile_args);
-    TensorAccessorArgs(*dram_buffer_0xAAAA).append_to(prefill_compile_args);
-    TensorAccessorArgs(*dram_buffer_0x5555).append_to(prefill_compile_args);
 
     // Pre-fill kernel on BRISC - reads from DRAM to L1
     CreateKernel(
@@ -566,8 +500,9 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
 //
 // Maps FPU utilization percentage → cycles_to_wait between compute operations.
 // The kernel uses cycles_to_wait to insert idle cycles and throttle the FPU.
-// Fill in the values for your target architecture; keys cover the valid [1, 92]
-// range at representative intervals.
+// Values are calibrated on Blackhole p300c; keys cover the valid [1, 92]
+// range at representative intervals. Device timestamps below verify that the
+// resulting sustained utilization remains close to the selected table entry.
 // ---------------------------------------------------------------------------
 
 // clang-format off
@@ -644,7 +579,11 @@ static const std::map<uint32_t, uint32_t> kDutyCycleToSlowLoopsMap = {
 /// Valid values: 10, 20, 30, 40, 50, 60, 70, 80, 90, 100.
 /// Returns 100 (no slow workload) if the variable is absent or invalid.
 static uint32_t get_duty_cycle_pct() {
-    const char* env = std::getenv("MAX_UTIL_DUTY_CYCLE");
+    const char* env = std::getenv("MAX_UTIL_DUTY_CYCLE_PCT");
+    if (env == nullptr) {
+        // Preserve compatibility with the original, undocumented spelling.
+        env = std::getenv("MAX_UTIL_DUTY_CYCLE");
+    }
     if (env != nullptr) {
         try {
             int val = std::stoi(env);
@@ -678,8 +617,8 @@ static uint32_t duty_cycle_to_slow_loops(uint32_t duty_cycle_pct, uint32_t num_w
 // ---------------------------------------------------------------------------
 // build_program – constructs the main Program
 //
-// Decoupled kernels: BRISC and NCRISC generate NOC traffic only,
-// TRISC uses pre-filled L1 buffers directly without CB waits.
+// TRISC uses pre-filled L1 buffers directly without CB waits. An optional
+// BRISC kernel synchronizes compute launch across the worker grid.
 // ---------------------------------------------------------------------------
 
 static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
@@ -695,62 +634,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 
     Program program = CreateProgram();
 
-    auto super_sync_sender_semaphore_id = 0;
-    auto super_sync_receiver_semaphore_id = 0;
-    if (cfg.super_sync) {
-        super_sync_sender_semaphore_id = tt_metal::CreateSemaphore(program, core_range_set, INVALID);
-        super_sync_receiver_semaphore_id = tt_metal::CreateSemaphore(program, core_range_set, INVALID);
-    }
     log_info(LogTest, "Super sync: {}", cfg.super_sync);
-
-    // -- Reader kernel (BRISC / RISCV_0 / NOC0) -----------------------------
-    // Top-left core multicasts to entire grid; all other cores are no-ops.
-    auto reader_kernel = CreateKernel(
-        program,
-        "tests/didt/max_util_workload/kernels/max_util_reader.cpp",
-        core_range_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args =
-                {
-                    cfg.num_wl_loops,                  // 0: num_loops (inner loops per dispatch)
-                    cfg.l1_buffer3_addr,               // 1: l1_tx_A_addr – pattern A (0x5555)
-                    cfg.l1_buffer4_addr,               // 2: l1_tx_B_addr – pattern B (0xAAAA)
-                    cfg.l1_buffer7_addr,               // 3: l1_rx_addr – destination on receiving cores
-                    cfg.l1_buffer8_addr,               // 4: (unused)
-                    cfg.l1_buffer9_addr,               // 5: (unused)
-                    cfg.l1_buffer10_addr,              // 6: (unused)
-                    cfg.data_transfer_size,            // 7: transfer_size
-                    cfg.super_sync,                    // 8: super_sync
-                    super_sync_sender_semaphore_id,    // 9: super_sync_sender_semaphore_id
-                    super_sync_receiver_semaphore_id,  // 10: super_sync_receiver_semaphore_id
-                    cfg.l1_super_sync_addr             // 11: l1_super_sync_addr
-
-                },
-        });
-
-    // -- Writer kernel (NCRISC / RISCV_1 / NOC1) ----------------------------
-    // Bottom-right core multicasts to entire grid; all other cores are no-ops.
-    auto writer_kernel = CreateKernel(
-        program,
-        "tests/didt/max_util_workload/kernels/max_util_writer.cpp",
-        core_range_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args =
-                {
-                    cfg.num_wl_loops,        // 0: num_loops (inner loops per dispatch)
-                    cfg.l1_buffer5_addr,     // 1: l1_tx_A_addr – pattern A (0x5555)
-                    cfg.l1_buffer6_addr,     // 2: l1_tx_B_addr – pattern B (0xAAAA)
-                    cfg.l1_buffer7_addr,     // 3: (unused)
-                    cfg.l1_buffer8_addr,     // 4: (unused)
-                    cfg.l1_buffer9_addr,     // 5: l1_rx_addr – destination on receiving cores
-                    cfg.l1_buffer10_addr,    // 6: (unused)
-                    cfg.data_transfer_size,  // 7: transfer_size
-                },
-        });
 
     // -- Compute kernel (TRISC) ---------------------------------------------
     // Uses pre-filled L1 buffers directly, no CB waits
@@ -772,62 +656,51 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             .fp32_dest_acc_en = false,
             .compile_args =
                 {
-                    cfg.l1_buffer0_addr,    // 0: l1_buffer0_addr (bfloat16)
-                    cfg.l1_buffer1_addr,    // 1: l1_buffer1_addr (bfloat16)
-                    cfg.l1_buffer2_addr,    // 2: l1_buffer2_addr (output, 8 float16_b tiles)
-                    cfg.num_tiles,          // 3: num_tiles (8)
-                    cfg.num_wl_loops,       // 4: num_iterations (inner loops per dispatch)
-                    cycles_to_wait,         // 5: cycles_to_wait (derived from fpu_utilization_pct)
-                    cfg.super_sync,         // 6: super_sync
-                    cfg.l1_super_sync_addr  // 7: l1_super_sync_addr
+                    cfg.l1_buffer0_addr,     // 0: l1_buffer0_addr (bfloat16)
+                    cfg.l1_buffer1_addr,     // 1: l1_buffer1_addr (bfloat16)
+                    cfg.l1_buffer2_addr,     // 2: l1_buffer2_addr (output, 8 float16_b tiles)
+                    cfg.num_tiles,           // 3: num_tiles (8)
+                    cfg.num_wl_loops,        // 4: num_iterations (inner loops per dispatch)
+                    cycles_to_wait,          // 5: cycles_to_wait (derived from fpu_utilization_pct)
+                    cfg.super_sync,          // 6: super_sync
+                    cfg.l1_super_sync_addr,  // 7: l1_super_sync_addr
+                    cfg.l1_fpu_timing_addr   // 8: l1_fpu_timing_addr
                 },
         });
 
-    // -- Set runtime arguments for NOC traffic kernels ----------------------
-    // Reader  (NOC0): only the top-left  core multicasts to the whole grid.
-    // Writer  (NOC1): only the bottom-right core multicasts to the whole grid.
-    // All other cores receive is_sender=0 and exit immediately.
+    if (cfg.super_sync) {
+        auto sender_semaphore_id = tt_metal::CreateSemaphore(program, core_range_set, INVALID);
+        auto receiver_semaphore_id = tt_metal::CreateSemaphore(program, core_range_set, INVALID);
+        auto barrier_kernel = CreateKernel(
+            program,
+            "tests/didt/max_util_workload/kernels/super_sync.cpp",
+            core_range_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {sender_semaphore_id, receiver_semaphore_id, cfg.l1_super_sync_addr},
+            });
 
-    // Physical NOC0 coordinates of the grid corners (used by both kernels).
-    CoreCoord phys_tl = device->worker_core_from_logical_core(cfg.grid_start);
-    CoreCoord phys_br = device->worker_core_from_logical_core(cfg.grid_end);
-
-    // Number of destination cores for multicast (all cores minus the sender itself).
-    uint32_t grid_size = (cfg.grid_end.x - cfg.grid_start.x + 1) * (cfg.grid_end.y - cfg.grid_start.y + 1);
-    uint32_t num_dests = grid_size - 1;
-
-    for (uint32_t y = cfg.grid_start.y; y <= cfg.grid_end.y; ++y) {
-        for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
-            CoreCoord core = {x, y};
+        CoreCoord phys_tl = device->worker_core_from_logical_core(cfg.grid_start);
+        CoreCoord phys_br = device->worker_core_from_logical_core(cfg.grid_end);
+        uint32_t num_dests = core_range.size() - 1;
+        for (const auto& core : core_range) {
             CoreCoord worker_core = device->worker_core_from_logical_core(core);
-
-            // Runtime arg vectors for reader and writer kernels
-            std::vector<uint32_t> sender_args = {
-                1u,
-                static_cast<uint32_t>(phys_tl.x),
-                static_cast<uint32_t>(phys_tl.y),
-                static_cast<uint32_t>(phys_br.x),
-                static_cast<uint32_t>(phys_br.y),
-                num_dests,
-                static_cast<uint32_t>(worker_core.x),
-                static_cast<uint32_t>(worker_core.y)};
-            std::vector<uint32_t> idle_args = {
-                0u,
-                static_cast<uint32_t>(phys_tl.x),
-                static_cast<uint32_t>(phys_tl.y),
-                static_cast<uint32_t>(phys_br.x),
-                static_cast<uint32_t>(phys_br.y),
-                num_dests,
-                static_cast<uint32_t>(worker_core.x),
-                static_cast<uint32_t>(worker_core.y)};
-
-            bool is_reader_sender = (x == cfg.grid_start.x && y == cfg.grid_start.y);
-            bool is_writer_sender = (x == cfg.grid_end.x && y == cfg.grid_end.y);
-
-            SetRuntimeArgs(program, reader_kernel, core, is_reader_sender ? sender_args : idle_args);
-            SetRuntimeArgs(program, writer_kernel, core, is_writer_sender ? sender_args : idle_args);
-
-            // Compute kernel doesn't need runtime args - uses compile-time L1 addresses
+            bool is_sender = core == cfg.grid_start;
+            SetRuntimeArgs(
+                program,
+                barrier_kernel,
+                core,
+                {
+                    is_sender,
+                    static_cast<uint32_t>(phys_tl.x),
+                    static_cast<uint32_t>(phys_tl.y),
+                    static_cast<uint32_t>(phys_br.x),
+                    static_cast<uint32_t>(phys_br.y),
+                    num_dests,
+                    static_cast<uint32_t>(worker_core.x),
+                    static_cast<uint32_t>(worker_core.y),
+                });
         }
     }
 
@@ -887,13 +760,11 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
 // ---------------------------------------------------------------------------
 // build_slow_cos_program – constructs the slow (cos) program
 //
-// All three RISCVs run the same noc-address layout as build_program but the
-// compute kernel runs SFPU cosine instead of MVMUL, making it significantly
-// lighter on the FPU.  Reader/writer kernels are the same noop variants as in
-// build_program.  The slow workload loops num_slow_wl_loops times per dispatch.
+// The compute kernel runs SFPU cosine instead of MVMUL, making it significantly
+// lighter on the FPU. The slow workload loops num_slow_wl_loops times per dispatch.
 // ---------------------------------------------------------------------------
 
-static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg) {
+static Program build_slow_cos_program(const MaxUtilConfig& cfg) {
     const CoreRange core_range(cfg.grid_start, cfg.grid_end);
     const CoreRangeSet core_range_set({core_range});
 
@@ -905,52 +776,6 @@ static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg)
         cfg.num_slow_wl_loops);
 
     Program program = CreateProgram();
-
-    // -- Reader kernel (BRISC / NOC0): reuse the same noop reader --
-    auto reader_kernel = CreateKernel(
-        program,
-        "tests/didt/max_util_workload/kernels/max_util_reader.cpp",
-        core_range_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args =
-                {
-                    cfg.num_slow_wl_loops,   // 0: num_loops
-                    cfg.l1_buffer3_addr,     // 1: l1_tx_A_addr
-                    cfg.l1_buffer4_addr,     // 2: l1_tx_B_addr
-                    cfg.l1_buffer7_addr,     // 3: l1_rx_addr
-                    cfg.l1_buffer8_addr,     // 4: (unused)
-                    cfg.l1_buffer9_addr,     // 5: (unused)
-                    cfg.l1_buffer10_addr,    // 6: (unused)
-                    cfg.data_transfer_size,  // 7: transfer_size
-                    0,                       // 8: super_sync
-                    0,                       // 9: super_sync_sender_semaphore_id
-                    0,                       // 10: super_sync_receiver_semaphore_id
-                    0,                       // 11: l1_super_sync_addr
-                },
-        });
-
-    // -- Writer kernel (NCRISC / NOC1): reuse the same noop writer --
-    auto writer_kernel = CreateKernel(
-        program,
-        "tests/didt/max_util_workload/kernels/max_util_writer.cpp",
-        core_range_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args =
-                {
-                    cfg.num_slow_wl_loops,   // 0: num_loops
-                    cfg.l1_buffer5_addr,     // 1: l1_tx_A_addr
-                    cfg.l1_buffer6_addr,     // 2: l1_tx_B_addr
-                    cfg.l1_buffer7_addr,     // 3: (unused)
-                    cfg.l1_buffer8_addr,     // 4: (unused)
-                    cfg.l1_buffer9_addr,     // 5: l1_rx_addr
-                    cfg.l1_buffer10_addr,    // 6: (unused)
-                    cfg.data_transfer_size,  // 7: transfer_size
-                },
-        });
 
     // -- Compute kernel (TRISC): SFPU cosine on L1 data --
     CreateKernel(
@@ -970,32 +795,70 @@ static Program build_slow_cos_program(IDevice* device, const MaxUtilConfig& cfg)
                 },
         });
 
-    // Set runtime args for reader/writer (same noop pattern as build_program).
-    CoreCoord phys_tl = device->worker_core_from_logical_core(cfg.grid_start);
-    CoreCoord phys_br = device->worker_core_from_logical_core(cfg.grid_end);
-    uint32_t grid_size = (cfg.grid_end.x - cfg.grid_start.x + 1) * (cfg.grid_end.y - cfg.grid_start.y + 1);
-    uint32_t num_dests = grid_size - 1;
+    return program;
+}
 
-    std::vector<uint32_t> sender_args = {
-        1u,
-        static_cast<uint32_t>(phys_tl.x),
-        static_cast<uint32_t>(phys_tl.y),
-        static_cast<uint32_t>(phys_br.x),
-        static_cast<uint32_t>(phys_br.y),
-        num_dests};
-    std::vector<uint32_t> idle_args = {0u, 0u, 0u, 0u, 0u, 0u};
+// ---------------------------------------------------------------------------
+// log_fpu_utilization – reads back-pressured unpack-thread timestamps from a
+// representative worker and reports useful MVMUL cycles / pipeline cycles.
+// ---------------------------------------------------------------------------
 
-    for (uint32_t y = cfg.grid_start.y; y <= cfg.grid_end.y; ++y) {
-        for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
-            CoreCoord core = {x, y};
-            bool is_reader_sender = (x == cfg.grid_start.x && y == cfg.grid_start.y);
-            bool is_writer_sender = (x == cfg.grid_end.x && y == cfg.grid_end.y);
-            SetRuntimeArgs(program, reader_kernel, core, is_reader_sender ? sender_args : idle_args);
-            SetRuntimeArgs(program, writer_kernel, core, is_writer_sender ? sender_args : idle_args);
-        }
+static bool log_fpu_utilization(IDevice* device, const MaxUtilConfig& cfg) {
+    std::vector<uint32_t> timing;
+    detail::ReadFromDeviceL1(
+        device, cfg.grid_start, cfg.l1_fpu_timing_addr, 4 * sizeof(uint32_t), timing, CoreType::WORKER);
+    if (timing.size() != 4) {
+        log_warning(LogTest, "Device {}: FPU timing readback returned {} words", device->id(), timing.size());
+        return false;
     }
 
-    return program;
+    uint64_t t0 = (static_cast<uint64_t>(timing[1]) << 32) | timing[0];
+    uint64_t t1 = (static_cast<uint64_t>(timing[3]) << 32) | timing[2];
+    if (t1 <= t0) {
+        log_warning(LogTest, "Device {}: invalid FPU timing (t0={}, t1={})", device->id(), t0, t1);
+        return false;
+    }
+
+    // Each tile executes eight repetitions of sixteen MVMUL instructions.
+    constexpr uint32_t useful_fpu_cycles_per_tile = 8 * 16;
+    uint64_t useful_cycles = static_cast<uint64_t>(useful_fpu_cycles_per_tile) * cfg.num_tiles * cfg.num_wl_loops;
+    uint64_t elapsed_cycles = t1 - t0;
+    double measured_pct = 100.0 * static_cast<double>(useful_cycles) / static_cast<double>(elapsed_cycles);
+
+    // Very short smoke runs do not fill the unpack/math/pack pipeline, so the
+    // back-pressure timing window is not a meaningful utilization estimate.
+    if (cfg.num_wl_loops < 100) {
+        log_info(
+            LogTest,
+            "Device {} FPU utilization measurement skipped: {} loop(s) do not fill the compute pipeline",
+            device->id(),
+            cfg.num_wl_loops);
+        return true;
+    }
+
+    const double matched_pct = static_cast<double>(nearest_fpu_pct(cfg.fpu_utilization_pct));
+    constexpr double tolerance_pct_points = 2.0;
+    bool within_tolerance = std::abs(measured_pct - matched_pct) <= tolerance_pct_points;
+    log_info(
+        LogTest,
+        "Device {} FPU utilization: requested={}% matched={}% measured={:.1f}% "
+        "({} useful MVMUL cycles / {} elapsed cycles on worker ({},{}))",
+        device->id(),
+        cfg.fpu_utilization_pct,
+        nearest_fpu_pct(cfg.fpu_utilization_pct),
+        measured_pct,
+        useful_cycles,
+        elapsed_cycles,
+        cfg.grid_start.x,
+        cfg.grid_start.y);
+    if (!within_tolerance) {
+        log_warning(
+            LogTest,
+            "Device {} FPU utilization is outside the ±{:.1f} percentage-point tolerance",
+            device->id(),
+            tolerance_pct_points);
+    }
+    return within_tolerance;
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,7 +991,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     const bool has_slow_wl = cfg.num_slow_wl_loops > 0;
     auto slow_cos_workload = distributed::MeshWorkload();
     if (has_slow_wl) {
-        slow_cos_workload.add_program(target, build_slow_cos_program(device, cfg));
+        slow_cos_workload.add_program(target, build_slow_cos_program(cfg));
         log_info(
             LogTest, "Duty-cycle interleave: slow cos loops={} between each max-util dispatch", cfg.num_slow_wl_loops);
     }
@@ -1144,6 +1007,8 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         }
     }
     distributed::Finish(cq);
+
+    bool valid_fpu_timing = log_fpu_utilization(device, cfg);
 
     // Report per-ETH-core DRAM bandwidth after the program completes.
     bool valid_eth_timing = log_eth_bw(device, cfg, eth_dram_buf);
@@ -1162,7 +1027,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
         cfg.num_wl_loops,
         cfg.num_slow_wl_loops);
 
-    return valid_eth_timing;
+    return valid_fpu_timing && valid_eth_timing;
 }
 
 /// Runs the workload on every unit-mesh device simultaneously. Active Ethernet
@@ -1207,7 +1072,7 @@ static bool run_all_devices(
         std::unique_ptr<distributed::MeshWorkload> slow_workload;
         if (cfg.num_slow_wl_loops > 0) {
             slow_workload = std::make_unique<distributed::MeshWorkload>();
-            slow_workload->add_program(target, build_slow_cos_program(device, cfg));
+            slow_workload->add_program(target, build_slow_cos_program(cfg));
         }
         runs.push_back(DeviceRun{
             mesh_device, device, cfg, std::move(eth_dram_buffer), std::move(main_workload), std::move(slow_workload)});
@@ -1240,13 +1105,15 @@ static bool run_all_devices(
         distributed::Finish(run.mesh_device->mesh_command_queue());
     }
 
-    // Report per-ETH-core DRAM bandwidth for every device.
+    // Report FPU utilization and per-ETH-core DRAM bandwidth for every device.
+    bool valid_fpu_timing = true;
     bool valid_eth_timing = true;
     for (const auto& run : runs) {
+        valid_fpu_timing &= log_fpu_utilization(run.device, run.cfg);
         valid_eth_timing &= log_eth_bw(run.device, run.cfg, run.eth_dram_buffer);
     }
 
-    return valid_eth_timing;
+    return valid_fpu_timing && valid_eth_timing;
 }
 
 // ---------------------------------------------------------------------------
