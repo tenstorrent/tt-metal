@@ -471,15 +471,31 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     # matmul's output write overlaps its compute either way: 559.5 vs 559.3 us at bs16), and with its input in L1 the
     # heads op is compute-bound, so it runs the v3 compute (each phase once per unit; 30% less compute at bs16 shapes,
     # 305 -> 214 us, bit-identical; slower than v1 with a DRAM input, so it follows this knob). bs8: 27 MB, 223 KB per
-    # core; cold / sustained 102.2 / 116.2 -> 98.8 / 113.1 ms. bs16: 53.5 MB, 446 KB per core, fits only with the
-    # post-attention sum in DRAM (the sum held the norm output low in L1, splitting the free space in two), which the
-    # sum's own L1 gain does not outweigh: 189.3 / 222.9 -> 186.0 / 220.3 ms. sustained_run.sh, 3 alternating rounds,
-    # chip 0 (NEGATIVE_RESULTS 56); bs32 would need 892 KB per core. Opt out: TT_PREFILL_QKV_L1=0 (the bs16 sum then
-    # returns to L1).
+    # core; cold / sustained 102.2 / 116.2 -> 98.8 / 113.1 ms. bs16: 53.5 MB, 446 KB per core, fits (without the
+    # preallocation below) only with the post-attention sum in DRAM (the sum held the norm output low in L1, splitting
+    # the free space in two), which the sum's own L1 gain does not outweigh: 189.3 / 222.9 -> 186.0 / 220.3 ms.
+    # sustained_run.sh, 3 alternating rounds, chip 0 (NEGATIVE_RESULTS 56); bs32 would need 892 KB per core. Opt out:
+    # TT_PREFILL_QKV_L1=0 (the bs16 sum then returns to L1).
     if batch_size in (8, 16) and seq_len == 512:
         os.environ.setdefault("TT_PREFILL_QKV_L1", "1")
         if os.getenv("TT_PREFILL_QKV_L1") == "1":
             os.environ.setdefault("QWEN_FUSED_COMPUTE_V3", "1")
+    # The post-MLP add+RMSNorm output (the next layer's QKV input) preallocated in L1 before FF2 (tt/decoder_fusion.py):
+    # allocated by the add, it lands below FF2's output and the post-attention sum, which are live then and freed
+    # right after, and splits L1's free space. At bs16 that lets the post-attention sum stay in L1 beside the QKV
+    # output: cold / sustained 186.0 / 228.1 -> 185.2 / 227.0 ms (3 alternating rounds, chip 1). At bs32 the QKV
+    # output (892 KB per core) cannot live in L1, so QKV + the heads op run in two half-batch chunks
+    # (tt/qkv_chunks.py): the add writes its output as two preallocated half-batch tensors at the top of L1, each
+    # chunk's QKV output goes to L1 and its heads op (v3) writes Q / K / V into full-batch tensors at a batch offset;
+    # layer 0 (input from the embedding) runs unchunked. bs32: 369.1 / 433.3 -> 362.2 / 430.4 ms (3 alternating
+    # rounds, chip 0; the settled clock drops ~10 MHz), STS-B 0.8146 unchanged (NEGATIVE_RESULTS 56). Opt out:
+    # QWEN_FUSED_ADD_NORM_PREALLOC=0 (bs16) / QWEN_QKV_CHUNKS=1 (bs32).
+    if batch_size == 16 and seq_len == 512:
+        os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
+    if batch_size == 32 and seq_len == 512:
+        os.environ.setdefault("QWEN_QKV_CHUNKS", "2")
+        if os.getenv("QWEN_QKV_CHUNKS") == "2":
+            os.environ.setdefault("QWEN_FUSED_ADD_NORM_PREALLOC", "1")
     # Batched ISL 512: the fused add+RMSNorm's short-lived operands live in L1 interleaved instead of DRAM: its b (the
     # WO / FF2 outputs) and both norms' outputs (read by QKV / FF1+FF3), and at bs8 the post-attention residual sum (add
     # 2's a, alive across the MLP only; at bs16 only without the QKV output in L1, above). The decoder's copy of the
@@ -491,7 +507,10 @@ def apply_workload_env(batch_size: int, seq_len: int) -> None:
     if batch_size in (8, 16, 32) and seq_len == 512 and os.getenv("QWEN_BATCHED_L1_INTERMEDIATES", "1") == "1":
         for k in ("TT_PREFILL_WO_L1", "TT_PREFILL_FF2_L1", "QWEN_FUSED_ADD_NORM_OUT_L1"):
             os.environ.setdefault(k, "1")
-        if batch_size == 8 or (batch_size == 16 and os.getenv("TT_PREFILL_QKV_L1") != "1"):
+        if batch_size == 8 or (
+            batch_size == 16
+            and (os.getenv("TT_PREFILL_QKV_L1") != "1" or os.getenv("QWEN_FUSED_ADD_NORM_PREALLOC") == "1")
+        ):
             os.environ.setdefault("QWEN_FUSED_ADD_NORM_SUM1_L1", "1")
     # Batched ISL 512 SDPA with reuse_kv: each core reads a KV head's K/V once instead of once per Q chunk (at q512 the
     # 4 Q heads sharing a KV head each re-read it: 142 MB per call at bs16, DRAM-bound and contention-limited), and the

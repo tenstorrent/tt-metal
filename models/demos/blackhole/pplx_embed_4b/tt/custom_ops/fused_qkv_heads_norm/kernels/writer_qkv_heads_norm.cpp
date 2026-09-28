@@ -47,6 +47,7 @@ void kernel_main() {
     const uint32_t v_tensor_addr = get_arg_val<uint32_t>(2);
     const uint32_t num_work_units = get_arg_val<uint32_t>(3);
     const uint32_t work_unit_start = get_arg_val<uint32_t>(4);
+    const uint32_t batch_offset = get_arg_val<uint32_t>(5);  // first batch of this call in the (larger) outputs
 
     constexpr uint32_t q_out_h_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t q_out_w_tiles = get_compile_time_arg_val(1);
@@ -91,7 +92,7 @@ void kernel_main() {
     uint32_t sub = work_unit_start % q_split;  // which Q half (0 also carries K, 1 carries V)
     uint32_t group = (work_unit_start / q_split) % head_groups;
     uint32_t s_tile = (work_unit_start / q_split / head_groups) % seq_tiles;
-    uint32_t batch = work_unit_start / q_split / head_groups / seq_tiles;
+    uint32_t batch = batch_offset + work_unit_start / q_split / head_groups / seq_tiles;
     for (uint32_t w = 0; w < num_work_units; ++w) {
         const bool has_k = (q_split == 1) || sub == 0;
         const bool has_v = (q_split == 1) || sub == 1;

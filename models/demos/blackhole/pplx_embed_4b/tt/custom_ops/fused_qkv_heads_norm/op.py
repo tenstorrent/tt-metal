@@ -96,6 +96,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     kv_dtype: ttnn.DataType | None = None,
     resident: bool = False,
     norm_eps: float | None = None,
+    out_tensors: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
+    batch_offset: int = 0,
+    use_v3: bool | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """``qkv_fused``: ``[B, 1, S, (num_heads + 2*num_kv_heads) * head_dim]`` TILE bf16/bfp8.
 
@@ -107,6 +110,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     per-core L1 shard (see ``_RESIDENT_CACHE``) instead of reading them per call; falls back when a core's units
     span more than one seq tile. The first cache miss copies the RoPE tables to the host, so it must not happen
     inside a trace capture.
+    ``out_tensors`` / ``batch_offset``: write into preallocated ``(q, k, v)`` with a larger batch, this call's batches
+    at ``[batch_offset, batch_offset + B)`` (a batch processed in chunks lands in one tensor per output, no concat).
+    ``use_v3``: the v3 compute for this call (default: ``QWEN_FUSED_COMPUTE_V3``).
     """
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -117,7 +123,9 @@ def nlp_create_qkv_heads_norm_headsplit(
     # phase run once per unit over the unit's Q and K heads, so each phase's reconfig / init / CB handshakes are paid
     # once per unit; intermediate CBs hold a unit's heads. Bit-identical to v1 at every batch size; 30% less compute,
     # but slower than v1 when the input streams from DRAM (NEGATIVE_RESULTS 53 / 56).
-    use_v3 = os.getenv("QWEN_FUSED_COMPUTE_V3", "0") == "1" and not use_v2
+    if use_v3 is None:
+        use_v3 = os.getenv("QWEN_FUSED_COMPUTE_V3", "0") == "1"
+    use_v3 = use_v3 and not use_v2
     # cos/sin tiles depend only on the seq tile; consecutive units of a core share it across the
     # head groups, so with the v2 compute they are read once per seq tile instead of once per unit.
     cache_rot = fuse_rotary and use_v2
@@ -148,9 +156,26 @@ def nlp_create_qkv_heads_norm_headsplit(
     separate_q = q_dtype != kv_dtype  # Q gets its own output CB (17) with its own tile size
     q_shape = (plan.batch, plan.num_q_heads, plan.seq_len, plan.head_dim)
     kv_shape = (plan.batch, plan.num_kv_heads, plan.seq_len, plan.head_dim)
-    q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(q_shape), q_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    if out_tensors is None:
+        if batch_offset:
+            raise ValueError("batch_offset needs out_tensors")
+        q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(q_shape), q_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+        k_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config
+        )
+        v_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(kv_shape), kv_dtype, ttnn.TILE_LAYOUT, device, memory_config
+        )
+    else:
+        q_tensor, k_tensor, v_tensor = out_tensors
+        for t, want, dt in (
+            (q_tensor, q_shape, q_dtype),
+            (k_tensor, kv_shape, kv_dtype),
+            (v_tensor, kv_shape, kv_dtype),
+        ):
+            got = tuple(int(d) for d in t.padded_shape)
+            if got[1:] != tuple(want[1:]) or got[0] < batch_offset + plan.batch or t.dtype != dt:
+                raise ValueError(f"out tensor {got} {t.dtype} cannot take batches {batch_offset}+{want} {dt}")
 
     grid = device.compute_with_storage_grid_size()
     num_cores, per_core = _split_work_to_cores(plan.num_blocks_total * head_groups * q_split, int(grid.x), int(grid.y))
@@ -302,7 +327,17 @@ def nlp_create_qkv_heads_norm_headsplit(
         )
         compute_rt.append((core, [n_units, cursor]))
         writer_rt.append(
-            (core, [q_tensor.buffer_address(), k_tensor.buffer_address(), v_tensor.buffer_address(), n_units, cursor])
+            (
+                core,
+                [
+                    q_tensor.buffer_address(),
+                    k_tensor.buffer_address(),
+                    v_tensor.buffer_address(),
+                    n_units,
+                    cursor,
+                    batch_offset,
+                ],
+            )
         )
         cursor += n_units
 
