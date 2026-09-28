@@ -231,6 +231,62 @@ OP_COLOR = {s.name: s.color for s in ALL_OPS}
 SWEEP_USE_CASE_TO_OP = {s.sweep_use_case: s.name for s in ALL_OPS} | {"plain": "to_out"}
 
 
+# Rows per device at 15 s / 768P / 16:9 per SP factor (the pipeline's logged `rows/device`; README Part 2).
+M_15S_768P_16_9_BY_SP = {8: 13664, 4: 27296}
+
+
+def ops_for(tp: int, M: int | None = None, ops: list[OpSpec] | None = None) -> list[OpSpec]:
+    """The block's matmul ops at another TP factor (and M): per-device widths rescaled from the TP=4 registry.
+
+    An AGMM keeps its gathered K and gets K_local = K / tp and N = N_out = N4 * 4 / tp; ff2 gets K = K_local =
+    ffn / tp with N (pre-reduce-scatter) unchanged and N_out = hidden / tp. Only TP=4 has swept blockings and
+    2026-09-17 measurements, so any other TP carries the model's generic fallback blocking -- (8, 7, 8) for the
+    AGMMs, whose K_block 8 the ring-safe rule lowers to a divisor of K_local / 32 -- and NaN for `measured_us`.
+    `M` defaults to the 15 s rows/device at SP = 32 / tp on the 4x8 mesh (TP=8 -> 27296; TP=4 -> 13664).
+    """
+    from dataclasses import replace
+
+    ops = ALL_OPS if ops is None else ops
+    if M is None:
+        M = M_15S_768P_16_9_BY_SP[32 // tp]
+    out = []
+    for op in ops:
+        if tp == TP:
+            out.append(replace(op, M=M) if M != op.M else op)
+            continue
+        scale = TP / tp
+        if op.is_agmm:
+            k_local = op.K // tp
+            k_tiles = k_local // 32
+            k_block = 8 if k_tiles % 8 == 0 else max(d for d in range(1, 9) if k_tiles % d == 0)
+            out.append(
+                replace(
+                    op,
+                    M=M,
+                    tp=tp,
+                    K_local=k_local,
+                    N=int(op.N * scale),
+                    N_out=int(op.N_out * scale),
+                    blocks=(8, k_block, 8, 2, 2),
+                    measured_us_wh_15s=float("nan"),
+                )
+            )
+        else:
+            out.append(
+                replace(
+                    op,
+                    M=M,
+                    tp=tp,
+                    K=int(op.K * scale),
+                    K_local=int(op.K_local * scale),
+                    N_out=int(op.N_out * scale),
+                    blocks=(8, 8, 8, 2, 2),
+                    measured_us_wh_15s=float("nan"),
+                )
+            )
+    return out
+
+
 def select_ops(arg: str) -> list[OpSpec]:
     """`--ops agmm|all|<comma list of op names and/or families>`, e.g. `agmm,ff2`."""
     out: list[OpSpec] = []

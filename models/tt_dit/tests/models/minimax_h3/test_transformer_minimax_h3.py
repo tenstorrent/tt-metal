@@ -47,6 +47,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local
 from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
+    GALAXY_RING_PERF,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -1020,7 +1021,19 @@ def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
     }
 
 
-@GALAXY_RING
+# The pipeline's rows/device at 15 s / 16:9 / 768P per SP factor (README Part 2; `c0af23ba607`). Every M-keyed
+# blocking table is keyed on these, so a drift here would silently miss every swept entry.
+PERF_ROWS_PER_DEVICE_15S = {8: 13664, 4: 27296}
+
+# How the block holds its adaLN projection (see `MiniMaxH3TransformerBlock.__init__` and
+# minimax_h3_wormhole/fsdp_off_handoff.md): `resident` keeps the TP-fractured weight on device and re-projects
+# `temb` every forward (the shipped path, FSDP on or off); `tables` keeps the weight on host and slices one
+# request-wide table per step (proposal #3, the Wormhole FSDP-off default); `fsdp` shards only that projection
+# across SP and gathers it every forward (proposal #7). The last two only exist with the DiT unsharded.
+ADALN_MODES = ("resident", "tables", "fsdp")
+
+
+@GALAXY_RING_PERF
 @pytest.mark.parametrize(
     "duration_s",
     [
@@ -1043,6 +1056,7 @@ def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
         pytest.param(4, id="sp_sim4"),
     ],
 )
+@pytest.mark.parametrize("adaln_mode", [pytest.param(mode, id=f"adaln_{mode}") for mode in ADALN_MODES])
 def test_minimax_h3_transformer_block_perf(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1053,9 +1067,14 @@ def test_minimax_h3_transformer_block_perf(
     sp_simulate: int,
     is_fsdp: bool,
     topology: ttnn.Topology,
+    adaln_mode: str,
     reset_seeds,
 ) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
+    if adaln_mode != "resident" and is_fsdp:
+        # With the DiT sharded the adaLN weight is sharded with it; `on_host` + FSDP raises in ColParallelLinear
+        # and `adaln_fsdp` is what FSDP already does. The pipeline forces both off when `dit_fsdp` is on.
+        pytest.skip(f"adaln_mode={adaln_mode} only applies with the DiT unsharded (is_fsdp=False)")
     # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
     # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
     # nothing there; the WH rows are only meaningful at sp_sim1.
@@ -1075,6 +1094,11 @@ def test_minimax_h3_transformer_block_perf(
         f"{sizes['num_video']} video + {sizes['num_audio']} audio + {sizes['num_text']} text "
         f"= seq_len {seq_len} (padded {padded_len}, {padded_len // sp_factor} rows/device)"
     )
+    if duration_s == 15.0 and SIM == 1 and sp_factor in PERF_ROWS_PER_DEVICE_15S:
+        assert padded_len // sp_factor == PERF_ROWS_PER_DEVICE_15S[sp_factor], (
+            f"{padded_len // sp_factor} rows/device at SP={sp_factor}, the pipeline runs "
+            f"{PERF_ROWS_PER_DEVICE_15S[sp_factor]}: every M-keyed blocking table would miss"
+        )
 
     num_timesteps = 2
     frame = sizes["grid_h"] * sizes["grid_w"]
@@ -1110,6 +1134,8 @@ def test_minimax_h3_transformer_block_perf(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
+        adaln_tables=adaln_mode == "tables",
+        adaln_fsdp=adaln_mode == "fsdp",
     )
     tt_block.load_torch_state_dict(torch_block.state_dict())
     del torch_block
@@ -1129,7 +1155,20 @@ def test_minimax_h3_transformer_block_perf(
     )
     tt_rope_cos, tt_rope_sin = upload_rope(rope_cos, rope_sin, mesh_device=mesh_device, sp_axis=sp_axis)
 
-    def run_block() -> ttnn.Tensor:
+    if adaln_mode == "tables":
+        # One request-wide table, as `MiniMaxH3Transformer3DModel.prepare_request_modulation` builds it: 50 steps
+        # of `num_timesteps` slots each. Built once per request in production, so outside the profiled region;
+        # what the profile sees is the per-step slice path (`_step_tables`) in place of the projection.
+        num_steps = 50
+        temb_all = from_torch(
+            torch.randn(1, 1, num_steps * num_timesteps, TIME_EMBED_DIM), device=mesh_device, dtype=ttnn.float32
+        )
+        tt_block.build_request_modulation(temb_all, rows_per_step=num_timesteps * MINIMAX_H3_MODALITY_NUM)
+        ttnn.deallocate(temb_all)
+
+    def run_block(step: int) -> ttnn.Tensor:
+        if adaln_mode == "tables":
+            tt_block.adaln_step = step
         out = tt_block(
             tt_spatial,
             logical_length_tensor(mesh_device, sim_seq_len),
@@ -1142,12 +1181,14 @@ def test_minimax_h3_transformer_block_perf(
         return out
 
     logger.info("iteration 1: compiling kernels and populating the program cache")
-    run_block()
+    run_block(0)
 
     logger.info("iteration 2: warm run (the profiled region)")
     signpost("start")
-    tt_out = run_block()
+    tt_out = run_block(1)
     signpost("stop")
+    if adaln_mode == "tables":
+        tt_block.release_request_modulation()
 
     assert tuple(tt_out.shape) == (
         1,

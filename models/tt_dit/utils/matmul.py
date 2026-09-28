@@ -156,6 +156,20 @@ grid_88_configs = {
     (13664, 5376, 7168): (8, 7, 10, (2, 2)),  # ff1, 15709.9 us
     (13664, 5376, 5376): (8, 7, 12, (2, 2)),  # to_qkv
     (13664, 7168, 1344): (8, 8, 6, (2, 2)),  # to_out
+    # MiniMax-H3 at 15 s / 768P on the WH Galaxy at TP=8 / SP=4 (27296 rows/device -- the DiT-FSDP-off placement,
+    # minimax_h3_wormhole/fsdp_off_handoff.md): per-device N halves and the ring delivers K in 8 chunks (21 K tiles
+    # per device for K=5376, 28 for 7168), so none of the TP=4 rows above apply and the model ran the generic
+    # (8, 7, 8) fallback on all three -- to_out padded its 3 N tiles per core to 8. Swept 2026-09-25 with
+    # sweep_mm_block_sizes.py on `wh_4x8_ring_tp8` (device kernel duration, harness use cases qkv / to_out /
+    # ff1_swiglu); the block profile (Tracy, tp8 fsdp1) ran the generic blocking at 14.22 / 11.21 / 16.71 ms.
+    (27296, 5376, 2688): (8, 7, 12, (2, 2)),  # to_qkv, 10950.3 us (123 combos; #2 (8, 3, 16) 11879.8)
+    (27296, 7168, 672): (16, 7, 3, (4, 1)),  # to_out, 9047.1 us (200 combos; #2 (14, 7, 3) sb(1, 3) 9159.3)
+    (27296, 5376, 3584): (
+        10,
+        7,
+        10,
+        (2, 2),
+    ),  # ff1, 14924.1 us (112 combos; #2 (12, 7, 8) 15074.9, 1380 vs ~1300 KB L1)
 }
 
 
@@ -164,6 +178,10 @@ grid_88_configs = {
 grid_89_configs = {
     # MiniMax-H3 ff2, 15 s @ 768P, plain minimal_matmul on the WH Galaxy 8x9 grid (13664 rows/device): rank 2/322; (12, 7, 8) is 1.5% faster but not PCC-validated, so not landed.
     (13664, 3584, 5376): (8, 7, 10, (2, 2)),  # ff2, 6770.7 us
+    # ff2 at TP=8 (K = 14336 / 8, 27296 rows/device), the unfused path a Linear topology takes; the Ring path takes the
+    # fused entry in `fused_mmrs_configs` below. Swept 2026-09-25 (227 combos): (12, 14, 4) 7156.4 us against the
+    # hardcoded (8, 8, 8) default's 8.09 ms in the block profile.
+    (27296, 1792, 5376): (12, 14, 4, (2, 2)),  # ff2 TP8, 7156.4 us
     (32, 2432, 3648): (2, 4, 8),
     (1024, 2432, 1920): (4, 4, 8),
     (352, 2432, 1920): (2, 4, 4),
@@ -1001,6 +1019,14 @@ fused_mmrs_configs = {
         # back-to-back calls with no hang. Same worker-per-direction count as the warned default that
         # preceded it -- the blocking, not the collective shape, was what made that default slow.
         (13664, 3584, 5376): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 6, 7, 8, 2, 2, None, 1),  # 8539.0 us
+        # The same op at TP=8 / SP=4 (K = 14336 / 8 = 1792, 27296 rows/device), the Wormhole DiT-FSDP-off placement.
+        # Until 2026-09-25 `mmrs_config.has_mmrs_config` gated on K = 3584, so TP=8 ran ff2 unfused: minimal_matmul
+        # on the (8, 8, 8) default 8.09 ms + reduce_scatter_minimal_async 6.24 ms + addcmul 0.64 ms per block (Tracy).
+        # Swept 2026-09-25 with sweep_mm_block_sizes.py (mmrs_nobias, wh_4x8_ring_tp8, 304 combos): (6, 2, 12)
+        # 11466.6 us, then (6, 2, 10) 11941.2 and (8, 2, 6) 11966.9. The RS carries (R-1)/R = 7/8 of the 27296 x 5376
+        # output against 3/4 of 13664 x 5376 at TP=4 (2.3x the bytes), which is why the fused op is 11.5 and not 8.5 ms.
+        # 744 KB of L1 for the window shard + CBs (the 13664 entry's 1280 KB fits in the block; 1336 clashed).
+        (27296, 1792, 5376): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 6, 2, 12, 2, 2, None, 1),  # 11466.6 us
     },
     ttnn.CoreCoord(12, 10): {
         # Wan2.2 720p ff2, single galaxy, swept 2026-08-24 (windowed): Mt_per_core=37, M_block=8

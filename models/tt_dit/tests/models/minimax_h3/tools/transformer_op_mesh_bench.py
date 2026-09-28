@@ -68,7 +68,7 @@ import ttnn
 
 sys.path.insert(0, ".")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from minimax_h3_ops import OPS_BY_NAME, golden, make_extra_inputs, output_parts, prepare_weight  # noqa: E402
+from minimax_h3_ops import OPS_BY_NAME, golden, make_extra_inputs, ops_for, output_parts, prepare_weight  # noqa: E402
 
 from models.tt_dit.utils.sweep_mm_block_sizes import close_mesh, open_mesh, resolve_config  # noqa: E402
 
@@ -84,7 +84,17 @@ def main() -> None:
         description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--op", default="ff1", choices=list(OPS_BY_NAME))
-    p.add_argument("--M", type=int, default=None, help="rows per device (default: the op's 15 s / 768P / 16:9 M)")
+    p.add_argument(
+        "--M", type=int, default=None, help="rows per device (default: the op's 15 s / 768P / 16:9 M at --tp)"
+    )
+    p.add_argument(
+        "--tp",
+        type=int,
+        default=4,
+        choices=(4, 8),
+        help="TP ring: 4 = the shipped TP4/SP8 placement (wh_4x8_ring, axis 0), 8 = TP8/SP4 (wh_4x8_ring_tp8, axis 1); "
+        "8 rescales the op's per-device K_local / N from the TP=4 registry (minimax_h3_ops.ops_for)",
+    )
     p.add_argument("--fp32-dest", type=int, default=1)
     p.add_argument(
         "--blocks", default=None, help="M_block,K_block,N_block,subblock_h,subblock_w (default: what the model runs)"
@@ -145,7 +155,7 @@ def main() -> None:
     )
     args = p.parse_args()
 
-    spec = OPS_BY_NAME[args.op]
+    spec = ops_for(args.tp, args.M, [OPS_BY_NAME[args.op]])[0]
     fused = spec.has_fusion and not args.no_fusion
     if (args.with_rs or args.fused or args.with_addcmul) and spec.family != "mm+rs":
         p.error("--with-rs / --with-addcmul / --fused apply to ff2 only")
@@ -159,7 +169,7 @@ def main() -> None:
     K, N = spec.K, spec.N
     mb, kb, nb, sh, sw = (int(v) for v in (args.blocks or spec.blocks_str()).split(","))
 
-    cfg = dict(resolve_config("wh_4x8_ring"))
+    cfg = dict(resolve_config("wh_4x8_ring" if args.tp == 4 else "wh_4x8_ring_tp8"))
     if args.fabric_payload:
         cfg["fabric_router_config_payload"] = args.fabric_payload
     log(f"opening mesh (fabric payload {cfg['fabric_router_config_payload']} B)")

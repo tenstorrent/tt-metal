@@ -172,7 +172,12 @@ Install it into the environment you run the tests from:
 
 ```bash
 pip install "diffusers @ git+https://github.com/huggingface/diffusers@abc5e9bf71fd38f53cd471bc3acaa84bc5ecbfdc"
+# the repo's python_env ships uv rather than pip:
+python_env/bin/uv pip install --python python_env/bin/python "diffusers @ git+https://github.com/huggingface/diffusers@abc5e9bf71fd38f53cd471bc3acaa84bc5ecbfdc"
 ```
+
+Only the reference tests need it (`tests/models/minimax_h3/test_transformer_minimax_h3.py` imports the fork at module
+level and fails collection without it); the pipeline and the e2e sweep harness do not import `diffusers`.
 
 Verify the reference classes resolve:
 

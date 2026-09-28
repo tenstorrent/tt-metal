@@ -100,6 +100,19 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    # Same Galaxy, TP ring of 8 along axis 1 (columns): the MiniMax-H3 TP8/SP4 placement, the only one
+    # that fits with DiT FSDP off (minimax_h3_wormhole/fsdp_off_handoff.md). Mirrors bh_4x8_sp0_tp1.
+    "wh_4x8_ring_tp8": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 4096,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
     "wh_4x8_linear": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D",
@@ -245,6 +258,20 @@ SHAPES = [
     # wh_4x8_ring_2links (2 links x 2 x 2 = 8 cores, one row).
     (13664, 3584, 5376, 8, 7, False, "mmrs_nobias"),
     (13664, 3584, 5376, 8, 8, False, "mmrs_nobias"),
+    # -----------------------------------------------------------------------
+    # MiniMax-H3 on WH Galaxy at TP=8 / SP=4 (device config wh_4x8_ring_tp8), 15 s @ 768P: M = 27296
+    # rows/device (the pipeline's logged value; README Part 2), per-device N halves against TP=4 and the
+    # ring delivers K in 8 chunks (21 K tiles per device for K=5376, 28 for 7168). None of the TP=4 entries
+    # above transfer, so the model runs every AGMM on the generic (8, 7, 8) fallback here, and ff2 unfused
+    # (K = 14336 / 8 = 1792 fails `has_mmrs_config`'s TP=4 gate). Swept 2026-09-25 for the FSDP-off work.
+    # -----------------------------------------------------------------------
+    (27296, 5376, 2688, 8, 8, True, "qkv"),
+    (27296, 7168, 672, 8, 8, True, "to_out"),
+    (27296, 5376, 3584, 8, 8, True, "ff1_swiglu"),
+    # ff2 unfused on the full 8x9 grid (what TP8 runs today, on the hardcoded (8, 8, 8)).
+    (27296, 1792, 5376, 8, 9, False, "ff2"),
+    # ff2 fused MM+RS+addcmul, bias-free like the model; 8x7 leaves the 16-core RS zone for 4 links.
+    (27296, 1792, 5376, 8, 7, False, "mmrs_nobias"),
     # LTX / Wan2.2 MMRS ff2 shapes on BH 4x8 sp1tp0 (TP ring of 4 on axis 0), 12x8 matmul grid —
     # resweep under the windowed L1 handoff (see the mmrs runner: combos with >= 2 M blocks per
     # core run windowed, the rest via the DRAM handoff). LTX ff2: K = 16384/tp4, N = 4096;

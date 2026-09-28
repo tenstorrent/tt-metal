@@ -98,25 +98,35 @@ dispatch-timeout reset the fabric mapper can refuse the 4x8 once (`tt-smi -r` ag
 
 ## 3. What the next agent should do: profile the transformer block
 
+> **Done 2026-09-25** (README Part 4, "The TP8 penalty was untuned matmuls"; `~/h3_wormhole_results/block_profiles_2026-09-25/RESULTS.md`).
+> The 1.8% was +16 ms/block of matmul: every blocking table held TP=4 shapes, so TP8 ran the generic AGMM fallback and an
+> unfused ff2. Swept and landed TP8 entries (M = 27296) and lifted the ff2 fuse gate; `adaln_tables` (#3) went from
+> 231.4 to 224.1 ms/block and 12239 to 11878 ms/fwd, now 2.0% faster per step than the shipped TP4/SP8 preset. #3 stays
+> the FSDP-off default. Open: to_out runs 2 ms slower on two of the four column rings (fabric), and whether the shipped
+> preset itself should move to TP8/SP4. The steps below are kept for the method.
+
 Every number above is end to end. Nothing in this session profiled the block per configuration, so the
 "block ms" column is derived and the 1.8% TP=8 penalty and the 0.7-1.2% FSDP saving are not yet attributed
 to ops. The tools to do that are in **PR #57941, "MiniMax-H3: Wormhole Galaxy optimizations"**
 (branch `minimax_h3_wh_optimizations`, `models/tt_dit/tests/models/minimax_h3/tools/`), and the README
 Part 2 of this directory shows them in use on the shipped configuration:
 
-1. **Take a Tracy per-op profile of one block** with the safe runner in profile mode:
+1. **Take a Tracy per-op profile of one block** with the safe runner in profile mode. *Corrected 2026-09-25:*
+   the test lives in `test_transformer_minimax_h3.py` (not `test_performance_minimax_h3.py`), and it now takes an
+   `adaln_<mode>` parameter and TP8/SP4 rows (`GALAXY_RING_PERF` in `common.py`):
    ```bash
    scripts/run_safe_pytest.sh --profile \
-     "'models/tt_dit/tests/models/minimax_h3/test_performance_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim1-15s_768p-4x8sp1tp0nl4_ring_is_fsdp1]'" \
-     -o timeout=1500
+     "'models/tt_dit/tests/models/minimax_h3/test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf[wormhole_b0-adaln_tables-sp_sim1-test_prompt_text_tokens-15s_768p-4x8sp0tp1nl4_ring_is_fsdp0]'" \
+     -s --timeout 3600
    ```
-   It prints `SAFE_PYTEST: PROFILER CSV: <path>` (under `generated/profiler/reports/`). The existing
-   parametrizations are TP4/SP8 only (`4x8sp1tp0nl4_ring_is_fsdp0` / `_is_fsdp1`, in
-   `tests/.../minimax_h3/common.py`); **add TP8/SP4 variants** (`tp_axis=1, sp_axis=0`) and plumb
-   `adaln_tables` / `adaln_fsdp` into the block fixture so #3, #6 and #7 can each be profiled against the
-   FSDP-on block at the same TP. Two known snags: the `is_fsdp0` profile has aborted inside Tracy before
-   (ff1.md, "per-op durations are not additive under FSDP"), and the block test needs the pinned diffusers
-   fork that not every host has (the 09-17 sweep host did not, and ran everything end to end instead).
+   Ids are `wormhole_b0-adaln_{resident,tables,fsdp}-sp_sim{1,4}-{test_prompt,512}_text_tokens-{5,10,15}s_768p-4x8sp{1tp0,0tp1}nl4_ring_is_fsdp{0,1}` (use `test_prompt_text_tokens`: it is the pipeline's prompt length, 13664 / 27296 rows per device at 15 s, which the test asserts);
+   `tables` / `fsdp` skip with `is_fsdp1`. It prints `SAFE_PYTEST: PROFILER CSV: <path>` (under
+   `generated/profiler/reports/`); the embedded single quotes are for `--profile` only (plain mode passes them to
+   pytest literally). The file imports the pinned diffusers fork at module level, so a host without it fails
+   collection: install it with `python_env/bin/uv pip install --python python_env/bin/python "diffusers @ git+https://github.com/huggingface/diffusers@<pin in MiniMaxH3.md>"`
+   (the pipeline and the e2e harness do not import diffusers). The `is_fsdp0` Tracy abort noted in ff1.md did not
+   recur in 16 profiles on 2026-09-25. Results of that session: `~/h3_wormhole_results/block_profiles_2026-09-25/RESULTS.md`
+   and README Part 4.
 2. **Compare profiles** with `tools/block_profile_stats.py compare` (per-op mean / std / CoV across the
    32 devices and across runs; the README Part 2 tables came from it) and `tools/project_block_perf.py
    fsdp1=<csv> fsdp0=<csv>` (projects a block delta onto the 15 s forward). Use

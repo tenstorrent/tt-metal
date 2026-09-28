@@ -71,10 +71,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from minimax_h3_ops import (  # noqa: E402
     AGMM_OPS,
     M_15S_768P_16_9,
+    M_15S_768P_16_9_BY_SP,
     MEASURED_US_WH_15S,
     OPS_BY_NAME,
     SWEEP_USE_CASE_TO_OP,
     OpSpec,
+    ops_for,
     select_ops,
 )
 
@@ -1442,7 +1444,17 @@ def main() -> None:
     )
     p.add_argument("--links", type=int, default=None, help="override --arch's links per direction")
     p.add_argument(
-        "--M", type=int, default=M_15S_768P_16_9, help="rows per device (default 13664 = 15 s / 768P / 16:9 at SP=8)"
+        "--M",
+        type=int,
+        default=None,
+        help="rows per device (default: 13664 = 15 s / 768P / 16:9 at SP=8 for --tp 4, 27296 at SP=4 for --tp 8)",
+    )
+    p.add_argument(
+        "--tp",
+        type=int,
+        default=4,
+        choices=(4, 8),
+        help="TP factor (ring size) the block runs at; 8 rescales every op's per-device K_local / N from the TP=4 registry",
     )
     p.add_argument(
         "--ops",
@@ -1491,7 +1503,16 @@ def main() -> None:
         dram_bw = WH_DRAM_BW[args.dram]
     else:
         dram_bw = float(args.dram) * 1e9
-    main_arch = replace(base, dram_bw=dram_bw, num_links=args.links or base.num_links)
+    if args.M is None:
+        args.M = M_15S_768P_16_9_BY_SP[32 // args.tp]
+    main_arch = replace(base, dram_bw=dram_bw, num_links=args.links or base.num_links, ring_size=args.tp)
+    if args.tp != base.ring_size:
+        main_arch = replace(
+            main_arch,
+            name=main_arch.name.replace(
+                f"TP={base.ring_size} / SP={32 // base.ring_size}", f"TP={args.tp} / SP={32 // args.tp}"
+            ),
+        )
     others = [a for key, a in ARCHES.items() if key != args.arch]
     if args.no_bh:
         others = [a for a in others if a is not BH]
@@ -1501,7 +1522,7 @@ def main() -> None:
     if args.profile_csv is None and args.arch == "wh":
         args.profile_csv = DEFAULT_PROFILE_CSV
 
-    ops = select_ops(args.ops + (",ff2" if args.include_ff2 else ""))
+    ops = ops_for(args.tp, args.M, select_ops(args.ops + (",ff2" if args.include_ff2 else "")))
     measured: dict[str, float] = {}
     if not args.no_measured:
         # The registry's shipped-blocking numbers are the Wormhole 2026-09-17 baseline; other arches only have
