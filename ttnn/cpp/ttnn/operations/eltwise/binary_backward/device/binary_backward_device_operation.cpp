@@ -32,8 +32,7 @@ std::string_view op_name_of(BinaryBackwardOpType op_type) {
 }
 
 // Hard: caller errors no path can recover from (bad storage, null buffer, non-float
-// dtype). PyTorch also throws on int/uint gradient requests; matching that so composite
-// never silently accepts a case autograd itself rejects.
+// dtype). int/uint kept out so composite never silently accepts a non-differentiable case.
 std::optional<std::string> operand_hard_reject_reason(
     std::string_view op_name, const Tensor& tensor, std::string_view role) {
     if (tensor.storage_type() != StorageType::DEVICE) {
@@ -46,8 +45,8 @@ std::optional<std::string> operand_hard_reject_reason(
     }
     if (!is_supported_dtype(tensor.dtype())) {
         return fmt::format(
-            "{} requires floating-point {} (bfloat16/float32/bfloat8_b/bfloat4_b); got dtype {}. PyTorch autograd "
-            "also rejects gradient computation on int/uint tensors.",
+            "{} requires floating-point {} (bfloat16/float32/bfloat8_b/bfloat4_b); got dtype {}. int/uint "
+            "operands are not supported by binary_backward.",
             op_name,
             role,
             tensor.dtype());
@@ -101,7 +100,8 @@ std::optional<std::string> preallocated_hard_reject_reason(
     }
     if (preallocated->logical_shape() != reference.logical_shape()) {
         return fmt::format(
-            "{} operation requires {} logical shape to match its operand, got {} vs {}",
+            "{} requires {} logical shape {} to match operand shape {}. Grads return at operand shape now; "
+            "resize the preallocated buffer or drop it to auto-allocate.",
             op_name,
             role,
             preallocated->logical_shape(),
@@ -109,7 +109,8 @@ std::optional<std::string> preallocated_hard_reject_reason(
     }
     if (preallocated->padded_shape() != reference.padded_shape()) {
         return fmt::format(
-            "{} operation requires {} padded shape to match its operand, got {} vs {}",
+            "{} requires {} padded shape {} to match operand padded shape {}. Grads return at operand "
+            "shape now; resize the preallocated buffer or drop it to auto-allocate.",
             op_name,
             role,
             preallocated->padded_shape(),

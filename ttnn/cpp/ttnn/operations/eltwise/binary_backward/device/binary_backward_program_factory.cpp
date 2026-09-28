@@ -20,11 +20,8 @@ namespace ttnn::operations::binary_backward {
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-// Fused broadcast+reduce (#56601 follow-up) hooks off kernel_spec.broadcast_reduce_kernel_path
-// (empty in PR-1). Lift plan when wiring the branch:
-//   reader  <- binary_ng/device/kernels_ng/dataflow/reader_interleaved_{row,col,row_col_mixed}_bcast.cpp
-//   compute <- moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp (DEST fp32 accumulate)
-// PR-1 correctness for broadcast rows goes through composite reduce_to_shape in binary_backward.cpp.
+// Fused broadcast+reduce follow-up hooks off kernel_spec.broadcast_reduce_kernel_path
+// (empty here). Correctness for broadcast rows uses composite reduce_to_shape in binary_backward.cpp.
 
 ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
     const BinaryBackwardParams& args, const BinaryBackwardInputs& tensor_args, std::vector<Tensor>& outputs) {

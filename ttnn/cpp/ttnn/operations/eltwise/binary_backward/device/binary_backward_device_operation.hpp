@@ -27,8 +27,7 @@ struct BinaryBackwardDeviceOperation {
     using program_factory_t = std::variant<BinaryBackwardProgramFactory>;
 
     // Caller-error invariants: device storage, non-null buffer, cross-device, non-float
-    // dtype (PyTorch also rejects), preallocated dtype/shape mismatch. TT_FATAL from
-    // validate; the wrapper cannot demote them to composite.
+    // dtype, preallocated dtype/shape mismatch. TT_FATAL from validate.
     static std::optional<std::string> hard_invariants_reason(
         BinaryBackwardOpType op_type,
         const Tensor& grad_output,

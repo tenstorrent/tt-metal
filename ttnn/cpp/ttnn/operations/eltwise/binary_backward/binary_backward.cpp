@@ -48,9 +48,8 @@ void preallocated_tensors_check(
     }
 }
 
-// PyTorch-parity: after a broadcast-shape multiply, sum-reduce along the axes where the
-// operand was expanded so the grad matches the operand's shape (mirrors tt-train's
-// unbroadcast_grad and PyTorch autograd's AccumulateGrad); no-op on same-shape.
+// After a broadcast-shape multiply, sum-reduce along the axes where the operand was
+// expanded so the grad matches operand shape; mirrors tt-train unbroadcast_grad.
 Tensor reduce_grad_to_operand_shape(
     const Tensor& grad, const ttnn::Shape& operand_shape, const std::optional<MemoryConfig>& memory_config) {
     const auto axes = broadcast_reduce_axes(operand_shape, grad.logical_shape());
