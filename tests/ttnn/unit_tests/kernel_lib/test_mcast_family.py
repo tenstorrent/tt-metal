@@ -129,6 +129,15 @@ GEOMETRIES = CHAIN_GEOMETRIES + [case for case in POLICY_GEOMETRIES if case[0] !
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("name,groups", GEOMETRIES, ids=[case[0] for case in GEOMETRIES])
 def test_family_geometry(device, noc, name, groups):
+    if name in ("mapped-gap", "dense-gap"):
+        width = min(device.compute_with_storage_grid_size().x - 1, 9)
+        if width < 3:
+            pytest.skip("requires a worker grid of at least 4x1")
+        groups = (
+            [([(x, 0) for x in range(width)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]
+            if name == "mapped-gap"
+            else [([(x, 0) for x in range(width)], [(2, 0)])]
+        )
     run_family_case(
         device,
         groups,
