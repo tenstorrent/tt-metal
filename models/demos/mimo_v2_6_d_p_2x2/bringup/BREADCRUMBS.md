@@ -142,3 +142,26 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Device gate (2x2): pcc_swap_out 0.999994, out rel 0.0039, h_mid rel 0.0064 ratio [1.0014, 1.0084], ffn_norm rel 0.0051 ratio
   [0.9942, 1.0106], coef 1.0005, PASS. The first `FAIL pcc=0` block comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_04_ffn_norm.py`
+
+## C.full_dense.mlp.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_dense_mlp.py` (same golden, ffn_norm
+  [2048, 4096] -> mlp_out). Only the docstring changed. Gate: pcc_mlp_L00 >= 0.99. Asserted extras: output finite, rel L2 <= 0.015, per-token
+  norm ratio in [0.98, 1.02], worst per-token rel L2 <= 0.05. Why: PCC passes a 2x output, an all_reduce counted 4x, zeroed rows and a missing
+  TP shard (the docstring lists the prior's measurements). HiFi2-like weight truncation gives rel 0.0141, so the 0.015 limit leaves little room
+  above HiFi2. HiFi4 (owner rule) is expected near 0.003-0.006.
+- BRINGUP_IMPL=reference: PCC 0.999998, rel 0.001745, ratio [0.9986, 1.0015], worst row 0.0024, PASS. BRINGUP_IMPL=stub: PCC 0, FAIL.
+- Default gate (2x2) fails with NotImplementedError ("no device module for mlp yet"). The implement step adds that module.
+- On the 2x2 mesh the down projection's reduction has to cover all 4 chips (both axes). A reduction over one axis only leaves out half the TP
+  shards (the prior measured PCC 0.9958 / rel 0.26 with one shard missing), and the rel check catches that.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp.py`
+
+## C.full_dense.mlp.implement.1 (implement role), 2026-09-28
+- `tt/mlp.py`: `TtDenseMLP`, copied from the 1x4 prior. The only code change is the down reduce, `ttnn.all_reduce(cluster_axis=None)`
+  (axis 1 then axis 0, all 4 TP ranks). Sharding needed no change: `ShardTensorToMesh` over the row-major 2x2 order gives chip d = 2*row + col
+  intermediate columns [4096d, 4096d+4096) for gate/up (dim -1) and the matching down rows (dim -2). Weights are fp8 + 128x128 block scale,
+  dequantized to bf16 at load. Every matmul runs HiFi4 + fp32 acc, and silu is fused into the gate linear.
+- `tt/model.py`: added `build_mlp` (the same loader path as the prior: `reference.weights.fp8_weight`). `hooks.py`: added `_mlp_module`.
+  `device_component` serves `mlp`, the hybrid model adds an `mlp` override, and `DEVICE_STEPS.full_dense` now contains `mlp`.
+- Gate: pcc_mlp_L00 0.999995, rel_l2 0.004004, row_norm_ratio [1.0007, 1.0050], worst row 0.0056, PASS. Every row's norm ratio is slightly
+  above 1, a small upward bias well inside [0.98, 1.02]. The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp.py`
