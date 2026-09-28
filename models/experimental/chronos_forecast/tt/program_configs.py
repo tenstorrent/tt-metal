@@ -35,6 +35,7 @@ class TtChronosPrecision:
     bf8_attention: bool = False  # Q/K/V (RoPE and SDPA inputs) as bfloat8_b
     bf8_ff_hidden: bool = False  # relu(x @ Wi) stored as bfloat8_b
     bf8_sublayer_out: bool = False  # attention / FF outputs added to the (bf16) residual stream
+    bf8_norm_out: bool = False  # RMSNorm outputs (QKV, V*O and FF-up matmul inputs) as bfloat8_b
     lofi_ff: bool = False  # FF-up/down matmuls at LoFi
     lofi_attention: bool = False  # QKV, output and group V*O matmuls at LoFi
 
@@ -45,6 +46,7 @@ class TtChronosPrecision:
             bf8_attention=True,
             bf8_ff_hidden=True,
             bf8_sublayer_out=True,
+            bf8_norm_out=True,
             lofi_ff=True,
             lofi_attention=True,
         )
@@ -68,6 +70,11 @@ class TtChronosPrecision:
         import ttnn
 
         return ttnn.bfloat8_b if self.bf8_sublayer_out else ttnn.bfloat16
+
+    def norm_dtype(self):
+        import ttnn
+
+        return ttnn.bfloat8_b if self.bf8_norm_out else None
 
     def ff_math_fidelity(self):
         import ttnn
@@ -279,3 +286,23 @@ def linear(x, weight, *, bias=None, activation: str | None = None, memory_config
         dtype=dtype,
         compute_kernel_config=compute_kernel_config(math_fidelity),
     )
+
+
+def rms_norm(x, *, epsilon: float, memory_config=None, dtype=None):
+    """Gamma-free RMSNorm; a ``dtype`` other than x's uses the model-local op, which can narrow the output."""
+    import ttnn
+
+    memory_config = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
+    custom = (
+        dtype is not None
+        and dtype != x.dtype
+        and x.layout == ttnn.TILE_LAYOUT
+        and not x.memory_config().is_sharded()
+        and not memory_config.is_sharded()
+        and x.shape[-1] % TILE == 0
+    )
+    if not custom:
+        return ttnn.rms_norm(x, epsilon=epsilon, memory_config=memory_config)
+    from models.experimental.chronos_forecast import ops
+
+    return ops.rms_norm(x, epsilon=epsilon, memory_config=memory_config, norm_dtype=dtype)

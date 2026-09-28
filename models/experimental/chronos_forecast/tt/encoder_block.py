@@ -129,7 +129,9 @@ class TtEncoderBlock:
 
         # Sublayer 3: feedforward (inline) + residual
         ff_fidelity = self.precision.ff_math_fidelity()
-        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, memory_config=mem)
+        n = program_configs.rms_norm(
+            x, epsilon=self.weights.ff_eps, memory_config=mem, dtype=self.precision.norm_dtype()
+        )
         h = program_configs.linear(
             n,
             ff_wi,

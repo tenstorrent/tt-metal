@@ -142,7 +142,9 @@ class TtMhaCore:
         num_heads, head_dim = self.weights.num_heads, self.weights.head_dim
         batch, seq = x.shape[0], x.shape[1]
         # 1. RMSNorm (T5-style: no mean subtraction, no bias); gamma is folded into wqkv.
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, memory_config=mem)
+        x_norm = program_configs.rms_norm(
+            x, epsilon=self.weights.eps, memory_config=mem, dtype=self.precision.norm_dtype()
+        )
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
         fidelity = self.precision.attention_math_fidelity()
         xqkv = program_configs.linear(
@@ -248,7 +250,9 @@ class TtMhaCore:
         if self._diagonal_vo_weight is None:
             raise RuntimeError("diagonal group path was not enabled for this MHA core")
         mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, memory_config=mem)
+        x_norm = program_configs.rms_norm(
+            x, epsilon=self.weights.eps, memory_config=mem, dtype=self.precision.norm_dtype()
+        )
         out = program_configs.linear(
             x_norm,
             self._diagonal_vo_weight,

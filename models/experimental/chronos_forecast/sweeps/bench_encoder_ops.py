@@ -79,6 +79,50 @@ def bench_rms_norm(dev):
         yield name, trace_us(dev, fn), pcc(ref, got)
 
 
+def bench_add_rms_norm(dev):
+    """Residual add + RMSNorm: stock norm, model-local norm (bf16 / bf8 out), and the fused dual-output op."""
+    x = to_dev(torch.randn(SERIES, T, D), ttnn.bfloat16, dev)
+    out = to_dev(torch.randn(SERIES, T, D), ttnn.bfloat8_b, dev)
+    y_h = ttnn.to_torch(x).float() + ttnn.to_torch(out).float()
+    ref = y_h * torch.rsqrt(y_h.pow(2).mean(-1, keepdim=True) + 1e-6)
+
+    def split(norm):
+        def fn():
+            y = ops.add(x, out, memory_config=L1)
+            return y, norm(y)
+
+        return fn
+
+    def stock(y):
+        return ttnn.rms_norm(y, epsilon=1e-6, memory_config=L1)
+
+    def local(dtype):
+        return lambda y: ops.rms_norm(y, epsilon=1e-6, memory_config=L1, norm_dtype=dtype)
+
+    def fused(dtype):
+        return lambda: ops.add_rms_norm(x, out, epsilon=1e-6, memory_config=L1, norm_dtype=dtype)
+
+    cases = [
+        ("add + ttnn.rms_norm", split(stock)),
+        ("add + ops.rms_norm bf16", split(local(ttnn.bfloat16))),
+        ("add + ops.rms_norm bf8", split(local(ttnn.bfloat8_b))),
+        ("add_rms_norm bf16", fused(ttnn.bfloat16)),
+        ("add_rms_norm bf8", fused(ttnn.bfloat8_b)),
+    ]
+    for name, fn in cases:
+        y, n = fn()
+        p = min(pcc(y_h, ttnn.to_torch(y).float()), pcc(ref, ttnn.to_torch(n).float()))
+        ttnn.deallocate(y)
+        ttnn.deallocate(n)
+
+        def keep_n(fn=fn):
+            y, n = fn()
+            ttnn.deallocate(y)
+            return n
+
+        yield name, trace_us(dev, keep_n), p
+
+
 def bench_heads(dev):
     xqkv = to_dev(torch.randn(SERIES, T, 3 * D), ttnn.bfloat8_b, dev)
 
@@ -146,6 +190,7 @@ BENCHES = {
     "rope": bench_rope,
     "add": bench_add,
     "rms_norm": bench_rms_norm,
+    "add_rms_norm": bench_add_rms_norm,
     "heads": bench_heads,
     "qkv_rope": bench_qkv_rope,
     "concat": bench_concat,
