@@ -45,3 +45,8 @@ pytest models/demos/gemma4_d_p/tests/test_prefill_service.py -sv --basetemp=/tmp
 It checks all six full-context prompts, final-chunk trace/eager PCC above 0.999, finite hidden states, nonzero first/last KV rows from every layer, distinct slot contents, and preservation of completed slots. It then reuses all six slots with 8193-token prompts to check partial final chunks. Producer logs, including timings, are saved in the pytest temporary directory. For the canonical demo, add `--timeout=3600` if loading weights exceeds the repository's default 300-second timeout.
 
 For source KV correctness and real loopback migration, see [Migration tests](PREFILL_MIGRATION.md).
+
+For DFlash context K/V, set `PREFILL_DFLASH=1` in the server environment. Each
+user slot gets its own five-layer draft cache; acknowledgements increase from
+60 to 65 per chunk. See [DFlash prefill](DFLASH_PREFILL.md) for cache paths,
+computation, and tests.
