@@ -44,55 +44,40 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
 
-    // Create address generators for DRAM buffers
-    const InterleavedAddrGen<true> dram0_addr_gen = {
-        .bank_base_address = dram_buffer0_addr,
-        .page_size = tile_size_bytes,
-    };
+    constexpr auto dram0_args = TensorAccessorArgs<14>();
+    constexpr auto dram1_args = TensorAccessorArgs<dram0_args.next_compile_time_args_offset()>();
+    constexpr auto dram_0xAAAA_args = TensorAccessorArgs<dram1_args.next_compile_time_args_offset()>();
+    constexpr auto dram_0x5555_args = TensorAccessorArgs<dram_0xAAAA_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<true> dram1_addr_gen = {
-        .bank_base_address = dram_buffer1_addr,
-        .page_size = tile_size_bytes,
-    };
-
-    const InterleavedAddrGen<true> dram_0xAAAA_addr_gen = {
-        .bank_base_address = dram_buffer_0xAAAA_addr,
-        .page_size = transfer_size,
-    };
-
-    const InterleavedAddrGen<true> dram_0x5555_addr_gen = {
-        .bank_base_address = dram_buffer_0x5555_addr,
-        .page_size = transfer_size,
-    };
+    const auto dram0_addr_gen = TensorAccessor(dram0_args, dram_buffer0_addr);
+    const auto dram1_addr_gen = TensorAccessor(dram1_args, dram_buffer1_addr);
+    const auto dram_0xAAAA_addr_gen = TensorAccessor(dram_0xAAAA_args, dram_buffer_0xAAAA_addr);
+    const auto dram_0x5555_addr_gen = TensorAccessor(dram_0x5555_args, dram_buffer_0x5555_addr);
 
     // Read buffer 0 from DRAM to L1
     for (uint32_t t = 0; t < num_tiles; ++t) {
         uint32_t l1_write_addr = l1_buffer0_addr + (t * tile_size_bytes);
-        uint64_t noc_addr = get_noc_addr(t, dram0_addr_gen);
-        noc_async_read(noc_addr, l1_write_addr, tile_size_bytes);
+        noc_async_read_page(t, dram0_addr_gen, l1_write_addr);
         noc_async_read_barrier();
     }
 
     // Read buffer 1 from DRAM to L1
     for (uint32_t t = 0; t < num_tiles; ++t) {
         uint32_t l1_write_addr = l1_buffer1_addr + (t * tile_size_bytes);
-        uint64_t noc_addr = get_noc_addr(t, dram1_addr_gen);
-        noc_async_read(noc_addr, l1_write_addr, tile_size_bytes);
+        noc_async_read_page(t, dram1_addr_gen, l1_write_addr);
         noc_async_read_barrier();
     }
 
     // Read buffer 3 and 5 from same DRAM (0xAAAA pattern)
-    uint64_t noc_addr = get_noc_addr(0, dram_0xAAAA_addr_gen);
-    noc_async_read(noc_addr, l1_buffer3_addr, transfer_size);
+    noc_async_read_page(0, dram_0xAAAA_addr_gen, l1_buffer3_addr);
     noc_async_read_barrier();
-    noc_async_read(noc_addr, l1_buffer5_addr, transfer_size);
+    noc_async_read_page(0, dram_0xAAAA_addr_gen, l1_buffer5_addr);
     noc_async_read_barrier();
 
     // Read buffer 4 and 6 from same DRAM (0x5555 pattern)
-    noc_addr = get_noc_addr(0, dram_0x5555_addr_gen);
-    noc_async_read(noc_addr, l1_buffer4_addr, transfer_size);
+    noc_async_read_page(0, dram_0x5555_addr_gen, l1_buffer4_addr);
     noc_async_read_barrier();
-    noc_async_read(noc_addr, l1_buffer6_addr, transfer_size);
+    noc_async_read_page(0, dram_0x5555_addr_gen, l1_buffer6_addr);
     noc_async_read_barrier();
 
     *(l1_super_sync_addr_ptr) = 0;

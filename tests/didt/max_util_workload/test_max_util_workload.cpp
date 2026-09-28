@@ -27,6 +27,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_metal/test_utils/stimulus.hpp>
 #include <distributed/mesh_device_impl.hpp>
@@ -497,6 +498,27 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
 
     Program program = CreateProgram();
 
+    std::vector<uint32_t> prefill_compile_args = {
+        dram_buffer0_addr,        // 0: dram_buffer0_addr
+        dram_buffer1_addr,        // 1: dram_buffer1_addr
+        dram_buffer_0xAAAA_addr,  // 2: dram_buffer_0xAAAA_addr
+        dram_buffer_0x5555_addr,  // 3: dram_buffer_0x5555_addr
+        cfg.l1_buffer0_addr,      // 4: l1_buffer0_addr
+        cfg.l1_buffer1_addr,      // 5: l1_buffer1_addr
+        cfg.l1_buffer3_addr,      // 6: l1_buffer3_addr
+        cfg.l1_buffer4_addr,      // 7: l1_buffer4_addr
+        cfg.l1_buffer5_addr,      // 8: l1_buffer5_addr
+        cfg.l1_buffer6_addr,      // 9: l1_buffer6_addr
+        tile_bytes_bfloat16,      // 10: tile_size_bytes (bfloat16, 2048)
+        buffer_size_uint32,       // 11: data_transfer_size (8KB)
+        cfg.num_tiles,            // 12: num_tiles (8)
+        cfg.l1_super_sync_addr,   // 13: l1_super_sync_addr
+    };
+    TensorAccessorArgs(*dram_buffer0).append_to(prefill_compile_args);
+    TensorAccessorArgs(*dram_buffer1).append_to(prefill_compile_args);
+    TensorAccessorArgs(*dram_buffer_0xAAAA).append_to(prefill_compile_args);
+    TensorAccessorArgs(*dram_buffer_0x5555).append_to(prefill_compile_args);
+
     // Pre-fill kernel on BRISC - reads from DRAM to L1
     CreateKernel(
         program,
@@ -505,23 +527,7 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args =
-                {
-                    dram_buffer0_addr,        // 0: dram_buffer0_addr
-                    dram_buffer1_addr,        // 1: dram_buffer1_addr
-                    dram_buffer_0xAAAA_addr,  // 2: dram_buffer_0xAAAA_addr
-                    dram_buffer_0x5555_addr,  // 3: dram_buffer_0x5555_addr
-                    cfg.l1_buffer0_addr,      // 4: l1_buffer0_addr
-                    cfg.l1_buffer1_addr,      // 5: l1_buffer1_addr
-                    cfg.l1_buffer3_addr,      // 6: l1_buffer3_addr
-                    cfg.l1_buffer4_addr,      // 7: l1_buffer4_addr
-                    cfg.l1_buffer5_addr,      // 8: l1_buffer5_addr
-                    cfg.l1_buffer6_addr,      // 9: l1_buffer6_addr
-                    tile_bytes_bfloat16,      // 10: tile_size_bytes (bfloat16, 2048)
-                    buffer_size_uint32,       // 11: data_transfer_size (8KB)
-                    cfg.num_tiles,            // 12: num_tiles (8)
-                    cfg.l1_super_sync_addr,   // 13: l1_super_sync_addr
-                },
+            .compile_args = std::move(prefill_compile_args),
         });
 
     return program;
