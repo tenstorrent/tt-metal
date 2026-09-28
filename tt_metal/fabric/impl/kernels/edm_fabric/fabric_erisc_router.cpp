@@ -1567,6 +1567,15 @@ void run_routing_without_noc_sync_coordinated_as_master(
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_q;      // w12 FS22_MIN seed
             exact_free_q_saved =
                 exact_free_q;  // persist for delta block: correct restore value for stream-22 after retrain
+            // [#45872 PRE-RETRAIN] Set SIZE=exact_free_q_saved BEFORE retrain. Hardware auto-loads
+            // AVAILABLE=SIZE at retrain-finish, so no post-retrain init_ptr_val is needed.
+            WATCHER_RING_BUFFER_PUSH(0xAB250001u);  // [#45872] version marker: pre-retrain init_ptr_val
+            init_ptr_val(
+                static_cast<uint32_t>(sender_channel_free_slots_stream_ids[0]),
+                static_cast<int32_t>(exact_free_q_saved));
+            // [#45872 DBG] R2 (w5): stream-22 right after pre-retrain init_ptr_val (= exact_free_q_saved)
+            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = static_cast<uint32_t>(
+                get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));  // w5
         }
 
         // [POST-RETRAIN HANDSHAKE] Bracket the recovery pass with a before/after read of the L1 retrain
@@ -1588,18 +1597,10 @@ void run_routing_without_noc_sync_coordinated_as_master(
             // retrain-count delta as the gate -- more reliable than re-reading fabric_dbg_link_is_up() here,
             // which can see a momentary PCS glitch in the post-[#2] window and miss the restore.
             dbell_was_down = false;
-            // [#45872 DBG] R0 (w4): stream reg right after retrain — hardware resets to 32.
+            // [#45872 DBG] R0 (w4): stream reg right after retrain — should equal exact_free_q_saved
+            // (hardware loads AVAILABLE=SIZE=exact_free_q_saved; pre-retrain init_ptr_val set SIZE above).
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_DOWN_RAW_ADDR) = static_cast<uint32_t>(get_ptr_val(
                 static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));  // w4: stream reg after retrain
-            // Restore stream-22 to the quiesce-time free-slot count. Hardware reset it to 32 at retrain-finish,
-            // making the ERISC think the sender buffer is empty even though packets arrived in L1 before retrain.
-            // exact_free_q_saved was frozen at STOP/ACK time (sender quiesced, no in-flight decrements).
-            init_ptr_val(
-                static_cast<uint32_t>(sender_channel_free_slots_stream_ids[0]),
-                static_cast<int32_t>(exact_free_q_saved));
-            // [#45872 DBG] R2 (w5): stream-22 after init_ptr_val — should equal exact_free_q_saved
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_REG_AT_RETRAIN_END_ADDR) = static_cast<uint32_t>(
-                get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));  // w5: after restore
             // [CREDIT RESYNC] A retrain drops the receiver->sender credit block that was in flight, and
             // nothing re-issues it: the push only fires when a new completion occurs, and at the tail there
             // are none left. The sender is then permanently short of the credits it needs to retire its
