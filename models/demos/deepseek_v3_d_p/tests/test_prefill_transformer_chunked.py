@@ -203,19 +203,21 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
+    # then re-cut three times. Recentered to CI run 36356786056 / job 108828333472: every chunk came
+    # in 2.4-5.2% under the previous centre (run 34492835936 / job 102927415897), with the drop growing
+    # with KV depth.
     (61, 11, 10): [
-        0.413,
-        0.419,
-        0.452,
-        0.481,
-        0.513,
-        0.549,
-        0.584,
-        0.623,
-        0.676,
-        0.716,
-        0.756,
+        0.403,
+        0.406,
+        0.440,
+        0.468,
+        0.500,
+        0.532,
+        0.562,
+        0.593,
+        0.638,
+        0.678,
+        0.717,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
@@ -239,7 +241,10 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    (78, 11, 10): [0.543, 0.539, 0.552, 0.545, 0.561, 0.558, 0.557, 0.561, 0.577, 0.582, 0.592],
+    # Recentered to CI run 36356786056 / job 108727344674. Main had already drifted ~13 ms under the
+    # previous centre on every chunk (jobs 108833541819, 108591991106, 108483306778 read 0.530s at
+    # chunk 0); ND-sharded routed-expert weights take a flat ~5 ms more per chunk.
+    (78, 11, 10): [0.525, 0.521, 0.534, 0.528, 0.542, 0.540, 0.539, 0.543, 0.558, 0.564, 0.574],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
