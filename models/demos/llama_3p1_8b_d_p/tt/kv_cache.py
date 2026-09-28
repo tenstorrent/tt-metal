@@ -222,9 +222,14 @@ def allocate_kv_cache(
     geometry = PrefillGeometry(max_seq_len, num_users)
 
     def allocate_one():
-        # Zeroed on the device rather than uploaded. A host torch.zeros of this shape is fp32, so it
-        # would cost 4 B/element against 1.0625 on device -- 44 GiB of host RAM for a slot count the
-        # device holds in 21 GiB -- and the host would cap the slot count long before DRAM did.
+        # This still stages on the host, and at an auto-sized count that is the binding limit. For
+        # bfloat8_b, ttnn.zeros fills a std::vector<float> of shape.volume() and converts
+        # (ttnn/cpp/ttnn/operations/creation/creation.cpp), so the host pays 4 B/element for what the
+        # device holds at 1.0625: 52.5 GiB to place a 14.0 GiB buffer at 1,681 slots of 8K. Measuring
+        # ttnn.zeros without a device gives exactly 2.00 B/element at bfloat16 and 4.00 at float32,
+        # so the vector is the whole cost. It does not vary with capacity either, because slots x
+        # capacity is what DRAM fixes. Replacing this with ttnn.empty plus an in-place ttnn.fill
+        # keeps it on the device; that needs a Galaxy to verify against the NdShard config first.
         return ttnn.zeros(
             geometry.cache_shape,
             dtype=cache_dtype,
