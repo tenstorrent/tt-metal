@@ -198,7 +198,8 @@ for asset in json.load(sys.stdin).get("assets", []):
 ' <<<"$release_json")
         fi
         if [[ -z "$expected_hash" ]]; then
-            echo "WARNING: no sha256 digest for ${so_name} from $api_url; the download will not be verified" >&2
+            echo "ERROR: no sha256 digest for ${so_name} from $api_url; refusing an unverified download" >&2
+            exit 1
         fi
 
         echo "Downloading ${url}"
