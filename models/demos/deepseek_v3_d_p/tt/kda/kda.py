@@ -273,7 +273,12 @@ class ttKDA:
             new_state = (
                 selections.select_local_final_history(qkv, 1)
                 if selections is not None
-                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+                else ttnn.slice(
+                    qkv,
+                    (0, rows - (config.conv_kernel_size - 1), 0),
+                    (batch, rows, width),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             )
             predecessor = incoming_layer_carry
         else:
@@ -476,12 +481,13 @@ class ttKDA:
             ),
         )
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=self.staging_memory_config)
         ttnn.deallocate(projected.qkv)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        ttnn.deallocate(qkv)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
