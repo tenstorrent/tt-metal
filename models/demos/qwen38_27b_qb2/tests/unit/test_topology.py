@@ -9,7 +9,7 @@ import pytest
 
 import ttnn
 from models.demos.qwen38_27b_qb2.tt import model
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, resolve_mesh_tp
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, kv_head_owners, resolve_mesh_tp
 
 # A qualified platform is the whole tuple, so each rejection case perturbs exactly one element of
 # an otherwise-valid mesh. The Wormhole rows mirror the Blackhole ones so neither platform's gate
@@ -60,3 +60,28 @@ def test_rejects_unsupported_mesh_before_loading_weights(monkeypatch, expect_err
 @pytest.mark.parametrize("platform, expected_tp", [(_QB2, 4), (_T3K, 8)], ids=["qb2_tp4", "t3k_tp8"])
 def test_accepts_qualified_mesh_and_reports_tp(monkeypatch, platform, expected_tp):
     assert resolve_mesh_tp(_mock_mesh(monkeypatch, *platform)) == expected_tp
+
+
+# Qwen3.8-27B: 24 Q heads, 4 KV heads, GQA group 6.
+_NUM_Q, _NUM_KV = 24, 4
+
+
+def test_kv_heads_shard_evenly_when_devices_do_not_exceed_them():
+    assert kv_head_owners(_NUM_KV, 4) is None
+
+
+@pytest.mark.parametrize("tp", [4, 8], ids=["tp4", "tp8"])
+def test_every_device_owns_the_kv_head_its_q_heads_need(tp):
+    owners = kv_head_owners(_NUM_KV, tp) or list(range(tp))
+    assert len(owners) == tp
+    gqa_group = _NUM_Q // _NUM_KV
+    per_device_q = _NUM_Q // tp
+    for device, owned in enumerate(owners):
+        needed = {q // gqa_group for q in range(device * per_device_q, (device + 1) * per_device_q)}
+        # One KV head per device, and a device's Q heads never span two of them.
+        assert needed == {owned}
+
+
+def test_kv_head_owners_rejects_uneven_sharing(expect_error):
+    with expect_error(ValueError, "cannot share"):
+        kv_head_owners(3, 8)
