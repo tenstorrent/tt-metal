@@ -32,7 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import (
     mhc_expand,
     sinkhorn_knopp,
 )
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCHead, TtMHCWrap
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand as tt_mhc_expand
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -110,6 +110,12 @@ def test_project(device, T, C):
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=DeepSeekV4ProConfig.FABRIC_PAYLOAD_SIZE),
