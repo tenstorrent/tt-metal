@@ -44,6 +44,16 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         TT_FATAL(!input_tensor->is_sharded(), "Operands to SDPA need to be DRAM/L1 interleaved");
     }
 
+    // Non-MLA V may be narrower than K (bring-up fork): the output then has V's width. It must be whole tiles.
+    auto validate_v_head_dim = [](uint32_t dv, uint32_t dk) {
+        TT_FATAL(
+            dv <= dk && dv % tt::constants::TILE_WIDTH == 0,
+            "V head dim must be a multiple of {} and at most K's head dim. Got V: {}, K: {}",
+            tt::constants::TILE_WIDTH,
+            dv,
+            dk);
+    };
+
     auto validate_padding = [&](const Tensor& tensor) {
         auto logical_shape = tensor.logical_shape();
         auto legacy_shape = tensor.padded_shape();
@@ -88,11 +98,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 v_shape[0]);
             TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
             TT_FATAL(v_shape[2] == Sk, "K and V sequence length must match. Got K: {}, V: {}", k_shape[2], v_shape[2]);
-            TT_FATAL(
-                k_shape[3] == DH && v_shape[3] == DH,
-                "K and V hidden dim must match. Got K: {}, V: {}",
-                k_shape[3],
-                v_shape[3]);
+            TT_FATAL(k_shape[3] == DH, "Q and K hidden dim must match. Got Q: {}, K: {}", DH, k_shape[3]);
+            validate_v_head_dim(v_shape[3], DH);
         }
         TT_FATAL(
             nqh >= nkv && nqh % nkv == 0,
@@ -315,11 +322,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     tt::constants::TILE_WIDTH);
             } else {
                 TT_FATAL(v_shape[1] == nkv, "K and V num_heads must match. Got K: {}, V: {}", k_shape[1], v_shape[1]);
-                TT_FATAL(
-                    k_shape[3] == DH && v_shape[3] == DH,
-                    "K and V hidden dim must match. Got K: {}, V: {}",
-                    k_shape[3],
-                    v_shape[3]);
+                TT_FATAL(k_shape[3] == DH, "Q and K hidden dim must match. Got Q: {}, K: {}", DH, k_shape[3]);
+                validate_v_head_dim(v_shape[3], DH);
             }
         }
         TT_FATAL(
@@ -440,6 +444,11 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // Windowed attention is otherwise plain non-causal SDPA, so apply the same Q/K/V shape and
         // chunk-size validation as the regular path.
         validate_shapes_and_chunks();
+        TT_FATAL(
+            v.logical_shape()[3] == q.logical_shape()[3],
+            "Windowed SDPA requires V's head dim to equal K's. Got V: {}, K: {}",
+            v.logical_shape()[3],
+            q.logical_shape()[3]);
 
         const auto& cu = tensors.cu_window_seqlens.value();
         TT_FATAL(cu.storage_type() == StorageType::DEVICE, "cu_window_seqlens must be on device.");
@@ -531,6 +540,9 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     auto shape = tensors.q.logical_shape();
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
+    } else if (tensors.v.has_value() && !attrs.paged_cache_geometry.active()) {
+        // The output has V's head dim (narrower than Q's when V is; equal otherwise).
+        shape[3] = tensors.v->logical_shape()[3];
     }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));

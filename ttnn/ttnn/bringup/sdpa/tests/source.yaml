@@ -13,7 +13,7 @@
 #
 # Baseline 118 tests: 107 passed, 11 skipped, 0 failed on both the original and the fork, no gaps. The skips are the
 # tests' own (nh=8 q128/k128 "Can cause OOM if profiling is enabled", q192 cases whose s is not a multiple of 192).
-# Recording took about 11 minutes, one entry at a time; a check (fork only, warm) about 5.5 minutes.
+# Recording took about 11 minutes, one entry at a time; a check (fork only, warm) about 3 minutes.
 upstream_sha: 99f7e834cea8bc42f0b478b9cc59a7b89f2f9c1a
 swap:
   ttnn.transformer.scaled_dot_product_attention: ttnn.bringup.scaled_dot_product_attention
