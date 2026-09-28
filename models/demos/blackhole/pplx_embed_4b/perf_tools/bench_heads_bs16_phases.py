@@ -108,7 +108,8 @@ def main():
     assert MODE == "unit" or not V3, "per-phase anchors are v1's; use PH_MODE=unit for v3"
     cattr = "COMPUTE_KERNEL_BS1" if V3 else "COMPUTE_KERNEL"
     kern = os.path.join(SCRATCH, "compute_phases.cpp")
-    open(kern, "w").write(instrument(open(getattr(hop, cattr)).read()))
+    # PH_KERNEL=path: instrument that kernel source instead of the op's (same contract as the selected compute)
+    open(kern, "w").write(instrument(open(os.getenv("PH_KERNEL") or getattr(hop, cattr)).read()))
     orig = getattr(hop, cattr)
     setattr(hop, cattr, kern)
     D = ttnn.open_device(device_id=0, l1_small_size=32768)

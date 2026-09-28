@@ -1142,3 +1142,22 @@ fix the layout but costs +5.1 ms cold (366.1 → 371.2). Preallocating the norm 
 (`QWEN_FUSED_ADD_NORM_PREALLOC=1`) puts it at the top (lowest buffer at the QKV call 1,149,312 B) with FF2's output in L1, neutral on its own
 (367.1 vs 367.4 ms); at bs16 it lets the post-attention sum back into L1 beside the QKV output (−0.8 / −1.1 ms cold /
 sustained). Chunked bs32: 369.1 / 433.3 → 362.2 / 430.4 ms cold / sustained, STS-B 0.8146.
+
+## 57. Heads-op rsqrt over column 0's faces only: 16% less compute, slower op (2026-09-28)
+
+After the row reduce only column 0 of the mean-square tile holds values, and the `bcast_cols` multiply that consumes
+`rsqrt(ms + eps)` reads column 0 only, but `rsqrt_tile` is hard-coded to `VectorMode::RC` (all four faces, fp32,
+non-approximate). The same SFPU call with `VectorMode::C` (faces 0 and 2) is bit-identical with half the rsqrt work;
+v3 has it behind compile-time arg 9 (`QWEN_FUSED_RSQRT_COL=1`, default off).
+
+Per-core compute drops as expected: v1 401.6k → 356.4k cycles per core (the math thread's eps+rsqrt phase 7681 →
+5077 cycles per unit, nothing else moves; `bench_heads_bs16_phases.py`, `PH_KERNEL=`), v3 287.6k → 241.8k (−16%).
+Standalone wall time, bs16 shapes, L1 input (`bench_heads_bs16_kernels.py 16 v1 v3 v3:<kernel>`, an unmodified copy of
+v3 through the same override reproduces v3 exactly): v1 304.2 → 271.2 µs, but **v3 215.0 → 256.5 µs** (bs32 393.8 →
+541.3); with a DRAM input v3 gets faster (372 → 335). v3's compute (~179 µs) now finishes well under the op's data
+movement with an L1 input (~225 µs, dominated by the 53.5 MB of Q/K/V tile writes to DRAM), and the op lands above
+that floor, as v3 did against a DRAM input (§56): once compute outruns the data movement, the traffic bunches and the
+top grid rows fall behind. The binaries are not the cause (v3 math 6.2 → 7.2 KB; v1, larger still, gains). e2e,
+`ab_one.sh`, one chip per batch: bs1 15.5 → 15.7 ms, bs8 98.5 → 98.2, bs16 185.1 → 185.8, bs32 359.5 → 362.6 (iteration
+9 at bs32 434.5 → 441.8). The v3 heads op is bound by its output writes now, not its compute; further compute cuts
+need the Q/K/V write side fixed first (their DRAM traffic, or keeping them in L1 for SDPA).

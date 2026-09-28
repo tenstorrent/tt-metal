@@ -2,7 +2,7 @@
 # cos / sin in L1 like the model (QWEN_ROPE_PREFILL_L1=1); QKV input in L1 (the fused-QKV case: no DRAM read) and
 # in DRAM (today's unfused op). Each variant runs in its own process (the kernel choice is read from env at call time,
 # but the program cache would otherwise mix them). Usage: bench_heads_bs16_kernels.py [batch] [variant ...]
-#   variants: v1 v2 v3 or path/to/compute.cpp (a v1-contract kernel); default v1 v2 v3
+#   variants: v1 v2 v3, path/to/compute.cpp (a v1-contract kernel) or v3:path/to/compute.cpp (v3 contract)
 import os
 import statistics
 import subprocess
@@ -22,7 +22,9 @@ def child(B, variant, out_dir):
     from models.demos.blackhole.pplx_embed_4b.tt.custom_ops.fused_qkv_heads_norm.constants import make_norm_constants
     from models.tt_transformers.tt.common import get_rot_transformation_mat
 
-    if variant not in ENVS:
+    if variant.startswith("v3:"):  # a v3-contract kernel (v3's CB sizing, QWEN_FUSED_COMPUTE_V3=1)
+        hop.COMPUTE_KERNEL_BS1 = os.path.abspath(variant[3:])
+    elif variant not in ENVS:
         hop.COMPUTE_KERNEL = os.path.abspath(variant)
     torch.manual_seed(0)
     D = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=64 * 1024 * 1024)
@@ -88,7 +90,7 @@ def main():
     outs = {}
     for v in variants:
         d = tempfile.mkdtemp(prefix="heads_k_")
-        env = dict(os.environ, **ENVS.get(v, {}))
+        env = dict(os.environ, **ENVS.get(v, {"QWEN_FUSED_COMPUTE_V3": "1"} if v.startswith("v3:") else {}))
         p = subprocess.run(
             [sys.executable, __file__, "--child", str(B), v, d], env=env, capture_output=True, text=True, timeout=900
         )
