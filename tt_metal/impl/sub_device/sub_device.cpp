@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -97,8 +98,6 @@ SubDevice::SubDevice(SubDevice&& other) noexcept = default;
 SubDevice& SubDevice::operator=(SubDevice&& other) noexcept = default;
 
 SubDevice::~SubDevice() = default;
-
-const CoreRangeSet& SubDevice::cores(HalProgrammableCoreType core_type) const { return pimpl_->cores(core_type); }
 
 SubDeviceImpl* SubDevice::impl() { return pimpl_.get(); }
 

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
@@ -21,7 +21,7 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
 class Gemma4KvCaches(KvCaches):
     """One durable migration-ready ring cache per semantic model layer."""
 
-    layers: list
+    layers: list = field(repr=False)
     layer_types: tuple[str, ...]
     num_users: int
     max_seq_len: int

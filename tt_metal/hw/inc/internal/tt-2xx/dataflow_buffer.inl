@@ -19,6 +19,8 @@
 #include "api/kernel_thread_globals.h"
 #include "internal/scoped_lock_cache_ops.h"  // scoped_lock_acquire/release_cache_ops
 
+#include <type_traits>
+
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
 #else
@@ -351,9 +353,59 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 #endif
 }
 
+#ifdef COMPILE_FOR_TRISC
+inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
+    uint32_t address = 0;
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
+        // not straddle slot.limit; tile_index is in [0, n).
+        const uint32_t base_address =
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
+        address = address_units_to_bytes(base_address + offset_address);
+        mailbox_write(ckernel::ThreadId::MathThreadId, address);
+        mailbox_write(ckernel::ThreadId::PackThreadId, address);
+        mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, address);
+    }
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
+    address = mailbox_read(ckernel::ThreadId::UnpackThreadId);
+#endif
+    return address;
+}
+
+template <typename T>
+T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "read_tile_value: T must be 1, 2, or 4 bytes");
+    static_assert(
+        (std::is_integral_v<T> && std::is_unsigned_v<T> && !std::is_same_v<T, bool>),
+        "read_tile_value: T must be an unsigned integral type");
+
+    T value = T{};
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        // Same linear addressing as get_tile_address: the wait_front window does not wrap.
+        const uint32_t base_address =
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
+        const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
+        value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
+        mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, static_cast<uint32_t>(value));
+    }
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)
+    value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));
+#endif
+    return value;
+}
+#endif  // COMPILE_FOR_TRISC
+
 #ifndef COMPILE_FOR_TRISC
 template <bool is_producer>
-inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
+inline void DataflowBuffer::handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If transactions_issued lands exactly on
     // a boundary, txn_id_index has already wrapped past it, so step back one slot.
     uint8_t tail_txn_idx = (transactions_issued % local_dfb_interface_.num_entries_per_txn_id == 0)
@@ -363,7 +415,8 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
+    uint16_t expected_slot0 =
+        static_cast<uint16_t>(transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u));
 
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
@@ -543,7 +596,14 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    // HW free space only discounts reads that have already reached POSTED, so a
+    // read this kernel issued but that has not posted yet still looks like a
+    // free slot. Track it instead as "reservations this kernel has made on this
+    // TC that the consumer has not acked", and require room for one more.
+    const uint16_t capacity = static_cast<uint16_t>(overlay::fast_llk_intf_get_capacity(tensix_id, tc_id));
+    const uint16_t reserved = static_cast<uint16_t>(
+        local_dfb_interface_.broadcast_tc ? ptiles_read_ : ptiles_read_ / local_dfb_interface_.num_tcs_to_rr);
+    while (static_cast<uint16_t>(reserved - overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) >= capacity);
     WAYPOINT("PIRD");
     return txn_id;
 }
@@ -577,7 +637,12 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     while (static_cast<int16_t>(
         static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id)) -
         static_cast<uint16_t>(ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
-    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    // HW occupancy still counts entries this kernel has claimed but whose ACK is
+    // batched and pending, so it can hand the same posted entry out twice. Count
+    // instead the posted entries on this TC that the kernel has not claimed yet
+    // and require at least one.
+    const uint16_t claimed = static_cast<uint16_t>(ctiles_written_ / local_dfb_interface_.num_tcs_to_rr);
+    while (static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id) - claimed) == 0);
     WAYPOINT("PIWD");
     return txn_id;
 }

@@ -480,9 +480,10 @@ class LlamaDecoder(LightweightModule):
 
     def _prefill_norm(self, x):
         rows = x.padded_shape[2]
-        # At 224 rows the eight-core norm CBs overlap live L1 allocations.
-        # Preserve logical lengths and the original larger-prefill path.
-        if rows > 192:
+        # With live serving allocations, the eight-core norm CBs can
+        # overlap L1 buffers for a 192-row chunk tail.
+        # Keep those tails on the existing interleaved normalization path.
+        if rows > 128:
             return ttnn.rms_norm(
                 x, epsilon=self.eps, compute_kernel_config=self.compute, memory_config=ttnn.L1_MEMORY_CONFIG
             )

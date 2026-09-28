@@ -19,7 +19,6 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
-#include "ttnn/device.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -584,7 +583,9 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     a_slim = ttnn::operations::experimental::quasar::to_layout(a_slim, ttnn::TILE_LAYOUT);
     b_slim = ttnn::operations::experimental::quasar::to_layout(b_slim, ttnn::TILE_LAYOUT);
 
-    auto* device = ttnn::GetDefaultDevice();
+    // Take the device from the operand that is already on one, not from the process-wide default
+    // device: that default is a raw pointer nothing clears when the device it names is closed.
+    auto* device = a_slim.device() != nullptr ? a_slim.device() : b_slim.device();
     if (device != nullptr) {
         if (a_slim.storage_type() != ttnn::StorageType::DEVICE) {
             a_slim = a_slim.to_device(device);
@@ -599,12 +600,12 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
 Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
+    TT_FATAL(!coeffs.empty(), "polyval requires at least one coefficient");
     if (coeffs.size() == 1) {
         return ttnn::full_like(input_a, coeffs[0], std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     Tensor result = q::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
-    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+    for (size_t idx = 1; idx < coeffs.size() - 1; idx++) {
         result = q::add(result, coeffs[idx], std::nullopt, output_mem_config);
         result = q::multiply(input_a, result, std::nullopt, output_mem_config);
     }

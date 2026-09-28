@@ -13,8 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from loguru import logger
 from PIL import Image
+
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
@@ -26,7 +27,8 @@ from .common_av import (
     check_spatial_seams,
     gate_clip,
     gate_vbench,
-    log_timing_table,
+    log_pipeline_perf,
+    log_quality,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -39,7 +41,7 @@ FPS = 24
 PROMPT = "a slow push-in through a quiet room as afternoon light moves across the floor"
 
 # Bars set below the minimum measured across the three ref2va cases; t2va's bars do NOT transfer.
-REF2VA_CLIP_THRESHOLD = 25.0  # min measured 29.05
+REF2VA_CLIP_THRESHOLD = 25.0
 REF2VA_VBENCH_THRESHOLDS = {
     "subject_consistency": 0.90,
     "background_consistency": 0.89,
@@ -55,7 +57,7 @@ _L1_SMALL = 16384
 # The shared shapes, but this suite runs a smaller L1_SMALL pool than they carry and reports it in
 # the measurement line, so the size is overridden rather than inherited.
 MESHES = [
-    pytest.param(shape, {**params, "l1_small_size": _L1_SMALL}, id=param.id)
+    pytest.param(shape, {**params, "l1_small_size": _L1_SMALL}, id=param.id, marks=param.marks)
     for param in GALAXY_MESHES
     for shape, params in [param.values]
 ]
@@ -135,7 +137,7 @@ def _write(output, stem: str) -> dict:
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
         Image.fromarray(frames[index]).save(directory / f"{stem}_frame_{index}.png")
     paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, directory, stem=stem)
-    logger.info(f"{stem}: artifacts in {directory} ({sorted(paths)})")
+    log_quality(f"{stem}: artifacts in {directory} ({sorted(paths)})")
     return paths
 
 
@@ -149,25 +151,28 @@ def _record_quality(frames: np.ndarray, paths: dict, case: str) -> None:
 def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
     """Pipeline bound to the `transformer_ref` partition (62 GB, fixed at construction)."""
     return MiniMaxH3Pipeline.create_pipeline(
-        mesh_device=mesh_device, weights_dir=weights_dir("transformer_ref"), task="ref2va"
+        vae_output_type="float",
+        mesh_device=mesh_device,
+        weights_dir=weights_dir("transformer_ref"),
+        task="ref2va",
     )
 
 
-CASE = "mixed"
-EXPECTED_PADDED_LEN = (
-    89856  # measured e2e (a host estimate says 90112); asserted so the case cannot drift off the probed shape
-)
+# Per-case padded sequence length, asserted so a case cannot silently drift off its probed shape.
+_EXPECTED_PADDED_LEN = {"one_image": 39936, "video_with_sound": 81664, "mixed": 83968}
 
 
 @pytest.mark.timeout(10800)
+@pytest.mark.parametrize("case", list(_EXPECTED_PADDED_LEN), ids=list(_EXPECTED_PADDED_LEN))
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
-def test_ref2va_end_to_end(mesh_device, reset_seeds):
-    """Full ``mixed`` generation: geometry agreement across every reference path, plus warm latency."""
-    case = CASE
+def test_ref2va_end_to_end(case, mesh_device, reset_seeds):
+    """Full ref2va generation per reference case (one_image / video_with_sound / mixed): geometry
+    agreement across every reference path, plus warm latency."""
     references = ref2va_references(case)
     pipeline = _pipeline(mesh_device)
 
     # Warmup must use the SAME references: `padded_len` depends on them, and the helper asserts agreement.
+    benchmark_profiler = BenchmarkProfiler()
     output = run_warm_generation(
         pipeline,
         PROMPT,
@@ -177,29 +182,32 @@ def test_ref2va_end_to_end(mesh_device, reset_seeds):
         width=WIDTH,
         num_inference_steps=STEPS,
         seed=SEED,
+        profiler=benchmark_profiler,
     )
 
     assert output.video.shape == (1, 3, NUM_FRAMES, HEIGHT, WIDTH), tuple(output.video.shape)
     assert output.video.min() >= 0.0 and output.video.max() <= 1.0, "decoded video must be in [0, 1]"
     assert torch.isfinite(output.video).all() and torch.isfinite(output.audio).all()
     assert (
-        pipeline.last_padded_len == EXPECTED_PADDED_LEN
-    ), f"{case} ran at padded_len {pipeline.last_padded_len}, not the probed {EXPECTED_PADDED_LEN}"
+        pipeline.last_seq_len.padded == _EXPECTED_PADDED_LEN[case]
+    ), f"{case} ran at padded_len {pipeline.last_seq_len.padded}, not the probed {_EXPECTED_PADDED_LEN[case]}"
 
     frames = to_uint8_frames(output)
     # Artifacts before the checks, so a failing check still leaves frames to inspect.
     paths = _write(output, f"ref2va_{case}")
 
     num_forwards = STEPS - 1
-    log_timing_table(
-        pipeline,
-        f"ref2va[{case}]",
+    log_pipeline_perf(
+        benchmark_profiler,
+        label=f"ref2va[{case}]",
+        pipeline=pipeline,
         num_forwards=num_forwards,
-        video_seconds=NUM_FRAMES / FPS,
-        extra=(
-            f", l1_small_size {_L1_SMALL} | {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames @ {FPS} fps "
-            f"({NUM_FRAMES / FPS:.2f} s), {num_forwards} forwards, padded_len {pipeline.last_padded_len}"
-        ),
+        width=WIDTH,
+        height=HEIGHT,
+        num_frames=NUM_FRAMES,
+        fps=FPS,
+        num_inference_steps=STEPS,
+        extra_lines=(f"L1 Small Size: {_L1_SMALL}",),
     )
 
     check_audio_sanity(
@@ -244,7 +252,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     colour = (_colour_distance(a, normal), _colour_distance(b, inverted))
     crossed = (_colour_distance(a, inverted), _colour_distance(b, normal))
 
-    logger.info(
+    log_quality(
         f"ref2va discriminator: run-to-run floor {floor:.6f}, reference-swap signal {signal:.6f} "
         f"(ratio {signal / max(floor, 1e-9):.1f}x) | CLIP to normal A={to_normal[0]:.4f} "
         f"B={to_normal[1]:.4f} | CLIP to inverted A={to_inverted[0]:.4f} B={to_inverted[1]:.4f} | "
@@ -267,7 +275,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     )
 
     # Direction is logged, not asserted: no known instrument here can fail on a correct pipeline only.
-    logger.info(
+    log_quality(
         f"ref2va direction (recorded, not asserted): CLIP own-vs-other "
         f"A {to_normal[0]:.4f} vs {to_inverted[0]:.4f}, B {to_inverted[1]:.4f} vs {to_normal[1]:.4f}; "
         f"colour own-vs-other A {colour[0]:.4f} vs {crossed[0]:.4f}, B {colour[1]:.4f} vs {crossed[1]:.4f}"

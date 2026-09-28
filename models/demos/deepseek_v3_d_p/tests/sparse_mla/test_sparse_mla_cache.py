@@ -458,7 +458,8 @@ def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
         return gathered
 
     mla._gather_kvpe_prefix = fake_gather
-    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.mla.mla.signpost", lambda **_: None)
+    markers = []
+    monkeypatch.setattr(ttnn, "tracy_message", markers.append)
 
     actual_indices, actual_gathered = mla._select_and_gather_overlapped(
         selection_state=state,
@@ -469,6 +470,13 @@ def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
     )
     assert actual_indices is final_indices and actual_gathered is gathered
     assert events == ["load", "topk", "gather", "clear", "finalize"]
+    assert markers == [
+        "`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`",
+        "`TT_SIGNPOST: SPARSE_MLA_LOCAL_TOPK`",
+        "`TT_SIGNPOST: SPARSE_MLA_KV_GATHER`",
+        "`TT_SIGNPOST: SPARSE_MLA_OVERLAP_END`",
+        "`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`",
+    ]
 
 
 @pytest.mark.parametrize("failure_stage", ["topk", "gather"])
@@ -495,7 +503,7 @@ def test_sparse_mla_overlap_region_recovers_after_exception(monkeypatch, expect_
     mla._indexer = SimpleNamespace(select_local=select_local)
     mla._gather_kvpe_prefix = gather
     mla.tt_ccl = SimpleNamespace(reset_sparse_mla_overlap_semaphores=lambda: events.append("reset"))
-    monkeypatch.setattr("models.demos.deepseek_v3_d_p.tt.mla.mla.signpost", lambda **_: None)
+    monkeypatch.setattr(ttnn, "tracy_message", lambda _: None)
 
     with expect_error(ValueError, "boom"):
         mla._select_and_gather_overlapped(

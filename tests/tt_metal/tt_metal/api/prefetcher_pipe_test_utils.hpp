@@ -100,16 +100,4 @@ inline void write_sender_l1_staging(
     }
 }
 
-inline void set_sender_l1_staging_runtime_args(
-    Program& program,
-    KernelHandle sender_kernel,
-    const CoreRangeSet& sender_cores,
-    const experimental::PrefetcherPipe& pipe) {
-    const uint32_t l1_staging_addr = sender_l1_staging_address(pipe);
-    for (const auto& core : corerange_to_cores(sender_cores)) {
-        const CoreRangeSet single = CoreRangeSet(CoreRange(core));
-        SetRuntimeArgs(program, sender_kernel, single, {l1_staging_addr});
-    }
-}
-
 }  // namespace tt::tt_metal::prefetcher_pipe_test

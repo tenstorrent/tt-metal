@@ -163,12 +163,18 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         if (!cfg.tensix_consumer) {
-            auto& consumer_hw_config =
-                std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+            auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+            if (!consumer_spec_dm.config_2xx) {
+                consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+            }
+            auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
             consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
         }
     }
@@ -337,10 +343,16 @@ void run_update_address_test(
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
-        auto& consumer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
+        auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+        if (!consumer_spec_dm.config_2xx) {
+            consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }

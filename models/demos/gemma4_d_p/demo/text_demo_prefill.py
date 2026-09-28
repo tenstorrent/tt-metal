@@ -17,6 +17,7 @@ import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tests.test_factory import find_layer_idx, parametrize_mesh_with_fabric
 from models.demos.gemma4_d_p.tt.common import create_tt_model
+from models.demos.gemma4_d_p.tt.model import prefill_chunk_geometry_error
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 
 try:
@@ -30,13 +31,12 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-GEMMA4_SLIDING_WINDOW_TOKENS = 1024
-PREFILL_CHUNK_SIZES = (4096, 8192, 16384, 32768)
+PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
-def _model_path():
+def _hf_model_id():
     return os.getenv("HF_MODEL")
 
 
@@ -73,7 +73,7 @@ _TOKEN_TEXT_CACHE = pathlib.Path("models/tt_transformers/demo/context_cache")
 
 
 @functools.lru_cache(maxsize=None)
-def _text_token_stream(model_path):
+def _text_token_stream(hf_model_id):
     """The source text tokenized once per process, as ``[1, n]`` int32 ids.
 
     No chat template: it would append a question after the context, so a 32k and a 128k
@@ -92,18 +92,18 @@ def _text_token_stream(model_path):
         text = resp.text
         _TOKEN_TEXT_CACHE.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(text)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
     return torch.tensor(tokenizer.encode(text), dtype=torch.int32).unsqueeze(0)
 
 
-def _get_prefill_tokens(model_path, context_len, vocab_size, source="text"):
+def _get_prefill_tokens(hf_model_id, context_len, vocab_size, source="text"):
     """Return prefix-consistent token IDs from text or a fixed-seed random stream."""
     if source == "random":
         gen = torch.Generator().manual_seed(0)
         return torch.randint(0, vocab_size, (1, context_len), dtype=torch.int32, generator=gen)
     assert source == "text", f"unknown token source {source!r}, expected 'text' or 'random'"
 
-    ids = _text_token_stream(model_path)
+    ids = _text_token_stream(hf_model_id)
     if ids.shape[-1] < context_len:
         ids = ids.repeat(1, -(-context_len // ids.shape[-1]))
     ids = ids[:, :context_len].clone()
@@ -136,10 +136,10 @@ def _cp_gather_torch(tensor, mesh_config):
 # ── Eager / traced execution ──────────────────────────────────────────────────
 
 
-def _hf_text_config(model_path):
+def _hf_text_config(hf_model_id):
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(hf_model_id, trust_remote_code=True)
     text_config = getattr(config, "text_config", config)
     text_config._attn_implementation = "eager"
     return text_config
@@ -148,14 +148,14 @@ def _hf_text_config(model_path):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
+def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None):
     """Create a CP prefill model with ring caches for one or more chunks."""
     if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
     context_len = context_len or chunk_size
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
 
-    hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+    hf_config = Gemma4ModelArgs.load_hf_config(hf_model_id)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
 
     logger.info(
@@ -168,7 +168,7 @@ def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
         max_seq_len=max_seq_len,
         dtype=MODEL_DTYPE,
         force_rebuild=_load_full_weights(),
-        model_path=model_path,
+        hf_model_id=hf_model_id,
         prefill_chunk_size=chunk_size,
     )
     logger.info(f"Model ready in {time.time() - t0:.1f}s")
@@ -194,25 +194,19 @@ def test_prefill_long_context_traced(
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
-        pytest.skip(
-            f"chunk={chunk_size} gives a {chunk_size // cp}-token Q slab at CP={cp}, under the "
-            f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
-            f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp} (its halo is single-hop)"
-        )
-    if context_len % chunk_size != 0:
-        pytest.skip(f"context_len={context_len} is not a whole number of {chunk_size}-token chunks")
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+        pytest.skip(geometry_error)
 
-    model_path = _model_path()
+    hf_model_id = _hf_model_id()
     n_chunks = context_len // chunk_size
     model_args, model, kv_cache = _build_prefill_model(
         mesh_config=mesh_config,
-        model_path=model_path,
+        hf_model_id=hf_model_id,
         chunk_size=chunk_size,
         context_len=context_len,
     )
 
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
+    tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
 
     host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
@@ -388,13 +382,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
-        pytest.skip(
-            f"chunk {chunk_size} / CP {cp} = {chunk_size // cp} tokens per rank, below the "
-            f"{GEMMA4_SLIDING_WINDOW_TOKENS}-token sliding window; ring_joint needs "
-            f"chunk >= window*cp = {GEMMA4_SLIDING_WINDOW_TOKENS * cp}"
-        )
-    assert context_len % chunk_size == 0, "context_len must be a whole number of chunks"
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+        pytest.skip(geometry_error)
     n_chunks = context_len // chunk_size
     if chunk_idx != "all" and not 0 <= int(chunk_idx) < n_chunks:
         pytest.skip(f"chunk {chunk_idx} is outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
@@ -403,15 +392,15 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
     model_layer_types = {"global": "full_attention", "local": "sliding_attention"}
 
-    model_path = _model_path()
-    text_config = _hf_text_config(model_path)
+    hf_model_id = _hf_model_id()
+    text_config = _hf_text_config(hf_model_id)
     model_args, model, _ = _build_prefill_model(
         mesh_config=mesh_config,
-        model_path=model_path,
+        hf_model_id=hf_model_id,
         chunk_size=chunk_size,
         context_len=context_len,
     )
-    tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size)
+    tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size)
 
     layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
