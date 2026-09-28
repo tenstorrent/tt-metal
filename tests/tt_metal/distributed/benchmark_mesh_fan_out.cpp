@@ -19,15 +19,14 @@
 #include <memory>
 #include <vector>
 
+#include "benchmark_mesh_device.hpp"
+
 namespace {
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
-MeshDevice& mesh_device() {
-    static std::shared_ptr<MeshDevice> device = MeshDevice::create(MeshDeviceConfig(std::nullopt));
-    return *device;
-}
+MeshDevice& mesh_device() { return test::benchmark_mesh_device(); }
 
 constexpr uint32_t PAGE_SIZE = 1024;
 constexpr uint32_t DATUM_SIZE = 4;
