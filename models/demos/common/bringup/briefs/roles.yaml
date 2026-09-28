@@ -20,7 +20,9 @@ plan: |
   `$bringup_dir/components.yaml` (schema in `models/demos/common/bringup/plan/components.py`). The gate computes
   per-chip memory from the real checkpoint shapes under your placements, so every checkpoint tensor needs a placement.
   Adjust `$bringup_dir/tasks.yaml` only if the plan needs different tasks (keep the id scheme). A person approves the
-  plan afterwards; the gate passes only then.
+  plan afterwards; the gate passes only then. A block step TTNN has no proper op for (no op, no composition, no fork
+  of an existing op fits) is tagged OPGEN, with `searched` like CPU and COMPOSED and optionally the op name as `op`:
+  its component task then requests the op from the op code generator and the step stays on the CPU bridge.
 test: |
   Role: test. Review the rendered test $tests for $component_desc against the golden and the component, and adjust it
   if needed (comparison mode, threshold, extra checks). It will be frozen next: it must pass with the CPU reference as
@@ -31,6 +33,7 @@ implement: |
   $component_entry
   Register the module in `$model_dir/bringup/hooks.py` (`device_component`, and `device_model` for the ladder).
   Everything not swapped stays on the CPU reference.
+  $defer
 contract: |
   Role: contract. Make $model servable by the prefill engine: adapter, runtime, KV layout and address table (see
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md` and the repo map). You may change the prefill engine
@@ -57,4 +60,7 @@ assemble: |
   embedding to the final norm, made from the validated modules (reuse them, do not rewrite them). Each block's forward
   goes through `run_block` with the block graph, so the profiler sees one section per step. Everything that depends
   only on shapes or positions is built once at load and sliced on the device (agent rule 5). Register it as the
-  `device_model` hook; keep the hybrid selectable (e.g. `BRINGUP_HYBRID=1`) for debugging. $details
+  `device_model` hook; keep the hybrid selectable (e.g. `BRINGUP_HYBRID=1`) for debugging. Steps deferred to
+  op-gen (listed below, if any) stay on the CPU: the device model calls each through `CpuBridge`
+  (`models/demos/common/bringup/testing/cpu_bridge.py`) with the mesh placements of its inputs and output; nothing
+  else in the forward path may touch the host. $details

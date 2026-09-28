@@ -13,7 +13,8 @@ Metrics (last chunk unless noted):
     pcc_state_min        worst state tensor over every layer and the whole sequence (and pcc_state_<name>_L{i})
     pcc_final_hidden, top1_match, top5_overlap, pcc_logits_tail     only when the stack ends at the model's last layer
     chunk_seconds_c{c}, prefill_seconds, model_load_s, covered_layers, subset,
-    host_transfers_per_layer (warm chunks only: the most host round-trips inside one model.layer call)
+    host_transfers_per_layer (warm chunks only: the most host round-trips inside one model.layer call; a deferred
+        step's CPU bridge is not counted), deferred_cpu_steps, deferred_cpu_ms (the bridge's steps and host time, F46)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import torch
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.generate_golden import run_starts
 from models.demos.common.bringup.reference.golden import Golden
+from models.demos.common.bringup.testing import cpu_bridge
 from models.demos.common.bringup.testing.harness import threshold
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 
@@ -61,6 +63,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         first = last
 
     trail, t_total, hidden = {}, 0.0, None
+    cpu_bridge.STATS.reset()
     host = {}  # layer -> host round-trips inside model.layer on warm chunks (after the first chunk this rung runs)
     for c in range(first, n_chunks):
         s0 = c * chunk
@@ -93,6 +96,11 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         if c != last:
             model.free(hidden)
     metrics.record("prefill_seconds", round(t_total, 3))
+    cpu_bridge.record(metrics)
+    if cpu_bridge.STATS.steps:
+        print(
+            f"deferred to op-gen, on the CPU bridge: {cpu_bridge.STATS.step_names} ({cpu_bridge.STATS.ms:.0f} ms host)"
+        )
     if host:
         worst = max(n for n, _ in host.values())
         metrics.record("host_transfers_per_layer", worst)
