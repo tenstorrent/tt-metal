@@ -86,8 +86,8 @@ void kernel_main() {
     source.reserve_back(2 * max_pages);
     destination.reserve_back(2 * max_pages);
     const uint32_t source_addr = source.get_write_ptr(), destination_addr = destination.get_write_ptr();
-    // Family tests protect sentinel initialization with the attached start barrier.
-    // Wrapper tests have no barrier; initializing their landing region could race
+    // Multicast tests protect sentinel initialization with the attached start barrier.
+    // Positional API tests have no barrier; initializing their landing region could race
     // a valid handshake-free transfer, so leave it untouched.
     if constexpr (barrier.active) {
         for (uint32_t i = 0; i < 4096 * max_pages / 4; ++i) {

@@ -55,7 +55,7 @@ void kernel_main() {
 
     if (mc.can_send()) {
         // SENDER — built ONCE above the block loop and reused for every staged block. An inactive
-        // single-line family has no receivers, so it skips send() below.
+        // A sender-only multicast has no receivers, so it skips send() below.
         auto pipe = mc.sender(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             for (uint32_t i = 0; i < payload_pages; ++i) {

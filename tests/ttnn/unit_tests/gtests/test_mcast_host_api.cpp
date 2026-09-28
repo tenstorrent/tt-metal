@@ -6,9 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <set>
-#include <type_traits>
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -30,36 +28,6 @@ using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::NOC;
 namespace wire = dataflow_kernel_lib::mcast_wire;
 namespace m2 = tt::tt_metal::experimental;
-
-template <typename T>
-concept ExposesCollectionOrPreparation = requires(T value) {
-    value.add_group(CoreRangeSet{}, std::vector<CoreCoord>{});
-} || requires(T value) { value.prepare_arguments(); };
-static_assert(!ExposesCollectionOrPreparation<Mcast>);
-static_assert(std::is_constructible_v<
-              Mcast,
-              const tt::tt_metal::IDevice&,
-              const McastConfig&,
-              const CoreRangeSet&,
-              uint32_t,
-              McastSenderConfig,
-              McastCoreOrder>);
-static_assert(!std::is_constructible_v<
-              Mcast,
-              tt::tt_metal::IDevice*,
-              const McastConfig&,
-              const CoreRangeSet&,
-              uint32_t,
-              McastSenderConfig,
-              McastCoreOrder>);
-static_assert(!std::is_constructible_v<
-              Mcast,
-              tt::tt_metal::IDevice*,
-              const McastConfig&,
-              const std::vector<CoreCoord>&,
-              uint32_t,
-              McastSenderConfig,
-              McastCoreOrder>);
 
 class McastFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastFixture> {};
 
@@ -194,17 +162,13 @@ TEST_F(McastFixture, RowsColumnsAndWholeGrid) {
                 rows ? 3 : 2,
                 rotating ? McastSenderConfig{McastRotatingSenderConfig{}} : McastSenderConfig{McastFixedSenderConfig{}},
                 order);
-            McastImpl legacy(*device_);
             std::vector<std::vector<CoreCoord>> senders;
             std::vector<std::vector<uint32_t>> acks;
             for (const auto& group : groups) {
                 senders.push_back(rotating ? group : std::vector<CoreCoord>{group.front()});
                 acks.emplace_back(senders.back().size(), group.size() - 1);
-                legacy.add_group(core_set(group), senders.back());
             }
             expect_pattern(channel, device_, groups, senders, acks);
-            EXPECT_EQ(emitted(channel).compile_time_args, emitted(legacy).compile_time_args);
-            EXPECT_EQ(emitted(channel).runtime_args, emitted(legacy).runtime_args);
         }
     }
     Mcast all(*device_, {}, receivers, 6);
@@ -331,12 +295,11 @@ TEST_F(McastFixture, ChainSelectionPreservesParticipationLimits) {
     const auto partial = grid({0, 0}, {0, 0});
     const CoreRangeSet empty;
     McastConfig config{.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast};
-    Mcast legacy_equivalent(*device_, config, irregular, 2);
-    auto expected = McastImpl(
-        *device_, McastConfig{.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast});
-    expected.add_group(irregular, {{0, 0}});
-    EXPECT_EQ(emitted(legacy_equivalent).compile_time_args, emitted(expected).compile_time_args);
-    EXPECT_EQ(emitted(legacy_equivalent).runtime_args, emitted(expected).runtime_args);
+    Mcast channel(*device_, config, irregular, 2);
+    EXPECT_EQ(
+        wire::transfer_mode(test::emitted_metadata(emitted(channel).compile_time_args, 0).mcast.flags),
+        dataflow_kernel_lib::TransferMode::ChainUnicast);
+    EXPECT_EQ(channel.participating_cores(), irregular);
     config.handshake_cores = irregular;
     EXPECT_NO_THROW((Mcast(*device_, config, irregular, 2)));
     for (const auto* subset : {&partial, &empty}) {
@@ -431,7 +394,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
         EXPECT_EQ(adopted_spec.kernels.front().semaphore_bindings[i].semaphore_spec_name, adopted[i]);
     }
     // Explicit numeric configuration is owned too, but remains inappropriate for
-    // native named-resource attachment, as with the legacy backend.
+    // native named-resource attachment.
     McastConfig numeric_config{.sem_ids = std::vector<uint32_t>{4, 7}};
     Mcast numeric(*device_, numeric_config, receivers, 4);
     numeric_config.sem_ids->clear();

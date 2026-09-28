@@ -103,14 +103,93 @@ def test_device_lifetime_is_retained(device):
     assert sys.getrefcount(device) == references
 
 
-def test_only_unified_surface_is_public():
-    for name in ["McastFamily", "Mcast1D", "Mcast2D", "Mcast1DShape", "Mcast2DSenderOrder"]:
-        assert not hasattr(ttnn, name)
-        assert not hasattr(ttnn._ttnn.mcast_host, name)
-    assert not hasattr(ttnn.McastConfig(), "ack_count_override")
-    assert not hasattr(ttnn.Mcast, "add_group")
-    for name in ["prepare_arguments", "compile_time_args", "runtime_args", "owned_semaphores", "ack_count"]:
-        assert not hasattr(ttnn.Mcast, name)
+def test_current_host_api_is_exported():
+    module = ttnn._ttnn.mcast_host
+    for name in [
+        "Mcast",
+        "McastConfig",
+        "McastDataReady",
+        "TransferMode",
+        "McastCoreOrder",
+        "McastSenderPlacement",
+        "McastFixedSenderConfig",
+        "McastRotatingSenderConfig",
+        "McastSenderGridConfig",
+        "McastExplicitSenderConfig",
+        "attach_absent",
+    ]:
+        assert getattr(ttnn, name) is getattr(module, name)
+
+
+def test_current_config_bindings_round_trip():
+    defaults = ttnn.McastConfig()
+    assert defaults.noc.value == ttnn.NOC.NOC_0.value
+    assert defaults.handshake
+    assert defaults.handshake_cores is None
+    assert defaults.data_ready == ttnn.McastDataReady.Flag
+    assert defaults.base_sem_id is None
+    assert defaults.sem_ids is None
+    assert defaults.irregular_receiver_set_mode == ttnn.TransferMode.Multicast
+
+    handshake_cores = core_set([(0, 0), (1, 0)])
+    config = ttnn.McastConfig(
+        noc=ttnn.NOC.NOC_1,
+        handshake_cores=handshake_cores,
+        data_ready=ttnn.McastDataReady.Counter,
+        sem_ids=[4, 6],
+    )
+    assert config.noc.value == ttnn.NOC.NOC_1.value
+    assert config.handshake
+    assert config.handshake_cores == handshake_cores
+    assert config.data_ready == ttnn.McastDataReady.Counter
+    assert config.base_sem_id is None
+    assert config.sem_ids == [4, 6]
+    assert config.irregular_receiver_set_mode == ttnn.TransferMode.Multicast
+
+    allocated = ttnn.McastConfig(base_sem_id=3)
+    assert allocated.base_sem_id == 3
+    assert allocated.sem_ids is None
+
+    chain = ttnn.McastConfig(irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast)
+    assert chain.irregular_receiver_set_mode == ttnn.TransferMode.ChainUnicast
+
+
+def test_current_sender_config_bindings_round_trip():
+    fixed = ttnn.McastFixedSenderConfig(sender_index=2, placement=ttnn.McastSenderPlacement.Staggered)
+    assert fixed.sender_index == 2
+    assert fixed.placement == ttnn.McastSenderPlacement.Staggered
+
+    rotating = ttnn.McastRotatingSenderConfig()
+    assert isinstance(rotating, ttnn.McastRotatingSenderConfig)
+
+    sender_cores = core_set([(2, 0), (2, 1)])
+    sender_grid = ttnn.McastSenderGridConfig(sender_cores, sender_order=ttnn.McastCoreOrder.ColumnMajor)
+    assert sender_grid.sender_cores == sender_cores
+    assert sender_grid.sender_order == ttnn.McastCoreOrder.ColumnMajor
+
+    senders = [[ttnn.CoreCoord(2, 0)], [ttnn.CoreCoord(2, 1)]]
+    explicit = ttnn.McastExplicitSenderConfig(senders)
+    assert explicit.senders_per_group == senders
+
+
+def test_attach_absent_uses_current_named_offsets():
+    kernel = ttnn.KernelDescriptor(
+        kernel_source="inspection-only.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set([(0, 0)]),
+        compile_time_args=[17],
+        runtime_args=[(ttnn.CoreCoord(0, 0), [23])],
+        config=ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_0,
+            noc=ttnn.NOC.NOC_0,
+        ),
+    )
+    ttnn.attach_absent(kernel, "optional_channel")
+    offsets = dict(kernel.named_compile_time_args)
+    assert offsets["optional_channel_ct_offset"] == 1
+    assert offsets["optional_channel_rt_offset"] == 0
+    assert kernel.compile_time_args == [17, 0]
+    assert kernel.runtime_args[0][0] == [23]
 
 
 def test_shared_transfer_mode_policy():

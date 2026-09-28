@@ -69,7 +69,7 @@ void kernel_main() {
         }
         words[32 + round] = result;
     }
-    // A second attached family has its own resources and vararg slice.
+    // A second attached multicast has its own resources and vararg slice.
     auto second_sender = second.optional_sender(noc);
     auto second_receiver = second.optional_receiver(noc);
     words[40] = 0;

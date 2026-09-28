@@ -137,13 +137,26 @@ def inspect_mcast(kernel, core, prefix="mcast"):
     named = dict(kernel.named_compile_time_args)
     ct = inspect_mcast_ct(kernel, prefix)
     rt = kernel.runtime_args[core.x][core.y][named[prefix + "_rt_offset"] :]
-    if (ct["flags"] >> 3) & 3:
-        return dict(roles=rt[9], phase=rt[10], rectangles=0, ack=rt[1], coordinates=list(rt[2:4]))
     offset = 0
     roles = ct["roles"]
     if roles == 0xFFFFFFFF:
         roles = rt[offset]
         offset += 1
+    if (ct["flags"] >> 3) & 3:
+        # Compact chains carry optional roles/coordinates, then five neighbor words.
+        # Sender phase and ACK count are implicit: a fixed sender waits only for its successor.
+        coordinates = []
+        if ct["capabilities"] & 2:
+            coordinates = list(rt[offset : offset + 2])
+            offset += 2
+        successor_x = rt[offset + 2]
+        return dict(
+            roles=roles,
+            phase=0 if roles & 1 else 0xFFFFFFFF,
+            rectangles=0,
+            ack=int(bool(roles & 1) and successor_x != 0xFFFFFFFF),
+            coordinates=coordinates,
+        )
     phase = 0
     if ct["span"] and ct["capabilities"] & 1:
         phase = rt[offset]
@@ -173,7 +186,7 @@ def inspect_mcast(kernel, core, prefix="mcast"):
     return dict(roles=roles, phase=phase, rectangles=rectangles, ack=ack, coordinates=coordinates)
 
 
-def run_family_case(
+def run_mcast_groups_case(
     device,
     specs,
     *,
@@ -196,10 +209,10 @@ def run_family_case(
     """Build a unified multicast channel, then exercise its attached kernel arguments."""
     specs = [Group(*group) for group in specs]
     if _mcast_order(specs) is None:
-        # Arbitrary unequal families are intentionally no longer public. Preserve
+        # Arbitrary unequal groups are intentionally no longer public. Preserve
         # device protocol coverage by exercising each representable group.
         for spec in specs:
-            run_family_case(
+            run_mcast_groups_case(
                 device,
                 [spec],
                 noc=noc,
@@ -255,7 +268,7 @@ def run_family_case(
     )
 
 
-def run_mcast_case(
+def run_positional_mcast_case(
     device,
     *,
     width,
@@ -385,7 +398,7 @@ def _run_channel(
         face_ct = list(ct)
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=f"{KERNEL_DIR}/pipe_family.cpp",
+                kernel_source=f"{KERNEL_DIR}/pipe_mcast.cpp",
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=core_set(selected),
                 compile_time_args=face_ct,
@@ -424,8 +437,8 @@ def _run_channel(
     if min_rectangles is not None:
         # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
         # Chain arguments omit rectangles; inspect the same geometry in multicast mode.
-        geometry_family = make_mcast(device, specs, ttnn.McastConfig(noc=config.noc))
-        _, geometry_kernel = attach_for_inspection(geometry_family, participants, config.noc)
+        geometry_mcast = make_mcast(device, specs, ttnn.McastConfig(noc=config.noc))
+        _, geometry_kernel = attach_for_inspection(geometry_mcast, participants, config.noc)
         for _, senders in specs:
             x, y = senders[0]
             assert inspect_mcast(geometry_kernel, ttnn.CoreCoord(x, y))["rectangles"] >= min_rectangles

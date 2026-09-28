@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Unified Mcast attachment, receiver routing, and source/consumer ordering."""
+"""Device behavior for the positional McastArgs API."""
 
 import pytest
 import torch
@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
     inspect_mcast_ct,
     make_cb,
     tile_pattern,
-    run_mcast_case,
+    run_positional_mcast_case,
 )
 
 
@@ -467,8 +467,10 @@ def test_fixed_line(device, cols, rows, blocks, pages):
 @pytest.mark.parametrize(
     "width,senders,rotating", [(1, [0], False), (2, [0], False), (2, [0, 2], True), (9, [0], False)]
 )
-def test_alternating_prepared_payload(device, noc, caller_managed, width, senders, rotating):
-    run_mcast_case(device, width=width, senders=senders, rotating=rotating, noc=noc, caller_managed=caller_managed)
+def test_alternating_positional_payload(device, noc, caller_managed, width, senders, rotating):
+    run_positional_mcast_case(
+        device, width=width, senders=senders, rotating=rotating, noc=noc, caller_managed=caller_managed
+    )
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -482,8 +484,8 @@ def test_alternating_prepared_payload(device, noc, caller_managed, width, sender
         (2, [0, 2], True, True),
     ],
 )
-def test_prepared_control(device, noc, counter, width, senders, rotating, caller_managed):
-    run_mcast_case(
+def test_positional_control(device, noc, counter, width, senders, rotating, caller_managed):
+    run_positional_mcast_case(
         device,
         width=width,
         senders=senders,
@@ -498,8 +500,8 @@ def test_prepared_control(device, noc, counter, width, senders, rotating, caller
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
-def test_prepared_no_handshake(device, noc, counter):
-    run_mcast_case(
+def test_positional_no_handshake(device, noc, counter):
+    run_positional_mcast_case(
         device, width=2, senders=[2], rotating=False, noc=noc, counter=counter, caller_managed=True, handshake=False
     )
 
@@ -507,7 +509,9 @@ def test_prepared_no_handshake(device, noc, counter):
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("control", [False, True])
 def test_mixed_local_only_sender_turn(device, noc, control):
-    run_mcast_case(device, width=1, senders=[0, 1], rotating=True, noc=noc, control=control, caller_managed=True)
+    run_positional_mcast_case(
+        device, width=1, senders=[0, 1], rotating=True, noc=noc, control=control, caller_managed=True
+    )
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -515,10 +519,12 @@ def test_mixed_local_only_sender_turn(device, noc, control):
 @pytest.mark.parametrize("control", [False, True])
 @pytest.mark.parametrize("width", [1, 2])
 def test_single_sender_rotating_config(device, noc, counter, control, width):
-    run_mcast_case(device, width=width, senders=[0], rotating=True, noc=noc, counter=counter, control=control)
+    run_positional_mcast_case(
+        device, width=width, senders=[0], rotating=True, noc=noc, counter=counter, control=control
+    )
 
 
 @pytest.mark.parametrize("kind", ["row", "column"])
 @pytest.mark.parametrize("rotating", [False, True])
-def test_line_wrapper_shared_kernel(device, kind, rotating):
-    run_mcast_case(device, width=2, senders=[0, 1] if rotating else [0], rotating=rotating, kind=kind)
+def test_line_topologies_share_positional_kernel(device, kind, rotating):
+    run_positional_mcast_case(device, width=2, senders=[0, 1] if rotating else [0], rotating=rotating, kind=kind)

@@ -1,16 +1,77 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Exact mcast membership, transport selection and protocol ordering."""
+"""Topology and protocol stress for the positional McastArgs API."""
+
+from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
     attach_for_inspection,
     core_set,
+    inspect_mcast,
     inspect_mcast_ct,
     make_mcast,
-    run_family_case,
+    run_mcast_groups_case,
 )
+
+SENDER_ROLE = 1
+RECEIVER_ROLE = 2
+SENDER_CAPABILITY = 1
+RECEIVER_CAPABILITY = 2
+ALL_CAPABILITIES = SENDER_CAPABILITY | RECEIVER_CAPABILITY
+NO_CORE = 0xFFFFFFFF
+
+
+@pytest.mark.parametrize(
+    "roles,capabilities",
+    [
+        (SENDER_ROLE, SENDER_CAPABILITY),
+        (RECEIVER_ROLE, RECEIVER_CAPABILITY),
+        (SENDER_ROLE, ALL_CAPABILITIES),
+        (RECEIVER_ROLE, ALL_CAPABILITIES),
+        (0, ALL_CAPABILITIES),
+    ],
+)
+@pytest.mark.parametrize("dynamic", [False, True])
+@pytest.mark.parametrize("has_successor", [False, True])
+def test_compact_chain_decoder(roles, capabilities, dynamic, has_successor):
+    # Literal v3 layout, including unrelated argument prefixes and a trailing block.
+    compact_chain_flags = 9
+    control = 3 | (compact_chain_flags << 4) | (capabilities << 18) | ((1 << 17) if dynamic else roles << 15)
+    coordinate_sentinels = [7, 8]
+    successor_sentinels = [9, 10]
+    coordinates = coordinate_sentinels if capabilities & RECEIVER_CAPABILITY else []
+    successor = successor_sentinels if has_successor else [NO_CORE, NO_CORE]
+    neighbors = [NO_CORE, NO_CORE, *successor, 0]
+    rt = ([roles] if dynamic else []) + coordinates + neighbors
+    compile_time_prefix = [101, 102]
+    runtime_prefix = [103]
+    runtime_suffix = [104]
+    kernel = SimpleNamespace(
+        named_compile_time_args=[
+            ("mcast_ct_offset", len(compile_time_prefix)),
+            ("mcast_rt_offset", len(runtime_prefix)),
+        ],
+        compile_time_args=compile_time_prefix + [control, 0, 1, 2],
+        runtime_args={0: {0: runtime_prefix + rt + runtime_suffix}},
+    )
+    assert inspect_mcast(kernel, ttnn.CoreCoord(0, 0)) == dict(
+        roles=roles,
+        phase=0 if roles & SENDER_ROLE else NO_CORE,
+        rectangles=0,
+        ack=int(bool(roles & SENDER_ROLE) and has_successor),
+        coordinates=coordinates,
+    )
+
+
+def _worker_width_with_barrier(device, *, preferred, minimum, height):
+    size = device.compute_with_storage_grid_size()
+    width = min(size.x - 1, preferred)
+    if width < minimum or size.y < height:
+        pytest.skip(f"requires a worker grid of at least {minimum + 1}x{height}")
+    return width
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -19,21 +80,24 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
 def test_non_worker_gap_preserves_worker_holes(device, noc, counter, chain_link):
     # Three logical row segments become four rectangles if the virtual NoC gap is treated
     # as missing receivers. Spectators in the partial rows must still remain untouched.
-    receivers = [(x, 0) for x in range(2, 9)] + [(x, 1) for x in range(9)] + [(x, 2) for x in range(4)]
-    run_family_case(device, [(receivers, [(2, 0)])], noc=noc, counter=counter, chain_link=chain_link, min_rectangles=3)
+    width = _worker_width_with_barrier(device, preferred=9, minimum=5, height=3)
+    receivers = [(x, 0) for x in range(2, width)] + [(x, 1) for x in range(width)] + [(x, 2) for x in range(4)]
+    run_mcast_groups_case(
+        device, [(receivers, [(2, 0)])], noc=noc, counter=counter, chain_link=chain_link, min_rectangles=3
+    )
 
 
 @pytest.mark.parametrize("noc", [0, 1])
 def test_caller_managed_multicast_receiver(device, noc):
-    run_family_case(device, [([(0, 0), (1, 0)], [(0, 0)])], noc=noc, receiver_caller_managed=True)
+    run_mcast_groups_case(device, [([(0, 0), (1, 0)], [(0, 0)])], noc=noc, receiver_caller_managed=True)
 
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
 @pytest.mark.parametrize("control", [False, True])
 @pytest.mark.parametrize("caller_managed", [False, True])
-def test_fixed_families(device, noc, counter, control, caller_managed):
-    run_family_case(
+def test_fixed_groups(device, noc, counter, control, caller_managed):
+    run_mcast_groups_case(
         device,
         [
             ([(0, 0), (2, 0), (3, 0), (0, 1)], [(0, 0)]),
@@ -50,8 +114,8 @@ def test_fixed_families(device, noc, counter, control, caller_managed):
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
 @pytest.mark.parametrize("control", [False, True])
-def test_rotating_families(device, noc, counter, control):
-    run_family_case(
+def test_rotating_groups(device, noc, counter, control):
+    run_mcast_groups_case(
         device,
         [
             ([(0, 0), (2, 0), (3, 0), (0, 1)], [(0, 0), (4, 0)]),
@@ -66,14 +130,14 @@ def test_rotating_families(device, noc, counter, control):
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
-def test_family_no_handshake(device, noc, counter):
-    run_family_case(device, [([(2, 0), (4, 0)], [(0, 0)])], noc=noc, counter=counter, handshake=False, rounds=1)
+def test_mcast_no_handshake(device, noc, counter):
+    run_mcast_groups_case(device, [([(2, 0), (4, 0)], [(0, 0)])], noc=noc, counter=counter, handshake=False, rounds=1)
 
 
 @pytest.mark.parametrize("noc", [0, 1])
-def test_family_staircase_and_gap(device, noc):
+def test_mcast_staircase_and_gap(device, noc):
     # Staircase with the sender in its local singleton, plus a dense logical row crossing BH's gap.
-    run_family_case(
+    run_mcast_groups_case(
         device,
         [([(7, 0), (0, 1), (1, 1), (2, 1), (0, 2)], [(7, 0)]), ([(x, 3) for x in range(9)], [(0, 3)])],
         noc=noc,
@@ -82,56 +146,78 @@ def test_family_staircase_and_gap(device, noc):
 
 
 @pytest.mark.parametrize("noc", [0, 1])
-def test_family_three_rectangles(device, noc):
+def test_mcast_three_rectangles(device, noc):
     # Three isolated destinations exercise the maximum supported owning argument array.
-    run_family_case(device, [([(0, 0), (2, 0), (4, 0)], [(1, 0)])], noc=noc)
+    run_mcast_groups_case(device, [([(0, 0), (2, 0), (4, 0)], [(1, 0)])], noc=noc)
 
 
 @pytest.mark.parametrize("counter", [False, True])
-def test_family_zero_ack(device, counter):
-    run_family_case(device, [([(2, 0), (4, 0)], [(0, 0)])], zero_ack=True, counter=counter, rounds=1)
+def test_mcast_zero_ack(device, counter):
+    run_mcast_groups_case(device, [([(2, 0), (4, 0)], [(0, 0)])], zero_ack=True, counter=counter, rounds=1)
 
 
 @pytest.mark.parametrize("counter", [False, True])
-def test_family_adopted_semaphores(device, counter):
-    run_family_case(
+def test_mcast_adopted_semaphores(device, counter):
+    run_mcast_groups_case(
         device, [([(0, 0), (2, 0), (3, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])], adopted=True, counter=counter
     )
 
 
-# Policy's irregular case is identical to chain's sender-middle. Keep it once.
+def _mapped_gap_geometry(device):
+    width = _worker_width_with_barrier(device, preferred=9, minimum=3, height=3)
+    return [([(x, 0) for x in range(width)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]
+
+
+def _dense_gap_geometry(device):
+    width = _worker_width_with_barrier(device, preferred=9, minimum=3, height=1)
+    return [([(x, 0) for x in range(width)], [(2, 0)])]
+
+
+class GeometryCase(NamedTuple):
+    name: str
+    geometry: object
+    min_rectangles: int | None = None
+
+    def resolve(self, device):
+        return self.geometry(device) if callable(self.geometry) else self.geometry
+
+
 CHAIN_GEOMETRIES = [
-    ("two-core", [([(0, 0), (2, 0)], [(0, 0)])]),
-    ("sender-middle", [([(0, 0), (2, 0), (0, 2)], [(2, 0)])]),
-    ("sender-outside", [([(0, 0), (2, 0), (0, 2)], [(4, 0)])]),
-    (
+    GeometryCase("two-core", [([(0, 0), (2, 0)], [(0, 0)])]),
+    GeometryCase("sender-middle", [([(0, 0), (2, 0), (0, 2)], [(2, 0)])]),
+    GeometryCase("sender-outside", [([(0, 0), (2, 0), (0, 2)], [(4, 0)])]),
+    GeometryCase(
         "varied-geometry",
         [([(0, 0), (1, 0), (2, 0)], [(0, 0)]), ([(0, 2), (2, 2), (4, 2)], [(2, 2)]), ([(6, 0)], [(6, 0)])],
     ),
-    ("concurrent", [([(0, 0), (2, 0), (0, 2)], [(2, 0)]), ([(4, 0), (6, 0), (4, 2)], [(4, 2)])]),
-    ("mapped-gap", [([(x, 0) for x in range(9)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
-    ("dense-chain", [([(0, 0), (1, 0), (2, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
-    ("self-only", [([(0, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
+    GeometryCase("concurrent", [([(0, 0), (2, 0), (0, 2)], [(2, 0)]), ([(4, 0), (6, 0), (4, 2)], [(4, 2)])]),
+    GeometryCase("mapped-gap", _mapped_gap_geometry, min_rectangles=1),
+    GeometryCase("dense-chain", [([(0, 0), (1, 0), (2, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
+    GeometryCase("self-only", [([(0, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
 ]
 POLICY_GEOMETRIES = [
-    ("dense-gap", [([(x, 0) for x in range(9)], [(2, 0)])]),
-    ("irregular", [([(0, 0), (2, 0), (0, 2)], [(2, 0)])]),
-    ("mixed", [([(0, 0), (1, 0), (2, 0)], [(1, 0)]), ([(0, 2), (2, 2), (4, 2)], [(2, 2)]), ([(6, 0)], [(6, 0)])]),
-    ("mixed-outside", [([(0, 0), (1, 0)], [(2, 0)]), ([(0, 2), (2, 2), (4, 2)], [(6, 2)])]),
+    GeometryCase("dense-gap", _dense_gap_geometry, min_rectangles=1),
+    GeometryCase("irregular", [([(0, 0), (2, 0), (0, 2)], [(2, 0)])]),
+    GeometryCase(
+        "mixed",
+        [([(0, 0), (1, 0), (2, 0)], [(1, 0)]), ([(0, 2), (2, 2), (4, 2)], [(2, 2)]), ([(6, 0)], [(6, 0)])],
+    ),
+    GeometryCase("mixed-outside", [([(0, 0), (1, 0)], [(2, 0)]), ([(0, 2), (2, 2), (4, 2)], [(6, 2)])]),
 ]
-GEOMETRIES = CHAIN_GEOMETRIES + [case for case in POLICY_GEOMETRIES if case[0] != "irregular"]
+# Policy's irregular case is identical to chain's sender-middle. Keep it once.
+GEOMETRIES = CHAIN_GEOMETRIES + [case for case in POLICY_GEOMETRIES if case.name != "irregular"]
 
 
 @pytest.mark.parametrize("noc", [0, 1])
-@pytest.mark.parametrize("name,groups", GEOMETRIES, ids=[case[0] for case in GEOMETRIES])
-def test_family_geometry(device, noc, name, groups):
-    run_family_case(
+@pytest.mark.parametrize("case", GEOMETRIES, ids=[case.name for case in GEOMETRIES])
+def test_mcast_geometry(device, noc, case):
+    run_mcast_groups_case(
         device,
-        groups,
+        case.resolve(device),
         chain_link=True,
         noc=noc,
         rounds=8,
-        min_rectangles=1 if name in ("mapped-gap", "dense-gap") else None,
+        min_rectangles=case.min_rectangles,
     )
 
 
@@ -140,9 +226,9 @@ def test_family_geometry(device, noc, name, groups):
 @pytest.mark.parametrize("control", [False, True], ids=["payload", "control"])
 @pytest.mark.parametrize("caller_managed", [False, True], ids=["guard", "caller-managed"])
 def test_chain_protocol(device, noc, counter, control, caller_managed):
-    run_family_case(
+    run_mcast_groups_case(
         device,
-        CHAIN_GEOMETRIES[3][1],
+        CHAIN_GEOMETRIES[3].resolve(device),
         chain_link=True,
         noc=noc,
         counter=counter,
@@ -153,21 +239,21 @@ def test_chain_protocol(device, noc, counter, control, caller_managed):
 
 
 def test_chain_smoke(device):
-    run_family_case(device, CHAIN_GEOMETRIES[0][1], chain_link=True)
+    run_mcast_groups_case(device, CHAIN_GEOMETRIES[0].resolve(device), chain_link=True)
 
 
 @pytest.mark.parametrize("counter", [False, True])
 def test_chain_adopted_semaphores(device, counter):
-    run_family_case(device, CHAIN_GEOMETRIES[2][1], chain_link=True, counter=counter, adopted=True)
+    run_mcast_groups_case(device, CHAIN_GEOMETRIES[2].resolve(device), chain_link=True, counter=counter, adopted=True)
 
 
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
 @pytest.mark.parametrize("mixed_events", [False, True])
 def test_chain_large_payload_and_backpressure(device, noc, counter, mixed_events):
-    run_family_case(
+    run_mcast_groups_case(
         device,
-        CHAIN_GEOMETRIES[3][1],
+        CHAIN_GEOMETRIES[3].resolve(device),
         chain_link=True,
         noc=noc,
         counter=counter,
@@ -181,9 +267,9 @@ def test_chain_large_payload_and_backpressure(device, noc, counter, mixed_events
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True], ids=["flag", "counter"])
 def test_chain_caller_managed_receiver(device, noc, counter):
-    run_family_case(
+    run_mcast_groups_case(
         device,
-        CHAIN_GEOMETRIES[3][1],
+        CHAIN_GEOMETRIES[3].resolve(device),
         chain_link=True,
         noc=noc,
         counter=counter,
@@ -198,9 +284,9 @@ def test_chain_caller_managed_receiver(device, noc, counter):
 @pytest.mark.parametrize("noc", [0, 1])
 @pytest.mark.parametrize("counter", [False, True])
 def test_policy_backpressure(device, noc, counter):
-    run_family_case(
+    run_mcast_groups_case(
         device,
-        POLICY_GEOMETRIES[2][1],
+        POLICY_GEOMETRIES[2].resolve(device),
         chain_link=True,
         noc=noc,
         counter=counter,
@@ -223,7 +309,7 @@ def test_compressed_coordinate_lifetime(device, noc, column_major, count):
     senders = [(i // 8, i % 8) if column_major else (i % 8, i // 8) for i in range(count)]
     # Pass through all phases and wrap: the returned optional receiver must own
     # its expanded table after the temporary decoder/constructor has gone away.
-    run_family_case(device, [(receivers, senders)], noc=noc, counter=True, rounds=count + 3)
+    run_mcast_groups_case(device, [(receivers, senders)], noc=noc, counter=True, rounds=count + 3)
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -250,7 +336,7 @@ def test_compressed_external_sender_lifetime(device, noc, counter, column_major,
     assert metadata["span"] == len(senders)
     assert 2 * (metadata["x_ranges"] + metadata["y_ranges"]) < 2 * len(senders)
     # Exercise every sender and wrap, with the decoded table owned by the pipe.
-    run_family_case(device, [(receivers, senders)], noc=noc, counter=counter, rounds=len(senders) + 3)
+    run_mcast_groups_case(device, [(receivers, senders)], noc=noc, counter=counter, rounds=len(senders) + 3)
 
 
 def test_group_attention_external_sender_argument_counts(device):
@@ -292,4 +378,4 @@ def test_large_explicit_coordinate_lifetime(device):
     # The same 64-core geometry with a non-Cartesian traversal must retain pairs.
     # This also provides a matched explicit-storage artifact for the range audit.
     senders[0], senders[1] = senders[1], senders[0]
-    run_family_case(device, [(receivers, senders)], noc=0, counter=True, rounds=67)
+    run_mcast_groups_case(device, [(receivers, senders)], noc=0, counter=True, rounds=67)
