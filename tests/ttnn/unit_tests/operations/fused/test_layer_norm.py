@@ -313,6 +313,40 @@ def test_layer_norm_welford_fp32_residual_large_offset(device, rows, width):
     assert error.abs().mean() < 0.004
 
 
+@run_for_wormhole_b0_or_blackhole()
+@pytest.mark.parametrize("width", [128, 2880])
+@pytest.mark.parametrize("anchor", [float("inf"), -float("inf"), float("nan")], ids=["inf", "neg_inf", "nan"])
+def test_layer_norm_fp32_residual_nonfinite_anchor_is_row_local(device, enabled_program_cache, width, anchor):
+    """Unused statistics lanes must not broadcast another row's non-finite anchor."""
+    torch.manual_seed(71)
+    clean_input = torch.randn((64, width), dtype=torch.float32)
+    residual = torch.randn_like(clean_input)
+    residual_tensor = ttnn.from_torch(residual, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    reciprocals = create_recip_tensor(device, width, use_welford=True)
+    for poison in (True, False):
+        x = clean_input.clone()
+        if poison:
+            # These anchors used to occupy padding that transposes into other rows.
+            x[16, 0] = anchor
+            x[62, 0] = anchor
+        reference = torch.nn.functional.layer_norm(x.double() + residual.double(), [width])
+        input_tensor = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device)
+        output = ttnn.layer_norm(
+            input_tensor,
+            residual_input_tensor=residual_tensor,
+            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            recip_tensor=reciprocals,
+            compute_kernel_config=config,
+        )
+        actual = ttnn.to_torch(output).double()
+        finite_rows = torch.isfinite(reference).all(dim=-1)
+        assert torch.isfinite(actual[finite_rows]).all()
+        torch.testing.assert_close(actual[finite_rows], reference[finite_rows], rtol=5e-3, atol=1.5e-2)
+
+
 @pytest.mark.parametrize(
     "rows,width,has_residual,has_gamma,has_beta",
     [

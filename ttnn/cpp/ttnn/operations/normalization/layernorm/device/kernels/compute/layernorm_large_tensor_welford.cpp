@@ -16,6 +16,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/experimental/layernorm.h"
 #include "api/compute/transpose.h"
@@ -154,6 +155,15 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         }
 
         tile_regs_acquire();
+        if constexpr (fp32_sfpu_finalizer) {
+            if (block.is_first()) {
+                // The final column broadcast masks padding arithmetically. Keep
+                // it finite, including the unwritten half of each state row.
+                fill_tile_init();
+                fill_tile(mean_dst, 0.0f);
+                fill_tile(var_dst, 0.0f);
+            }
+        }
         if (!block.is_first()) {
             // Preserve the previous blocks' raw (mean, M2) in adjacent DEST
             // tiles. The SFPU Chan merge consumes them after this block's M2
@@ -199,7 +209,9 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
         if (block.is_first()) {
             two_pass_stats_save_state(mean_dst);
-            two_pass_stats_save_anchor_to_state(mean_dst);
+            if constexpr (!fp32_sfpu_finalizer) {
+                two_pass_stats_save_anchor_to_state(mean_dst);
+            }
         } else {
             two_pass_stats_combine_block(
                 mean_dst,
