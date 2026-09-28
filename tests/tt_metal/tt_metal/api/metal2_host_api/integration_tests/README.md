@@ -1,12 +1,10 @@
 # Metal 2.0 Host API integration tests
 
-End-to-end tests on real Wormhole B0 or Blackhole silicon: build a Program from a ProgramSpec, compile, dispatch,
-and check the results on the device. The fixtures skip on any other architecture. Test names have no `CPU_` prefix,
-so CI runs them on silicon runners.
+This folder holds Metal 2.0 unit tests that tests integration of Metal 2.0 with other parts of the low level systems (e.g. LLK).
 
-A test belongs here only if it needs silicon. A test that only calls `MakeProgramFromSpec` or compiles kernels
-should use a mock fixture in [`../unit_tests/`](../unit_tests/) or
-[`../kernel_compilation_tests/`](../kernel_compilation_tests/).
+Tests contained in this directory may need the host-attached accelarator or compatible emulation platforms to be present.
+
+Tests should prefer [unit tests suite](../unit_tests/) or [kernel compilation tests suite](../kernel_compilation_tests/) when tests are self-contained and are able to be run without silicon/ emulation environment.
 
 ## Fixtures
 
@@ -26,15 +24,3 @@ should use a mock fixture in [`../unit_tests/`](../unit_tests/) or
 | `scratchpad_fast_dispatch.cpp` | 2 | `UnitMeshCQSingleCardFixture` | Scratchpad write and readback under fast dispatch; a scratchpad as either end of a NoC transfer |
 | `compute_semaphore.cpp` | 7 | `ProgramSpecHWTest` | Compute-kernel semaphores (`SemScope::COMPUTE_ATOMIC`). Blackhole only; they skip on Wormhole |
 | `mesh_workload_factories.cpp` | 5 | `MeshWorkloadFactory*` | `MakeMeshWorkloadFromSpec(s)`: repeated enqueue, DFB resize between enqueues, the map overload, slow dispatch, distinct specs on a 1x2 mesh |
-
-## Running
-
-Slow-dispatch and fast-dispatch tests need separate runs:
-
-```sh
-export TT_METAL_HOME=$PWD
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api \
-    --gtest_filter='ProgramSpecHWTest.*:MeshWorkloadFactorySlowDispatchHWTest.*'
-./build/test/tt_metal/unit_tests_api \
-    --gtest_filter='UnitMeshCQSingleCardFixture.Scratchpad*:MeshWorkloadFactoryHWTest.*:MeshWorkloadFactory1x2HWTest.*'
-```
