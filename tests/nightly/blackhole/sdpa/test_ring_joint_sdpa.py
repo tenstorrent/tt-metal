@@ -4670,7 +4670,9 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
             chunk_size_local,
         )
         cache_seq_per_dev = kv_host.shape[2] // sp_size
-        assert stable_kv_input_seq_len >= kv_host.shape[2] and persistent_seq_len > kv_host.shape[2]
+        assert (
+            stable_kv_input_seq_len >= kv_host.shape[2] and persistent_seq_len > kv_host.shape[2]
+        ), f"chunk {i}: KV length {kv_host.shape[2]}, stable {stable_kv_input_seq_len}, persistent {persistent_seq_len}"
         # Embed this chunk's rotated KV into the stable physical layout; the untouched remainder is
         # garbage that must not leak into the result.
         kv_input_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_cache_seq_per_dev, d_k) * 100
