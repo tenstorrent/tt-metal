@@ -726,6 +726,16 @@ def passed_test(
     return is_within_tolerance and (pcc > target_pcc)
 
 
+def build_lock_path(name: str) -> str:
+    """Per-user path for a host-wide build lock.
+
+    These locks live in world-shared /tmp. A fixed name lets whichever user ran
+    the harness first own the file (mode 0644), after which every other user's
+    open fails with EACCES and the whole run dies in pytest_configure.
+    """
+    return f"/tmp/{name}-{os.getuid()}.lock"
+
+
 def create_directories(dirs: list[Path]):
     """Create directories with file lock to handle race conditions in parallel execution."""
 
@@ -734,7 +744,7 @@ def create_directories(dirs: list[Path]):
         return
 
     # Acquire lock and create using os.makedirs (more robust than pathlib.mkdir)
-    lock = FileLock("/tmp/tt-llk-build.lock")
+    lock = FileLock(build_lock_path("tt-llk-build"))
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)
