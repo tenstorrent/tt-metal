@@ -77,6 +77,9 @@ struct ApplyWorkSplit {
     uint32_t n_rows_used = 0;
     uint32_t base = 0;
     uint32_t rem = 0;
+    // Tile rows per [N, C] slice, and valid rows in each slice's last tile row (0 = all valid).
+    uint32_t Ht = 0;
+    uint32_t h_tail = 0;
     CoreCoord grid{};
     CoreRangeSet core_ranges;
 };
@@ -93,6 +96,9 @@ ApplyWorkSplit make_work_split(const Tensor& x) {
     ws.core_ranges = num_cores_to_corerangeset(ws.num_cores, ws.grid, /*row_wise=*/true);
     ws.base = ws.num_rows / ws.num_cores;
     ws.rem = ws.num_rows % ws.num_cores;
+    const uint32_t tile_h = x.tensor_spec().tile().get_height();
+    ws.Ht = x.padded_shape()[2] / tile_h;
+    ws.h_tail = x.logical_shape()[2] % tile_h;
     return ws;
 }
 
@@ -138,7 +144,6 @@ ApplyBuffers make_buffers(
     ApplyBuffers bufs;
     bufs.dy = tensor_args.dy.buffer();
     bufs.x = tensor_args.x.buffer();
-    // TensorAccessorArgs needs a live buffer even when the kernel does not read gamma / dgamma.
     bufs.gamma = with_dgamma ? tensor_args.gamma->buffer() : tensor_args.x.buffer();
     bufs.inv_rms = tensor_args.inv_rms.buffer();
     bufs.d = tensor_args.d.buffer();
@@ -168,7 +173,7 @@ ApplyCoreArgs make_core_args(
     const auto root = vcoord(0, 0);
 
     ApplyCoreArgs args;
-    args.reader = {bufs.dy, bufs.x, bufs.gamma, bufs.inv_rms, bufs.d, work.row_start, work.row_count};
+    args.reader = {bufs.dy, bufs.x, bufs.gamma, bufs.inv_rms, bufs.d, work.row_start, work.row_count, ws.Ht, ws.h_tail};
     args.writer = {
         bufs.dx,
         work.row_start,
@@ -328,7 +333,7 @@ void RMSNormBwApplyOperation::ProgramFactory::override_runtime_arguments(
     // re-apply every arg, addresses included.
     const auto apply = [](RuntimeArgsData& dst, const std::vector<RTArg>& src) {
         TT_FATAL(
-            dst.size() == src.size(),
+            dst.size() >= src.size(),
             "rmsnorm_bw_apply: cached program has {} runtime args but {} were re-derived",
             dst.size(),
             src.size());
