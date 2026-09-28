@@ -15,7 +15,12 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op_types.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op_utils.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -41,6 +46,31 @@ void preallocated_tensors_check(
     if (required_outputs[1] && !other_grad.has_value()) {
         other_grad = ttnn::empty_like(other, std::nullopt, std::nullopt, std::nullopt, memory_config);
     }
+}
+
+// PyTorch-parity: after a broadcast-shape multiply, sum-reduce along the axes where the
+// operand was expanded so the grad matches the operand's shape (mirrors tt-train's
+// unbroadcast_grad and PyTorch autograd's AccumulateGrad); no-op on same-shape.
+Tensor reduce_grad_to_operand_shape(
+    const Tensor& grad, const ttnn::Shape& operand_shape, const std::optional<MemoryConfig>& memory_config) {
+    const auto axes = broadcast_reduce_axes(operand_shape, grad.logical_shape());
+    if (axes.empty() && grad.logical_shape().rank() == operand_shape.rank()) {
+        return grad;
+    }
+    Tensor reduced = grad;
+    if (!axes.empty()) {
+        ttsl::SmallVector<int> axes_int(axes.begin(), axes.end());
+        reduced = ttnn::sum(
+            grad,
+            std::variant<int, int64_t, ttsl::SmallVector<int>>{axes_int},
+            /*keepdim=*/true,
+            memory_config);
+    }
+    // sum with keepdim preserves rank; drop leading 1s when operand had fewer axes.
+    if (reduced.logical_shape().rank() != operand_shape.rank()) {
+        reduced = ttnn::reshape(reduced, operand_shape, memory_config);
+    }
+    return reduced;
 }
 
 }  // namespace detail
@@ -843,6 +873,40 @@ std::vector<std::optional<Tensor>> mul_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    // Hard invariants raise so caller errors (bad storage, cross-device, non-float dtype,
+    // preallocated dtype/shape mismatch) cannot be silently coerced. Soft reasons (ROW_MAJOR,
+    // non-32x32 tile, broadcast, sharded, partial mask, A1) drop to composite.
+    const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
+        operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+        grad_tensor_arg,
+        input_tensor_arg,
+        other_tensor_arg,
+        input_grad,
+        other_grad);
+    TT_FATAL(!hard.has_value(), "{}", hard.value_or(std::string{}));
+    const auto soft = operations::binary_backward::BinaryBackwardDeviceOperation::soft_fallback_reason(
+        operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+        grad_tensor_arg,
+        input_tensor_arg,
+        other_tensor_arg,
+        output_mem_config,
+        {are_required_outputs.at(0), are_required_outputs.at(1)},
+        input_grad,
+        other_grad);
+    if (!soft.has_value()) {
+        auto outs = operations::binary_backward::launch_binary_backward(
+            operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+            grad_tensor_arg,
+            input_tensor_arg,
+            other_tensor_arg,
+            tt::tt_metal::DataType::INVALID,
+            output_mem_config.value_or(input_tensor_arg.memory_config()),
+            {true, true},
+            input_grad,
+            other_grad);
+        return {outs[0], outs[1]};
+    }
+
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad,
@@ -852,12 +916,34 @@ std::vector<std::optional<Tensor>> mul_bw(
         {are_required_outputs[0], are_required_outputs[1]},
         output_mem_config);
 
+    // Broadcast on the forward makes grad_out.shape == out.shape > operand.shape on some axes;
+    // ttnn::multiply(grad, other) then produces at grad shape, so reduce back to operand shape
+    // before writing into the preallocated buffer (which is sized to operand.shape).
+    const auto input_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        input_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
+    const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
+        other_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
+
     if (are_required_outputs.at(0)) {
-        ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config, input_grad);
+        if (input_needs_reduce) {
+            Tensor grad_a = ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config);
+            grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                grad_a, input_tensor_arg.logical_shape(), output_mem_config);
+            ttnn::assign(grad_a, input_grad.value());
+        } else {
+            ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config, input_grad);
+        }
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config, other_grad);
+        if (other_needs_reduce) {
+            Tensor grad_b = ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config);
+            grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                grad_b, other_tensor_arg.logical_shape(), output_mem_config);
+            ttnn::assign(grad_b, other_grad.value());
+        } else {
+            ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config, other_grad);
+        }
         result[1] = other_grad;
     }
     return result;
