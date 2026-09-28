@@ -190,7 +190,7 @@ class TtMHCWrap(LightweightModule):
         scale: torch.Tensor,
         dtype=ttnn.float32,
         tp_axis: int | None = None,
-        num_links: int = 1,
+        num_links: int | None = None,
         topology=ttnn.Topology.Linear,
     ):
         # the fused parametrization op is fp32-only; reject here rather than fail deep in hc_pre
@@ -204,7 +204,7 @@ class TtMHCWrap(LightweightModule):
         self.ckc = _compute_kernel_config()
         # tp_axis is None on a single device, where nothing is sharded and no reduction is needed.
         self.tp_axis = tp_axis
-        self.num_links = num_links
+        self.num_links = num_links if num_links is not None else (2 if is_blackhole() else 1)
         self.topology = topology
         self.tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
         self.tt_ccl = get_tt_ccl(device) if self.tp_factor > 1 else None
