@@ -11,7 +11,8 @@
 #   ./codegen/scripts/setup_worktree.sh {create|cleanup|prune|list} [ARG]
 #
 # Env:
-#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: /proj_sw/user_dev/llk-codegen-worktrees)
+#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: beside the base clone when
+#                            it is on a local disk, else /proj_sw/user_dev/llk-codegen-worktrees)
 #   CODEGEN_KEEP_WORKTREE  — "false" (default) removes the worktree after the run;
 #                            "true" keeps the live checkout
 #   CODEGEN_BASE_COMMIT    — optional full commit SHA to use instead of origin/main
@@ -31,7 +32,32 @@ LLK_REL="${LLK_ROOT#"$REPO_ROOT/"}"
 GIT_USER="llk_code_gen"
 
 # Prepare paths
-CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-/proj_sw/user_dev/llk-codegen-worktrees}"
+#
+# A worktree is only usable on the host that holds its git database, so place
+# it on the same filesystem. When the base clone is on a local disk (e.g.
+# /localdev), worktrees go beside the clone: creating one there took 19.6s,
+# against 6-14 min of pre-run setup on weka, and every later git and file
+# operation in the solve is local too. Card hosts never read the worktree --
+# they receive the candidate as a diff and build in their own clone -- so
+# nothing else needs it on shared storage. A clone on weka, NFS or anything
+# unrecognised keeps the historical shared default unchanged.
+_default_worktree_root() {
+  local common clone parent fs
+  common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+  clone="$(dirname "$common")"
+  parent="$(dirname "$clone")"
+  fs="$(stat -f -c %T "$clone" 2>/dev/null || true)"
+  case "$fs" in
+    xfs | ext2/ext3 | ext4 | btrfs)
+      if [ -n "$common" ] && [ -w "$parent" ]; then
+        echo "$parent/llk-codegen-worktrees"
+        return
+      fi
+      ;;
+  esac
+  echo /proj_sw/user_dev/llk-codegen-worktrees
+}
+CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-$(_default_worktree_root)}"
 CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-dir)"
 
 CODEGEN_SETUP_LOCK="${CODEGEN_GIT_DIR}/codegen-worktree-setup.lock"
@@ -528,7 +554,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       echo "  issue-123                  — for issue solving"
       echo "  generate-gelu-quasar       — for kernel generation"
       echo ""
-      echo "Env: CODEGEN_WORKTREE_ROOT (default /proj_sw/user_dev/llk-codegen-worktrees),"
+      echo "Env: CODEGEN_WORKTREE_ROOT (default beside a local-disk clone, else /proj_sw/user_dev/llk-codegen-worktrees),"
       echo "     CODEGEN_KEEP_WORKTREE (default false)"
       [[ -z "$cmd" ]] && exit 1 || { [[ "$cmd" == "--help" || "$cmd" == "-h" ]] && exit 0 || exit 1; }
       ;;
