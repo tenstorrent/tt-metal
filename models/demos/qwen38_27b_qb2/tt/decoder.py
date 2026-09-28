@@ -439,6 +439,20 @@ class Qwen38Decoder(LightweightModule):
             fuse_swiglu=fuse_swiglu,
         )
 
+    def _shard_grid(self, cores):
+        """Rectangle holding `cores` width shards, as `_width_memory` lays them out.
+
+        Sharded layernorm's program config must name the same rectangle as its shard spec, so
+        both sides read this. QB2's worker grid is ten wide and every measured count here is a
+        multiple of ten; a narrower grid re-shapes the same count.
+        """
+        if self.policy.get("rectangular_working", False) and cores % 10 == 0:
+            return 10, cores // 10
+        width = self.device.compute_with_storage_grid_size().x
+        if cores % width:
+            raise ValueError(f"{cores} width shards do not tile a {width}-wide worker grid")
+        return width, cores // width
+
     def _width_memory(self, cores, height, width):
         if self.policy.get("rectangular_working", False) and cores % 10 == 0:
             grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, cores // 10 - 1))})
@@ -464,7 +478,7 @@ class Qwen38Decoder(LightweightModule):
 
     def _residual_memory(self, batch):
         cores = self.policy.get("residual_cores", 40)
-        grid = (10, cores // 10)
+        grid = self._shard_grid(cores)
         return ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -489,7 +503,7 @@ class Qwen38Decoder(LightweightModule):
             packed = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, rows, width]), memory)
             shard_width = 160 // cores
             program = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(10, cores // 10),
+                compute_with_storage_grid_size=self._shard_grid(cores),
                 subblock_w=min(shard_width, 4),
                 block_h=(rows + 31) // 32,
                 block_w=shard_width,
@@ -509,7 +523,7 @@ class Qwen38Decoder(LightweightModule):
             public = len(x.shape) == 3
             memory = self._residual_memory(batch)
             cores = self.policy.get("residual_cores", 40)
-            grid = (10, cores // 10)
+            grid = self._shard_grid(cores)
             x = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, batch, 5120]), memory)
             width = 160 // cores
             program = ttnn.LayerNormShardedMultiCoreProgramConfig(

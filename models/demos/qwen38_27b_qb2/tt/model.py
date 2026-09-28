@@ -16,7 +16,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, resolve_mesh_tp
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, resolve_mesh_tp, tp_policy
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
 MODEL_ID = "Qwen/Qwen3.8-27B"
@@ -63,7 +63,8 @@ class ModelCache:
 
 class Qwen38Model:
     def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
-        resolve_mesh_tp(mesh_device)
+        self.TP = resolve_mesh_tp(mesh_device)
+        self.num_links = tp_policy(self.TP).get("num_links", 2)
         self.precision = load_precision(precision_config)
         self.mesh = mesh_device
         self.snapshot = Path(snapshot or checkpoint_path())
@@ -133,8 +134,9 @@ class Qwen38Model:
         if head_strategy == "dram":
             banks = mesh_device.dram_grid_size().x
             bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
-            for start in range(0, self.config.vocab_size // 4, 16384):
-                weight = self.head_weight[:, start : min(start + 16384, self.config.vocab_size // 4)]
+            shard_vocab = self.config.vocab_size // self.TP
+            for start in range(0, shard_vocab, 16384):
+                weight = self.head_weight[:, start : min(start + 16384, shard_vocab)]
                 width = ((weight.shape[-1] + banks * 64 - 1) // (banks * 64)) * 64
                 memory = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -196,15 +198,15 @@ class Qwen38Model:
         out = ttnn.embedding(
             tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        out = ttnn.reshape(out, [1, 1, batch * length, self.config.hidden_size // 4])
+        out = ttnn.reshape(out, [1, 1, batch * length, self.config.hidden_size // self.TP])
         if sharded:
-            return ttnn.reshape(out, [batch, length, self.config.hidden_size // 4])
+            return ttnn.reshape(out, [batch, length, self.config.hidden_size // self.TP])
         out = ttnn.experimental.all_gather_async(
             out,
             dim=3,
             cluster_axis=1,
             mesh_device=self.mesh,
-            num_links=2,
+            num_links=self.num_links,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
@@ -234,7 +236,11 @@ class Qwen38Model:
                 epsilon=self.config.rms_norm_eps,
                 memory_config=memory,
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=(10, 4), subblock_w=4, block_h=1, block_w=4, inplace=False
+                    compute_with_storage_grid_size=self.layers[0]._shard_grid(40),
+                    subblock_w=4,
+                    block_h=1,
+                    block_w=4,
+                    inplace=False,
                 ),
                 compute_kernel_config=self.norm_compute,
             )
@@ -370,7 +376,7 @@ class Qwen38Model:
             x = x[:, length - 1 : length, :]
             length = 1
         if sharded:
-            x = self.layers[-1]._gather(ttnn.reshape(x, [1, batch, 1, self.config.hidden_size // 4]))
+            x = self.layers[-1]._gather(ttnn.reshape(x, [1, batch, 1, self.config.hidden_size // self.TP]))
             x = ttnn.reshape(x, [batch, 1, self.config.hidden_size])
         if batched_head:
             logits = self.logits(x, decode=True)
