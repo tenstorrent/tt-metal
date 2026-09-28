@@ -6,14 +6,17 @@
 MiMo has two KV shapes per chip (tt/attention.py):
   * full layers (0, 5, ...):     4 KV heads x 192, chip c holds head c          -> K [1, 1, S, 192]
   * sliding layers (1-4, ...):   8 KV heads x 192, chip c holds heads 2c, 2c+1  -> K [1, 2, S, 192]
-V has head dim 128, but the device keeps it zero-padded to 192 (SDPA needs Dv == D), x attention_value_scale.
+V has head dim 128, x attention_value_scale. The attention keeps V at 128 (tt/attention.py; MIMO_V_PAD=1 pads it to
+192 there), but this contract keeps its layout with V zero-padded to 192 per head: the padding is added only where
+the contract copy is written (kv_sink -> _slab), so the slab, the address table (one 12-tile entry per 32 tokens for
+K and V alike, gpt_oss_d_p kv_cache / kv_chunk_table) and every reader of it are unchanged.
 The migratable cache is one uniform slab per TP column ("what chip c holds"), for K and for V:
 
   * per chip K and V [num_users * num_layers, 1, max_seq, 384], bfloat8_b, TILE, DRAM NdShard [1, 1, 32, 384]
     ROUND_ROBIN_1D over the DRAM banks; batch index = slot * num_layers + layer (the gpt_oss_d_p GQA substrate)
   * sliding layer: columns [0:192] = head 2c, [192:384] = head 2c+1 (nlp_concat_heads order)
   * full layer:    columns [0:192] = head c, [192:384] = zero (device pad)
-  * V columns of a head: [h*192 : h*192 + 128] (the last 64 of each 192 are the device's zero pad)
+  * V columns of a head: [h*192 : h*192 + 128] (the last 64 of each 192 are zero, padded at the contract write)
   * K is post-RoPE in rotate-half (HF) order, as the golden; V is x attention_value_scale, as the golden
   * address table: configs 0..3 = K chip 0..3, 4..7 = V chip 0..3; 32-token entries of 12 bf8 tiles (13056 B)
 
@@ -30,7 +33,7 @@ import ttnn
 
 SP_AXIS = 0
 NUM_CHIPS = 4
-HEAD_DIM = 192  # QK head dim, and the device's padded V head dim
+HEAD_DIM = 192  # QK head dim, and the contract's padded V head dim
 V_HEAD_DIM = 128
 SLAB = 2 * HEAD_DIM  # per-chip KV width per token (both layer types: sliding holds 2 heads, full 1 head + zeros)
 
@@ -52,8 +55,8 @@ class MiMoContractKV:
         )
 
     def sink(self, layer: int, start: int, slot: int):
-        """kv_sink(k, v) for one (cache layer, chunk, slot): k/v are the attention's per-chip [1, h, S, 192], h in {1, 2}
-        (v zero-padded 128 -> 192)."""
+        """kv_sink(k, v) for one (cache layer, chunk, slot): k is the attention's per-chip [1, h, S, 192], h in {1, 2},
+        v [1, h, S, 128] (or [1, h, S, 192] zero-padded under MIMO_V_PAD=1)."""
         from models.demos.gpt_oss_d_p.tt.attention.kv_cache import write_kv_chunk
 
         def write(k, v):
@@ -83,12 +86,18 @@ class MiMoContractKV:
 
 
 def _slab(t):
-    """[1, h, S, 192] -> [1, 1, S, 384]: two heads side by side (sliding), or one head then 192 zero columns (full)."""
+    """[1, h, S, 192] -> [1, 1, S, 384]: two heads side by side (sliding), or one head then 192 zero columns (full).
+    A V at its real width [1, h, S, 128] is zero-padded to 192 per head first."""
     h, d = t.shape[1], t.shape[-1]
-    assert d == HEAD_DIM and h in (1, 2), t.shape
-    if h == 2:
+    assert d in (HEAD_DIM, V_HEAD_DIM) and h in (1, 2), t.shape
+    if h == 1:
+        return ttnn.pad(t, padding=[(0, 0), (0, 0), (0, 0), (0, SLAB - d)], value=0.0)
+    if d == HEAD_DIM:
         return ttnn.experimental.nlp_concat_heads(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.pad(t, padding=[(0, 0), (0, 0), (0, 0), (0, SLAB - HEAD_DIM)], value=0.0)
+    p = ttnn.pad(t, padding=[(0, 0), (0, 0), (0, 0), (0, HEAD_DIM - d)], value=0.0)
+    out = ttnn.experimental.nlp_concat_heads(p, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(p)
+    return out
 
 
 # ------------------------------------------------------------------ read-back (host, device-less via the table)
