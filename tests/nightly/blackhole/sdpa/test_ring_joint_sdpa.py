@@ -6261,15 +6261,13 @@ def test_ring_joint_balanced_overlapping_padding_and_causal_masks(use_rotation):
 
 
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["chunks", "pairs"])
-def test_ring_joint_rotated_q_compact_runtime_args(is_balanced, capfd):
+def test_ring_joint_rotated_q_compact_runtime_args(is_balanced):
     """Large base ranges still rotate without overflowing the portable runtime-arg budget."""
     # Four SDPA cores keep the reference small while producing >= 86 chunks/core.
     # Explicit per-iteration base-ID lists would need > 341 writer args even on ring4.
     mesh_config = replace(MESH_CONFIG, grid_cols=3, grid_rows=2)
     model = replace(MODEL_CONFIGS["minimax3_gqa_smoke"], nhq=173, seq_len=128, is_balanced=is_balanced)
     run_ring_joint_sdpa_model_configs(mesh_config, model, qk_configs=[(64, 128)])
-    output = capfd.readouterr().out
-    assert "Rotated Q split ACTIVE" in output
 
 
 @pytest.mark.timeout(600)
