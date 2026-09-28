@@ -81,16 +81,21 @@ sfpi_inline void _welfords_load_block_()
  * LREGs as tabulated below.
  *
  * - input_lreg: Input value (new sample x_{N+1}) (Either LREG0, LREG1, LREG2, or LREG3)
- * - LREG4: Mean of previous samples (mean_{N})
+ * - LREG4: Mean of previous samples (mean_{N}); updated in place to mean_{N+1}
  * - LREG5: Running sum of squared differences from the current mean (M2_{N})
- * - LREG6: Placeholder for the new mean (mean_{N+1})
+ * - LREG6: Scratch; holds α = x_{N+1} - mean_{N} on exit
  * - LREG7: Reciprocal of sample count (1/(N+1))
  *
  * The computation proceeds as:
  *   1. mean_{N+1} = mean_{N} + ((1/(N+1)) * (x_{N+1} - mean_{N}))
  *   2. M2_{N+1} = M2_{N} + (x_{N+1} - mean_{N}) * (x_{N+1} - mean_{N+1})
  *
- * The updated mean and M2 are left in LREG4 and LREG5, respectively.
+ * α = x_{N+1} - mean_{N} is computed once and kept in LREG6 for both updates, and the new mean is
+ * written straight into LREG4, so no second subtraction and no trailing move are needed. Every
+ * SFPMAD sees the same operands as the earlier 6-instruction form (which recomputed α from the
+ * same inputs after the mean update), so the results are bit-identical.
+ *
+ * The updated mean and M2 are left in LREG4 and LREG5, respectively; input_lreg is clobbered.
  *
  * @tparam input_lreg The input to use for the computation. Either LREG0, LREG1, LREG2, or LREG3.
  * @return None. The updated mean and M2 are left in LREG4 and LREG5, respectively.
@@ -98,47 +103,32 @@ sfpi_inline void _welfords_load_block_()
 template <std::uint32_t input_lreg>
 sfpi_inline void _compute_welfords_row_()
 {
-    // mean calculation
-    // ----------------
-    // mean_{N_+1} = mean_{N} + ((1/N+1) * (x_{N+1} - mean_{N}))
-    // Let α = x_{N+1} - mean_{N} and β = 1/N+1
-    // Then mean_{N+1} = mean_{N} + α * β
-
-    // 1. Calculate α = x_{N+1} - mean_{N}
+    // 1. α = x_{N+1} - mean_{N}
     // LREG6 = -1 * LREG4 + input_lreg
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG6, 0);
 
-    // 2. Calculate α * β + mean_{N}
-    // LREG6 = LREG6 * LREG7 + LREG4
-    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, 0);
+    // 2. mean_{N+1} = α * (1/(N+1)) + mean_{N}, in place
+    // LREG4 = LREG6 * LREG7 + LREG4
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);
 
-    // m2 calculation
-    // ---------------
-    // m2_{N+1} = m2_{N} + (x_{N+1} - mean_{N}) * (x_{N+1} - mean_{N+1})
-    // Let α = x_{N+1} - mean_{N} and β = x_{N+1} - mean_{N+1}
-    // Then m2_{N+1} = m2_{N} + α * β
+    // 3. β = x_{N+1} - mean_{N+1}
+    // input_lreg = -1 * LREG4 + input_lreg
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, input_lreg, 0);
 
-    // 1. Re-calculate α in lREG4 since LREG6 now contains the new mean
-    // LREG4 = -1 * LREG4 + input_lreg
-    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG4, 0);
-
-    // 2. Calculate β = x_{N+1} - mean_{N+1}
-    // input_lreg = -1 * LREG6 + input_lreg
-    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /*-1*/, ckernel::p_sfpu::LREG6, input_lreg, input_lreg, 0);
-
-    // 3. Calculate m2_{N+1} = α * β + m2_{N}
-    // LREG5 = LREG4 * input_lreg + LREG5
-    TTI_SFPMAD(ckernel::p_sfpu::LREG4, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
-
-    // Moves mean to LREG4 from LREG6 since it now is considered the past mean
-    TTI_SFPMOV(0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG4, 0);
+    // 4. M2_{N+1} = α * β + M2_{N}
+    // LREG5 = LREG6 * input_lreg + LREG5
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, input_lreg, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
 }
 
 /**
  * @brief The number of instructions required to calculate the running mean and m2 for a single
  * row of 32 columns. If _compute_welfords_row_ is modified, this value must be updated.
+ *
+ * The four row variants recorded by _program_welfords_replay_buffer_ occupy replay slots
+ * [0, 4 * WELFORD_INSTR_PER_ROW) = [0, 16), i.e. exactly the SFPU half of the math thread's
+ * replay buffer (ckernel::math::replay_buf_offset = 16).
  */
-constexpr std::uint32_t WELFORD_INSTR_PER_ROW = 6;
+constexpr std::uint32_t WELFORD_INSTR_PER_ROW = 4;
 
 /**
  * @brief Programs the replay buffer for the Welford's algorithm.
