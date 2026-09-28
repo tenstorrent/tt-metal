@@ -51,6 +51,18 @@
   budget_type: e2e
 
 # --- unit ---
+- id: bh-sdpa-ring-recipes
+  name: ring and exp ring joint SDPA precision recipes on two devices
+  cmd: >-
+    pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa_recipes.py
+    tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa_recipes.py
+  skus:
+    bh_p300:
+      timeout: 30
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: e2e
+
 - id: bh-fabric-ttnn-udm-unit
   name: fabric and ttnn UDM unit tests
   cmd: |
