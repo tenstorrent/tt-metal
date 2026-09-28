@@ -287,6 +287,7 @@ def nlp_create_qkv_heads_norm_headsplit(
         head_groups,
         plan.seq_tiles,
         q_split,
+        int(os.getenv("QWEN_FUSED_RSQRT_COL", "0") == "1"),  # v3: rsqrt over column 0's faces only (bit-identical)
     ]
     writer_ct = [
         plan.seq_tiles,

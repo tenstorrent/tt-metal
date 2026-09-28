@@ -31,6 +31,21 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+
+namespace ckernel {
+// rsqrt over the two left faces only (0 and 2, columns 0-15): a row-reduce result lives in column 0 and the
+// bcast_cols multiply that consumes it reads column 0 only, so the output is bit-identical with half the SFPU work
+// (compile-time arg 9, QWEN_FUSED_RSQRT_COL=1).
+ALWI void rsqrt_col_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsqrt,
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false, false),
+        idst,
+        VectorMode::C));
+}
+}  // namespace ckernel
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
@@ -112,7 +127,11 @@ inline void unit_heads(uint32_t nq, uint32_t nk, uint32_t kv_base) {
         }
         rsqrt_tile_init();
         for (uint32_t h = 0; h < n; ++h) {
-            rsqrt_tile(h);
+            if constexpr (get_compile_time_arg_val(9)) {
+                rsqrt_col_tile(h);
+            } else {
+                rsqrt_tile(h);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
