@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define TT_METAL_SFPU_SINGLE_TILE_DST 1
+
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -24,7 +26,13 @@ void kernel_main() {
     DataflowBuffer dfb_out(cb_output);
 
     compute_kernel_hw_startup(cb_input, cb_output);
+#if defined(SFPU_OP_PROGRAM_INIT_0) && !defined(TT_POLY_LLK_DISABLE) && defined(ARCH_WORMHOLE) && defined(TRISC_MATH)
+    ckernel::math::clear_addr_mod_base();
+#endif
     copy_init(cb_input);
+#if defined(SFPU_OP_PROGRAM_INIT_0) && !defined(TT_POLY_LLK_DISABLE)
+    SFPU_OP_PROGRAM_INIT_0
+#endif
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
 
