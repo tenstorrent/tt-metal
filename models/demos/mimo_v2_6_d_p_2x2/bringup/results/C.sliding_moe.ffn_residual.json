@@ -1,0 +1,29 @@
+{
+ "metrics": {
+  "experts_coef_ffn_residual_L01": {
+   "t": "2026-09-28T06:36:51",
+   "value": 1.001434564590454
+  },
+  "experts_rel_l2_ffn_residual_L01": {
+   "t": "2026-09-28T06:36:51",
+   "value": 0.01139452587813139
+  },
+  "pcc_ffn_residual_L01": {
+   "t": "2026-09-28T06:36:51",
+   "value": 0.9999959224834887
+  },
+  "rel_l2_ffn_residual_L01": {
+   "t": "2026-09-28T06:36:51",
+   "value": 0.002889020834118128
+  },
+  "row_norm_ratio_max_ffn_residual_L01": {
+   "t": "2026-09-28T06:36:51",
+   "value": 1.0016019344329834
+  },
+  "row_norm_ratio_min_ffn_residual_L01": {
+   "t": "2026-09-28T06:36:51",
+   "value": 0.99933260679245
+  }
+ },
+ "task": "C.sliding_moe.ffn_residual"
+}
