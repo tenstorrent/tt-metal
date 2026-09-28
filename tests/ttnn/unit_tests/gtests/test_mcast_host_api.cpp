@@ -7,7 +7,8 @@
 #include <array>
 #include <set>
 #include <type_traits>
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_unified.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -20,7 +21,7 @@ namespace ttnn::kernel_lib::host::test {
 dataflow_kernel_lib::mcast_wire::ArgumentMetadata emitted_metadata(const std::vector<uint32_t>& ct, uint32_t base);
 }  // namespace ttnn::kernel_lib::host::test
 
-namespace ttnn::kernel_lib::host::unified_test {
+namespace ttnn::kernel_lib::host::api_test {
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
@@ -36,20 +37,30 @@ concept ExposesCollectionOrPreparation = requires(T value) {
 static_assert(!ExposesCollectionOrPreparation<Mcast>);
 static_assert(std::is_constructible_v<
               Mcast,
-              tt::tt_metal::IDevice*,
-              const McastUnifiedConfig&,
+              const tt::tt_metal::IDevice&,
+              const McastConfig&,
               const CoreRangeSet&,
               uint32_t,
+              McastSenderConfig,
               McastCoreOrder>);
 static_assert(!std::is_constructible_v<
               Mcast,
               tt::tt_metal::IDevice*,
-              const McastUnifiedConfig&,
+              const McastConfig&,
+              const CoreRangeSet&,
+              uint32_t,
+              McastSenderConfig,
+              McastCoreOrder>);
+static_assert(!std::is_constructible_v<
+              Mcast,
+              tt::tt_metal::IDevice*,
+              const McastConfig&,
               const std::vector<CoreCoord>&,
               uint32_t,
+              McastSenderConfig,
               McastCoreOrder>);
 
-class McastUnifiedFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastUnifiedFixture> {};
+class McastFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastFixture> {};
 
 CoreRangeSet grid(CoreCoord start, CoreCoord end) { return CoreRangeSet(CoreRange(start, end)); }
 CoreRangeSet core_set(const std::vector<CoreCoord>& cores) {
@@ -60,17 +71,17 @@ CoreRangeSet core_set(const std::vector<CoreCoord>& cores) {
     return CoreRangeSet(std::move(ranges));
 }
 
-template <typename Family>
-KernelDescriptor emitted(const Family& family, NOC noc = NOC::NOC_0, const std::vector<uint32_t>& adopted_ids = {}) {
+template <typename McastType>
+KernelDescriptor emitted(const McastType& mcast, NOC noc = NOC::NOC_0, const std::vector<uint32_t>& adopted_ids = {}) {
     tt::tt_metal::ProgramDescriptor descriptor;
     KernelDescriptor kernel;
-    kernel.core_ranges = family.participating_cores();
+    kernel.core_ranges = mcast.participating_cores();
     kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = noc};
     for (const auto id : adopted_ids) {
         descriptor.semaphores.push_back({.id = id, .core_ranges = kernel.core_ranges, .initial_value = 0});
     }
-    family.attach(descriptor, "channel", std::array{std::ref(kernel)});
+    mcast.attach(descriptor, "channel", std::array{std::ref(kernel)});
     return kernel;
 }
 
@@ -167,7 +178,7 @@ void expect_pattern(
     }
 }
 
-TEST_F(McastUnifiedFixture, RowsColumnsAndWholeGrid) {
+TEST_F(McastFixture, RowsColumnsAndWholeGrid) {
     const auto receivers = grid({0, 0}, {2, 1});
     for (const auto order : {McastCoreOrder::RowMajor, McastCoreOrder::ColumnMajor}) {
         const bool rows = order == McastCoreOrder::RowMajor;
@@ -176,14 +187,13 @@ TEST_F(McastUnifiedFixture, RowsColumnsAndWholeGrid) {
                  : std::vector<std::vector<CoreCoord>>{{{0, 0}, {0, 1}}, {{1, 0}, {1, 1}}, {{2, 0}, {2, 1}}};
         for (bool rotating : {false, true}) {
             Mcast channel(
-                device_,
+                *device_,
                 {},
                 receivers,
                 rows ? 3 : 2,
-                order,
-                rotating ? McastSenderConfig{McastRotatingSenderConfig{}}
-                         : McastSenderConfig{McastFixedSenderConfig{}});
-            McastFamily legacy(device_);
+                rotating ? McastSenderConfig{McastRotatingSenderConfig{}} : McastSenderConfig{McastFixedSenderConfig{}},
+                order);
+            McastImpl legacy(*device_);
             std::vector<std::vector<CoreCoord>> senders;
             std::vector<std::vector<uint32_t>> acks;
             for (const auto& group : groups) {
@@ -196,13 +206,13 @@ TEST_F(McastUnifiedFixture, RowsColumnsAndWholeGrid) {
             EXPECT_EQ(emitted(channel).runtime_args, emitted(legacy).runtime_args);
         }
     }
-    Mcast all(device_, {}, receivers, 6, McastCoreOrder::RowMajor);
+    Mcast all(*device_, {}, receivers, 6);
     expect_pattern(all, device_, {{{0, 0}, {1, 0}, {2, 0}, {0, 1}, {1, 1}, {2, 1}}}, {{{0, 0}}}, {{5}});
-    Mcast local(device_, {}, grid({0, 0}, {1, 0}), 1, McastCoreOrder::RowMajor);
+    Mcast local(*device_, {}, grid({0, 0}, {1, 0}), 1);
     expect_pattern(local, device_, {{{0, 0}}, {{1, 0}}}, {{{0, 0}}, {{1, 0}}}, {{0}, {0}});
 }
 
-TEST_F(McastUnifiedFixture, StaggeredAndSortedReceiverOrder) {
+TEST_F(McastFixture, StaggeredAndSortedReceiverOrder) {
     const auto receivers = grid({0, 0}, {3, 1});
     for (const auto order : {McastCoreOrder::RowMajor, McastCoreOrder::ColumnMajor}) {
         const bool rows = order == McastCoreOrder::RowMajor;
@@ -215,45 +225,45 @@ TEST_F(McastUnifiedFixture, StaggeredAndSortedReceiverOrder) {
             rows ? std::vector<std::vector<CoreCoord>>{{{3, 0}}, {{0, 1}}}
                  : std::vector<std::vector<CoreCoord>>{{{1, 1}}, {{2, 0}}};
         Mcast channel(
-            device_,
+            *device_,
             {},
             receivers,
             4,
-            order,
-            McastFixedSenderConfig{.sender_index = UINT32_MAX, .placement = McastSenderPlacement::Staggered});
+            McastFixedSenderConfig{.sender_index = UINT32_MAX, .placement = McastSenderPlacement::Staggered},
+            order);
         expect_pattern(channel, device_, groups, senders, {{3}, {3}});
-        Mcast rotating(device_, {}, receivers, 4, order, McastRotatingSenderConfig{});
+        Mcast rotating(*device_, {}, receivers, 4, McastRotatingSenderConfig{}, order);
         expect_pattern(rotating, device_, groups, groups, {{3, 3, 3, 3}, {3, 3, 3, 3}});
     }
 }
 
-TEST_F(McastUnifiedFixture, SenderGridOrderingIsNotSpatialInference) {
+TEST_F(McastFixture, SenderGridOrderingIsNotSpatialInference) {
     const auto receivers = grid({0, 0}, {1, 1});
     Mcast channel(
-        device_,
+        *device_,
         {},
         receivers,
         2,
-        McastCoreOrder::RowMajor,
-        McastSenderGridConfig{.sender_cores = grid({3, 0}, {4, 1}), .sender_order = McastCoreOrder::ColumnMajor});
+        McastSenderGridConfig{.sender_cores = grid({3, 0}, {4, 1}), .sender_order = McastCoreOrder::ColumnMajor},
+        McastCoreOrder::RowMajor);
     expect_pattern(
         channel, device_, {{{0, 0}, {1, 0}}, {{0, 1}, {1, 1}}}, {{{3, 0}, {3, 1}}, {{4, 0}, {4, 1}}}, {{2, 2}, {2, 2}});
     Mcast fixed(
-        device_,
+        *device_,
         {},
         receivers,
         2,
-        McastCoreOrder::RowMajor,
-        McastSenderGridConfig{.sender_cores = grid({3, 0}, {4, 0})});
+        McastSenderGridConfig{.sender_cores = grid({3, 0}, {4, 0})},
+        McastCoreOrder::RowMajor);
     expect_pattern(fixed, device_, {{{0, 0}, {1, 0}}, {{0, 1}, {1, 1}}}, {{{3, 0}}, {{4, 0}}}, {{2}, {2}});
 }
 
-TEST_F(McastUnifiedFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
+TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     const auto receivers = grid({0, 0}, {3, 1});
     auto handshake = core_set({{0, 0}, {1, 0}, {1, 1}});
-    McastUnifiedConfig config{.handshake_cores = &handshake, .base_sem_id = 5};
+    McastConfig config{.handshake_cores = handshake, .base_sem_id = 5};
     McastExplicitSenderConfig senders{.senders_per_group = {{{0, 0}, {3, 0}}, {{0, 1}, {1, 1}}}};
-    Mcast channel(device_, config, receivers, 4, McastCoreOrder::RowMajor, senders);
+    Mcast channel(*device_, config, receivers, 4, senders);
     handshake = CoreRangeSet{};
     config.base_sem_id = 0;
     senders.senders_per_group.clear();
@@ -278,39 +288,27 @@ TEST_F(McastUnifiedFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     EXPECT_EQ(second_rt.at(2), 2u);
 }
 
-TEST_F(McastUnifiedFixture, DefaultEmptyAndDisabledHandshakes) {
+TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
     const auto receivers = grid({0, 0}, {1, 0});
     const CoreRangeSet empty;
-    Mcast no_acks(
-        device_,
-        McastUnifiedConfig{.handshake_cores = &empty},
-        receivers,
-        2,
-        McastCoreOrder::RowMajor,
-        McastRotatingSenderConfig{});
+    Mcast no_acks(*device_, McastConfig{.handshake_cores = empty}, receivers, 2, McastRotatingSenderConfig{});
     expect_pattern(no_acks, device_, {{{0, 0}, {1, 0}}}, {{{0, 0}, {1, 0}}}, {{0, 0}});
-    Mcast default_acks(device_, {}, receivers, 2, McastCoreOrder::RowMajor, McastRotatingSenderConfig{});
+    Mcast default_acks(*device_, {}, receivers, 2, McastRotatingSenderConfig{});
     expect_pattern(default_acks, device_, {{{0, 0}, {1, 0}}}, {{{0, 0}, {1, 0}}}, {{1, 1}});
-    Mcast disabled(device_, McastUnifiedConfig{.handshake = false}, receivers, 2, McastCoreOrder::RowMajor);
+    Mcast disabled(*device_, McastConfig{.handshake = false}, receivers, 2);
     const auto snapshot = emitted(disabled);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).family.flags & 1u, 0u);
     EXPECT_EQ(wire::CompileTimeLayout(snapshot.compile_time_args.front()).consumer_ready, wire::OMITTED);
-    EXPECT_ANY_THROW((Mcast(
-        device_,
-        McastUnifiedConfig{.handshake = false, .handshake_cores = &empty},
-        receivers,
-        2,
-        McastCoreOrder::RowMajor)));
+    EXPECT_ANY_THROW((Mcast(*device_, McastConfig{.handshake = false, .handshake_cores = empty}, receivers, 2)));
 }
 
-TEST_F(McastUnifiedFixture, RejectsInvalidGroupingAndSchedules) {
+TEST_F(McastFixture, RejectsInvalidGroupingAndSchedules) {
     const auto receivers = grid({0, 0}, {3, 0});
     for (uint32_t size : {0u, 3u, 5u}) {
-        EXPECT_ANY_THROW((Mcast(device_, {}, receivers, size, McastCoreOrder::RowMajor)));
+        EXPECT_ANY_THROW((Mcast(*device_, {}, receivers, size)));
     }
-    EXPECT_ANY_THROW((Mcast(device_, {}, CoreRangeSet{}, 1, McastCoreOrder::RowMajor)));
-    EXPECT_ANY_THROW(
-        (Mcast(device_, {}, receivers, 2, McastCoreOrder::RowMajor, McastFixedSenderConfig{.sender_index = 2})));
+    EXPECT_ANY_THROW((Mcast(*device_, {}, CoreRangeSet{}, 1)));
+    EXPECT_ANY_THROW((Mcast(*device_, {}, receivers, 2, McastFixedSenderConfig{.sender_index = 2})));
     for (const auto& lists : std::vector<std::vector<std::vector<CoreCoord>>>{
              {},
              {{{0, 0}}},
@@ -318,48 +316,46 @@ TEST_F(McastUnifiedFixture, RejectsInvalidGroupingAndSchedules) {
              {{{0, 0}, {0, 0}}, {{2, 0}, {3, 0}}},
              {{{0, 0}}, {{2, 0}, {3, 0}}},
              {{{2, 0}}, {{3, 0}}}}) {
-        EXPECT_ANY_THROW(
-            (Mcast(device_, {}, receivers, 2, McastCoreOrder::RowMajor, McastExplicitSenderConfig{lists})));
+        EXPECT_ANY_THROW((Mcast(*device_, {}, receivers, 2, McastExplicitSenderConfig{lists})));
     }
     for (const auto& senders : {CoreRangeSet{}, grid({0, 1}, {2, 1})}) {
-        EXPECT_ANY_THROW((Mcast(device_, {}, receivers, 2, McastCoreOrder::RowMajor, McastSenderGridConfig{senders})));
+        EXPECT_ANY_THROW((Mcast(*device_, {}, receivers, 2, McastSenderGridConfig{senders})));
     }
     const auto outside = grid({0, 1}, {0, 1});
-    EXPECT_ANY_THROW(
-        (Mcast(device_, McastUnifiedConfig{.handshake_cores = &outside}, receivers, 4, McastCoreOrder::RowMajor)));
+    EXPECT_ANY_THROW((Mcast(*device_, McastConfig{.handshake_cores = outside}, receivers, 4)));
 }
 
-TEST_F(McastUnifiedFixture, ChainSelectionPreservesParticipationLimits) {
+TEST_F(McastFixture, ChainSelectionPreservesParticipationLimits) {
     const auto irregular = core_set({{0, 0}, {2, 0}});
     const auto partial = grid({0, 0}, {0, 0});
     const CoreRangeSet empty;
-    McastUnifiedConfig config{.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast};
-    Mcast legacy_equivalent(device_, config, irregular, 2, McastCoreOrder::RowMajor);
-    auto expected = McastFamily(
-        device_, McastConfig{.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast});
+    McastConfig config{.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast};
+    Mcast legacy_equivalent(*device_, config, irregular, 2);
+    auto expected = McastImpl(
+        *device_, McastConfig{.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast});
     expected.add_group(irregular, {{0, 0}});
     EXPECT_EQ(emitted(legacy_equivalent).compile_time_args, emitted(expected).compile_time_args);
     EXPECT_EQ(emitted(legacy_equivalent).runtime_args, emitted(expected).runtime_args);
-    config.handshake_cores = &irregular;
-    EXPECT_NO_THROW((Mcast(device_, config, irregular, 2, McastCoreOrder::RowMajor)));
+    config.handshake_cores = irregular;
+    EXPECT_NO_THROW((Mcast(*device_, config, irregular, 2)));
     for (const auto* subset : {&partial, &empty}) {
-        config.handshake_cores = subset;
-        EXPECT_ANY_THROW((Mcast(device_, config, irregular, 2, McastCoreOrder::RowMajor)));
-        EXPECT_NO_THROW((Mcast(device_, config, grid({0, 0}, {1, 0}), 2, McastCoreOrder::RowMajor)));
+        config.handshake_cores = *subset;
+        EXPECT_ANY_THROW((Mcast(*device_, config, irregular, 2)));
+        EXPECT_NO_THROW((Mcast(*device_, config, grid({0, 0}, {1, 0}), 2)));
     }
-    config.handshake_cores = nullptr;
-    EXPECT_ANY_THROW((Mcast(device_, config, irregular, 2, McastCoreOrder::RowMajor, McastRotatingSenderConfig{})));
+    config.handshake_cores = std::nullopt;
+    EXPECT_ANY_THROW((Mcast(*device_, config, irregular, 2, McastRotatingSenderConfig{})));
     config.handshake = false;
-    EXPECT_ANY_THROW((Mcast(device_, config, irregular, 2, McastCoreOrder::RowMajor)));
+    EXPECT_ANY_THROW((Mcast(*device_, config, irregular, 2)));
 }
 
-TEST_F(McastUnifiedFixture, WrappedGroupsAndRectangleLimit) {
+TEST_F(McastFixture, WrappedGroupsAndRectangleLimit) {
     const std::vector<std::vector<CoreCoord>> groups{
         {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}, {0, 2}},
         {{1, 2}, {2, 2}, {3, 2}, {0, 3}, {1, 3}, {2, 3}, {3, 3}, {0, 4}, {1, 4}}};
     auto ordered = groups.front();
     ordered.insert(ordered.end(), groups.back().begin(), groups.back().end());
-    Mcast wrapped(device_, {}, core_set(ordered), 9, McastCoreOrder::RowMajor);
+    Mcast wrapped(*device_, {}, core_set(ordered), 9);
     expect_pattern(wrapped, device_, groups, {{{0, 0}}, {{1, 2}}}, {{8}, {8}});
     const auto snapshot = emitted(wrapped);
     const wire::RuntimeLayout layout(test::emitted_metadata(snapshot.compile_time_args, 0));
@@ -372,18 +368,17 @@ TEST_F(McastUnifiedFixture, WrappedGroupsAndRectangleLimit) {
         }
     }
     const auto too_fragmented = core_set({{0, 0}, {2, 0}, {4, 0}, {6, 0}});
-    EXPECT_ANY_THROW((Mcast(device_, {}, too_fragmented, 4, McastCoreOrder::RowMajor)));
+    EXPECT_ANY_THROW((Mcast(*device_, {}, too_fragmented, 4)));
 }
 
-TEST_F(McastUnifiedFixture, DescriptorSpecAndDirectAttachmentParity) {
+TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     const auto receivers = grid({0, 0}, {3, 0});
     const auto handshake = grid({0, 0}, {1, 0});
     Mcast channel(
-        device_,
-        McastUnifiedConfig{.handshake_cores = &handshake},
+        *device_,
+        McastConfig{.handshake_cores = handshake},
         receivers,
         4,
-        McastCoreOrder::RowMajor,
         McastExplicitSenderConfig{{{{0, 0}, {3, 0}}}});
     tt::tt_metal::ProgramDescriptor descriptor;
     KernelDescriptor kernel;
@@ -436,8 +431,8 @@ TEST_F(McastUnifiedFixture, DescriptorSpecAndDirectAttachmentParity) {
     }
     // Explicit numeric configuration is owned too, but remains inappropriate for
     // native named-resource attachment, as with the legacy backend.
-    McastUnifiedConfig numeric_config{.sem_ids = std::vector<uint32_t>{4, 7}};
-    Mcast numeric(device_, numeric_config, receivers, 4, McastCoreOrder::RowMajor);
+    McastConfig numeric_config{.sem_ids = std::vector<uint32_t>{4, 7}};
+    Mcast numeric(*device_, numeric_config, receivers, 4);
     numeric_config.sem_ids->clear();
     const auto numeric_snapshot = emitted(numeric, NOC::NOC_0, {4, 7});
     EXPECT_EQ(numeric_snapshot.compile_time_args.at(1), 4u);
@@ -458,7 +453,7 @@ TEST_F(McastUnifiedFixture, DescriptorSpecAndDirectAttachmentParity) {
     }
     auto copied_spec = spec;
     auto copied_args = args;
-    Mcast second(device_, McastUnifiedConfig{.handshake = false}, receivers, 4, McastCoreOrder::RowMajor);
+    Mcast second(*device_, McastConfig{.handshake = false}, receivers, 4);
     second.attach(copied_spec, copied_args, "second", targets);
     EXPECT_EQ(copied_spec.semaphores.size(), 3u);
     EXPECT_EQ(spec.semaphores.size(), 2u);
@@ -469,7 +464,7 @@ TEST_F(McastUnifiedFixture, DescriptorSpecAndDirectAttachmentParity) {
     }
 }
 
-TEST_F(McastUnifiedFixture, OperationCommunicationFeasibility) {
+TEST_F(McastFixture, OperationCommunicationFeasibility) {
     struct Pattern {
         const char* name;
         std::vector<std::vector<CoreCoord>> receivers;
@@ -529,16 +524,16 @@ TEST_F(McastUnifiedFixture, OperationCommunicationFeasibility) {
         }
         for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
             Mcast channel(
-                device_,
-                McastUnifiedConfig{
+                *device_,
+                McastConfig{
                     .noc = noc,
                     .handshake = pattern.handshake_enabled,
-                    .handshake_cores = pattern.handshake ? &*pattern.handshake : nullptr,
+                    .handshake_cores = pattern.handshake,
                     .data_ready = pattern.signal},
                 core_set(ordered),
                 pattern.receivers.front().size(),
-                pattern.order,
-                McastExplicitSenderConfig{pattern.senders});
+                McastExplicitSenderConfig{pattern.senders},
+                pattern.order);
             expect_pattern(channel, device_, pattern.receivers, pattern.senders, pattern.acks, noc);
             const auto flags = test::emitted_metadata(emitted(channel, noc).compile_time_args, 0).family.flags;
             EXPECT_EQ(flags & 1u, pattern.handshake_enabled ? 1u : 0u);
@@ -553,18 +548,17 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
     const auto receivers = grid({0, 0}, {3, 0});
     const auto workers = grid({0, 0}, {1, 0});
     Mcast channel(
-        &device,
-        McastUnifiedConfig{
-            .noc = noc, .handshake_cores = &workers, .data_ready = dataflow_kernel_lib::DataReadySignal::Counter},
+        device,
+        McastConfig{
+            .noc = noc, .handshake_cores = workers, .data_ready = dataflow_kernel_lib::DataReadySignal::Counter},
         receivers,
         4,
-        McastCoreOrder::RowMajor,
         McastExplicitSenderConfig{{{{0, 0}, {3, 0}}}});
     expect_pattern(channel, &device, {{{0, 0}, {1, 0}, {2, 0}, {3, 0}}}, {{{0, 0}, {3, 0}}}, {{1, 2}}, noc);
     const std::array targets{m2::KernelSpecName{"mixed"}};
     m2::KernelSpec kernel{
         .unique_id = targets.front(),
-        .source = "tests/ttnn/unit_tests/kernel_lib/kernels/mcast_unified.cpp",
+        .source = "tests/ttnn/unit_tests/kernel_lib/kernels/mcast_api.cpp",
         .compile_time_args = {{"rounds", rounds}},
         .runtime_arg_schema = {.runtime_arg_names = {"seed", "acknowledges", "report_addr"}},
         .hw_config = m2::DataMovementHardwareConfig{
@@ -611,11 +605,11 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
     }
 }
 
-TEST_F(McastUnifiedFixture, DeviceSmoke) { run_mixed_ack_device(*device_, NOC::NOC_0, 2); }
-TEST_F(McastUnifiedFixture, DeviceMatrix) {
+TEST_F(McastFixture, DeviceSmoke) { run_mixed_ack_device(*device_, NOC::NOC_0, 2); }
+TEST_F(McastFixture, DeviceMatrix) {
     for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
         run_mixed_ack_device(*device_, noc, 8);
     }
 }
 
-}  // namespace ttnn::kernel_lib::host::unified_test
+}  // namespace ttnn::kernel_lib::host::api_test

@@ -315,29 +315,20 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
-    ttnn::kernel_lib::host::Mcast2D in0_mcast = [&]() {
-        const auto mcast_rect = CoreRangeSet(in0_mcast_rect);
-        if (in0_is_sharded) {
-            // The work and sender grids are row-major prefixes. If the work bounding box has inactive tail
-            // fillers, every sender is inside the active prefix and only the num_cores - 1 other active cores ack.
-            // Otherwise the helper derives the sender-inside/outside count from the dense receiver rectangle.
-            const std::optional<uint32_t> ack_count_override =
-                in0_mcast_rect.size() > num_cores ? std::make_optional(num_cores - 1) : std::nullopt;
-            return ttnn::kernel_lib::host::Mcast2D(
-                &device,
-                mcast_rect,
-                ttnn::kernel_lib::host::Mcast2DRotatingSenderConfig{
-                    .sender_grid = in0_mcast_sender_cores,
-                    .sender_order = ttnn::kernel_lib::host::Mcast2DSenderOrder::RowMajor},
-                ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .ack_count_override = ack_count_override});
-        }
-        // The fixed sender is one of num_cores active participants; every other active core acknowledges it.
-        return ttnn::kernel_lib::host::Mcast2D(
-            &device,
-            mcast_rect,
-            ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
-            ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .ack_count_override = num_cores - 1});
-    }();
+    namespace mcast = ttnn::kernel_lib::host;
+    const CoreRangeSet in0_mcast_grid(in0_mcast_rect);
+    const CoreRangeSet in0_handshake_cores = all_cores.intersection(in0_mcast_grid);
+    mcast::McastSenderConfig in0_senders = mcast::McastExplicitSenderConfig{{{start_core}}};
+    if (in0_is_sharded) {
+        in0_senders = mcast::McastSenderGridConfig{
+            .sender_cores = in0_mcast_sender_cores, .sender_order = mcast::McastCoreOrder::RowMajor};
+    }
+    mcast::Mcast in0_mcast(
+        device,
+        mcast::McastConfig{.noc = in0_noc, .handshake_cores = in0_handshake_cores},
+        in0_mcast_grid,
+        /*receiver_group_size=*/in0_mcast_grid.num_cores(),
+        in0_senders);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -983,7 +974,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     in0_mcast.append_semaphores(program);
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = create_mcast_dataflow_kernel<
-        ttnn::kernel_lib::host::Mcast2D>(
+        ttnn::kernel_lib::host::Mcast>(
         program,
         &in0_mcast,
         "in0_mcast",
@@ -1011,7 +1002,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     if (in0_is_sharded && in0_mcast_cores_without_work.num_cores() > 0) {
         in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
-        create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast2D>(
+        create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast>(
             program,
             &in0_mcast,
             "in0_mcast",
@@ -1032,7 +1023,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     }
 
     if (!in0_is_sharded and in0_mcast_receivers.num_cores() > 0) {
-        create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast2D>(
+        create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast>(
             program,
             &in0_mcast,
             "in0_mcast",
@@ -1048,7 +1039,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 }});
     }
 
-    auto mm_kernel_in1_sender_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast2D>(
+    auto mm_kernel_in1_sender_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast>(
         program,
         nullptr,
         "in1_mcast",
@@ -1303,11 +1294,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     // Mcast args. The receiver bounding box can contain inactive tail fillers; only the other num_cores - 1
     // workers acknowledge the fixed sender.
-    ttnn::kernel_lib::host::Mcast2D in1_mcast(
-        &device,
-        CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
-        ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
-        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .ack_count_override = num_cores - 1});
+    const auto in1_mcast_grid = CoreRangeSet(in1_mcast_receiver_cores_bounding_box);
+    ttnn::kernel_lib::host::Mcast in1_mcast(
+        device,
+        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .handshake_cores = all_cores},
+        in1_mcast_grid,
+        /*receiver_group_size=*/in1_mcast_grid.num_cores(),
+        ttnn::kernel_lib::host::McastExplicitSenderConfig{{{start_core}}});
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
     const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
@@ -1880,7 +1873,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // append helper arguments before CreateKernel and the initial SetRuntimeArgs.
     in1_mcast.append_semaphores(program);
 
-    auto mm_kernel_in0_sender_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast2D>(
+    auto mm_kernel_in0_sender_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast>(
         program,
         nullptr,
         "in0_mcast",
@@ -1899,7 +1892,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
             }});
 
-    auto mm_kernel_in1_sender_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast2D>(
+    auto mm_kernel_in1_sender_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast>(
         program,
         &in1_mcast,
         "in1_mcast",
@@ -1922,7 +1915,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // Placeholder handle is unused when there are no receiver cores.
     tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = mm_kernel_in0_sender_id;
     if (in1_mcast_receivers.num_cores() > 0) {
-        mm_kernel_in1_receiver_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast2D>(
+        mm_kernel_in1_receiver_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast>(
             program,
             &in1_mcast,
             "in1_mcast",
@@ -4125,28 +4118,21 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     ////////////////////////////////////////////////////////////////////////////
     //                      Multicast channels
     ////////////////////////////////////////////////////////////////////////////
-    // in0 is multicast over the output bounding box, from the first core or rotating over the width
-    // shards in row-major order. The box can contain inactive tail fillers, so an explicit ACK count
-    // excludes them whenever they exist. in1 is not multicast on this path.
+    // In0 is multicast over the output bounding box. Inactive tail fillers do not acknowledge.
     namespace mh = ttnn::kernel_lib::host;
     const CoreRangeSet in0_mcast_rect(in0_mcast_receiver_cores_bounding_box);
-    const mh::Mcast2D in0_mcast = [&]() {
-        if (in0_is_sharded) {
-            const std::optional<uint32_t> ack_count_override =
-                in0_mcast_receiver_num_cores > num_cores ? std::make_optional(num_cores - 1) : std::nullopt;
-            return mh::Mcast2D(
-                &device,
-                in0_mcast_rect,
-                mh::Mcast2DRotatingSenderConfig{
-                    .sender_grid = in0_mcast_sender_cores, .sender_order = mh::Mcast2DSenderOrder::RowMajor},
-                mh::McastConfig{.noc = in0_noc, .ack_count_override = ack_count_override});
-        }
-        return mh::Mcast2D(
-            &device,
-            in0_mcast_rect,
-            mh::Mcast2DFixedSenderConfig{.sender = start_core},
-            mh::McastConfig{.noc = in0_noc, .ack_count_override = num_cores - 1});
-    }();
+    const CoreRangeSet in0_handshake_cores = all_cores.intersection(in0_mcast_rect);
+    mh::McastSenderConfig in0_senders = mh::McastExplicitSenderConfig{{{start_core}}};
+    if (in0_is_sharded) {
+        in0_senders = mh::McastSenderGridConfig{
+            .sender_cores = in0_mcast_sender_cores, .sender_order = mh::McastCoreOrder::RowMajor};
+    }
+    const mh::Mcast in0_mcast(
+        device,
+        mh::McastConfig{.noc = in0_noc, .handshake_cores = in0_handshake_cores},
+        in0_mcast_rect,
+        /*receiver_group_size=*/in0_mcast_rect.num_cores(),
+        in0_senders);
     std::vector<KernelSpecName> in0_mcast_kernels{IN0_SENDER};
     if (has_in0_no_work_in_receiver_kernel) {
         in0_mcast_kernels.push_back(IN0_NO_WORK_IN_RECV);
@@ -5211,11 +5197,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     // contain inactive tail fillers; only the other num_cores - 1 workers acknowledge the sender.
     // in0 is not multicast on this path.
     namespace mh = ttnn::kernel_lib::host;
-    const mh::Mcast2D in1_mcast(
-        &device,
-        CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
-        mh::Mcast2DFixedSenderConfig{.sender = start_core},
-        mh::McastConfig{.noc = in1_noc, .ack_count_override = num_cores - 1});
+    const auto in1_mcast_grid = CoreRangeSet(in1_mcast_receiver_cores_bounding_box);
+    const mh::Mcast in1_mcast(
+        device,
+        mh::McastConfig{.noc = in1_noc, .handshake_cores = all_cores},
+        in1_mcast_grid,
+        /*receiver_group_size=*/in1_mcast_grid.num_cores(),
+        mh::McastExplicitSenderConfig{{{start_core}}});
     std::vector<KernelSpecName> in1_mcast_kernels{IN1_SENDER_WRITER};
     if (has_in1_receiver_writer_kernel) {
         in1_mcast_kernels.push_back(IN1_RECEIVER_WRITER);

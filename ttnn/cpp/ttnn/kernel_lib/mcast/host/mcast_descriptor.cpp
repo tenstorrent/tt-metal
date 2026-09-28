@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -43,7 +43,7 @@ void append_offsets(KernelDescriptor& kernel, std::string_view prefix, uint32_t 
 
 }  // namespace
 
-void McastFamily::attach(
+void McastImpl::attach(
     ProgramDescriptor& descriptor,
     std::string_view prefix,
     std::span<const std::reference_wrapper<KernelDescriptor>> targets) const {
@@ -124,7 +124,7 @@ void McastFamily::attach(
     }
 }
 
-McastArgumentOffsets McastFamily::append_kernel_args_to(
+McastArgumentOffsets McastImpl::append_kernel_args_to(
     std::vector<uint32_t>& compile_time_args,
     KernelDescriptor::RuntimeArgs& runtime_args,
     const CoreRangeSet& placement) const {
@@ -175,20 +175,6 @@ void attach_absent(KernelDescriptor& kernel, std::string_view prefix) {
     const auto ct = detail::absent_mcast_compile_time_args();
     staged.compile_time_args.insert(staged.compile_time_args.end(), ct.begin(), ct.end());
     kernel = std::move(staged);
-}
-
-void Mcast1D::attach(
-    ProgramDescriptor& descriptor,
-    std::string_view prefix,
-    std::span<const std::reference_wrapper<KernelDescriptor>> kernels) const {
-    family_->attach(descriptor, prefix, kernels);
-}
-
-void Mcast2D::attach(
-    ProgramDescriptor& descriptor,
-    std::string_view prefix,
-    std::span<const std::reference_wrapper<KernelDescriptor>> kernels) const {
-    family_->attach(descriptor, prefix, kernels);
 }
 
 }  // namespace ttnn::kernel_lib::host

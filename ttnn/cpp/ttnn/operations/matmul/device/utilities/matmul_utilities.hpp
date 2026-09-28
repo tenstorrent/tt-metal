@@ -24,10 +24,10 @@ namespace ttnn::operations::matmul::utilities {
 
 // Operation prefixes are complete before this call. Pad per kernel, append the
 // bound multicast channel, and install the initial runtime args on every core.
-template <typename Family, typename Placement>
+template <typename McastType, typename Placement>
 tt::tt_metal::KernelHandle create_mcast_dataflow_kernel(
     tt::tt_metal::Program& program,
-    const Family* family,
+    const McastType* mcast,
     const std::string& prefix,
     std::vector<std::pair<tt::tt_metal::CoreCoord, std::vector<uint32_t>>>& runtime_args,
     const std::string& source,
@@ -35,9 +35,9 @@ tt::tt_metal::KernelHandle create_mcast_dataflow_kernel(
     tt::tt_metal::DataMovementConfig config) {
     auto ct_offset = config.compile_args.size();
     size_t rt_offset = 0;
-    if (family) {
+    if (mcast) {
         const auto offsets =
-            family->append_kernel_args_to(config.compile_args, runtime_args, tt::tt_metal::CoreRangeSet(placement));
+            mcast->append_kernel_args_to(config.compile_args, runtime_args, tt::tt_metal::CoreRangeSet(placement));
         ct_offset = offsets.compile_time;
         rt_offset = offsets.runtime;
     } else {

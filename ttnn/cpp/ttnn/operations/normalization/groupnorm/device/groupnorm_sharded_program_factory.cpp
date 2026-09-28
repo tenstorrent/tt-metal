@@ -492,13 +492,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .initial_value = 0});
 
     // A reduction is one semantic multicast stream. Each logical GroupNorm work group is one exact
-    // family group; McastFamily decomposes wrapped groups into their real rectangles without fake
+    // group; Mcast decomposes wrapped groups into their real rectangles without fake
     // sender-only padding rectangles.
-    const auto reduction_family = make_group_norm_mcast_family(
-        device,
-        mcast_groups,
+    // Height shards follow shard order; block shards reduce along the height axis,
+    // which is the opposite traversal (the core_coords2D grouping above).
+    const bool mcast_row_major = is_height_sharding == (shard_orientation == ShardOrientation::ROW_MAJOR);
+    const ttnn::kernel_lib::host::Mcast reduction_mcast(
+        *device,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}});
+            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}},
+        all_cores,
+        num_cores_per_mcast_group,
+        ttnn::kernel_lib::host::McastFixedSenderConfig{},
+        mcast_row_major ? ttnn::kernel_lib::host::McastCoreOrder::RowMajor
+                        : ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
 
     // reader defines
     std::map<std::string, std::string> reader_mcast_sender_defines;
@@ -1301,12 +1308,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }
     }
 
-    // Partial-statistics readiness is consumed before gathering; this family delivers the result.
+    // Partial-statistics readiness is consumed before gathering; this multicast delivers the result.
     std::vector<std::reference_wrapper<KernelDescriptor>> reduction_kernels{reader_mcast_sender_desc};
     if (has_receiver_kernel) {
         reduction_kernels.emplace_back(reader_mcast_receiver_desc);
     }
-    reduction_family.attach(desc, "reduction_mcast", reduction_kernels);
+    reduction_mcast.attach(desc, "reduction_mcast", reduction_kernels);
     desc.kernels.push_back(std::move(reader_mcast_sender_desc));
     if (has_receiver_kernel) {
         desc.kernels.push_back(std::move(reader_mcast_receiver_desc));

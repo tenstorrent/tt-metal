@@ -288,11 +288,13 @@ tt::tt_metal::ProgramDescriptor SparseMatmulMultiCoreReuseMcast1DProgramFactory:
 
     const auto in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     const auto in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const ttnn::kernel_lib::host::Mcast2D in0_mcast(
-        device,
-        CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
-        ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
-        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc});
+    const auto in0_mcast_grid = CoreRangeSet(in0_mcast_receiver_cores_bounding_box);
+    const ttnn::kernel_lib::host::Mcast in0_mcast(
+        *device,
+        ttnn::kernel_lib::host::McastConfig{.noc = in0_noc},
+        in0_mcast_grid,
+        /*receiver_group_size=*/in0_mcast_grid.num_cores(),
+        ttnn::kernel_lib::host::McastExplicitSenderConfig{{{start_core}}});
 
     uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
     // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the

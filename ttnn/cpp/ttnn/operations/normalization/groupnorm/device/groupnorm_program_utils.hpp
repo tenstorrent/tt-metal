@@ -12,7 +12,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/tensor/tensor.hpp"  // ttnn::Tensor, tt::tt_metal::DataType
 
 namespace ttnn::prim {
@@ -56,13 +55,6 @@ inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_p
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats);
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
-
-// Each reduction group broadcasts from its first core to its exact logical membership.
-// Geometry and wire preparation belong to McastFamily, including wrapped groups.
-kernel_lib::host::McastFamily make_group_norm_mcast_family(
-    tt::tt_metal::IDevice* device,
-    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& groups,
-    const kernel_lib::host::McastConfig& config);
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width = 32);
 

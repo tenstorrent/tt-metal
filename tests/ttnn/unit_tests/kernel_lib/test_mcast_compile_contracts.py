@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import core_set, KERNEL_DIR
+from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import core_set, KERNEL_DIR, make_mcast
 
 
 @pytest.mark.parametrize(
@@ -20,13 +20,14 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import core_set, KERNEL_D
     ],
 )
 def test_forwarding_receive_compile_contract(device, expect_error, with_dense_group, violation):
-    family = ttnn.McastFamily(
+    groups = [([(0, 0), (2, 0)], [(0, 0)])]
+    if with_dense_group:
+        groups.append(([(0, 2), (1, 2)], [(0, 2)]))
+    mcast = make_mcast(
         device,
+        groups,
         ttnn.McastConfig(noc=ttnn.NOC.NOC_1, irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast),
     )
-    family.add_group(core_set([(0, 0), (2, 0)]), [ttnn.CoreCoord(0, 0)])
-    if with_dense_group:
-        family.add_group(core_set([(0, 2), (1, 2)]), [ttnn.CoreCoord(0, 2)])
     receiver = ttnn.CoreCoord(1, 2) if with_dense_group else ttnn.CoreCoord(2, 0)
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_DIR}/pipe_receive_contract.cpp",
@@ -36,7 +37,7 @@ def test_forwarding_receive_compile_contract(device, expect_error, with_dense_gr
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
     )
     descriptor = ttnn.ProgramDescriptor()
-    family.attach(descriptor, "mcast", [kernel])
+    mcast.attach(descriptor, "mcast", [kernel])
     ct = list(kernel.compile_time_args)
     offset = dict(kernel.named_compile_time_args)["mcast_ct_offset"]
     if violation.startswith("source-"):
@@ -100,8 +101,7 @@ def test_compact_compile_contract(device, expect_error, case):
         "consumer-ready-semaphore": 6,
         "signal-source-semaphore": 7,
     }[case]
-    family = ttnn.McastFamily(device)
-    family.add_group(core_set([(0, 0), (1, 0)]), [ttnn.CoreCoord(0, 0)])
+    mcast = ttnn.Mcast(device, ttnn.McastConfig(), core_set([(0, 0), (1, 0)]), 2)
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_DIR}/pipe_compact_contract.cpp",
         core_ranges=core_set([core]),
@@ -116,7 +116,7 @@ def test_compact_compile_contract(device, expect_error, case):
     if case == "absent-coordinates":
         ttnn.attach_absent(kernel, "mcast")
     else:
-        family.attach(descriptor, "mcast", [kernel])
+        mcast.attach(descriptor, "mcast", [kernel])
     ct = list(kernel.compile_time_args)
     ct[1] = len(kernel.runtime_args[core[0]][core[1]])
     ct[2] = len(ct)

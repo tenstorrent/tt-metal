@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_spec_common.hpp"
 
 #include <algorithm>
@@ -171,7 +171,7 @@ void add_metadata(
 constexpr std::array<std::string_view, 3> resource_roles{"data_ready", "consumer_ready", "signal_source"};
 }  // namespace
 
-void McastFamily::attach(
+void McastImpl::attach(
     m2::ProgramSpec& spec,
     m2::ProgramRunArgs& run_args,
     std::string_view prefix,
@@ -285,20 +285,4 @@ void attach_absent(m2::ProgramSpec& spec, std::string_view prefix, std::span<con
     spec = std::move(staged);
 }
 
-void Mcast1D::attach(
-    m2::ProgramSpec& spec,
-    m2::ProgramRunArgs& args,
-    std::string_view prefix,
-    std::span<const m2::KernelSpecName> kernels,
-    std::span<const m2::SemaphoreSpecName> adopted) const {
-    family_->attach(spec, args, prefix, kernels, adopted);
-}
-void Mcast2D::attach(
-    m2::ProgramSpec& spec,
-    m2::ProgramRunArgs& args,
-    std::string_view prefix,
-    std::span<const m2::KernelSpecName> kernels,
-    std::span<const m2::SemaphoreSpecName> adopted) const {
-    family_->attach(spec, args, prefix, kernels, adopted);
-}
 }  // namespace ttnn::kernel_lib::host

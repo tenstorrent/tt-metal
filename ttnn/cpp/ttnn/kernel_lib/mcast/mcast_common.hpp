@@ -142,10 +142,6 @@ enum ChainOffset : uint32_t {
     INCLUDES_SENDER,
     CHAIN_WORDS
 };
-constexpr uint32_t CHAIN_COORDINATES = HEADER_WORDS;
-constexpr uint32_t CHAIN_NEIGHBORS = CHAIN_COORDINATES + SENDER_COORD_WORDS;
-constexpr uint32_t CHAIN_ROLES = CHAIN_NEIGHBORS + CHAIN_WORDS;
-constexpr uint32_t CHAIN_RUNTIME_WORDS = CHAIN_ROLES + ROLE_WORDS;
 constexpr SenderMcastMode classify(uint32_t remote_count, bool includes_sender) {
     return remote_count == 0 ? SenderMcastMode::LocalCopy
            : includes_sender ? SenderMcastMode::MulticastIncludeSource
@@ -157,7 +153,7 @@ constexpr bool concrete(SenderMcastMode sender_mcast_mode) {
            sender_mcast_mode == SenderMcastMode::MulticastIncludeSource;
 }
 static_assert(RECT_WORDS == 7 && HEADER_WORDS == 2);
-static_assert(CHAIN_WORDS == 5 && CHAIN_RUNTIME_WORDS == 11);
+static_assert(CHAIN_WORDS == 5);
 static_assert(sizeof(RectangleRuntimeArguments) == RECT_WORDS * sizeof(uint32_t));
 
 constexpr uint32_t OMITTED = 0xFFFFFFFFu;
@@ -185,21 +181,17 @@ struct RuntimeLayout {
         const auto& family = metadata.family;
         const auto& kernel = metadata.kernel;
         const auto& coordinates = metadata.coordinates;
-        if (transfer_mode(family.flags) == TransferMode::ChainUnicast) {
-            // Preserve the original chain runtime bytes, including unused header fields.
-            roles = CHAIN_ROLES + ROLES;
-            sender_phase = roles + SENDER_ROUND;
-            rectangle_count = NUM_RECTANGLES;
-            ack = ACK;
-            sender_coordinates = CHAIN_COORDINATES;
-            coordinate_words = SENDER_COORD_WORDS;
-            chain_neighbors = CHAIN_NEIGHBORS;
-            words = CHAIN_RUNTIME_WORDS;
-            return;
-        }
         const bool sends = (kernel.capabilities & CAN_SEND) != 0;
         const bool receives = (kernel.capabilities & CAN_RECEIVE) != 0;
         roles = reserve(words, kernel.roles == DYNAMIC_ROLES);
+        if (transfer_mode(family.flags) == TransferMode::ChainUnicast) {
+            if (receives) {
+                coordinate_words = SENDER_COORD_WORDS;
+                sender_coordinates = reserve(words, true, coordinate_words);
+            }
+            chain_neighbors = reserve(words, true, CHAIN_WORDS);
+            return;
+        }
         sender_phase = reserve(words, sends && family.rotating_span != 0);
         rectangle_count = reserve(words, sends && family.rectangle_capacity > 1);
         ack = reserve(words, sends && (family.flags & PRE_HANDSHAKE) && family.ack_count == ACK_EQUALS_FANOUT);

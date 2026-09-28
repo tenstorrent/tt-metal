@@ -121,20 +121,15 @@ compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
 
-# Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe). Mcast1D = per-row/column families;
-# Mcast2D = one mcast over a single rectangle (matmul-1d: single sender -> whole grid).
+# Host-side multicast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe).
 attach_absent = ttnn._ttnn.mcast_host.attach_absent
-McastFamily = ttnn._ttnn.mcast_host.McastFamily
 TransferMode = ttnn._ttnn.mcast_host.TransferMode
-Mcast1D = ttnn._ttnn.mcast_host.Mcast1D
-Mcast1DShape = ttnn._ttnn.mcast_host.Mcast1DShape
-Mcast1DSenderPlacement = ttnn._ttnn.mcast_host.Mcast1DSenderPlacement
-Mcast1DFixedSenderConfig = ttnn._ttnn.mcast_host.Mcast1DFixedSenderConfig
-Mcast1DRotatingSenderConfig = ttnn._ttnn.mcast_host.Mcast1DRotatingSenderConfig
-Mcast2D = ttnn._ttnn.mcast_host.Mcast2D
-Mcast2DSenderOrder = ttnn._ttnn.mcast_host.Mcast2DSenderOrder
-Mcast2DFixedSenderConfig = ttnn._ttnn.mcast_host.Mcast2DFixedSenderConfig
-Mcast2DRotatingSenderConfig = ttnn._ttnn.mcast_host.Mcast2DRotatingSenderConfig
+Mcast = ttnn._ttnn.mcast_host.Mcast
+McastCoreOrder = ttnn._ttnn.mcast_host.McastCoreOrder
+McastSenderPlacement = ttnn._ttnn.mcast_host.McastSenderPlacement
+McastFixedSenderConfig = ttnn._ttnn.mcast_host.McastFixedSenderConfig
+McastRotatingSenderConfig = ttnn._ttnn.mcast_host.McastRotatingSenderConfig
+McastSenderGridConfig = ttnn._ttnn.mcast_host.McastSenderGridConfig
+McastExplicitSenderConfig = ttnn._ttnn.mcast_host.McastExplicitSenderConfig
 McastConfig = ttnn._ttnn.mcast_host.McastConfig
 McastDataReady = ttnn._ttnn.mcast_host.McastDataReady
-MCAST_ACK_EQUALS_FANOUT = ttnn._ttnn.mcast_host.MCAST_ACK_EQUALS_FANOUT

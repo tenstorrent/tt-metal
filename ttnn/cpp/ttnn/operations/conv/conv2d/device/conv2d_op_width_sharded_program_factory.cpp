@@ -369,17 +369,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
 
     const CoreRangeSet all_reader_cores_set(all_reader_cores);
-    std::optional<ttnn::kernel_lib::host::Mcast2D> activation_mcast;
+    std::optional<ttnn::kernel_lib::host::Mcast> activation_mcast;
     if (!skip_activation_mcast) {
         activation_mcast.emplace(
-            device,
-            all_reader_cores_set,
-            ttnn::kernel_lib::host::Mcast2DRotatingSenderConfig{},
+            *device,
             ttnn::kernel_lib::host::McastConfig{
                 .noc = act_noc,
                 .handshake = true,
-                .data_ready = dataflow_kernel_lib::DataReadySignal::Flag,
-                .ack_count_override = std::max(input_num_cores, output_num_cores) - 1});
+                .handshake_cores = all_cores,
+                .data_ready = dataflow_kernel_lib::DataReadySignal::Flag},
+            all_reader_cores_set,
+            /*receiver_group_size=*/all_reader_cores_set.num_cores(),
+            ttnn::kernel_lib::host::McastRotatingSenderConfig{});
     }
 
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");

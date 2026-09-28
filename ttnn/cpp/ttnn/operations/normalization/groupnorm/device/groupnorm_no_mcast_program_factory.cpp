@@ -568,11 +568,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .initial_value = 0});
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const auto reduction_family = make_group_norm_mcast_family(
-        device,
-        mcast_groups,
+    const ttnn::kernel_lib::host::Mcast reduction_mcast(
+        *device,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}});
+            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}},
+        all_cores,
+        num_cores_per_mcast_group,
+        ttnn::kernel_lib::host::McastFixedSenderConfig{},
+        row_wise ? ttnn::kernel_lib::host::McastCoreOrder::RowMajor
+                 : ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
 
     std::map<std::string, std::string> reader_mcast_sender_defines;
     if (gamma.has_value()) {
@@ -1563,7 +1567,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
 
     const std::array kernels{std::ref(reader_mcast_sender_desc_g1), std::ref(reader_mcast_sender_desc_g2)};
-    reduction_family.attach(desc, "reduction_mcast", kernels);
+    reduction_mcast.attach(desc, "reduction_mcast", kernels);
     desc.kernels.push_back(std::move(reader_mcast_sender_desc_g1));
     desc.kernels.push_back(std::move(reader_mcast_sender_desc_g2));
     desc.kernels.push_back(std::move(writer_desc_g1));

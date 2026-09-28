@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -30,75 +31,42 @@ struct ProgramRunArgs;
 
 namespace ttnn::kernel_lib::host {
 
+class McastImpl;
+
 // =============================================================================
 // Usage examples
 //
 // The examples assume that device, descriptor, noc, and the shown cores and receiver sets already exist, and
 // that kernel is a placed KernelDescriptor with its operation-specific compile-time and runtime arguments.
 //
-// Mcast1D: create one independent multicast per row, with the first core in each row as its fixed sender.
+// Create one independent multicast per row, with the first core in each row as its fixed sender.
 //
-// Mcast1D mcast(
+// Mcast mcast(
 //     device,
+//     McastConfig{.noc = noc},
 //     receivers,
-//     Mcast1DShape::PerRow,
-//     Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-//     McastConfig{.noc = noc});
+//     receiver_row_size,
+//     McastFixedSenderConfig{},
+//     McastCoreOrder::RowMajor);
 // const std::array kernels{std::ref(kernel)};
 // mcast.attach(descriptor, "input_mcast", kernels);
 // descriptor.kernels.push_back(std::move(kernel));
 //
-// Mcast2D: create one multicast over the receiver rectangle from a fixed sender.
+// Create one multicast over the receiver set from an explicit sender.
 //
-// Mcast2D mcast(device, receivers, Mcast2DFixedSenderConfig{.sender = sender}, McastConfig{.noc = noc});
+// Mcast mcast(
+//     device,
+//     McastConfig{.noc = noc},
+//     receivers,
+//     receivers.num_cores(),
+//     McastExplicitSenderConfig{{{sender}}});
 // const std::array kernels{std::ref(kernel)};
 // mcast.attach(descriptor, "input_mcast", kernels);
 // descriptor.kernels.push_back(std::move(kernel));
 //
-// McastFamily: collect independent, disjoint groups that share one protocol and semaphore allocation.
-//
-// McastFamily mcast(device, McastConfig{.noc = noc});
-// mcast.add_group(receivers_a, std::vector<tt::tt_metal::CoreCoord>{sender_a});
-// mcast.add_group(receivers_b, std::vector<tt::tt_metal::CoreCoord>{sender_b});
-// const std::array kernels{std::ref(kernel)};
-// mcast.attach(descriptor, "input_mcast", kernels);
-// descriptor.kernels.push_back(std::move(kernel));
-//
-// These examples use ProgramDescriptor. The same helpers also support ProgramSpec attachment and direct Program
+// These examples use ProgramDescriptor. Mcast also supports ProgramSpec attachment and direct Program
 // construction through append_semaphores(), append_compile_time_args_to(), and append_runtime_args_to().
 // =============================================================================
-
-// Indicates that no consumer-ready semaphore is configured.
-static constexpr uint32_t UNUSED_SEM_ID = 0xFFFFFFFFu;
-
-// The host resolves this default from each sender's multicast fanout.
-static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
-
-struct McastConfig {
-    // NoC used by the kernel pipe.
-    tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
-    // Wait for receiver readiness before sending. When disabled, the kernel writer
-    // must ensure any prior accesses to the landing region finish before the sender
-    // can write it, e.g. through synchronization in an earlier operation phase.
-    // Without such ordering, leave the region untouched until receive() completes.
-    // receive() waits for completed delivery; it does not initiate the transfer.
-    bool handshake = true;
-    // Select the data-ready signaling mode.
-    dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
-    // Exact first owned semaphore ID. Descriptor attachment and Program binding
-    // allocate free IDs when omitted.
-    std::optional<uint32_t> base_sem_id = std::nullopt;
-    // Adopt caller-owned ids: data_ready, consumer_ready (required with handshake), and
-    // signal_source (required for resolved ChainUnicast). Chain IDs must be distinct and
-    // initialized to zero for a fresh invocation; signal_source cannot alias another live channel.
-    std::optional<std::vector<uint32_t>> sem_ids = std::nullopt;
-    // Override the derived receiver acknowledgment count. Used for cores without actual work
-    // that are passively participating in the multicast.
-    std::optional<uint32_t> ack_count_override = std::nullopt;
-    // Family-wide delivery policy when any group is irregular. Entirely rectangular
-    // families always use Multicast, regardless of this setting.
-    dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
-};
 
 struct McastArgumentOffsets {
     uint32_t compile_time;
@@ -133,350 +101,91 @@ void append_absent_mcast_compile_time_args_to(Args& destination) {
     detail::append_args_to(destination, detail::absent_mcast_compile_time_args());
 }
 
-// Independent, disjoint groups sharing one protocol and semaphore allocation.
-// Groups share a sender mode, number of sender rounds, and TransferMode.
-class McastFamily {
-public:
-    // Collect groups, query topology to place kernels, then attach or append_semaphores.
-    // The borrowed device must stay open/alive through the first successful preparation.
-    // Later attachment and topology queries use owned snapshots, without accessing the device.
-    // Copies own their data; building copies share the borrowed-device lifetime requirement.
-    explicit McastFamily(tt::tt_metal::IDevice* device, const McastConfig& cfg = {});
-    // One exact receiver set and a nonempty ordered sender list. One sender is fixed;
-    // multiple senders rotate in the supplied order. Rejected additions preserve prior groups.
-    void add_group(
-        tt::tt_metal::CoreRangeSet receivers,
-        std::vector<tt::tt_metal::CoreCoord> senders,
-        std::optional<uint32_t> ack_count_override = std::nullopt);
-    // Attachment and Program binding prepare arguments automatically; additions are then forbidden.
-    // =============================================================================
-    // Operation construction paths:
-    //
-    // - ProgramDescriptor: attach resources and arguments to already placed kernel descriptors.
-    // - ProgramSpec: attach named resources, argument schemas, and run arguments to kernel specs.
-    // - Direct Program construction: append semaphores, compile-time args, and per-core runtime args separately.
-    // =============================================================================
+enum class McastCoreOrder { RowMajor, ColumnMajor };
+enum class McastSenderPlacement { Uniform, Staggered };
 
-    // ProgramDescriptor path: attach resources and complete argument blocks to already placed kernels.
+struct McastConfig {
+    tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
+    bool handshake = true;
+    // nullopt means all receivers; an empty set means no acknowledgments.
+    // The current sender never acknowledges itself. Chain forwarding requires
+    // all receivers and therefore accepts only nullopt or the full receiver set.
+    std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
+    dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
+    std::optional<uint32_t> base_sem_id;
+    std::optional<std::vector<uint32_t>> sem_ids;
+    dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
+};
+
+struct McastFixedSenderConfig {
+    // Uniform requires an in-group index. Staggered wraps index + group number.
+    uint32_t sender_index = 0;
+    McastSenderPlacement placement = McastSenderPlacement::Uniform;
+};
+
+struct McastRotatingSenderConfig {};
+
+struct McastSenderGridConfig {
+    tt::tt_metal::CoreRangeSet sender_cores;
+    std::optional<McastCoreOrder> sender_order;  // Defaults to receiver order.
+};
+
+struct McastExplicitSenderConfig {
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> senders_per_group;
+};
+
+using McastSenderConfig =
+    std::variant<McastFixedSenderConfig, McastRotatingSenderConfig, McastSenderGridConfig, McastExplicitSenderConfig>;
+
+// Partitions the ordered receiver cores into equal consecutive groups and
+// owns the resulting multicast lowering snapshot.
+class Mcast {
+public:
+    Mcast(
+        const tt::tt_metal::IDevice& device,
+        const McastConfig& config,
+        const tt::tt_metal::CoreRangeSet& receivers,
+        uint32_t receiver_group_size,
+        const McastSenderConfig& sender_config = McastFixedSenderConfig{},
+        McastCoreOrder receiver_order = McastCoreOrder::RowMajor);
+    ~Mcast();
+
+    Mcast(const Mcast&);
+    Mcast& operator=(const Mcast&);
+    Mcast(Mcast&&) noexcept;
+    Mcast& operator=(Mcast&&) noexcept;
+
     void attach(
-        tt::tt_metal::ProgramDescriptor&,
+        tt::tt_metal::ProgramDescriptor& descriptor,
         std::string_view prefix,
         std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
-
-    // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
     void attach(
-        tt::tt_metal::experimental::ProgramSpec&,
-        tt::tt_metal::experimental::ProgramRunArgs&,
+        tt::tt_metal::experimental::ProgramSpec& spec,
+        tt::tt_metal::experimental::ProgramRunArgs& args,
         std::string_view prefix,
         std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
         std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
-
-    // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
     void append_semaphores(tt::tt_metal::Program& program);
-
-    // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
     template <typename Args>
     void append_compile_time_args_to(Args& destination) const {
-        require_program_bound_();
-        detail::append_args_to(destination, compile_time_args_(program_semaphore_ids_, argument_metadata_()));
+        detail::append_args_to(destination, compile_time_args_());
     }
-
-    // Direct Program construction, step 3: append this core's multicast runtime arguments to existing arguments.
     template <typename Args>
     void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
-        require_program_bound_();
-        detail::append_args_to(destination, runtime_args_(core, argument_metadata_()));
+        detail::append_args_to(destination, runtime_args_(core));
     }
-
-    // Placement-specific CT/RT must be emitted together. Prefixes are padded per
-    // kernel; all validation and emission is staged before either destination changes.
     McastArgumentOffsets append_kernel_args_to(
         std::vector<uint32_t>& compile_time_args,
         tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
         const tt::tt_metal::CoreRangeSet& placement) const;
-
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
 private:
-    friend class Mcast;
-    friend class Mcast1D;
-    friend class Mcast2D;
-    McastFamily(
-        tt::tt_metal::IDevice* device,
-        const McastConfig& cfg,
-        std::optional<tt::tt_metal::CoreRangeSet> handshake_cores);
-    void prepare_topology_() const;
-    // Idempotent after success. Failure preserves collected groups and their topology.
-    void prepare_arguments_() const;
-    dataflow_kernel_lib::mcast_wire::ArgumentMetadata argument_metadata_(
-        const tt::tt_metal::CoreRangeSet* placement = nullptr) const;
-    std::vector<uint32_t> runtime_args_(
-        const tt::tt_metal::CoreCoord& core, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
+    std::unique_ptr<McastImpl> impl_;
 
-    struct Group {
-        Group(
-            tt::tt_metal::CoreRangeSet receivers,
-            std::vector<tt::tt_metal::CoreCoord> senders,
-            std::optional<uint32_t> ack_count_override = std::nullopt);
-
-        const tt::tt_metal::CoreRangeSet& receiver_cores() const { return receivers_; }
-
-        const tt::tt_metal::CoreRangeSet& participating_cores() const { return participating_; }
-
-        std::vector<uint32_t> runtime_args(
-            const tt::tt_metal::CoreCoord& core,
-            const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
-
-        bool rotating() const { return senders_.size() > 1; }
-        uint32_t num_senders() const;
-        bool has_remote_receivers() const;
-        uint32_t num_rectangles() const;
-
-        struct PreparedMulticast {
-            std::vector<std::vector<uint32_t>> receiver_rectangle_args_per_sender;
-            dataflow_kernel_lib::SenderMcastMode sender_mcast_mode = dataflow_kernel_lib::SenderMcastMode::Unknown;
-        };
-        struct PreparedChain {
-            std::vector<tt::tt_metal::CoreCoord> order;
-            std::vector<dataflow_kernel_lib::ChainRuntimeArguments> nodes;
-        };
-        struct PreparedRectangle {
-            tt::tt_metal::CoreRange logical;
-            tt::tt_metal::CoreRange noc;
-        };
-        struct PreparedState {
-            std::vector<PreparedRectangle> rectangles;
-            std::vector<uint32_t> sender_coords;
-            dataflow_kernel_lib::mcast_wire::SenderCoordinateMetadata coordinate_metadata;
-            std::vector<uint32_t> sender_ranges;
-            std::vector<uint32_t> acks;
-            std::variant<PreparedMulticast, PreparedChain> transport = PreparedMulticast{};
-        };
-        void prepare_(
-            tt::tt_metal::IDevice* device,
-            const McastConfig& cfg,
-            dataflow_kernel_lib::TransferMode transfer_mode,
-            const tt::tt_metal::CoreRangeSet* handshake_cores) const;
-        PreparedMulticast prepare_multicast_(
-            const McastConfig& cfg, PreparedState& state, const tt::tt_metal::CoreRangeSet* handshake_cores) const;
-        PreparedChain prepare_chain_(tt::tt_metal::IDevice* device, PreparedState& state) const;
-        const PreparedState& prepared_state_() const;
-        uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;
-        tt::tt_metal::CoreRangeSet receivers_;
-        std::vector<tt::tt_metal::CoreCoord> senders_;
-        std::optional<uint32_t> ack_count_override_;
-        tt::tt_metal::CoreRangeSet participating_;
-        std::vector<uint32_t> fanouts_;
-        mutable std::optional<PreparedState> prepared_;
-    };
-
-    void require_arguments_prepared_() const;
-    void require_program_bound_() const;
-    void require_unbound_() const;
-    std::array<uint32_t, 3> resolve_semaphore_ids_(std::span<const tt::tt_metal::SemaphoreDescriptor> existing) const;
-    void validate_semaphores_present_and_zeroed_(
-        std::span<const tt::tt_metal::SemaphoreDescriptor> existing, const std::array<uint32_t, 3>& ids) const;
-    uint32_t required_semaphores_() const;
-    std::vector<uint32_t> compile_time_args_(
-        const std::array<uint32_t, 3>& ids, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
-    tt::tt_metal::IDevice* device_;
-    mutable bool arguments_prepared_ = false;
-    mutable bool topology_current_ = false;
-    // Preparation is the last use of the borrowed device; attachment uses these snapshots.
-    mutable tt::ARCH prepared_arch_{};
-    mutable tt::tt_metal::CoreCoord prepared_device_grid_;
-    std::optional<tt::tt_metal::ProgramId> bound_program_id_;
-    std::array<uint32_t, 3> program_semaphore_ids_{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
-    const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
-    std::vector<Group> groups_;
-    McastConfig cfg_;
-    // Only the unified wrapper supplies this owned, family-wide subset. Legacy
-    // family/group scalar overrides retain their existing semantics.
-    std::optional<tt::tt_metal::CoreRangeSet> handshake_cores_;
-    mutable tt::tt_metal::CoreRangeSet receivers_;
-    mutable tt::tt_metal::CoreRangeSet participating_;
-    mutable dataflow_kernel_lib::mcast_wire::FamilyMetadata layout_;
-    mutable dataflow_kernel_lib::mcast_wire::ArgumentMetadata generic_metadata_;
-};
-
-// Mcast1D-specific types.
-
-// Groups the receiver grid into independent row or column multicasts.
-enum class Mcast1DShape {
-    PerRow,
-    PerColumn,
-};
-
-// Placement of the fixed sender on each row or column.
-enum class Mcast1DSenderPlacement {
-    Uniform,   // Use the same sender index on every line.
-    Diagonal,  // Advance the fixed sender index with each line, wrapping at the receiver line length.
-};
-
-struct Mcast1DFixedSenderConfig {
-    uint32_t starting_sender_index = 0;
-    Mcast1DSenderPlacement sender_placement = Mcast1DSenderPlacement::Uniform;
-};
-
-struct Mcast1DRotatingSenderConfig {
-    // Rotate over receivers when omitted. Explicit senders may be sparse or outside receivers,
-    // but must align with receiver lines and provide the same nonzero count on every line.
-    // Sender order is increasing x within rows or increasing y within columns.
-    std::optional<tt::tt_metal::CoreRangeSet> sender_grid = std::nullopt;
-};
-
-using Mcast1DSenderConfig = std::variant<Mcast1DFixedSenderConfig, Mcast1DRotatingSenderConfig>;
-
-// Configures independent row or column multicasts over a rectangular receiver grid.
-// Fixed mode selects one sender per line. Rotating mode uses every core in sender_grid, or
-// receivers when sender_grid is omitted.
-class Mcast1D {
-public:
-    // Unified API: the sender configuration selects fixed or rotating behavior.
-    Mcast1D(
-        tt::tt_metal::IDevice* device,
-        const tt::tt_metal::CoreRangeSet& receivers,
-        Mcast1DShape shape,
-        const Mcast1DSenderConfig& sender_config,
-        const McastConfig& cfg = {});
-
-    // =============================================================================
-    // Operation construction paths:
-    //
-    // - ProgramDescriptor: attach resources and arguments to already placed kernel descriptors.
-    // - ProgramSpec: attach named resources, argument schemas, and run arguments to kernel specs.
-    // - Direct Program construction: append semaphores, compile-time args, and per-core runtime args separately.
-    // =============================================================================
-
-    // ProgramDescriptor path: attach resources and complete argument blocks to already placed kernels.
-    void attach(
-        tt::tt_metal::ProgramDescriptor&,
-        std::string_view prefix,
-        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
-
-    // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
-    void attach(
-        tt::tt_metal::experimental::ProgramSpec&,
-        tt::tt_metal::experimental::ProgramRunArgs&,
-        std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
-        std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
-
-    // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
-    void append_semaphores(tt::tt_metal::Program& program);
-
-    // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
-    template <typename Args>
-    void append_compile_time_args_to(Args& destination) const {
-        family_->append_compile_time_args_to(destination);
-    }
-
-    // Direct Program construction, step 3: append this core's multicast runtime arguments. Cores outside the
-    // participating topology receive a correctly sized argument block with neither role enabled.
-    template <typename Args>
-    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
-        family_->append_runtime_args_to(destination, core);
-    }
-
-    McastArgumentOffsets append_kernel_args_to(
-        std::vector<uint32_t>& compile_time_args,
-        tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
-        const tt::tt_metal::CoreRangeSet& placement) const {
-        return family_->append_kernel_args_to(compile_time_args, runtime_args, placement);
-    }
-
-    const tt::tt_metal::CoreRangeSet& participating_cores() const;
-    tt::tt_metal::CoreRangeSet sender_only_cores() const;
-
-private:
-    static std::vector<std::vector<tt::tt_metal::CoreCoord>> sender_lines_from_grid_(
-        const tt::tt_metal::CoreRange& receiver_box, const tt::tt_metal::CoreRangeSet& sender_grid, Mcast1DShape shape);
-
-    std::optional<McastFamily> family_;
-};
-
-// Mcast2D-specific types.
-
-// Traversal order used to assign rotating sender rounds over a 2D sender grid.
-enum class Mcast2DSenderOrder {
-    RowMajor,
-    ColumnMajor,
-};
-
-struct Mcast2DFixedSenderConfig {
-    tt::tt_metal::CoreCoord sender;
-};
-
-struct Mcast2DRotatingSenderConfig {
-    // Rotate over receivers when omitted.
-    std::optional<tt::tt_metal::CoreRangeSet> sender_grid = std::nullopt;
-    Mcast2DSenderOrder sender_order = Mcast2DSenderOrder::RowMajor;
-};
-
-using Mcast2DSenderConfig = std::variant<Mcast2DFixedSenderConfig, Mcast2DRotatingSenderConfig>;
-
-// Configures one multicast over a rectangular receiver grid.
-// The fixed sender may be inside or outside the receiver grid. Rotating mode uses sender_grid, or
-// receivers when sender_grid is omitted.
-class Mcast2D {
-public:
-    // Unified API: the sender configuration selects fixed or rotating behavior.
-    Mcast2D(
-        tt::tt_metal::IDevice* device,
-        const tt::tt_metal::CoreRangeSet& receivers,
-        const Mcast2DSenderConfig& sender_config,
-        const McastConfig& cfg = {});
-
-    // =============================================================================
-    // Operation construction paths:
-    //
-    // - ProgramDescriptor: attach resources and arguments to already placed kernel descriptors.
-    // - ProgramSpec: attach named resources, argument schemas, and run arguments to kernel specs.
-    // - Direct Program construction: append semaphores, compile-time args, and per-core runtime args separately.
-    // =============================================================================
-
-    // ProgramDescriptor path: attach resources and complete argument blocks to already placed kernels.
-    void attach(
-        tt::tt_metal::ProgramDescriptor&,
-        std::string_view prefix,
-        std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
-
-    // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
-    void attach(
-        tt::tt_metal::experimental::ProgramSpec&,
-        tt::tt_metal::experimental::ProgramRunArgs&,
-        std::string_view prefix,
-        std::span<const tt::tt_metal::experimental::KernelSpecName> kernels,
-        std::span<const tt::tt_metal::experimental::SemaphoreSpecName> adopted_semaphores = {}) const;
-
-    // Direct Program construction, step 1: append multicast semaphores before constructing kernels.
-    void append_semaphores(tt::tt_metal::Program& program);
-
-    // Direct Program construction, step 2: append multicast compile-time arguments to existing kernel arguments.
-    template <typename Args>
-    void append_compile_time_args_to(Args& destination) const {
-        family_->append_compile_time_args_to(destination);
-    }
-
-    // Direct Program construction, step 3: append this core's multicast runtime arguments to existing arguments.
-    template <typename Args>
-    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
-        family_->append_runtime_args_to(destination, core);
-    }
-
-    McastArgumentOffsets append_kernel_args_to(
-        std::vector<uint32_t>& compile_time_args,
-        tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
-        const tt::tt_metal::CoreRangeSet& placement) const {
-        return family_->append_kernel_args_to(compile_time_args, runtime_args, placement);
-    }
-
-private:
-    static std::vector<tt::tt_metal::CoreCoord> senders_from_grid_(
-        const tt::tt_metal::CoreRangeSet& sender_grid, Mcast2DSenderOrder sender_order);
-
-    std::optional<McastFamily> family_;
+    std::vector<uint32_t> compile_time_args_() const;
+    std::vector<uint32_t> runtime_args_(const tt::tt_metal::CoreCoord& core) const;
 };
 
 }  // namespace ttnn::kernel_lib::host

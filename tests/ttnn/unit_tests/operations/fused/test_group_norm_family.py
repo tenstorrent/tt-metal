@@ -75,6 +75,48 @@ def test_group_norm_wrapped_family_cache(device, use_welford, column_major):
         assert_numeric_metrics(reference, actual, pcc_threshold=0.999, rtol=0.01, atol=0.09, frobenius_threshold=0.035)
 
 
+@pytest.mark.parametrize("column_major", [False, True], ids=["rows", "columns"])
+def test_group_norm_block_shard_reduction_order(device, column_major):
+    # Four height contributors per channel shard. Their reduction order is the
+    # opposite of shard order, unlike the height-sharded case above.
+    width, height = (4, 2) if column_major else (2, 4)
+    grid = ttnn.CoreGrid(x=width, y=height)
+    ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, height - 1))])
+    memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ranges,
+            [64, 64],
+            ttnn.ShardOrientation.COL_MAJOR if column_major else ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch.manual_seed(19)
+    source = torch.rand(1, 128, 1, 256, dtype=torch.bfloat16)
+    reference = torch.nn.functional.group_norm(source.float(), 16).permute(0, 2, 3, 1)
+    tensor = ttnn.from_torch(
+        source.permute(0, 2, 3, 1).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory,
+    )
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(128, 16, 2, ttnn.bfloat8_b), device)
+    output = ttnn.group_norm(
+        tensor,
+        num_groups=16,
+        epsilon=1e-5,
+        input_mask=mask,
+        core_grid=grid,
+        memory_config=memory,
+        output_layout=ttnn.TILE_LAYOUT,
+        inplace=False,
+        use_welford=False,
+    )
+    actual = ttnn.to_torch(ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)).float()
+    assert_numeric_metrics(reference, actual, pcc_threshold=0.999, rtol=0.01, atol=0.09, frobenius_threshold=0.035)
+
+
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("batches", [1, 8], ids=["multicast", "local"])
 def test_group_norm_interleaved_family_cache(device, use_welford, batches):

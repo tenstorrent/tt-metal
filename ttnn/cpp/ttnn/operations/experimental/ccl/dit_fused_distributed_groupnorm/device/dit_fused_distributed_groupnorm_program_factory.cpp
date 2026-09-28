@@ -21,6 +21,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -504,14 +505,17 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const uint32_t go_sem_id = use_mux ? CreateSemaphore(program, CoreRangeSet({core_grid}), 0u) : 0u;
 
     const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    std::optional<ttnn::kernel_lib::host::McastFamily> reduction_family;
+    std::optional<ttnn::kernel_lib::host::Mcast> reduction_mcast;
     if (!use_mux) {
-        reduction_family.emplace(ttnn::prim::make_group_norm_mcast_family(
-            device,
-            mcast_groups,
+        reduction_mcast.emplace(
+            *device,
             ttnn::kernel_lib::host::McastConfig{
-                .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}}));
-        reduction_family->append_semaphores(program);
+                .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}},
+            all_reduction_cores,
+            num_cores_per_mcast_group,
+            ttnn::kernel_lib::host::McastFixedSenderConfig{},
+            ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
+        reduction_mcast->append_semaphores(program);
     }
 
     // Kernels are the stock welford GroupNorm kernels plus the shared fused-norm CCL forwarder. The
@@ -594,7 +598,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     if (!use_mux) {
         sender_reader_named_ct.emplace("reduction_mcast_ct_offset", sender_reader_ct.size());
         sender_reader_named_ct.emplace("reduction_mcast_rt_offset", 5 + 2 * num_cores_per_mcast_group);
-        reduction_family->append_compile_time_args_to(sender_reader_ct);
+        reduction_mcast->append_compile_time_args_to(sender_reader_ct);
     }
     const auto sender_reader_kernel_id = CreateKernel(
         program,
@@ -612,7 +616,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             TensorAccessorArgs(output_tensor.buffer()).append_to(receiver_reader_ct);
             receiver_named_ct.emplace("reduction_mcast_ct_offset", receiver_reader_ct.size());
             receiver_named_ct.emplace("reduction_mcast_rt_offset", 5);
-            reduction_family->append_compile_time_args_to(receiver_reader_ct);
+            reduction_mcast->append_compile_time_args_to(receiver_reader_ct);
         }
         receiver_reader_kernel_id = CreateKernel(
             program,
@@ -796,7 +800,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                     TT_FATAL(
                         rt.size() == 5 + 2 * num_cores_per_mcast_group,
                         "Local GroupNorm sender runtime prefix differs from its multicast offset");
-                    reduction_family->append_runtime_args_to(rt, core);
+                    reduction_mcast->append_runtime_args_to(rt, core);
                     SetRuntimeArgs(program, sender_reader_kernel_id, core, rt);
                     continue;
                 }
@@ -894,7 +898,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                     rt.push_back(static_cast<uint32_t>(sender_virtual.y));
                     SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
                 } else {
-                    reduction_family->append_runtime_args_to(rt, core);
+                    reduction_mcast->append_runtime_args_to(rt, core);
                     SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
                 }
             }

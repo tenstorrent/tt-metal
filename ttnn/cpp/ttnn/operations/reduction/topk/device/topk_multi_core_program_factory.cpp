@@ -400,12 +400,13 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     });
 
     // The final core multicasts readiness to local workers.
-    const ttnn::kernel_lib::host::Mcast2D final_readiness_mcast(
-        physical_device,
-        local_cores_range_set,
-        ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = final_core},
+    const ttnn::kernel_lib::host::Mcast final_readiness_mcast(
+        *physical_device,
         ttnn::kernel_lib::host::McastConfig{
-            .handshake = false, .data_ready = dataflow_kernel_lib::DataReadySignal::Flag});
+            .handshake = false, .data_ready = dataflow_kernel_lib::DataReadySignal::Flag},
+        local_cores_range_set,
+        /*receiver_group_size=*/local_cores_range_set.num_cores(),
+        ttnn::kernel_lib::host::McastExplicitSenderConfig{{{final_core}}});
 
     // Local reader - Data Input and Index Generation/Reading
     // Responsibility: Stream input tensor data from DRAM to local cores

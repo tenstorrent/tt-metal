@@ -165,24 +165,6 @@ int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     return 1;
 }
 
-kernel_lib::host::McastFamily make_group_norm_mcast_family(
-    tt::tt_metal::IDevice* device,
-    const std::vector<std::vector<tt::tt_metal::CoreCoord>>& groups,
-    const kernel_lib::host::McastConfig& config) {
-    kernel_lib::host::McastFamily family(device, config);
-    for (const auto& group : groups) {
-        TT_FATAL(!group.empty(), "GroupNorm reduction group must not be empty");
-        std::vector<tt::tt_metal::CoreRange> receivers;
-        receivers.reserve(group.size());
-        for (const auto& core : group) {
-            receivers.emplace_back(core, core);
-        }
-        family.add_group(
-            tt::tt_metal::CoreRangeSet(std::move(receivers)), std::vector<tt::tt_metal::CoreCoord>{group.front()});
-    }
-    return family;
-}
-
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width) {
     uint32_t current_position = 0;
     uint32_t max_tile_span = 0;

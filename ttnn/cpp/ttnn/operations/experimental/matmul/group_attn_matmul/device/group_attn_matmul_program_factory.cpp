@@ -116,24 +116,24 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
     CoreRangeSet mcast_receiver_cores = num_cores_to_corerangeset(
         Q_HEADS, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
     CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
-    // Partial bounding boxes contain filler cores whose reader exits without acknowledging; only the other active
-    // Q-head workers acknowledge each rotating sender.
-    const std::optional<uint32_t> in1_mcast_ack_count_override =
-        mcast_receiver_cores_bounding_box.size() > num_active_cores ? std::make_optional(num_active_cores - 1)
-                                                                    : std::nullopt;
+    // Partial bounding boxes contain filler cores whose reader exits without acknowledging.
     const auto mcast_sender_cores = num_cores_to_corerangeset(
         TILE_HEIGHT, operation_attributes.compute_with_storage_grid_size, operation_attributes.row_major);
     const tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     const tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
-    const ttnn::kernel_lib::host::Mcast2D in1_mcast(
-        device,
-        CoreRangeSet(mcast_receiver_cores_bounding_box),
-        ttnn::kernel_lib::host::Mcast2DRotatingSenderConfig{
-            .sender_grid = mcast_sender_cores,
-            .sender_order = operation_attributes.row_major ? ttnn::kernel_lib::host::Mcast2DSenderOrder::RowMajor
-                                                           : ttnn::kernel_lib::host::Mcast2DSenderOrder::ColumnMajor},
-        ttnn::kernel_lib::host::McastConfig{.noc = reader_noc, .ack_count_override = in1_mcast_ack_count_override});
+    const auto in1_mcast_grid = CoreRangeSet(mcast_receiver_cores_bounding_box);
+    const ttnn::kernel_lib::host::Mcast in1_mcast(
+        *device,
+        ttnn::kernel_lib::host::McastConfig{.noc = reader_noc, .handshake_cores = mcast_receiver_cores},
+        in1_mcast_grid,
+        /*receiver_group_size=*/in1_mcast_grid.num_cores(),
+        ttnn::kernel_lib::host::McastSenderGridConfig{
+            .sender_cores = mcast_sender_cores,
+            .sender_order = operation_attributes.row_major ? ttnn::kernel_lib::host::McastCoreOrder::RowMajor
+                                                           : ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor},
+        operation_attributes.row_major ? ttnn::kernel_lib::host::McastCoreOrder::RowMajor
+                                       : ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
 
     // ---- Circular buffers (sharded variants use CBDescriptor::buffer so the
     // framework patches the dynamic address on cache hit; CB total_size and

@@ -165,8 +165,10 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx)));
-    tt_l1_ptr uint32_t* current_dram_bank_id = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx + 1)));
+    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx)));
+    tt_l1_ptr uint32_t* current_dram_bank_id =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx + 1)));
     rt_args_idx += 2 * num_dram_shards_to_read;
 #endif  // IN1_DRAM_WIDTH_SHARDED
 

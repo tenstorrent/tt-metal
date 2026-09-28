@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Exact family membership, transport selection and protocol ordering."""
+"""Exact mcast membership, transport selection and protocol ordering."""
 
 import pytest
 import ttnn
@@ -8,6 +8,7 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
     attach_for_inspection,
     core_set,
     inspect_mcast_ct,
+    make_mcast,
     run_family_case,
 )
 
@@ -242,9 +243,8 @@ def test_compressed_external_sender_lifetime(device, noc, counter, column_major,
     senders = [coord(i % 8, i // 8) for i in range(31)]
     receivers = [coord(i, 6 if external_only else 0) for i in range(8)]
     config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0)
-    family = ttnn.McastFamily(device, config)
-    family.add_group(core_set(receivers), [ttnn.CoreCoord(*core) for core in senders])
-    _, kernel = attach_for_inspection(family, core_set(receivers + senders), config.noc)
+    mcast = make_mcast(device, [(receivers, senders)], config)
+    _, kernel = attach_for_inspection(mcast, core_set(receivers + senders), config.noc)
     metadata = inspect_mcast_ct(kernel)
     assert metadata["encoding"] != 0
     assert metadata["span"] == len(senders)
@@ -262,15 +262,15 @@ def test_group_attention_external_sender_argument_counts(device):
     senders = [(i // size.y, i % size.y) for i in range(32)]
     receivers = [(i // size.y, i % size.y) for i in range(10)]
     receiver_box = ttnn.CoreRangeSet([core_set(receivers).bounding_box()])
-    family = ttnn.Mcast2D(
+    mcast = ttnn.Mcast(
         device,
-        receiver_box,
-        ttnn.Mcast2DRotatingSenderConfig(
-            sender_grid=core_set(senders), sender_order=ttnn.Mcast2DSenderOrder.ColumnMajor
-        ),
         ttnn.McastConfig(),
+        receiver_box,
+        receiver_box.num_cores(),
+        ttnn.McastSenderGridConfig(core_set(senders), sender_order=ttnn.McastCoreOrder.ColumnMajor),
+        ttnn.McastCoreOrder.ColumnMajor,
     )
-    _, kernel = attach_for_inspection(family, core_set([(x, y) for x in range(size.x) for y in range(size.y)]))
+    _, kernel = attach_for_inspection(mcast, core_set([(x, y) for x in range(size.x) for y in range(size.y)]))
     metadata = inspect_mcast_ct(kernel)
     assert metadata["encoding"] != 0
     assert metadata["span"] == 32

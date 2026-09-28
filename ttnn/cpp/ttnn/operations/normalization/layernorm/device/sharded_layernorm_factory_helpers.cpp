@@ -1899,21 +1899,27 @@ void attach_multicast(
             mh::attach_absent(spec, prefix, readers);
             return;
         }
-        mh::McastConfig policy{.noc = config.reader_noc, .handshake = handshake, .data_ready = signal};
-        if (per_line) {
-            mh::Mcast1D family(
-                device,
-                receivers,
-                grid.row_wise ? mh::Mcast1DShape::PerRow : mh::Mcast1DShape::PerColumn,
-                mh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-                policy);
-            family.attach(spec, args, prefix, readers);
-        } else {
-            // Holes in a non-rectangular grid receive payloads, but do not acknowledge readiness.
-            policy.ack_count_override = grid.num_blocks - 1;
-            mh::Mcast2D family(device, receivers, mh::Mcast2DFixedSenderConfig{.sender = ranges.start_core}, policy);
-            family.attach(spec, args, prefix, readers);
-        }
+        const auto order = grid.row_wise ? mh::McastCoreOrder::RowMajor : mh::McastCoreOrder::ColumnMajor;
+        const auto bbox = receivers.bounding_box();
+        const uint32_t line_size =
+            grid.row_wise ? bbox.end_coord.x - bbox.start_coord.x + 1 : bbox.end_coord.y - bbox.start_coord.y + 1;
+        const std::optional<CoreRangeSet> handshake_cores =
+            handshake ? std::make_optional(ranges.all_cores.intersection(receivers)) : std::nullopt;
+        mh::McastSenderConfig senders =
+            per_line ? mh::McastSenderConfig{mh::McastFixedSenderConfig{}}
+                     : mh::McastSenderConfig{mh::McastExplicitSenderConfig{{{ranges.start_core}}}};
+        mh::Mcast mcast(
+            *device,
+            mh::McastConfig{
+                .noc = config.reader_noc,
+                .handshake = handshake,
+                .handshake_cores = handshake_cores,
+                .data_ready = signal},
+            receivers,
+            /*receiver_group_size=*/per_line ? line_size : receivers.num_cores(),
+            senders,
+            order);
+        mcast.attach(spec, args, prefix, readers);
     };
     if (!config.is_post_all_gather) {
         attach_channel(

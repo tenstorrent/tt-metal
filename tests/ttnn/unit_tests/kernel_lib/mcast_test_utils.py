@@ -23,6 +23,41 @@ def core_set(coords):
     )
 
 
+def _mcast_order(specs):
+    """Return the traversal that makes specs equal consecutive groups, if one exists."""
+    if not specs or any(len(receivers) != len(specs[0].receivers) for receivers, _ in specs):
+        return None
+    if any(len(senders) != len(specs[0].senders) for _, senders in specs):
+        return None
+    flattened = [core for receivers, _ in specs for core in receivers]
+    if len(set(flattened)) != len(flattened):
+        return None
+    if len(specs) == 1:
+        return ttnn.McastCoreOrder.RowMajor
+    expected_groups = [set(receivers) for receivers, _ in specs]
+    for order, key in (
+        (ttnn.McastCoreOrder.RowMajor, lambda core: (core[1], core[0])),
+        (ttnn.McastCoreOrder.ColumnMajor, lambda core: (core[0], core[1])),
+    ):
+        ordered = sorted(flattened, key=key)
+        size = len(specs[0].receivers)
+        if [set(ordered[i : i + size]) for i in range(0, len(ordered), size)] == expected_groups:
+            return order
+    return None
+
+
+def make_mcast(device, specs, config):
+    specs = [Group(*group) for group in specs]
+    order = _mcast_order(specs)
+    if order is None:
+        raise ValueError("Mcast requires equal consecutive receiver groups and equal sender counts")
+    receivers = core_set([core for group in specs for core in group.receivers])
+    sender_config = ttnn.McastExplicitSenderConfig(
+        [[ttnn.CoreCoord(*core) for core in group.senders] for group in specs]
+    )
+    return ttnn.Mcast(device, config, receivers, len(specs[0].receivers), sender_config, order)
+
+
 def make_cb(index, cores, *, pages=1, page_bytes=TILE_BYTES, dtype=ttnn.bfloat16):
     return ttnn.CBDescriptor(
         total_size=pages * page_bytes,
@@ -40,7 +75,7 @@ def tile_pattern(pages):
     return values.to(torch.bfloat16).reshape(pages, 1, 32, 32)
 
 
-def attach_for_inspection(family, cores, noc=ttnn.NOC.NOC_0, semaphores=()):
+def attach_for_inspection(mcast, cores, noc=ttnn.NOC.NOC_0, semaphores=()):
     kernel = ttnn.KernelDescriptor(
         kernel_source="inspection-only.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -48,7 +83,7 @@ def attach_for_inspection(family, cores, noc=ttnn.NOC.NOC_0, semaphores=()):
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=noc),
     )
     descriptor = ttnn.ProgramDescriptor(semaphores=list(semaphores))
-    family.attach(descriptor, "mcast", [kernel])
+    mcast.attach(descriptor, "mcast", [kernel])
     return descriptor, kernel
 
 
@@ -158,8 +193,32 @@ def run_family_case(
     delayed=False,
     min_rectangles=None,
 ):
-    """Build a real family, then exercise its attached kernel arguments."""
+    """Build a unified multicast channel, then exercise its attached kernel arguments."""
     specs = [Group(*group) for group in specs]
+    if _mcast_order(specs) is None:
+        # Arbitrary unequal families are intentionally no longer public. Preserve
+        # device protocol coverage by exercising each representable group.
+        for spec in specs:
+            run_family_case(
+                device,
+                [spec],
+                noc=noc,
+                counter=counter,
+                control=control,
+                caller_managed=caller_managed,
+                receiver_caller_managed=receiver_caller_managed,
+                dynamic=dynamic,
+                handshake=handshake,
+                rounds=rounds,
+                zero_ack=zero_ack,
+                adopted=adopted,
+                chain_link=chain_link,
+                large=large,
+                mixed_events=mixed_events,
+                delayed=delayed,
+                min_rectangles=min_rectangles,
+            )
+        return
     chained = chain_link and any(
         len(receivers)
         != (max(x for x, _ in receivers) - min(x for x, _ in receivers) + 1)
@@ -170,17 +229,15 @@ def run_family_case(
     config = ttnn.McastConfig(
         noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
         handshake=handshake,
+        handshake_cores=core_set([]) if zero_ack else None,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
-        ack_count_override=0 if zero_ack else None,
         sem_ids=list(range(semaphore_count)) if adopted else None,
         irregular_receiver_set_mode=(ttnn.TransferMode.ChainUnicast if chain_link else ttnn.TransferMode.Multicast),
     )
-    family = ttnn.McastFamily(device, config)
-    for receivers, senders in specs:
-        family.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
+    mcast = make_mcast(device, specs, config)
     _run_channel(
         device,
-        family,
+        mcast,
         specs,
         config,
         rounds=rounds,
@@ -198,7 +255,7 @@ def run_family_case(
     )
 
 
-def run_wrapper_case(
+def run_mcast_case(
     device,
     *,
     width,
@@ -212,7 +269,7 @@ def run_wrapper_case(
     handshake=True,
     kind="rectangle",
 ):
-    """Use a wrapper's host assembly with the same payload checks as a family."""
+    """Use unified host assembly with the same payload checks as a mcast."""
 
     def coords(indices):
         return [(0, i) if kind == "column" else (i, 0) for i in indices]
@@ -226,26 +283,8 @@ def run_wrapper_case(
         handshake=handshake,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
     )
-    if kind == "rectangle":
-        sender_config = (
-            ttnn.Mcast2DRotatingSenderConfig(sender_grid=core_set(group.senders))
-            if rotating
-            else ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(*group.senders[0]))
-        )
-        helper = ttnn.Mcast2D(device, core_set(group.receivers), sender_config, config)
-    else:
-        sender_config = (
-            ttnn.Mcast1DRotatingSenderConfig(sender_grid=core_set(group.senders))
-            if rotating
-            else ttnn.Mcast1DFixedSenderConfig(starting_sender_index=senders[0])
-        )
-        helper = ttnn.Mcast1D(
-            device,
-            core_set(group.receivers),
-            ttnn.Mcast1DShape.PerColumn if kind == "column" else ttnn.Mcast1DShape.PerRow,
-            sender_config,
-            config,
-        )
+    sender_config = ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*sender) for sender in group.senders]])
+    helper = ttnn.Mcast(device, config, core_set(group.receivers), len(group.receivers), sender_config)
     _run_channel(
         device,
         helper,
@@ -265,7 +304,7 @@ def run_wrapper_case(
 
 def _run_channel(
     device,
-    family,
+    mcast,
     specs,
     config,
     *,
@@ -356,24 +395,23 @@ def _run_channel(
         )
     semaphores = (
         [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=family.participating_cores(), initial_value=0)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=mcast.participating_cores(), initial_value=0)
             for i in config.sem_ids
         ]
         if adopted
         else []
     )
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores)
-    family.attach(descriptor, "mcast", kernels[:1] if zero_ack else kernels)
+    mcast.attach(descriptor, "mcast", kernels[:1] if zero_ack else kernels)
     attached_ct = inspect_mcast_ct(kernels[0])
     if zero_ack:
-        passive = ttnn.McastFamily(
+        passive = make_mcast(
             device,
+            specs,
             ttnn.McastConfig(
                 noc=config.noc, handshake=False, data_ready=config.data_ready, sem_ids=[attached_ct["data_ready"]]
             ),
         )
-        for receivers, senders in specs:
-            passive.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
         passive.attach(descriptor, "mcast", kernels[1:])
     if expected_chain is not None:
         assert (attached_ct["flags"] >> 3) & 3 == int(expected_chain)
@@ -386,9 +424,7 @@ def _run_channel(
     if min_rectangles is not None:
         # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
         # Chain arguments omit rectangles; inspect the same geometry in multicast mode.
-        geometry_family = ttnn.McastFamily(device, ttnn.McastConfig(noc=config.noc))
-        for receivers, senders in specs:
-            geometry_family.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
+        geometry_family = make_mcast(device, specs, ttnn.McastConfig(noc=config.noc))
         _, geometry_kernel = attach_for_inspection(geometry_family, participants, config.noc)
         for _, senders in specs:
             x, y = senders[0]
@@ -396,8 +432,13 @@ def _run_channel(
     for kernel in kernels:
         ttnn.attach_absent(kernel, "absent_mcast")
     if with_barrier:
-        barrier = ttnn.McastFamily(device, ttnn.McastConfig(noc=config.noc))
-        barrier.add_group(participants, [ttnn.CoreCoord(0, 0)])
+        barrier = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=config.noc),
+            participants,
+            participants.num_cores(),
+            ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(0, 0)]]),
+        )
         barrier.attach(descriptor, "barrier_mcast", kernels)
     else:
         for kernel in kernels:

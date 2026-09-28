@@ -13,15 +13,23 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
     cores = core_set(coords)
     signal = ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag
     noc_id = ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0
-    family = ttnn.McastFamily(
+    receiver_coords = coords if includes_sender else coords[1:]
+    mcast = ttnn.Mcast(
         device,
         ttnn.McastConfig(noc=noc_id, data_ready=signal, irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast),
+        core_set(receiver_coords),
+        len(receiver_coords),
+        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*coords[0])]]),
     )
-    family.add_group(core_set(coords if includes_sender else coords[1:]), [ttnn.CoreCoord(*coords[0])])
     reverse = None
     if reverse_channel:
-        reverse = ttnn.McastFamily(device, ttnn.McastConfig(noc=noc_id, data_ready=signal))
-        reverse.add_group(core_set([coords[0]]), [ttnn.CoreCoord(*coords[2])])
+        reverse = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=noc_id, data_ready=signal),
+            core_set([coords[0]]),
+            1,
+            ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*coords[2])]]),
+        )
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([3, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
@@ -48,7 +56,7 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
         for i, size in enumerate([65536, 65536, 2048])
     ]
     program = ttnn.ProgramDescriptor(cbs=cbs)
-    family.attach(program, "chain_mcast", [kernel])
+    mcast.attach(program, "chain_mcast", [kernel])
     offset = dict(kernel.named_compile_time_args)["chain_mcast_ct_offset"]
     assert len(kernel.compile_time_args[offset:]) == 4 and kernel.compile_time_args[offset + 3] == 2
     if reverse:

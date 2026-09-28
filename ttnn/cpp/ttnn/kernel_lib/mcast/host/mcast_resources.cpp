@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 
 #include <algorithm>
 #include <tt_stl/assert.hpp>
@@ -12,16 +12,16 @@
 namespace ttnn::kernel_lib::host {
 using namespace tt::tt_metal;
 
-void McastFamily::require_program_bound_() const {
+void McastImpl::require_program_bound_() const {
     require_arguments_prepared_();
     TT_FATAL(bound_program_id_.has_value(), "Call append_semaphores(program) before appending multicast arguments");
 }
 
-void McastFamily::require_unbound_() const {
+void McastImpl::require_unbound_() const {
     TT_FATAL(!bound_program_id_, "A Program-bound multicast family cannot use another attachment or legacy query path");
 }
 
-void McastFamily::validate_semaphores_present_and_zeroed_(
+void McastImpl::validate_semaphores_present_and_zeroed_(
     std::span<const SemaphoreDescriptor> existing, const std::array<uint32_t, 3>& ids) const {
     for (uint32_t role = 0; role < required_semaphores_(); ++role) {
         TT_FATAL(ids[role] < NUM_SEMAPHORES, "No valid multicast semaphore slot available");
@@ -40,7 +40,7 @@ void McastFamily::validate_semaphores_present_and_zeroed_(
     }
 }
 
-std::array<uint32_t, 3> McastFamily::resolve_semaphore_ids_(std::span<const SemaphoreDescriptor> existing) const {
+std::array<uint32_t, 3> McastImpl::resolve_semaphore_ids_(std::span<const SemaphoreDescriptor> existing) const {
     std::array<uint32_t, 3> ids{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     const auto count = required_semaphores_();
     if (cfg_.sem_ids) {
@@ -74,7 +74,7 @@ std::array<uint32_t, 3> McastFamily::resolve_semaphore_ids_(std::span<const Sema
     return ids;
 }
 
-void McastFamily::append_semaphores(Program& program) {
+void McastImpl::append_semaphores(Program& program) {
     prepare_arguments_();
     auto& impl = program.impl();
     TT_FATAL(!impl.created_from_spec(), "Multicast Program binding requires a regular Program");
@@ -108,8 +108,5 @@ void McastFamily::append_semaphores(Program& program) {
     program_semaphore_ids_ = ids;
     bound_program_id_ = impl.get_id();
 }
-
-void Mcast1D::append_semaphores(Program& program) { family_->append_semaphores(program); }
-void Mcast2D::append_semaphores(Program& program) { family_->append_semaphores(program); }
 
 }  // namespace ttnn::kernel_lib::host

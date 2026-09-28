@@ -432,11 +432,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .initial_value = 0});
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const auto reduction_family = make_group_norm_mcast_family(
-        device,
-        mcast_groups,
+    const ttnn::kernel_lib::host::Mcast reduction_mcast(
+        *device,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}});
+            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}},
+        all_cores,
+        num_cores_per_mcast_group,
+        ttnn::kernel_lib::host::McastFixedSenderConfig{},
+        row_wise ? ttnn::kernel_lib::host::McastCoreOrder::RowMajor
+                 : ttnn::kernel_lib::host::McastCoreOrder::ColumnMajor);
 
     std::map<std::string, std::string> reader_mcast_sender_defines;
     std::map<std::string, std::string> reader_mcast_receiver_defines;
@@ -1259,10 +1263,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
     }
 
-    // Partial-statistics readiness is consumed before gathering; this family delivers the result.
+    // Partial-statistics readiness is consumed before gathering; this multicast delivers the result.
     std::vector<std::reference_wrapper<KernelDescriptor>> reduction_kernels{reader_mcast_sender_desc};
     reduction_kernels.emplace_back(reader_mcast_receiver_desc);
-    reduction_family.attach(desc, "reduction_mcast", reduction_kernels);
+    reduction_mcast.attach(desc, "reduction_mcast", reduction_kernels);
     desc.kernels.push_back(std::move(reader_mcast_sender_desc));
     desc.kernels.push_back(std::move(reader_mcast_receiver_desc));
     desc.kernels.push_back(std::move(writer_desc));

@@ -610,7 +610,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         act_matrix_height_ntiles,
         per_core_out_matrix_height_ntiles);
     uint32_t total_noop_cores = total_num_cores_per_weight_slice - parallelization_config.num_cores_nhw;
-    uint32_t total_active_num_cores = parallelization_config.num_cores_nhw * num_weight_slices_width;
     TT_FATAL(!block_sharded || total_noop_cores == 0, "All cores should be active for block sharded convs");
 
     if (has_bias) {
@@ -760,33 +759,31 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // The block-sharded output grid is produced by determine_output_parallel_config as one dense,
     // zero-anchored rectangle. The weights channel uses one fixed sender per row/column of that output
     // grid; input-only split-reader cores run the sender kernel with skip_work and do not participate.
-    std::optional<ttnn::kernel_lib::host::Mcast1D> weights_mcast_1d;
+    namespace mcast = ttnn::kernel_lib::host;
+    std::optional<mcast::Mcast> weights_mcast;
     if (block_sharded && !skip_weights_mcast) {
         const auto output_bbox = output_cores.bounding_box();
         TT_FATAL(
             output_cores.size() == 1 && output_bbox.start_coord == CoreCoord(0, 0),
             "Block-sharded Conv2D weights multicast requires one dense, zero-anchored output grid");
-        weights_mcast_1d.emplace(
-            device,
+        weights_mcast.emplace(
+            *device,
+            mcast::McastConfig{.noc = writer_mcast_noc},
             output_cores,
-            transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
-                            : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
-            ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-            ttnn::kernel_lib::host::McastConfig{
-                .noc = writer_mcast_noc,
-            });
+            /*receiver_group_size=*/transpose_mcast ? num_cores_x : num_cores_y,
+            mcast::McastFixedSenderConfig{},
+            transpose_mcast ? mcast::McastCoreOrder::RowMajor : mcast::McastCoreOrder::ColumnMajor);
     }
 
     // The height-sharded/default weights channel is one sender at (0,0) broadcasting to the full
     // rectangular grid. Some rectangle members are noop cores, so only active receivers acknowledge.
-    std::optional<ttnn::kernel_lib::host::Mcast2D> weights_mcast_2d;
     if (!block_sharded && !skip_weights_mcast) {
-        weights_mcast_2d.emplace(
-            device,
+        weights_mcast.emplace(
+            *device,
+            mcast::McastConfig{.noc = writer_mcast_noc, .handshake_cores = input_cores},
             all_cores,
-            ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = top_left_core},
-            ttnn::kernel_lib::host::McastConfig{
-                .noc = writer_mcast_noc, .ack_count_override = total_active_num_cores - 1});
+            /*receiver_group_size=*/all_cores.num_cores(),
+            mcast::McastExplicitSenderConfig{{{top_left_core}}});
     }
 
     if (split_reader_cb_shared) {
@@ -1431,11 +1428,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         ttnn::kernel_lib::host::attach_absent(writer_mcast_sender_desc, "weights_mcast");
     } else {
         const std::array weights_kernels{std::ref(writer_mcast_sender_desc), std::ref(writer_mcast_receiver_desc)};
-        if (block_sharded) {
-            weights_mcast_1d->attach(desc, "weights_mcast", weights_kernels);
-        } else {
-            weights_mcast_2d->attach(desc, "weights_mcast", weights_kernels);
-        }
+        weights_mcast->attach(desc, "weights_mcast", weights_kernels);
     }
     desc.kernels.push_back(std::move(writer_mcast_sender_desc));
     if (create_writer_mcast_receiver) {

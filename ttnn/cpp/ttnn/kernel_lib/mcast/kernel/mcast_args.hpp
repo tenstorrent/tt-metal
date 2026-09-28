@@ -13,7 +13,7 @@
 namespace dataflow_kernel_lib {
 
 // =============================================================================
-// McastArgs — the KERNEL counterpart of host::McastFamily (including Mcast1D / Mcast2D wrappers).
+// McastArgs — the kernel counterpart of the host Mcast channel.
 // =============================================================================
 // Construct McastArgs with the starting offsets of the host helper's compile-time and runtime arguments.
 // Sender kernels call sender(noc), receiver kernels call receiver(noc), and rotating receivers pass the
