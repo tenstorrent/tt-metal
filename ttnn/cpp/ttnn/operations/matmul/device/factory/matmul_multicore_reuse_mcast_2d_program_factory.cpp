@@ -766,14 +766,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // (matmul_multicore_reuse_mcast_1d_program_factory.cpp) and the sibling matmul factories. WH/BH keep the
     // explicit processor/noc placement. (quasar_porting.md §4/§7)
     const auto dm_hw_config = [](tt_metal::DataMovementProcessor proc,
-                                 tt_metal::NOC noc) -> tt::tt_metal::experimental::DataMovementHardwareConfig {
-        return tt::tt_metal::experimental::DataMovementHardwareConfig{
-            .config_1xx =
-                tt::tt_metal::experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
-                    .processor = proc, .noc = noc},
-            .config_2xx =
-                tt::tt_metal::experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
-                    .disable_dfb_implicit_sync_for_all = true},
+                                 tt_metal::NOC noc) -> DataMovementHardwareConfig {
+        return DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = proc, .noc = noc},
+            .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
         };
     };
     // Arch flag for the mcast-rectangle normalization below (single-NOC Quasar needs ascending [min..max]).
