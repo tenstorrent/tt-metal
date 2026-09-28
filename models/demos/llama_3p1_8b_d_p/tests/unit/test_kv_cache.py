@@ -353,7 +353,7 @@ def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
 ):
     live = []
 
-    def fake_zeros(shape, **metadata):
+    def fake_empty(shape, *metadata):
         if len(live) == 1:  # the K cache fit; fail the V cache
             raise RuntimeError(message)
         tensor = SimpleNamespace(deallocate=lambda force: live.remove(tensor))
@@ -362,7 +362,10 @@ def test_allocate_kv_cache_failure_explains_num_users_and_frees_the_first_cache(
 
     monkeypatch.setattr(cache_module, "_validate_target", lambda *args, **kwargs: None)
     monkeypatch.setattr(cache_module, "_cache_memory_config", lambda mesh_device: None)
-    monkeypatch.setattr(cache_module.ttnn, "zeros", fake_zeros)
+    # The allocation is ttnn.empty followed by an in-place fill, so the allocating call is what has
+    # to fail here; intercepting only the zeroing would let both buffers through.
+    monkeypatch.setattr(cache_module.ttnn, "empty", fake_empty)
+    monkeypatch.setattr(cache_module.ttnn, "fill", lambda tensor, value, **kwargs: tensor)
 
     with expect_error(RuntimeError, "num_users=64" if names_num_users else message):
         allocate_kv_cache(object(), object(), num_users=64, max_seq_len=8192)

@@ -142,7 +142,7 @@ chunk is a fixed 1024 tokens whatever the capacity, which is why the figure does
 
 The 1 GiB default reserve is therefore mostly placement margin rather than activation space.
 
-## Allocation still stages on the host, and that is the binding limit
+## Allocation is device-side, and staging was the binding limit
 
 `allocate_kv_cache` used to build the cache as an fp32 torch tensor and upload it: 4 B/element
 against 1.0625 on device, so the host, not DRAM, capped every auto-sized deployment. Zeroing with
@@ -174,10 +174,20 @@ The figure does not fall as capacity rises, because slots x capacity is what DRA
 auto-sized allocation stages about the same 52 GiB whatever `max_seq_len` is. It fits the nodes these
 measurements ran on and would not fit a 62 GiB host.
 
-The fix is `ttnn.empty` for the device allocation plus an in-place `ttnn.fill` to zero it, which
-`ttnn.fill` supports for `BFLOAT8_B` in `TILE` layout with a preallocated `output_tensor`. That is
-not yet done here: it needs a Galaxy to confirm `ttnn.empty` accepts the `NdShard` memory config and
-that the aliased fill is sound, rather than being asserted from the signature.
+So `allocate_kv_cache` now uses `ttnn.empty` for the device allocation and an in-place `ttnn.fill`
+to zero it. Measured on a 4x8 Blackhole Galaxy at a 1,677,721,600-element cache (1.66 GiB/chip):
+
+| | Result |
+| --- | --- |
+| peak host RSS added by `ttnn.empty` | **0.00 GB** |
+| device DRAM delta across allocate and zero | 1.66 GiB/chip, i.e. one buffer and no transient copy |
+| in-place fill to a 7.0 sentinel | exact on all 32 chips |
+| in-place fill to 0.0 | exact on all 32 chips |
+
+The sentinel matters: `ttnn.empty` returns uninitialised memory, so filling to a value that could not
+be mistaken for freshly-zeroed DRAM is what proves the fill actually writes. Zeroing is not optional
+even though `zero_padded_kv_cache` clears page padding on every write, because attention admits any
+row below the populated end and tests read a fresh cache directly.
 
 ## Using it
 
