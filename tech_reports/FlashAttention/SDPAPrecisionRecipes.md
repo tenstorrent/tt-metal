@@ -79,6 +79,21 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 - A recipe cannot be combined with `compute_kernel_config` or `exp_approx_mode=False`, and `scale` must be the
   default 1/√D. Unsupported arguments raise before dispatch; there is no fallback.
 
+## Ring and exp ring attention
+
+`ring_joint_scaled_dot_product_attention` and `exp_ring_joint_scaled_dot_product_attention` take the same
+`precision`. FAST runs the legacy ring kernels and keeps their chunk limits (ring: Q 128-320, K 256/384/512,
+D 64/128/256; exp ring: K512, D128). COMPENSATED through LOW_PRECISION keep one online-softmax state per Q
+chunk in L1 across all ring steps. They mask key tails (shard padding, `logical_n`, the joint tail) and
+normalize once, on the last active step. Exp ring rows with several head segments (up to three passes) run
+pass-outer and ring-inner.
+
+- Noncausal only; cache, window and sink features are rejected.
+- `logical_n` (and ring's `logical_l`) may be a host scalar or a single-value device tensor, so a captured
+  trace can replay with new lengths.
+- For LOW_PRECISION, prepare K/V before they are communicated.
+- Ring's third output is internal scratch, not an LSE.
+
 ## LOW_PRECISION inputs
 
 SDPA never rounds, checks or converts its inputs. For LOW_PRECISION, the caller calls:
