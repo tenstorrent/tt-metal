@@ -1014,9 +1014,10 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
     uint64_t bytes_per_stream =
         static_cast<uint64_t>(cfg.eth_num_wl_loops) * cfg.eth_pages_per_bank * cfg.eth_page_size;
 
-    // The active-ETH wall clock runs at 1 GHz (ETH_CLOCK_CYCLE_1MS = 1,000,000),
-    // independently of the 1.35 GHz Tensix AI clock.
-    constexpr double kEthWallClockGHz = 1.0;
+    // Blackhole's active-ETH wall-clock counter runs in the device AICLK domain.
+    // Use the live clock rate because AICLK is DVFS-controlled (800 MHz idle,
+    // nominally 1.35 GHz while busy).
+    const double eth_wall_clock_ghz = static_cast<double>(device->get_clock_rate_mhz()) / 1000.0;
 
     double total_bw_bpc = 0.0;  // bytes/cycle
     uint32_t reported = 0;
@@ -1051,7 +1052,7 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
         }
         uint64_t cycles = t1 - t0;
         double bw_bpc = static_cast<double>(bytes_per_stream) / static_cast<double>(cycles);
-        double bw_gbps = bw_bpc * kEthWallClockGHz;
+        double bw_gbps = bw_bpc * eth_wall_clock_ghz;
         total_bw_bpc += bw_bpc;
         ++reported;
 
@@ -1083,8 +1084,8 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
             device->id(),
             reported,
             total_bw_bpc,
-            total_bw_bpc * kEthWallClockGHz,
-            kEthWallClockGHz);
+            total_bw_bpc * eth_wall_clock_ghz,
+            eth_wall_clock_ghz);
     }
     return reported == assignments.size();
 }
