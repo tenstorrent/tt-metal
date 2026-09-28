@@ -335,6 +335,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::TANH:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
+                return {
+                    "tanh_tt_poly_bf16_tile_init<false>();", fmt::format("tanh_tt_poly_bf16_tile<false>({});", idst)};
+            }
+#endif
             return {
                 fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
@@ -906,7 +912,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::GELU_TANH: return {"gelu_tanh_tile_init();", fmt::format("gelu_tanh_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
-        case UnaryOpType::TANH: return {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)};
+        case UnaryOpType::TANH:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"tanh_tt_poly_bf16_tile_init();", fmt::format("tanh_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)};
         case UnaryOpType::RELU:
 #if !defined(TT_POLY_LLK_DISABLE)
             if (input_dtype == DataType::BFLOAT16) {
@@ -1215,7 +1227,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
 #endif
             return {"digamma_tile_init();", fmt::format("digamma_tile({});", idst)};
-        case UnaryOpType::TANHSHRINK: return {"tanhshrink_tile_init();", fmt::format("tanhshrink_tile({});", idst)};
+        case UnaryOpType::TANHSHRINK:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"tanhshrink_tt_poly_bf16_tile_init();", fmt::format("tanhshrink_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"tanhshrink_tile_init();", fmt::format("tanhshrink_tile({});", idst)};
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
 }

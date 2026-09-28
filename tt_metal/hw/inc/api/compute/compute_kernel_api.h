@@ -1433,4 +1433,71 @@ ALWI void sigmoid_tt_poly_bf16_tile_init() {
 
 #undef TT_POLY_SIGMOID_BF16_ROUTE_ACTIVE
 
+#if !defined(TT_POLY_LLK_DISABLE) &&                                                                                 \
+    ((defined(TT_POLY_TANH_BF16_AVAILABLE)) && defined(TT_METAL_SFPU_SINGLE_TILE_DST) &&                             \
+     TT_METAL_SFPU_SINGLE_TILE_DST == 1 && defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1 && \
+     defined(SFPU_OP_PROGRAM_INIT_0))
+#define TT_POLY_TANH_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_TANH_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tanh_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_TANH_BF16_ROUTE_ACTIVE
+    tanh_tile<fast_and_approx, is_fp32_dest_acc_en>(idst);
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        tanh_tile<fast_and_approx, is_fp32_dest_acc_en>(idst);
+    } else {
+        if (idst != 0) {
+            tanh_tile_init<fast_and_approx, is_fp32_dest_acc_en>();
+            tanh_tile<fast_and_approx, is_fp32_dest_acc_en>(idst);
+#ifndef ARCH_QUASAR
+            MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::init_tanh_tt_poly_bf16, (fast_and_approx, is_fp32_dest_acc_en)));
+#else
+            MATH(SFPU_UNARY_INIT(tanh));
+#endif
+            return;
+        }
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_tanh_tt_poly_bf16,
+            (32 /* ITERATIONS */),
+            idst,
+            VectorMode::None));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tanh_tt_poly_bf16_tile_init() {
+#if !TT_POLY_TANH_BF16_ROUTE_ACTIVE
+    tanh_tile_init<fast_and_approx, is_fp32_dest_acc_en>();
+#else
+    if constexpr (is_fp32_dest_acc_en) {
+        tanh_tile_init<fast_and_approx, is_fp32_dest_acc_en>();
+    }
+#endif
+}
+
+/** Initialize the selected single-tile program once, before its tile loop. */
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void tanh_tt_poly_bf16_program_init() {
+#if TT_POLY_TANH_BF16_ROUTE_ACTIVE
+    if constexpr (!(is_fp32_dest_acc_en)) {
+#ifndef ARCH_QUASAR
+        MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::init_tanh_tt_poly_bf16, (fast_and_approx, is_fp32_dest_acc_en)));
+#else
+        MATH(SFPU_UNARY_INIT(tanh));
+#endif
+    }
+#endif
+}
+
+#undef TT_POLY_TANH_BF16_ROUTE_ACTIVE
+
 }  // namespace ckernel

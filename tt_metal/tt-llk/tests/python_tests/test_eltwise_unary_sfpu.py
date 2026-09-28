@@ -1408,6 +1408,8 @@ _TT_POLY_FP32_DEST = {
     "sigmoid": (),
     "softsign": (),
     "sqrt": (),
+    "tanh": (),
+    "tanhshrink": (),
     "multigammaln_p4": ("blackhole", "wormhole"),
 }
 _TT_POLY_COPY_REBASE = {}
@@ -1597,6 +1599,16 @@ _GENERATED_UNARY_CASES = [
         "ckernel_sfpu_softsign.h",
     ),
     (MathOperation.Sqrt, "sqrt", True, True, 32, "None", "ckernel_sfpu_sqrt.h"),
+    (MathOperation.Tanh, "tanh", True, True, 32, "None", "ckernel_sfpu_tanh.h"),
+    (
+        MathOperation.Tanhshrink,
+        "tanhshrink",
+        True,
+        True,
+        8,
+        "RC",
+        "ckernel_sfpu_tanhshrink.h",
+    ),
 ]
 
 
@@ -1875,6 +1887,8 @@ _TT_POLY_PERF_OPERATIONS = (
     "sigmoid",
     "softsign",
     "sqrt",
+    "tanh",
+    "tanhshrink",
 )
 
 _TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
@@ -2125,4 +2139,6 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "sigmoid",
     "softsign",
     "sqrt",
+    "tanh",
+    "tanhshrink",
 )
