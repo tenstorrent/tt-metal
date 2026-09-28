@@ -15,11 +15,22 @@ import ttnn
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.qwen38_27b_qb2.tt.model import Qwen38Model
 
+# Mirrors FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
+# tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B), the same way
+# conftest.py does. Not bound to Python; update here if the C++ constants change.
+_MAX_PACKET_PAYLOAD_BYTES = {"wormhole_b0": 7 * 1088, "blackhole": 14 * 1088}
+
 
 def configure_fabric(*, payload_bytes=8192):
-    """Configure the measured TP4 ring before the caller opens its mesh."""
+    """Configure the measured ring before the caller opens its mesh.
+
+    The QB2 measurement picked 8192 B, which sits under Blackhole's 15232 B ceiling but over
+    Wormhole's 7616 B. Clamp instead of failing so a T3K gets the largest packet its ethernet
+    datamover accepts.
+    """
     router = ttnn.FabricRouterConfig()
-    router.max_packet_payload_size_bytes = payload_bytes
+    arch_max = _MAX_PACKET_PAYLOAD_BYTES.get(ttnn.get_arch_name())
+    router.max_packet_payload_size_bytes = min(payload_bytes, arch_max) if arch_max else payload_bytes
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
 
 
@@ -43,7 +54,9 @@ class Qwen38Generator:
             raise ValueError("Unknown common sampling strategy")
         args.model_config = {
             "SAMPLING_AG_CONFIG": dict(
-                allow_force_argmax=sampling_strategy == "argmax", num_links=2, topology=ttnn.Topology.Ring
+                allow_force_argmax=sampling_strategy == "argmax",
+                num_links=model.num_links,
+                topology=ttnn.Topology.Ring,
             )
         }
         self.sampling_strategy = sampling_strategy

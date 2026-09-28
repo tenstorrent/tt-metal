@@ -42,6 +42,11 @@ _TP_POLICY = {
 }
 
 
+def tp_policy(tp):
+    """Platform deltas for callers that hold no decoder, such as the embedding all-gather."""
+    return _TP_POLICY.get(tp, {})
+
+
 def kv_head_owners(num_kv_heads, tp):
     """Device index -> KV head index, or None when the heads shard evenly.
 
