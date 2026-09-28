@@ -1368,7 +1368,15 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 
 _TT_POLY_PACK_CONFIGS = {}
 _TT_POLY_NATIVE_CALLS = {}
-_TT_POLY_FP32_DEST = {"erf": (), "erfc": (), "exp2": (), "expm1": ()}
+_TT_POLY_FP32_DEST = {
+    "acos": (),
+    "acosh": ("blackhole", "wormhole"),
+    "atanh": (),
+    "erf": (),
+    "erfc": (),
+    "exp2": (),
+    "expm1": (),
+}
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ()
 _TT_POLY_ADAPTER_OPERATIONS = {}
@@ -1448,6 +1456,33 @@ class _TTPolyGeneratedBF16(TemplateParameter):
 
 
 _GENERATED_UNARY_CASES = [
+    (
+        MathOperation.Acos,
+        "acos",
+        False,
+        False,
+        32,
+        "None",
+        "ckernel_sfpu_trigonometry.h",
+    ),
+    (
+        MathOperation.Acosh,
+        "acosh",
+        True,
+        False,
+        32,
+        "None",
+        "ckernel_sfpu_trigonometry.h",
+    ),
+    (
+        MathOperation.Atanh,
+        "atanh",
+        False,
+        False,
+        32,
+        "None",
+        "ckernel_sfpu_trigonometry.h",
+    ),
     (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
@@ -1501,7 +1536,7 @@ def test_tt_poly_generated_bf16_llk(
     )
 
 
-_TT_POLY_PERF_OPERATIONS = ("erf", "erfc", "exp2", "expm1")
+_TT_POLY_PERF_OPERATIONS = ("acos", "acosh", "atanh", "erf", "erfc", "exp2", "expm1")
 
 _TT_POLY_SCALAR_PERF_ALIASES = {"sigmoid_accurate": "sigmoid"}
 
@@ -1722,4 +1757,12 @@ def _tt_poly_scalar_perf_binding(operation, dest_acc):
     return _TTPolyStockScalar(operation)
 
 
-_TT_POLY_SCALAR_PERF_OPERATIONS = ("erf", "erfc", "exp2", "expm1")
+_TT_POLY_SCALAR_PERF_OPERATIONS = (
+    "acos",
+    "acosh",
+    "atanh",
+    "erf",
+    "erfc",
+    "exp2",
+    "expm1",
+)
