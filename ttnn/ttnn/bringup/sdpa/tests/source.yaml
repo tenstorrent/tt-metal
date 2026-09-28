@@ -1,0 +1,34 @@
+# The source op's own tests (ttnn.transformer.scaled_dot_product_attention and chunked_scaled_dot_product_attention),
+# run in place against this fork (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the
+# bringup-fork-op skill, "Carry the source op's tests".
+#
+# The fork copies the whole transformer/sdpa folder, so it also binds the joint, ring, MLA and sparse variants; only
+# the two plain entry points are swapped and carried here (the paths a GQA model's prefill uses). All entries are
+# single-device (the `device` fixture), which this box (4x Blackhole p150b) runs.
+#
+# Excluded: the perf/benchmark tests (timing, no check); joint_sdpa (another op in the folder); the exhaustive
+# grids of the nightly file (test_sdpa_tt's 180 dtype x placement x chunk cases, test_sdpa_tt_padded's 240,
+# test_sdpa_noncausal*'s ~220 masked/non-causal cases): a bf16 DRAM k128 slice of test_sdpa_tt is kept, and the
+# sanity-tier file covers non-causal, a random bias mask and streaming parity; the traced chunked cases.
+#
+# Baseline 118 tests: 107 passed, 11 skipped, 0 failed on both the original and the fork, no gaps. The skips are the
+# tests' own (nh=8 q128/k128 "Can cause OOM if profiling is enabled", q192 cases whose s is not a multiple of 192).
+# Recording took about 11 minutes, one entry at a time; a check (fork only, warm) about 5.5 minutes.
+upstream_sha: 99f7e834cea8bc42f0b478b9cc59a7b89f2f9c1a
+swap:
+  ttnn.transformer.scaled_dot_product_attention: ttnn.bringup.scaled_dot_product_attention
+  ttnn.transformer.chunked_scaled_dot_product_attention: ttnn.bringup.chunked_scaled_dot_product_attention
+tests:
+  - path: tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+    why: "the sanity-tier file: causal (and with the program cache), non-causal, non-causal with a random bias mask, sliding window, sliding-window streaming vs non-streaming parity, attention sink"
+  - path: tests/ttnn/unit_tests/operations/sdpa/test_sdpa_standard_exp.py
+    why: "the exp paths of the standard (non-streaming) compute: fp32 and bf16 dest, unit and non-unit scale, one K chunk and a masked second K chunk"
+  - path: tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_chunked.py
+    k: "no_trace or iterate_batch or legacy or geometry"
+    why: "chunked prefill on a paged KV cache (bf8 K/V, shuffled page table, chunk_start_idx as a device tensor): page blocks 64/128, prefill chunks 1024/2048, q/k chunks 128/256; batch iteration; the legacy scalar chunk_start_idx program-cache key; the paged-cache geometry override and its refusal"
+  - path: tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py
+    k: "test_sdpa_with_attention_sink or (test_sdpa_sliding_window and bf16) or test_sdpa_sliding_window_program_cache_key_includes_window"
+    why: "attention sink (d 32/64/128, batch 32, GQA 8:2, s up to 4096), sink + sliding window (gpt-oss, gemma), the gpt-oss sampled-accuracy case; sliding windows 64/128/256 over q/k chunks 128/256 (bf16); the window in the program-cache key"
+  - path: tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_prefill.py
+    k: "(test_sdpa_tt and dram_interleaved and bf16 and k128) or (test_sdpa_tt_with_program_cache and bf16) or test_sdpa_large_score_precision or test_sdpa_tt_small_chunks"
+    why: "causal: head dims 64/128, 8/16/71 heads (MQA), batch 8, s 2048/8192, q chunks 128/256 (bf16, DRAM); program-cache reuse; large-score precision; small chunks"
