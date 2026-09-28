@@ -124,6 +124,14 @@ on a Wormhole Galaxy for local testing. This does not add a Galaxy CI leg for
 that model, and a submesh run does not certify a different physical machine.
 Wrong architectures and unsupported model/SKU combinations fail setup.
 
+The Llama 8B CIv2 jobs download the checkpoint from the internal large-file cache
+before pytest, with a 15-minute download limit inside the 45-minute job budget.
+They set `HF_MODEL` to the downloaded directory and use a writable TT tensor cache
+under `${TMPDIR:-/tmp}/ttnn_model_cache`. This mirrors the normal demo's checkpoint
+preparation: the isolated behavior suite does not load its download fixture, and
+the model loader requires local files when `CI=true`, even if `HF_HUB_OFFLINE=0`.
+The other Llama runners continue using their mounted model caches.
+
 Gemma and Qwen use their production factories' linear `FABRIC_1D` configuration.
 Qwen reserves 24 KiB of `L1_SMALL` for GDN prefill convolution. For a
 local eight-chip Gemma run on Wormhole Galaxy, the adapter opens the 32-chip

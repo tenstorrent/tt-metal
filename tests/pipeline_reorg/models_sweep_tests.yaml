@@ -239,10 +239,26 @@
 
 - name: Llama 3.1-8B request behavior
   cmd: |
+    set -e
     mkdir -p generated/test_reports/model_behavior
     export HF_HOME=/mnt/MLPerf/huggingface
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    case "{sku}" in
+      wh_n150_civ2|bh_p150b_civ2)
+        # This isolated suite does not use the demo's model_location_generator fixture.
+        # Match its CIv2 LFC download before the model's local-files-only CI load.
+        model_cache_root="${TMPDIR:-/tmp}/ttnn_model_cache"
+        mkdir -p "$model_cache_root/model_weights" "$model_cache_root/tt_cache"
+        timeout 900 wget --no-proxy --tries=5 --retry-connrefused --waitretry=10 \
+          -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R 'index.html*' \
+          -P "$model_cache_root/model_weights" \
+          "http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface/$HF_MODEL/"
+        export TT_CACHE_PATH="$model_cache_root/tt_cache/$HF_MODEL"
+        export HF_MODEL="$model_cache_root/model_weights/$HF_MODEL"
+        test -s "$HF_MODEL/config.json"
+        ;;
+    esac
     pytest --confcutdir=tests/model_behavior tests/model_behavior \
       --model-behavior-backend=llama3.1-8b --model-behavior-execution=both \
       --timeout=3600 --basetemp=generated/test_reports/model_behavior/requests \
