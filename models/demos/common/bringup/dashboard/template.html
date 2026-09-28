@@ -165,6 +165,13 @@ footer{color:var(--muted);font-size:12px}
 .pnav button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:6px;padding:5px 12px;cursor:pointer}
 .pnav button:hover{background:var(--surface2)}
 .pnav button:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+section[hidden]{display:none}
+.pv-tables{display:grid;gap:18px}
+.pv-tables h3{font-size:15px;margin:0 0 6px}
+.pv-tables td.num,.pv-tables th.num{text-align:right}
+.pv-tables table.fixed{table-layout:fixed}
+.pv-tables table.fixed th.num{width:15%}
+.d-good{color:var(--good)} .d-bad{color:var(--crit)}
 @media (prefers-reduced-motion:no-preference){tr.task td{transition:background .12s}}
 </style>
 
@@ -273,6 +280,12 @@ footer{color:var(--muted);font-size:12px}
         </div>
       </article>
     </div>
+  </section>
+
+  <section aria-labelledby="s-prior" id="prior-sec" hidden>
+    <div class="sec-head"><h2 id="s-prior">vs prior</h2><p id="prior-sub"></p></div>
+    <div class="ptabs" id="prior-tabs" role="tablist" aria-label="Comparison shown"></div>
+    <div class="pv-tables" id="prior-body"></div>
   </section>
 
   <section aria-labelledby="s-pcc">
@@ -658,7 +671,64 @@ function profile(){
   select(cur);
   }
 }
-function render(){ header(); profile(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
+function prior(){
+  const P = D.prior, sec = $("#prior-sec");
+  sec.hidden = !P;
+  if (!P) return;
+  const A = P.this.label, B = P.prior.label, NA = "—";
+  $("#s-prior").textContent = `vs prior: ${A} (this run) vs ${B}`;
+  $("#prior-sub").textContent = `This run ${P.this.model} (${A}) next to ${P.prior.model} (${B}). Δ = this − prior; ${NA} = not measured on that side (yet).`;
+  const body = $("#prior-body"), tabs = $("#prior-tabs");
+  if (P.error){ tabs.hidden = true; body.innerHTML = `<div class="empty">Prior ${esc(P.source)}: ${esc(P.error)}</div>`; return; }
+  const cell = (v, f) => v == null ? `<span class="sub">${NA}</span>` : f(v);
+  const pcc = v => cell(v, fmt);
+  const dp = d => cell(d, x => x === 0 ? "0" : (x > 0 ? "+" : "−") + Math.abs(x).toExponential(1));
+  const ms = v => cell(v, x => x.toFixed(x >= 10 ? 1 : 2));
+  const dms = r => { if (r.delta == null) return cell(null); const q = r.prior ? r.this / r.prior : null;
+    const cls = q == null || Math.abs(q - 1) < 0.01 ? "" : q < 1 ? "d-good" : "d-bad";
+    return `<span class="${cls}">${r.delta > 0 ? "+" : r.delta < 0 ? "−" : ""}${Math.abs(r.delta).toFixed(Math.abs(r.delta) >= 10 ? 1 : 2)}${q ? ` (${q.toFixed(2)}×)` : ""}</span>`; };
+  const head = (first, extra = "") => `<thead><tr><th>${first}</th><th class="num">${esc(A)}</th><th class="num">${esc(B)}</th><th class="num">Δ</th>${extra}</tr></thead>`;
+  const grouped = (rows, key, lab, v, d) => { let h = "", last = null;
+    rows.forEach(r => { if (r.task !== last){ last = r.task; h += `<tr class="phase"><td colspan="4">${esc(r.task)}</td></tr>`; }
+      h += `<tr><td class="mono">${lab(r)}</td><td class="num">${v(r.this)}</td><td class="num">${v(r.prior)}</td><td class="num">${d(r.delta)}</td></tr>`; });
+    return h; };
+  const tbl = (title, note, h, cls = "fixed") => `<div>${title ? `<h3>${esc(title)}</h3>` : ""}${note ? `<p class="sub" style="margin:0 0 6px;font-size:13px">${esc(note)}</p>` : ""}<div class="tbl-wrap"><table class="${cls}">${h}</table></div></div>`;
+  const minor = r => /_L\d+$|^pcc_swap_/.test(r.metric);  // per-layer component PCC and swap-step PCC
+  const V = [
+    {id:"acc", label:"Accuracy", rows:[...P.layers, ...P.gate], html(){
+      if (!P.layers.length && !P.gate.length) return `<div class="empty">No accuracy metrics on either side yet</div>`;
+      return tbl("Per-layer PCC", "Layer output against the golden, per device run (ladder rungs and perf runs), matching task ids.",
+          head("Task / layer") + "<tbody>" + grouped(P.layers, "task", r => `L${r.layer} ${esc(D.layer_types[r.layer] || "")}`, pcc, dp) + "</tbody>") +
+        tbl("Gate metrics", "Other accuracy metrics of matching tasks: end-to-end and chunk output, state (KV) PCC, top-k, reference parity.",
+          head("Task / metric") + "<tbody>" + grouped(P.gate.filter(r => !minor(r)), "task", r => esc(r.metric), pcc, dp) + "</tbody>") +
+        (P.gate.some(minor) ? `<details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Component and swap PCC (${P.gate.filter(minor).length})</summary>` +
+          tbl("", "", head("Task / metric") + "<tbody>" + grouped(P.gate.filter(minor), "task", r => esc(r.metric), pcc, dp) + "</tbody>") + "</details>" : ""); }},
+    {id:"perf", label:"Performance", rows:[...P.perf, ...P.blocks, ...P.sections], html(){
+      const rows = (R, src) => R.map(r => `<tr><td>${esc(r.what)}</td><td class="num">${ms(r.this)}</td><td class="num">${ms(r.prior)}</td><td class="num">${dms(r)}</td>${src ? `<td class="mono" style="font-size:12px">${esc(r.src[0] || NA)} · ${esc(r.src[1] || NA)}</td>` : ""}</tr>`).join("");
+      return tbl("Headline", "Device and wall time of the current profile (the one the section above shows), and the latest warm full prefill. Times in ms.",
+          head("Measure", "<th>Source (this · prior)</th>") + "<tbody>" + rows(P.perf, true) + "</tbody>") +
+        (P.blocks.length ? tbl("Per block type", "Device ms per layer of each block type in the same chunk (mean over its profiled layers).", head("Block type") + "<tbody>" + rows(P.blocks) + "</tbody>") : "") +
+        (P.sections.length ? tbl("Per section", "Device ms per section, summed over the profiled layers (slowest chip).", head("Section") + "<tbody>" + rows(P.sections) + "</tbody>") : ""); }},
+    {id:"tasks", label:"Tasks", rows:P.tasks.map(t => ({this:t.status[0] === "PASS" ? 1 : null})), html(){
+      const pass = i => P.tasks.filter(t => t.status[i] === "PASS").length, has = i => P.tasks.filter(t => t.status[i] != null).length;
+      const pair = (v, f = x => x) => `${v[0] == null ? NA : f(v[0])} · ${v[1] == null ? NA : f(v[1])}`;
+      return tbl("Task summary", `${A}: ${pass(0)}/${has(0)} passed · ${B}: ${pass(1)}/${has(1)} passed. Pairs are ${A} · ${B}; from runs.compare.`,
+        `<thead><tr><th>Task</th><th>${esc(A)}</th><th>${esc(B)}</th><th class="num">Attempts</th><th class="num">Debugger</th><th class="num">Run</th><th class="num">Agent defs changed</th></tr></thead><tbody>` +
+        P.tasks.map(t => `<tr><td class="mono">${esc(t.task)}</td><td>${t.status[0] ? pill(t.status[0]) : cell(null)}</td><td>${t.status[1] ? pill(t.status[1]) : cell(null)}</td>` +
+          `<td class="num">${pair(t.attempts)}</td><td class="num">${pair(t.debugger)}</td><td class="num">${pair(t.duration_s, fmtDur)}</td><td class="num">${t.agent_defs_changed || ""}</td></tr>`).join("") + "</tbody>", "tasks"); }},
+  ];
+  let vi = 0;
+  try { const k = localStorage.getItem("prior-view"); const j = V.findIndex(v => v.id === k); if (j >= 0) vi = j; } catch (e) {}
+  tabs.innerHTML = V.map((v, i) => `<button type="button" class="ptab" role="tab" data-v="${i}" aria-selected="${i === vi}">${esc(v.label)}<span class="pt-ms" title="measured on ${esc(A)} / rows">${v.rows.filter(r => r.this != null).length}/${v.rows.length}</span></button>`).join("");
+  const show = i => { vi = i; tabs.querySelectorAll(".ptab").forEach(u => u.setAttribute("aria-selected", +u.dataset.v === i ? "true" : "false"));
+    try { localStorage.setItem("prior-view", V[i].id); } catch (e) {}
+    body.innerHTML = V[i].html(); };
+  tabs.querySelectorAll(".ptab").forEach(t => t.addEventListener("click", () => show(+t.dataset.v)));
+  tabs.onkeydown = e => { if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return; e.preventDefault(); e.stopPropagation();
+    const n = (vi + (e.key === "ArrowRight" ? 1 : -1) + V.length) % V.length; show(n); tabs.querySelector(`[data-v="${n}"]`).focus(); };
+  show(vi);
+}
+function render(){ header(); profile(); prior(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
   $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml, findings.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
 if (D) render();
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
