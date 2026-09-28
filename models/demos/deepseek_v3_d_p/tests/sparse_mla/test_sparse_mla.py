@@ -715,6 +715,87 @@ def run_sparse_mla_pad_overflow_case(
     logger.info(f"[{variant.name}] sparse MLA pad-overflow complete")
 
 
+def run_sparse_mla_kv_only_case(
+    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo
+):
+    """Last-layer chunked fast path must populate KVPE and tiled index caches without an output."""
+    seed = 42
+    weights, src_tag = build_weights(
+        variant, config, seed=seed, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo
+    )
+    config.max_seq_len = seq_len
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        tp_axis=tp_axis,
+    )
+    tt_index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, tp_axis=tp_axis)
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_chunked=True,
+        active_seq_len=chunk,
+        layer_num=1,
+        sparse_kv_cache_format=cache_format,
+        kv_only=True,
+    )
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        seq_len, chunk
+    )
+    hidden = make_hidden(chunk, config.hidden_size, seed)
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+    tt_x = ttnn.from_torch(
+        hidden.unsqueeze(0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=shard_dims),
+    )
+
+    out = mla_tt.forward(
+        tt_x,
+        rope_tensors,
+        tt_kvpe_cache,
+        actual_start=0,
+        index_kv_cache=tt_index_kv_cache,
+    )
+    assert out is None
+
+    _, ref_kvpe, ref_index = run_cpu_reference(
+        config,
+        weights,
+        hidden,
+        chunk,
+        cpu_ref_cache_dir(variant),
+        cache_tag=f"{src_tag}_funcidx_kvonly",
+    )
+    cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:, :1]
+    # sp*tp stripes -- see _collect_kvpe_cache.
+    positions = blockcyclic_positions(mesh_shape[sp_axis] * mesh_shape[tp_axis], chunk, cache_sr.shape[2])
+    cache_natural = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
+    cache_natural[positions] = cache_sr[0, 0]
+    _, kv_msg = assert_with_pcc(ref_kvpe, cache_natural[:chunk].unsqueeze(0).unsqueeze(0), SPARSE_KVPE_PCC)
+
+    index_natural = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+    _, index_msg = assert_with_pcc(ref_index[0, :chunk], index_natural[:chunk], SPARSE_INDEX_PCC)
+    logger.info(f"[{variant.name}] kv_only cache PCC: kvpe={kv_msg} index={index_msg}")
+    ttnn.synchronize_device(mesh_device)
+
+
 def run_sparse_mla_rotated_case(
     variant, config, mesh_device, iters_isl, chunk_size_global, ds_layer, ds_checkpoint, ds_repo
 ):
@@ -1079,4 +1160,28 @@ def test_sparse_mla_pad_overflow_chunked(
     """Ragged chunk stream whose tail chunk pads past the end of the cache (see pad_overflow_schedule)."""
     run_sparse_mla_pad_overflow_case(
         variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    )
+
+
+SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    SPARSE_KV_ONLY_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.parametrize(
+    "cache_format",
+    [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
+    ids=["kv_bf16", "kv_scaled_fp8"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_kv_only_chunked(
+    mesh_device, seq_len, chunk, cache_format, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    run_sparse_mla_kv_only_case(
+        variant, config_only, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo
     )
