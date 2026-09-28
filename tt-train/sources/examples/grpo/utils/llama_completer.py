@@ -24,6 +24,7 @@ from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
 from .completer_common import deallocate_tensors, async_read_to_host
+from .ttml_rollout_sampler import load_checkpoint
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
@@ -43,32 +44,6 @@ class LlamaCompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
-    """Load a ``model.safetensors`` the GRPO trainer saved, under TTML's parameter names, into *model*.
-    Raise before writing anything if a parameter is missing, e.g. in a checkpoint saved before a rename."""
-    from safetensors.numpy import load_file
-    import ml_dtypes
-
-    checkpoint = load_file(checkpoint_path)
-    parameters = model.parameters()
-    missing = sorted(name for name in parameters if name not in checkpoint)
-    if missing:
-        raise RuntimeError(
-            f"{checkpoint_path} lacks {len(missing)} of the model's {len(parameters)} parameters: " + ", ".join(missing)
-        )
-
-    for name, param in parameters.items():
-        arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-        if arr.ndim == 1:
-            arr = arr.reshape(1, 1, 1, -1)
-        elif arr.ndim == 2:
-            arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-        restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-        param.assign(restored)
-
-    print(f"Loaded {len(parameters)} parameters from {checkpoint_path}")
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
