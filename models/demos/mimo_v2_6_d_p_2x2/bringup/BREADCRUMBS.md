@@ -383,3 +383,9 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - BRINGUP_IMPL=reference: PASS (out pcc 0.999997, rel 0.0025; attention rel 0.0017). BRINGUP_IMPL=stub: FAIL on every check.
 - The default gate already passes (the device attn_norm and attention are already registered): pcc_swap_out 0.999991, out rel 0.0043 / first rows 0.0038, attn_norm rel 0.0029, attention rel 0.0049 / first rows 0.0049, ratio [0.9984, 1.0067], worst row 0.0101. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_02_attention.py`
+
+## C.full_moe.attn_residual.test.1 (2026-09-28)
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_moe_attn_residual.py` (same golden and CPU reference, layer 5). Only the docstring changed: an adoption note. Checks: PCC >= 0.99 (gated), numel, finite, rel L2 <= 0.01, per-token norm ratio [0.99, 1.01]; on delta = out - in: attn_out coefficient in [0.98, 1.02], ||delta - attn_out|| / ||attn_out|| <= 0.05. These are tighter than layer 1's because layer 5 is full attention with no sink, so attn_out is large. Every check runs on the gathered [2048, 4096] output, so none depends on the mesh shape.
+- BRINGUP_IMPL=reference: pcc 0.999997, rel 0.0025, ratio [0.9989, 1.0009], coef 1.0000, attn rel 0.0: PASS. BRINGUP_IMPL=stub: pcc 0: FAIL.
+- The default gate already passes (the device add is registered from the other block types): pcc 0.999996, rel 0.0030, ratio [0.9998, 1.0018], coef 1.0007, attn rel 0.0028. 1 passed. (The first `FAIL pcc=0` line comes from the precompile collect pass.)
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attn_residual.py`
