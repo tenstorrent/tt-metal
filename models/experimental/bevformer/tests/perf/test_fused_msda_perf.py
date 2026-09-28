@@ -23,6 +23,9 @@ time is in:
 
     * ``packed_multi`` -- packed value/offsets/attn, one call covering all
       levels. This is the production contract.
+    * ``packed_multi_l1`` -- the same, with ``value`` moved to L1 interleaved
+      before the measured region: what an L1-resident feature map buys
+      without moving any work.
     * ``canonical_multi`` -- the rank-4 / rank-6 / rank-5 operand forms the op
       also accepts. The delta against ``packed_multi`` is the cost of one page
       per sample instead of a byte offset into a packed stick.
@@ -64,7 +67,7 @@ WORKLOADS = [
     ("nuscenes_base", 1, 2500),
 ]
 
-KERNEL_VARIANTS = ["packed_multi", "canonical_multi", "packed_per_level"]
+KERNEL_VARIANTS = ["packed_multi", "packed_multi_l1", "canonical_multi", "packed_per_level"]
 
 
 def _head_sha():
@@ -341,6 +344,9 @@ def test_fused_msda_kernel_perf(
 
     if variant == "packed_multi":
         op_fn = partial(_call_one, value_p, refs, offsets_p, attn_p, spatial_shapes)
+    elif variant == "packed_multi_l1":
+        value_l1 = ttnn.to_memory_config(value_p, ttnn.L1_MEMORY_CONFIG)
+        op_fn = partial(_call_one, value_l1, refs, offsets_p, attn_p, spatial_shapes)
     elif variant == "canonical_multi":
         value_c, offsets_c, attn_c = _canonical_operands(value_p, offsets_p, attn_p, model)
         op_fn = partial(_call_one, value_c, refs, offsets_c, attn_c, spatial_shapes)
