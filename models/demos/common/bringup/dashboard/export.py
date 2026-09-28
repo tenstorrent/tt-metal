@@ -11,7 +11,9 @@ Reads: tasks.yaml, state.json, results/*.json (metrics, plan_memory.json, block_
 components.yaml, plan.yaml (optional ``chips``, ``ccl_per_layer``, ``profile_sections``), findings.yaml, the HF config.
 Sections: progress, gate ladder, model graph + layer strip, op coverage, findings, chunk timing, sharding (memory
 from the plan gate), where the time goes (warm per-section, per-chip profile), PCC trail by layer; with a spec
-``prior``, a vs-prior view (accuracy, chunk time and TTFT, task status next to the prior bring-up's).
+``prior``, a vs-prior view (accuracy, chunk time and TTFT, task status next to the prior bring-up's). Steps deferred to
+op-gen (F46): a "Deferred to op-gen" section (task, block, layers, request status, evidence), a banner that the results
+include N CPU steps, and timing rows and profile sections marked when the CPU bridge ran in them.
 """
 
 from __future__ import annotations
@@ -87,6 +89,8 @@ def timing_rows(spec, task: dict, m: dict) -> list[dict]:
     v = lambda k, d=None: m[k]["value"] if k in m else d  # noqa: E731
     hyb = v("device_model_hybrid")
     model = "hybrid harness" if hyb == 1 else "all-device" if hyb == 0 else "model not recorded"
+    if v("deferred_cpu_steps"):  # F46: steps deferred to op-gen ran on the host inside these times
+        model += f" + {v('deferred_cpu_steps')} CPU steps (deferred to op-gen, {v('deferred_cpu_ms', 0):.0f} ms host)"
     rows = []
     ch = sorted((int(k.rsplit("_c", 1)[1]), x["value"]) for k, x in m.items() if k.startswith("chunk_seconds_c"))
     if ch:
@@ -203,6 +207,7 @@ def build(spec) -> dict:
         for st in steps:
             st["task"] = f"C.{bt}.{st['name']}"
             st["state"] = "device" if status.get(st["task"]) == "PASS" else "cpu"
+            st["deferred"] = status.get(st["task"]) == "DEFERRED"
     first_rung = spec.data["ladder"][0]["name"] if spec.data.get("ladder") else None
     comps = []
     for c in comp_doc.get("components") or []:
@@ -217,6 +222,7 @@ def build(spec) -> dict:
                 "reuse": c.get("reuse"),
                 "task": gate,
                 "state": "device" if on else "cpu",
+                "deferred": status.get(gate) == "DEFERRED",
             }
         )
 
@@ -239,6 +245,8 @@ def build(spec) -> dict:
         if pos:  # the latest task's sweep wins (tasks are in ledger order)
             hyb = m.get("device_model_hybrid", {}).get("value")
             model = "hybrid harness" if hyb == 1 else "all-device" if hyb == 0 else "model not recorded"
+            if m.get("deferred_cpu_steps", {}).get("value"):
+                model += f" + {m['deferred_cpu_steps']['value']} CPU steps (deferred to op-gen)"
             positions = {"task": t["id"], "chunk": m.get("pos_chunk", {}).get("value"), "points": pos, "model": model}
 
     plan_mem = res / "plan_memory.json"
@@ -273,9 +281,37 @@ def build(spec) -> dict:
         "profile": load_profile(spec, res, plan_doc),
         "prior": load_prior(spec),
         "findings": findings,
+        "deferred": deferred_rows(spec, led, state),
         "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
     }
+
+
+def deferred_rows(spec, led, state) -> list[dict]:
+    """One row per task deferred to op-gen, with its request's status and evidence (F46)."""
+    from models.demos.common.bringup.plan import op_request as OR
+
+    reqs = {tid: (d, req) for d, req in OR.all_requests(spec) for tid in req.get("tasks") or []}
+    rows = []
+    for tid in led.deferred():
+        b = led.task(tid).get("brief") or {}
+        d, req = reqs.get(tid, (None, {}))
+        ev = req.get("evidence") or {}
+        rows.append(
+            {
+                "task": tid,
+                "block_type": b.get("block_type"),
+                "step": b.get("step"),
+                "layers": layer_label(req["layers"]) if req.get("layers") else "",
+                "op": req.get("op") or (state.get(tid, {}).get("deferred") or {}).get("op"),
+                "status": req.get("status", "missing"),
+                "request": str(d.relative_to(spec.repo)) if d else None,
+                "searched": [str(x) for x in ev.get("searched") or []],
+                "tried": [f"{x.get('what')}: {x.get('outcome')}" for x in ev.get("tried") or [] if isinstance(x, dict)],
+                "why_not_fork": ev.get("why_not_fork", ""),
+            }
+        )
+    return rows
 
 
 def layer_label(lays: list[int]) -> str:
@@ -298,12 +334,16 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     nch = spec.mesh[0] * spec.mesh[1]
     ops = prof.get("ops") or {}
 
+    bridged = set(prof.get("bridged_steps") or [])  # F46: steps deferred to op-gen, on the CPU bridge
+
     def step(key, ms, pc, op_rows, programs):
         m = meta.get(key) or {}
         b = m.get("bound") or bound_of(key)
+        cpu = key.split(".")[0] in bridged
         return {
             "key": key,
-            "name": m.get("name", key),
+            "name": m.get("name", key) + (" (CPU bridge, deferred to op-gen)" if cpu else ""),
+            "cpu_bridge": cpu,
             "part": m.get("part", phase_of(key)),
             "bound": b,
             "pat": m.get("pat", "ring" if b == "comm" else "local"),
@@ -407,7 +447,13 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
         "note": f"Device kernel time per section, summed over {len(prof.get('layers', []))} layers of one {b - a:,}-token chunk "
         f"at positions {a:,}-{b - 1:,} (golden prefix loaded, warm run). Per chip = that chip's own programs; the bar "
         f"uses the slowest chip per section. Source {prof_p.name}"
-        + (f"; before = X.1 (chunk {base['wall_ms']:.0f} ms)." if base else "."),
+        + (f"; before = X.1 (chunk {base['wall_ms']:.0f} ms)." if base else ".")
+        + (
+            f" The wall time includes {prof.get('deferred_cpu_ms', 0):.0f} ms of host work for steps deferred to op-gen "
+            f"({', '.join(sorted(bridged))}); their sections hold only the bridge's transfers."
+            if bridged
+            else ""
+        ),
     }
 
 
