@@ -39,6 +39,9 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
 
+// Latest end time among the dispatch_s records read so far.
+uint64_t last_record_end = 0;
+
 // Read one record slot from dispatch_s into the next ring buffer slot
 __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t record_idx) {
     // Heartbeat: ring_full_wait_count increments once per enqueue blocked on a full ring.
@@ -58,6 +61,20 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t recor
 
     noc_async_read(dispatch_noc_addr, slot_addr, realtime_profiler_timestamp_size);
     noc_async_read_barrier();
+
+    // A record ends at the latest worker completion seen, so end times never go backwards. A slot that saw no
+    // completion while open (dispatch_s was held up and its wait for workers returned at once) still holds its
+    // end from a full ring ago; replace it with the previous record's end. Done here rather than in dispatch_s
+    // to keep it off the dispatch path. Covers unprofiled records too, since they carry the chain forward.
+    volatile tt_l1_ptr realtime_profiler_record_t* record =
+        reinterpret_cast<volatile tt_l1_ptr realtime_profiler_record_t*>(slot_addr);
+    const uint64_t end = (static_cast<uint64_t>(record->kernel_end.time_hi) << 32) | record->kernel_end.time_lo;
+    if (end < last_record_end) {
+        record->kernel_end.time_hi = static_cast<uint32_t>(last_record_end >> 32);
+        record->kernel_end.time_lo = static_cast<uint32_t>(last_record_end);
+    } else {
+        last_record_end = end;
+    }
 
     const uint32_t id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr)[2];
     if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {

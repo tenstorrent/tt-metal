@@ -71,7 +71,10 @@ This replaced an A/B ping-pong handoff that had no acknowledgement and dropped
 records whenever the reader fell behind dispatch_s (issue #57632).
 
 The **BRISC reader** polls its `record_wr_idx`. For each published slot it issues a
-`noc_async_read` of the 32-byte record into the next ring slot, then advances
+`noc_async_read` of the 32-byte record into the next ring slot. A record ends at the
+latest worker completion seen, so the reader never lets an end time go backwards: a
+slot that saw no completion while open still holds its end from a full ring ago, and
+the reader replaces it with the previous record's end. It then advances
 `write_index` (records for unprofiled programs are read but not committed). It
 keeps draining while servicing a clock sync. If the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
@@ -94,7 +97,7 @@ ring-wrap, host-FIFO-wrap, and burst-size boundaries — followed by a single
 
 | Metric | Value |
 |--------|-------|
-| `publish_realtime_profiler_record` duration (BH p100a, device-profiler zone, p50) | **~128 cycles (~0.09 us)** |
+| `publish_realtime_profiler_record` duration (BH p100a, device-profiler zone, p50) | **~105 cycles (~0.08 us)** |
 | Former A/B signal, same zone and board | ~105 cycles |
 | Peak production rate, `RealtimeProfilerStress` (ring vs. A/B) | ~1.068 M rec/s both |
 
