@@ -10,20 +10,21 @@ from summarize_host_iwyu import FORWARD_DECLARATION, parse_report, render_markdo
 
 # Verbatim (trimmed) iwyu_tool.py output from include-what-you-use 0.24 with
 # --cxx17ns, as run by run_host_iwyu.sh. Two files with advice, one already
-# correct, and one clang diagnostic.
+# correct, and one clang diagnostic. IWYU names files by the absolute path in
+# the compilation database; /work is the checkout in iwyu-host.yaml.
 REPORT = """\
 
-tt_metal/fabric/mesh_graph_descriptor.cpp should add these lines:
+/work/tt_metal/fabric/mesh_graph_descriptor.cpp should add these lines:
 #include <cstddef>                                                    // for size_t
 #include <utility>                                                    // for pair, get, move, swap
 #include "tt_stl/strong_type.hpp"                                     // for StrongType
 namespace tt::tt_fabric { class MeshGraph; }
 
-tt_metal/fabric/mesh_graph_descriptor.cpp should remove these lines:
+/work/tt_metal/fabric/mesh_graph_descriptor.cpp should remove these lines:
 - #include <google/protobuf/io/zero_copy_stream_impl.h>  // lines 29-29
 - #include <unistd.h>  // lines 30-30
 
-The full include-list for tt_metal/fabric/mesh_graph_descriptor.cpp:
+The full include-list for /work/tt_metal/fabric/mesh_graph_descriptor.cpp:
 #include <google/protobuf/text_format.h>                              // for TextFormat
 #include <cstddef>                                                    // for size_t
 #include <utility>                                                    // for pair, get, move, swap
@@ -32,20 +33,20 @@ The full include-list for tt_metal/fabric/mesh_graph_descriptor.cpp:
 namespace tt::tt_fabric { class MeshGraph; }
 ---
 
-tt-train/sources/ttml/datasets/utils.cpp should add these lines:
+/work/tt-train/sources/ttml/datasets/utils.cpp should add these lines:
 #include <yaml-cpp/yaml.h>                        // for Node
 #include <utility>                                // for move
 
-tt-train/sources/ttml/datasets/utils.cpp should remove these lines:
+/work/tt-train/sources/ttml/datasets/utils.cpp should remove these lines:
 
-The full include-list for tt-train/sources/ttml/datasets/utils.cpp:
+The full include-list for /work/tt-train/sources/ttml/datasets/utils.cpp:
 #include <yaml-cpp/yaml.h>                        // for Node
 #include <utility>                                // for move
 ---
 
-(tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp has correct #includes/fwd-decls)
+(/work/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp has correct #includes/fwd-decls)
 
-tests/tt_metal/broken.cpp:1:10: fatal error: 'nonexistent.hpp' file not found
+/work/tests/tt_metal/broken.cpp:1:10: fatal error: 'nonexistent.hpp' file not found
     1 | #include <nonexistent.hpp>
       |          ^~~~~~~~~~~~~~~~~
 """
@@ -75,6 +76,13 @@ class ParseReportTests(unittest.TestCase):
 
     def test_unrecognised_text_recognises_nothing(self):
         self.assertEqual(parse_report("iwyu_tool.py: something unexpected\n").recognised, 0)
+
+    def test_driver_warning_alone_recognises_nothing(self):
+        # All iwyu_tool.py prints when a positional path selects no database
+        # entry (a header-only directory, for instance); it then exits 0 having
+        # analyzed nothing, so this must not read as a clean run.
+        report = "warning: '/work/tt_metal/api' not found in compilation database.\n"
+        self.assertEqual(parse_report(report).recognised, 0)
 
 
 class RenderMarkdownTests(unittest.TestCase):

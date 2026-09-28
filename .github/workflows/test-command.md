@@ -434,7 +434,6 @@ safe-outputs:
       - tt-metal-l2-nightly
       - ttnn-run-sweeps
       - vllm-model-tests
-      - metal-run-microbenchmarks
 
       - runtime-sanity-tests
       - runtime-unit-tests
@@ -632,7 +631,6 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** for any change under a `ttnn/cpp/ttnn/operations/` family or its tests, with `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
 | `ttnn-run-sweeps` | Selectable | `ttnn/` op changes where sweep coverage is the real signal |
 | `vllm-model-tests` | Selectable SKU | vLLM serving integration |
-| `metal-run-microbenchmarks` | Single card | Low-level metal performance primitives |
 | `runtime-sanity-tests`, `runtime-unit-tests`, `runtime-integration-tests`, `runtime-perf-tests` | WH / BH / multichip | `tt_metal/impl/**`, `llrt/**`, `api/**`, `jit_build/**`, dispatch and runtime layers |
 
 Path orientation: `tt_metal/hw/**` and `tt_metal/tt-llk/**` are kernel/LLK; `tt_metal/fabric/**`
