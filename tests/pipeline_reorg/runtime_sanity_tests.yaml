@@ -75,8 +75,7 @@
 
 # =============================================================================
 # TTSim simulator coverage for runtime C++ unit tests (sim_* SKUs only, no HW).
-# Migrated from .github/workflows/ttsim.yaml; runs under ttsim on ubuntu-latest
-# (the *_galaxy SKUs run on tt-ubuntu-2204-large-stable for the mock 6U cluster).
+# Migrated from .github/workflows/ttsim.yaml; runs under ttsim on ubuntu-latest.
 # runtime-sanity-tests-impl.yaml invokes setup-ttsim for every sim_* SKU.
 # See .github/actions/setup-ttsim/action.yml and .github/sku_config.yaml.
 #
@@ -139,9 +138,7 @@
 
 - name: runtime_sim_galaxy_cpp_unit_tests (wormhole_b0)
   cmd: >-
-    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
     ./build/test/tt_metal/unit_tests_api --gtest_filter='*StreamRegWrite*' &&
-    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
     ./build/test/tt_metal/unit_tests_api --gtest_filter='*InlineWrite*'
   skus:
     sim_wh_galaxy:
@@ -152,9 +149,7 @@
 
 - name: runtime_sim_galaxy_cpp_unit_tests (blackhole)
   cmd: >-
-    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml
     ./build/test/tt_metal/unit_tests_api --gtest_filter='*StreamRegWrite*' &&
-    TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_6u_cluster_desc/bh_6u_cluster_desc.yaml
     ./build/test/tt_metal/unit_tests_api --gtest_filter='*InlineWrite*'
   skus:
     sim_bh_galaxy:
