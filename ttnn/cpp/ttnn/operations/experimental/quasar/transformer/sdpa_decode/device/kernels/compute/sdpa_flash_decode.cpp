@@ -605,8 +605,21 @@ void kernel_main() {
             reconfig_data_format(dfb_cur_max, dfb_cur_max);
             pack_reconfig_out(dfb_prev_max);
 
-            // PREV_MAX <- CUR_MAX
-            move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
+            // PREV_MAX <- CUR_MAX.
+            // Quasar: skip this carry on the TERMINAL chunk of a single-core reducer (no next reduce_c and
+            // no tree to consume prev_max). Filling the capacity-1 self-loop prev_max via a copy-through-DEST
+            // move_block and then never consuming it trips the Quasar tile-counter accounting at the finalize
+            // pop (:758) — posted=1/acked=2 underflow. The running max is left in cur_max (see the :709
+            // comment) and finalize pops cur_max instead. WH/BH keep the unconditional carry (byte-identical
+            // to mainline); with-children Quasar keeps it too (the tree consumes prev_max).
+#ifdef ARCH_QUASAR
+            const bool carry_prev_max = (k_chunk + 1 < k_chunk_end) || (num_active_children > 0);
+#else
+            constexpr bool carry_prev_max = true;
+#endif
+            if (carry_prev_max) {
+                move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
+            }
 
             // NOTE: no move_block for the merged sum in the flash loop. The multi-chunk fma re-bases the
             // ring each chunk (pushes==pops==2N, running sum at rd_ptr==base) and an extra move_block would
@@ -754,8 +767,21 @@ void kernel_main() {
             mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_prev_sum);
             pack_reconfig_out(dfb_out_final);
 
-            // Pop the max buffer that still has data
+            // Pop the max buffer that still has data.
+            // Quasar single-core (no children): the terminal carry to prev_max was skipped above, so the max
+            // lives in cur_max. Popping a capacity-1 max DFB at FINALIZE trips a Quasar sim tile-counter
+            // accounting bug (posted=1 acked=2 abort) regardless of which max buffer we pop (an in-loop pop is
+            // fine; the finalize pop is not) — the kernel push/pop counts balance, so this is a sim/runtime
+            // remapper-credit issue for capacity-1 intra-tensix self-loop DFBs (see quasar_porting.md §8.5/§12).
+            // Leave cur_max un-popped: a harmless one-shot leak (occ=1, NOT an underflow; the DFB re-inits per
+            // launch and nothing consumes the max after finalize) — same as identity_scale/zero_in already leak.
+#ifdef ARCH_QUASAR
+            if (num_active_children > 0) {
+                DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
+            }
+#else
             DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
+#endif
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
