@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Bounded direct-execution workload for production Llama optimizer runs."""
+"""Bounded direct-execution workload for production optimizer runs (Llama 3.1 8B by default; any
+tt-transformers checkpoint in HF_MODEL, with HF_MODEL_ID naming it)."""
 
 from __future__ import annotations
 
@@ -19,12 +20,25 @@ from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.tt_transformers.tests.optimizer_weight_cache import RunCache
 
 
 # The checkpoint this gate runs. Weights are loaded from HF_MODEL (a local directory); the id is
 # stated here so the optimizer's roofline can resolve the model from the test it executes
 # (cc_optimize/run.py::_resolve_model_id scans the run's own test files for a cached HF id).
-HF_MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
+HF_MODEL_ID = os.environ.get("HF_MODEL_ID") or "meta-llama/Llama-3.1-8B-Instruct"
+# See test_optimizer_pcc.TRACE_REGION_SIZE: 52 MB for Llama 3.1 8B, 100 MB for Qwen3-32B on P300x2.
+TRACE_REGION_SIZE = int(os.environ.get("TT_TRACE_REGION_SIZE") or 52_000_000)
+
+
+def _full_depth() -> int:
+    """The checkpoint's own layer count, from HF_MODEL's config (32 when it cannot be read)."""
+    import json
+
+    try:
+        return int(json.loads((Path(os.environ["HF_MODEL"]) / "config.json").read_text())["num_hidden_layers"])
+    except (OSError, ValueError, KeyError):
+        return 32
 
 INPUT_IDS = [128000] + [1000 + ((index * 7919) % 120000) for index in range(127)]
 INPUT_TOKENS = len(INPUT_IDS)
@@ -59,11 +73,9 @@ def signpost(name: str, enabled: bool) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"  [perf-gate] signpost {name!r} not emitted ({type(exc).__name__}: {exc})", flush=True)
 
-# Weight cache for the gate. create_tt_model takes a warm-cache shortcut (load_tensor_flatbuffer on
-# the .tensorbin files) whenever TT_CACHE_PATH already holds a complete cache, and that shortcut has
-# hung on the 1 GB embedding file under the profiler; a fresh directory forces the HF conversion
-# path, which does not. Kept under the repo's gitignored generated/ so it can never be swept into a
-# model commit and needs no directory outside the checkout.
+# Each run's TT_CACHE_PATH: a fresh scratch directory, so tt-transformers loads the checkpoint in
+# full, and every converted weight comes from (or goes into) the content-keyed store in
+# optimizer_weight_cache. Under the repo's gitignored generated/, never swept into a model commit.
 CACHE_ROOT = Path(__file__).resolve().parents[3] / "generated" / "optimizer_cache"
 
 # tt-metal reads every TT_METAL_* setting exactly once, when the shared library loads during
@@ -115,8 +127,10 @@ def test_optimizer_direct_perf(monkeypatch):
     """
     mesh_device = generator = model = model_args = state_dict = tt_kv_cache = None
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="perf-", dir=str(CACHE_ROOT)) as cache_dir:
-        monkeypatch.setenv("TT_CACHE_PATH", cache_dir)
+    # Weights shared with the gate and every other run through the store (optimizer_weight_cache).
+    cache = RunCache(CACHE_ROOT, "perf-")
+    try:
+        monkeypatch.setenv("TT_CACHE_PATH", cache.path)
         depth = max(0, int(os.environ.get("TT_PERF_LAYERS", "0") or 0))
         output_tokens = max(2, int(os.environ.get("TT_PERF_OSL_TOKENS", "256")))
         decode_tokens = output_tokens - 1
@@ -131,14 +145,14 @@ def test_optimizer_direct_perf(monkeypatch):
         prefill_samples = 1 if profiling else PREFILL_SAMPLES
         print(
             f"GATE_CONFIG role={role} model={HF_MODEL_ID} profiling={int(profiling)} trace={int(enable_trace)} "
-            f"layers={depth or 32} isl={INPUT_TOKENS} osl={output_tokens} decode_tokens={decode_tokens} "
+            f"layers={depth or _full_depth()} isl={INPUT_TOKENS} osl={output_tokens} decode_tokens={decode_tokens} "
             f"prefill_samples={prefill_samples} profiler_buffer={PROFILER_BUFFER_AT_IMPORT}",
             flush=True,
         )
         if role == "verdict":
             # Only the full-pipeline verdict is held to this. The coverage probe runs this same node
             # at OSL=1 to read op signatures, and tracy runs it capped -- both are legitimate.
-            assert depth == 0, f"verdict must measure all 32 layers, got TT_PERF_LAYERS={depth}"
+            assert depth == 0, f"verdict must measure every layer, got TT_PERF_LAYERS={depth}"
             assert enable_trace, "verdict must run trace+1cq, but TT_PERF_TRACE=0 disabled it"
             assert decode_tokens >= 128, (
                 f"verdict needs sustained decode; got {decode_tokens} token(s) "
@@ -148,24 +162,26 @@ def test_optimizer_direct_perf(monkeypatch):
             ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
             mesh_device = ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(1, 4),
-                trace_region_size=52_000_000,
+                trace_region_size=TRACE_REGION_SIZE,
                 num_command_queues=1,
             )
             paged_attention_config = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
             optimizations = lambda args: DecodersPrecision.performance(args.n_layers, args.model_name)
-            model_args, model, tt_kv_cache, state_dict = create_tt_model(
-                mesh_device,
-                instruct=True,
-                max_batch_size=1,
-                optimizations=optimizations,
-                max_seq_len=MAX_SEQ_LEN,
-                paged_attention_config=paged_attention_config,
-                dtype=ttnn.bfloat8_b,
-                num_layers=depth or None,
-                use_prefetcher=False,
-                use_hf_rope=False,
+            model_args, model, tt_kv_cache, state_dict = cache.build(
+                lambda: create_tt_model(
+                    mesh_device,
+                    instruct=True,
+                    max_batch_size=1,
+                    optimizations=optimizations,
+                    max_seq_len=MAX_SEQ_LEN,
+                    paged_attention_config=paged_attention_config,
+                    dtype=ttnn.bfloat8_b,
+                    num_layers=depth or None,
+                    use_prefetcher=False,
+                    use_hf_rope=False,
+                )
             )
-            expected_layers = depth or 32
+            expected_layers = depth or _full_depth()
             assert model_args.n_layers == expected_layers
             assert len(model.layers) == expected_layers
             assert mesh_device.get_num_devices() == 4
@@ -173,6 +189,7 @@ def test_optimizer_direct_perf(monkeypatch):
             assert model.sampling is not None
             state_dict = None
             gc.collect()
+            cache.loaded()
 
             generator = Generator([model], [model_args], mesh_device, tokenizer=model_args.tokenizer)
             input_ids = torch.tensor([INPUT_IDS], dtype=torch.long)
@@ -272,3 +289,5 @@ def test_optimizer_direct_perf(monkeypatch):
                         ttnn.close_mesh_device(submesh)
                 ttnn.close_mesh_device(mesh_device)
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    finally:
+        cache.cleanup()
