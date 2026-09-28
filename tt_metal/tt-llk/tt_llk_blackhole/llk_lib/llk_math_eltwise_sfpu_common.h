@@ -92,7 +92,8 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_skip_faces_()
  *
  * The tile starts at face 0 of the current 32x32 Dest tile. Faces are visited in row-major order and
  * faces outside the shape are skipped, so a 16x32 tile visits faces 0 and 1 and a 32x16 tile visits
- * faces 0 and 2. The walk always ends at the end of the Dest tile.
+ * faces 0 and 2. The walk ends on the last face processed, not at the end of the Dest tile; callers
+ * reset the Dest address with @ref _llk_math_eltwise_sfpu_done_.
  *
  * The static_asserts limit TENSOR_SHAPE to full-face tiles of at most 2x2 faces, all of which are in the
  * math TensorShape coverage table, so no runtime LLK_VALIDATE_TENSOR_SHAPE_MATH check is needed.
@@ -113,30 +114,33 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_for_each_face_
     constexpr int FACES_R = TENSOR_SHAPE.num_faces_r_dim;
     constexpr int FACES_C = TENSOR_SHAPE.num_faces_c_dim;
 
+    // The Dest address is advanced before each face but the first, so nothing is issued after the last one.
     if constexpr (FACES_C == MAX_NUM_FACES_C_DIM)
     {
         // Whole rows of faces are contiguous in Dest.
 #pragma GCC unroll 0
         for (int face = 0; face < FACES_R * FACES_C; face++)
         {
+            if (face > 0)
+            {
+                _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+            }
             sfpu_func(args...);
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }
     else
     {
-        // One face per row of faces; skip the rest of the row.
+        // One face per row of faces; step over the rest of the previous row to reach the next one.
 #pragma GCC unroll 0
         for (int face_r = 0; face_r < FACES_R; face_r++)
         {
+            if (face_r > 0)
+            {
+                _llk_math_eltwise_sfpu_skip_faces_<MAX_NUM_FACES_C_DIM>();
+            }
             sfpu_func(args...);
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-            _llk_math_eltwise_sfpu_skip_faces_<MAX_NUM_FACES_C_DIM - FACES_C>();
         }
     }
-
-    // Skip the rows of faces outside the shape.
-    _llk_math_eltwise_sfpu_skip_faces_<(MAX_NUM_FACES_R_DIM - FACES_R) * MAX_NUM_FACES_C_DIM>();
 }
 
 /**
