@@ -4,12 +4,48 @@
 
 import pytest
 
+import os
 import pathlib
 import struct
+import subprocess
+import sys
 
 import torch
 
 import ttnn
+
+
+def test_load_tensor_without_device_leaves_devices_alone(tmp_path, device):
+    # The device fixture holds the chips open. A load that initialized MetalContext would open
+    # the cluster again in the child, which logs the UMD line below or blocks on the chip lock.
+    shards = torch.cat([torch.full((32, 64), value, dtype=torch.bfloat16) for value in (11, 29)], dim=1)
+    mapper = ttnn.create_mesh_mapper(
+        ttnn.MeshShape(1, 2),
+        ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]),
+    )
+    tensor_path = tmp_path / "two_shards.tensorbin"
+    torch_path = tmp_path / "loaded.pt"
+    tensor = ttnn.from_torch(shards, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+    ttnn.dump_tensor(tensor_path, tensor, mode=ttnn.DumpTensorMode.LOCAL)
+
+    child = (
+        "import sys, torch, ttnn\n"
+        "loaded = ttnn.load_tensor(sys.argv[1])\n"
+        "torch.save([ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(loaded)], sys.argv[2])\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", child, str(tensor_path), str(torch_path)],
+        env={**os.environ, "TT_LOGGER_LEVEL": "Info"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "Opening user mode device driver" not in output, output
+    loaded = torch.load(torch_path)
+    assert len(loaded) == 2
+    torch.testing.assert_close(torch.cat(loaded, dim=1), shards, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("malformation", ["header-size", "shard-buffer"])
