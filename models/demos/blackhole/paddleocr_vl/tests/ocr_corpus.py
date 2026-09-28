@@ -1,30 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic synthetic OCR corpus for PaddleOCR-VL bring-up.
-
-The bring-up gates compare TT output against a HuggingFace CPU reference, so the
-corpus has to be **reproducible** rather than realistic: the same twenty images
-must come out byte-identical on any machine, or a golden recorded today stops
-meaning anything tomorrow. Everything here is therefore rendered from a fixed
-seed with bundled fonts, and no image is committed to the repo.
-
-Two properties are deliberate:
-
-*Bucket coverage.* The vision tower compiles one program set per padded patch
-count, so the corpus spans every bucket the model can produce. ``smart_resize``
-snaps both dimensions to a multiple of 28 (patch 14 x spatial merge 2) and clamps
-the token count to [130, 1280], which is [520, 5120] patches. Sizes below are
-chosen so the set lands in all four of {1024, 2048, 4096, 6144}.
-
-*Known ground truth.* Each entry carries the exact string it renders, so the same
-corpus measures absolute CER, not just TT-vs-HF agreement. That matters when a
-port regression and a model limitation would otherwise look alike.
-
-Degradations (rotation, noise, blur, JPEG, contrast) are applied from the seeded
-RNG. They exist to move the pixel statistics off "clean synthetic render", which
-is where a bf16 numerical difference is most likely to change a character.
-"""
+"""Seeded synthetic OCR corpus with known ground truth, spanning all four vision buckets."""
 
 from __future__ import annotations
 
@@ -81,11 +58,7 @@ class Sample:
         return "\n".join(self.lines)
 
 
-# ---------------------------------------------------------------------------
-# Corpus. Twenty samples, five per bucket, spread across document kinds and
-# degradations. Text is ASCII-only: the goal is to isolate port fidelity, and a
-# CJK tokenizer difference would confound that.
-# ---------------------------------------------------------------------------
+# Corpus: five samples per bucket, ASCII-only so a CJK tokenizer difference cannot confound port fidelity.
 
 CORPUS: list[Sample] = [
     # ---- bucket 1024: small, sparse, high contrast --------------------------
@@ -462,14 +435,7 @@ CORPUS: list[Sample] = [
 
 
 def _fit_font(sample: Sample, size) -> ImageFont.FreeTypeFont:
-    """Pick the largest font size that fills the canvas without overflowing it.
-
-    Rendering every sample at its nominal point size leaves the big buckets
-    mostly white, which spends the 1280-token budget on blank tiles and shrinks
-    the glyphs the recognizer actually has to read. Fitting to the canvas keeps
-    text density roughly constant across buckets, so a bucket comparison is
-    about sequence length rather than font scale.
-    """
+    """Largest font size that fits the canvas, keeping text density constant across buckets."""
     w, h = size
     margin = max(18, int(w * 0.05))
     n = max(1, len(sample.lines))

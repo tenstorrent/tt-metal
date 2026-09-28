@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""PaddleOCR-VL's text decoder, taught to accept spliced image embeddings.
-
-Needs no new kernels (ERNIE-4.5-0.3B is Llama-shaped GQA, PCC 0.989 against
-HuggingFace); only ``prepare_inputs_prefill`` differs, since image tokens
-arrive pre-embedded and M-RoPE tables come from the host (see
-``tt/common.py``). Follows qwen3_vl's generator contract, not
-tt_transformers', since the served endpoint needs its ``update_rope_deltas``
-and ``last_token_idx % 32`` handling; see the commit history for why the two
-contracts are incompatible.
-"""
+"""Text decoder fed pre-spliced embeddings and host M-RoPE, on qwen3_vl's generator contract."""
 
 from __future__ import annotations
 
@@ -85,15 +76,7 @@ class Transformer(TTTransformer):
         deepstack_visual_embeds=None,
         **kwargs,
     ):
-        """Prefill inputs from pre-spliced embeddings and host rotary tables.
-
-        ``tokens`` is a ttnn tensor of embeddings shaped ``[1, S, dim]``, not ids.
-        ``rot_mats`` is the host ``(cos, sin)`` pair covering at least
-        ``start_pos + S`` positions; it is sliced here rather than in the caller
-        so chunked prefill can advance ``start_pos`` without rebuilding tables.
-
-        Returns qwen3_vl's five-tuple; see the module docstring.
-        """
+        """Prefill inputs from [1, S, dim] embeddings; rot_mats is sliced here so chunked prefill can advance start_pos."""
         assert rot_mats is not None, "PaddleOCR-VL prefill needs host M-RoPE tables; see tt/common.py"
         assert isinstance(rot_mats[0], torch.Tensor) and isinstance(rot_mats[1], torch.Tensor)
         assert len(tokens.shape) == 3, f"expected [batch, seq, dim] embeddings, got {tokens.shape}"
@@ -147,10 +130,6 @@ class Transformer(TTTransformer):
         )
 
     def ttnn_prefill_forward(self, x, *args, deepstack_visual_embeds=None, **kwargs):
-        """Swallow the deepstack argument qwen3_vl's generator always passes.
-
-        This model has no deepstack embeddings, and the base signature does not
-        accept the keyword, so it is dropped here rather than in the caller.
-        """
+        """Drop the deepstack argument qwen3_vl's generator always passes; this model has none."""
         assert deepstack_visual_embeds is None, "PaddleOCR-VL has no deepstack path"
         return super().ttnn_prefill_forward(x, *args, **kwargs)

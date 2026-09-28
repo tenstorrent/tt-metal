@@ -1,19 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression guard for the repeat-loop failure mode at the resolution ceiling.
-
-Commit ``dd4f214a4b2`` found that images above the supported resolution make the
-decoder loop a phrase indefinitely and hit the token cap instead of stopping: at
-1605632 pixels one printed page in five transcribed itself twice, and a dense page
-at 3211264 looped a phrase 141 times, emitting 27140 characters for an
-8228-character page. The vision tower was not at fault -- short text at that same
-grid came back exact -- so the fault is the decoder's stop behaviour once the
-image exceeds the resolution the model was trained at.
-
-The deployment now serves at 1204224 (the top bucket, 6144 patches / 1280 image
-tokens). This test locks that boundary in: nothing should silently widen the
-bucket table and reintroduce the loop without this failing first.
+"""Guard: at the 1204224-pixel ceiling a dense page must stop on EOS rather than loop.
 
 Run::
 

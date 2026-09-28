@@ -1,22 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score the vision encoder one layer at a time against HuggingFace.
-
-The stage bisection narrowed a bad tower PCC to the 27-block encoder and ruled
-out precision (bf16 scored the same as bfp8). This narrows it further by running
-both stacks in lockstep from the same input and reporting PCC after every layer,
-which separates two very different diagnoses:
-
-* layer 0 already low  -> the block is structurally wrong (rope, norm, activation)
-* layer 0 fine, drifting -> error accumulation, which is a precision story after all
-
-It also tests permutation-equivariance head on. ``--order permuted`` feeds both
-stacks the block-order tokens with block-order rotary tables; ``--order raster``
-feeds HuggingFace its native raster order and permutes its output afterwards.
-Those two agreeing is the assumption the whole port rests on, and disagreeing
-would explain the tower PCC by itself.
-"""
+"""Per-layer encoder PCC vs HuggingFace; --order permuted/raster checks permutation equivariance."""
 
 from __future__ import annotations
 

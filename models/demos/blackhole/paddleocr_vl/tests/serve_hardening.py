@@ -1,32 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hammer a running PaddleOCR-VL server to shake out trace and compile faults.
-
-The vision tower compiles a separate program set for each padded patch count,
-and the decoder captures a decode trace. That combination has a specific,
-well-documented failure mode on tt-metal: a compile issued while a trace is
-parked can corrupt the trace (#48536). The symptom is not an exception on the
-compiling request -- that one usually succeeds -- but a *later* request that
-hangs or returns garbage. A single pass in ascending bucket order, which is what
-``serve_smoke.py`` does, is exactly the sequence least likely to expose it.
-
-So this drives the server three ways:
-
-*Order.* Buckets are visited in a seeded random order rather than ascending, so
-a fresh server compiles a large bucket while a small one's trace is already
-parked.
-
-*Repetition.* Every image is requested repeatedly across passes, and each
-response is compared against that image's first response. Drift between passes
-is the signature of a clobbered trace; a hang shows up as a request timeout.
-
-*Depth.* A long run of back-to-back requests on one image checks that nothing
-degrades with steady-state use.
-
-Determinism is the assertion rather than accuracy: temperature is 0, so the same
-image must produce byte-identical text every time. Accuracy against the
-HuggingFace goldens is ``serve_smoke.py``'s job.
+"""Drive a running server in random bucket order over repeated passes; fail on response drift or a hang (#48536).
 
 Run (server on :8100)::
 

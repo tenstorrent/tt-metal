@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""S3 probe: read a page end to end on Blackhole and score the text.
-
-Vision tower plus text decoder, wired together through the host splice and
-M-RoPE, decoding greedily. This is the first point the port produces OCR output
-rather than tensors, and the gate that actually matters: character error rate
-against the HuggingFace reference, with ground-truth CER reported alongside so a
-port regression can be told apart from a model limitation.
-
-Greedy throughout, so the comparison is deterministic. Everything runs one image
-at a time; batching multimodal prefill is not supported by any TT model today.
+"""Diagnostic: OCR a few pages end to end, reporting CER vs HuggingFace and vs ground truth.
 
 Run::
 
@@ -48,16 +39,7 @@ OCR_PROMPT = "OCR:"
 
 
 def to_torch_logits(x, mesh, vocab_size: int, row: int = -1) -> torch.Tensor:
-    """One position's logit vector, from either a ttnn or torch return value.
-
-    ``ttnn_prefill_forward`` is asked for ``get_last_token=(idx // 32) * 32``, so
-    prefill hands back the 32-row block that *contains* the last prompt token
-    rather than that token alone. Taking the final row of the block reads a
-    position past the end of the prompt, which produces a plausible-looking but
-    wrong first token (it prefixed a stray "j" before this was pinned down).
-    Callers pass ``row = last_token_idx % 32`` to select correctly; decode
-    returns a single row and keeps the default.
-    """
+    """Logits at row; prefill returns the 32-row block holding the last token, so pass last_token_idx % 32."""
     if not isinstance(x, torch.Tensor):
         x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1))
     return x.float().reshape(-1, vocab_size)[row]

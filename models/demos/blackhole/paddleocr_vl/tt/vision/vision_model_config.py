@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Args object driving PaddleOCR-VL's vision tower on Blackhole.
-
-Follows ``qwen36/tt/vision/vision_model_config.py`` closely (same tower
-shape, same modules); differences are naming, not math -- see
-``load_state_dict`` below and the ``out_hidden_size`` publish.
-"""
+"""Vision args, following qwen36's vision_model_config apart from naming."""
 
 from __future__ import annotations
 
@@ -96,15 +91,7 @@ class VisionModelArgs(ModelArgs):
         ), f"vision out_hidden_size ({vision_cfg.out_hidden_size}) must be divisible by TP={tp}"
 
     def load_state_dict(self):
-        """Load the checkpoint, converting the text QKV with the *text* head dim.
-
-        The base implementation permutes the text q/k projections into meta RoPE
-        format using ``self.head_dim``, which this subclass has redefined to the
-        vision tower's 72. Left alone it computes 2048/72 = 28 text heads and
-        dies on a reshape. Restore the text value for the duration of the load;
-        the vision projections are untouched by that path and get their own
-        permute in ``weight_mapping._to_meta_rope_format``.
-        """
+        """Load with the text head dim restored; the vision head_dim (72) would break the text q/k permute."""
         vision_head_dim = self.head_dim
         self.head_dim = self.hf_config.text_config.head_dim
         try:

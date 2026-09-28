@@ -1,21 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Locate where the vision tower diverges from the reference.
-
-``probe_vision_tower.py`` scores the whole vision path in one number, which is
-the gate but says nothing about *which* stage is wrong. This walks the same
-input through one stage at a time and scores each against the golden, so a bad
-PCC lands on a specific module:
-
-    host embeddings  -> patch conv + resampled position table
-    encoder + ln_post -> the 27 reused blocks
-    projector        -> the reused PatchMerger
-
-It also A/B tests the vision q/k RoPE permute, which is the one transform this
-port applies that neither the checkpoint nor tt_transformers' vision path does
-for itself, and therefore the likeliest thing to have backwards.
-"""
+"""Score each vision stage (embeddings, encoder, projector) against the golden and A/B the q/k RoPE permute."""
 
 from __future__ import annotations
 

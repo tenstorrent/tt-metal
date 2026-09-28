@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""S1 gate: PaddleOCR-VL's ERNIE decoder on one Blackhole die.
-
-The decoder is Llama-shaped GQA, so the bet is that ``models/tt_transformers``
-serves it unmodified and the only bring-up work is the vision half. This scores
-the stock ``Transformer``, built from the checkpoint's own weights and prefilling
-a text prompt, against the HuggingFace reference.
+"""S1 gate: stock tt_transformers decoder prefill logits vs HuggingFace on one P150.
 
 Run::
 

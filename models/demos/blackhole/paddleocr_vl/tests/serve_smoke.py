@@ -1,18 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exercise a running PaddleOCR-VL server over the OpenAI-compatible API.
-
-Checks the things that distinguish "the process is up" from "the endpoint is
-usable": health, that the model is advertised, that an image request comes back
-with the right text, and that repeated requests at *different resolutions* keep
-working. That last one is the important one. The vision tower compiles a program
-set per padded patch count, so the failure this catches is a request succeeding
-and the next one at a new bucket hanging or returning garbage, which is the
-classic symptom of a compile landing while a trace is parked (tt-metal #48536).
-
-Scored against the recorded HuggingFace goldens where a sample has one, so a
-regression shows up as text drift rather than only as an exception.
+"""Smoke-test a running server: health, model listing, golden-scored OCR at every bucket, determinism.
 
 Run (server on :8100)::
 

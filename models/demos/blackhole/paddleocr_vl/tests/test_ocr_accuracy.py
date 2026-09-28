@@ -1,18 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""S3 gate: read a page end to end on Blackhole and score the text.
-
-Vision tower plus text decoder, wired together through the host splice and
-M-RoPE, decoding greedily. This is the gate that actually matters: character
-error rate against the HuggingFace reference, over the whole recorded corpus.
-
-Greedy throughout, so the comparison is deterministic. Everything runs one image
-at a time; batching multimodal prefill is not supported by any TT model today.
-
-Uses the same generator (``models.demos.qwen3_vl.tt.generator``) the vLLM serving
-path uses, not the base ``tt_transformers`` one, so this test and the served
-endpoint exercise one code path rather than two.
+"""S3 gate: end-to-end CER vs the HuggingFace reference, through the qwen3_vl generator vLLM also uses.
 
 Run::
 
@@ -48,13 +37,7 @@ MEAN_CER_GATE = 0.01  # "gate: <= 1.00%" -- see tests/probe_ocr_e2e.py history
 
 
 def _to_torch_logits(x, mesh, vocab_size: int, row: int = -1) -> torch.Tensor:
-    """One position's logit vector, from either a ttnn or torch return value.
-
-    ``ttnn_prefill_forward`` is asked for ``get_last_token=(idx // 32) * 32``, so
-    prefill hands back the 32-row block that *contains* the last prompt token
-    rather than that token alone. Callers pass ``row = last_token_idx % 32`` to
-    select correctly; decode returns a single row and keeps the default.
-    """
+    """Logits at row; prefill returns the 32-row block holding the last token, so pass last_token_idx % 32."""
     if not isinstance(x, torch.Tensor):
         x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=-1))
     return x.float().reshape(-1, vocab_size)[row]

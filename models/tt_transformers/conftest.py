@@ -15,11 +15,7 @@ def device_params(request, galaxy_type):
     # to trace_region_size using the logical submesh SKU.
     params = getattr(request, "param", {}).copy()
 
-    # Keep the Blackhole SKUs in step with the map in demo/simple_text_demo.py. A name
-    # missing here falls through to the physical device count, so a single-chip request
-    # such as MESH_DEVICE=P150 on a multi-chip host is read as multi-device and fabric
-    # is started across the whole cluster for a 1x1 mesh, which then times out in
-    # fabric router sync.
+    # Keep in step with demo/simple_text_demo.py; a missing SKU is read as multi-device and fabric sync times out.
     mesh_device = {
         "N150": (1, 1),
         "N300": (1, 2),

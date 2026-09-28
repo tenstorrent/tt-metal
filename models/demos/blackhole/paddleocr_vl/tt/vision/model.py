@@ -1,16 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""PaddleOCR-VL's vision tower on Blackhole.
-
-``VisionTransformer`` is the device model (27 reused ``qwen36`` blocks,
-``ln_post``, ``PatchMerger``). ``DropInVisionTransformer`` adds the host seam
-(patch/position embedding via the real ``PaddleOCRVisionEmbeddings`` module,
-block-order permutation, rotary tables) and matches HuggingFace's
-``PaddleOCRVisionModel`` call signature. Padding is bucketed per compiled
-patch count -- see ``VISION_BUCKETS`` below -- since an unbounded shape set
-would mean a compile landing while a trace is parked (tt-metal #48536).
-"""
+"""PaddleOCR-VL vision tower: qwen36 blocks on device, HF embeddings and permutation on the host, padded per VISION_BUCKETS."""
 
 from __future__ import annotations
 
@@ -37,10 +28,9 @@ from .functional import preprocess
 # why higher needs tiling the page rather than a bigger single image.
 VISION_BUCKETS = (1024, 2048, 4096, 6144)
 
-# One representative grid per bucket, used to compile each program set during
-# warmup. Both dimensions are even (spatial merge is 2) and the patch count sits
-# exactly at the bucket's capacity, so warming these compiles the same programs a
-# real request of that size replays.
+# One grid per bucket, used to compile each program set during warmup. Both
+# dimensions are even (spatial merge is 2); any count inside the bucket compiles
+# the same programs, since the tower runs at the bucket size throughout.
 WARMUP_GRIDS = {1024: (32, 32), 2048: (32, 64), 4096: (64, 64), 6144: (64, 80)}
 
 
@@ -57,11 +47,7 @@ def bucket_for(n_patches: int) -> int:
 
 
 class HostEmbeddings(torch.nn.Module):
-    """Patch embedding plus resampled position embedding, on the host.
-
-    Delegates to the real HuggingFace module so the convolution and the bilinear
-    resample cannot drift from the reference.
-    """
+    """Patch and position embedding on the host, via the HuggingFace module so it cannot drift."""
 
     def __init__(self, hf_vision_config, host_weights: dict[str, torch.Tensor], dtype=torch.bfloat16):
         super().__init__()
@@ -91,12 +77,7 @@ class HostEmbeddings(torch.nn.Module):
 
 
 class VisionTransformer(LightweightModule):
-    """Device half: encoder blocks, ``ln_post``, then the merger.
-
-    Deliberately ignorant of images. It takes an already-embedded, already
-    permuted, already padded patch sequence and the rotary tables that go with
-    it, which keeps every resolution-dependent decision on the host side.
-    """
+    """Device half (blocks, ln_post, merger) over an already embedded, permuted, padded sequence."""
 
     def __init__(self, args, dtype, state_dict, weight_cache_path, tt_ccl=None):
         super().__init__()
@@ -163,27 +144,25 @@ class VisionTransformer(LightweightModule):
         return self.forward(x, unpadded_seq_len, rot_mats)
 
     def forward(self, x, unpadded_seq_len: int, rot_mats):
-        """Run the tower. ``x`` arrives fractured along hidden and leaves the same way.
-
-        The bucket padding is dropped before ``ln_post`` rather than after the
-        blocks purely so the merger sees a row count divisible by merge**2; the
-        padded rows carry an identity rotation and contribute nothing either way.
-        """
+        """``x`` is fractured along hidden; every op runs at bucket size so warmup covers all shapes."""
+        # [0, n, S]: real patches never attend to padding; always 3 entries, so one program set per bucket.
+        cu_window_seqlens = ttnn.from_torch(
+            torch.tensor([0, unpadded_seq_len, x.shape[-2]], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.args.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.args.mesh_device),
+        )
         for block in self.blocks:
-            x = block(x, rot_mats=rot_mats)
+            x = block(x, rot_mats=rot_mats, cu_window_seqlens=cu_window_seqlens)
+        ttnn.deallocate(cu_window_seqlens)
 
-        x = x[:, :, :unpadded_seq_len, :]
         x = self.ln_post(x)
         return self.patch_merger(x)
 
 
 class DropInVisionTransformer(torch.nn.Module):
-    """Host seam plus device tower, shaped like ``PaddleOCRVisionModel``.
-
-    ``forward(pixel_values, grid_thw)`` returns the projected image embeddings
-    ready to splice into the text stream, matching what
-    ``PaddleOCRVLModel.get_image_features`` produces.
-    """
+    """Host seam plus device tower; forward returns what PaddleOCRVLModel.get_image_features does."""
 
     def __init__(
         self,
@@ -211,12 +190,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
     @torch.no_grad()
     def warmup_buckets(self) -> int:
-        """Compile every bucket's program set before any trace is captured.
-
-        Left to itself the tower compiles a bucket on first use, which in a
-        served process can land after the decode trace is captured, corrupting
-        it (tt-metal #48536). Returns the number of buckets warmed.
-        """
+        """Compile every bucket before trace capture; a later compile corrupts the parked trace (#48536)."""
         patch = self.model_args.patch_size
         for bucket, (h, w) in WARMUP_GRIDS.items():
             n = h * w
@@ -247,12 +221,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
     @torch.no_grad()
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
-        """One image at a time; concatenate the projected embeddings.
-
-        Per-image rather than packed: a single sequence makes the encoder's
-        attention plainly full and removes any need for ``cu_seqlens`` bookkeeping
-        on device. Multi-image prompts are rare for OCR and cost one pass each.
-        """
+        """One tower pass per image (multi-image OCR prompts are rare); returns the concatenated embeddings."""
         outputs = []
         remaining = pixel_values
 

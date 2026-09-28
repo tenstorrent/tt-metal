@@ -1,22 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Record the HuggingFace CPU reference for the PaddleOCR-VL bring-up gates.
-
-Every later stage is scored against what this script writes. S1 compares decoder
-logits, S2 compares the vision tower and projector tensor by tensor, and S3
-compares decoded OCR text. Recording all three from one run keeps them mutually
-consistent: the logits and the text come from the same weights, the same image
-preprocessing, and the same greedy decode.
-
-The reference is bf16 on CPU, matching the dtype the TT port will run, so a
-tensor mismatch later points at the port rather than at a dtype difference.
-Decoding is greedy (``do_sample=False``) so the text gate is deterministic.
-
-Intermediates are captured for a few images only. They are large -- a 1280-token
-page carries 5120 patch rows of width 1152 -- and three images across different
-buckets are enough to localize a fault to the tower, the projector, or the
-decoder.
+"""Record the bf16 CPU HuggingFace reference (logits, vision tensors, greedy text) the gates score against.
 
 Usage::
 
@@ -58,15 +43,7 @@ def build_inputs(processor, image: Image.Image, prompt: str = OCR_PROMPT):
 
 @torch.no_grad()
 def capture_intermediates(model, inputs) -> dict:
-    """Split the vision path into the two tensors the TT port has to reproduce.
-
-    ``get_image_features`` is the model's own entry point (it unsqueezes the
-    batch dim, calls the tower with ``grid_thw=``, then the projector with the
-    grid), and it conveniently hands back both halves: ``last_hidden_state`` is
-    the tower output, ``pooler_output`` is the projected embedding that gets
-    spliced into the text stream. Going through it rather than calling the
-    submodules by hand keeps this golden identical to what generation used.
-    """
+    """Tower and projector outputs via get_image_features, the same path generation uses."""
     vision_out = model.model.get_image_features(
         pixel_values=inputs["pixel_values"],
         image_grid_thw=inputs["image_grid_thw"],
@@ -104,13 +81,7 @@ def main() -> int:
     out = []
 
     def write_manifest():
-        """Rewrite the manifest after every sample.
-
-        A full CPU pass over the corpus takes the better part of an hour, and
-        the large pages are at the end. Writing only at the finish means any
-        interruption discards everything, which has already happened once, so
-        the manifest is rewritten each iteration and records how far it got.
-        """
+        """Rewritten after every sample so an interrupted CPU pass keeps its progress."""
         manifest = {
             "model_id": MODEL_ID,
             "prompt": OCR_PROMPT,

@@ -53,8 +53,9 @@ passes plus 50 sequential showed no drift, median 0.25s.
 
 The checkpoint's default `max_pixels` (1003520, ~100 DPI on A4) costs real
 accuracy on small print: a dense 9pt-text page measured 4.98% CER there, and
-0.07% at 1204224 -- exactly the top bucket (6144 patches / 1280 image tokens).
-**The deployment serves at 1204224.**
+0.07% at 1204224 -- exactly the top bucket (6144 patches / 1536 image tokens).
+**The deployment serves at 1204224:** `tt/generator_vllm.py` makes it the
+processor default and rejects a larger `max_pixels` with a 400.
 
 Higher resolutions were built and tested, then removed. At 1605632 and above,
 one printed page in five transcribed itself correctly and then transcribed

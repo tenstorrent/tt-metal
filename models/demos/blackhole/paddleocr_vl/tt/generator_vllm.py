@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""vLLM entry point for PaddleOCR-VL on Blackhole.
-
-Registers ``PaddleOCRVLForConditionalGeneration`` on vLLM's OpenAI-compatible
-server, reusing vLLM's own multimodal processor (tokenization, placeholder
-expansion, ``smart_resize``) and qwen3_vl's model-agnostic ``Generator`` --
-whose ``last_token_idx % 32`` selection out of the prefill block matters here
-too; see ``tt/model.py``. No deepstack; splice and padding happen on the host.
-"""
+"""vLLM adapter: vLLM's own PaddleOCR-VL processor plus qwen3_vl's Generator; splice and padding on the host."""
 
 from __future__ import annotations
 
@@ -27,7 +20,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.paddleocr_vl.tt.common import multimodal_rope_from_hf, splice_image_embeddings
 from models.demos.blackhole.paddleocr_vl.tt.model import Transformer
-from models.demos.blackhole.paddleocr_vl.tt.vision.model import DropInVisionTransformer
+from models.demos.blackhole.paddleocr_vl.tt.vision.model import VISION_BUCKETS, DropInVisionTransformer
 from models.demos.blackhole.paddleocr_vl.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.blackhole.paddleocr_vl.tt.weight_mapping import map_vision_state_dict
 from models.demos.qwen3_vl.tt.generator import Generator as VLGenerator
@@ -36,9 +29,18 @@ from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.model_config import ModelArgs
 
 MAX_SEQ_LEN_NATIVE = 131072
+MAX_PIXELS = VISION_BUCKETS[-1] * 14 * 14  # 1204224
 
 
 class TT_PaddleOCRVLProcessingInfo(PaddleOCRVLProcessingInfo):
+    def get_hf_processor(self, **kwargs: object):
+        # Default to the tower's measured ceiling, above the checkpoint's 1003520,
+        # and refuse more here rather than as a bucket_for error inside prefill.
+        max_pixels = self.ctx.get_merged_mm_kwargs(kwargs).get("max_pixels", MAX_PIXELS)
+        if max_pixels > MAX_PIXELS:
+            raise ValueError(f"max_pixels={max_pixels} exceeds PaddleOCR-VL's supported {MAX_PIXELS}")
+        return super().get_hf_processor(**{**kwargs, "max_pixels": max_pixels})
+
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         # Upstream advertises unlimited images. The tower runs one image per
         # forward and the decoder is batch-1, so cap it rather than let a request
@@ -56,10 +58,7 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
         # Prefix caching would need the vision splice to be cache-aware; not claimed.
         "supports_prefix_caching": False,
         "supports_async_decode": True,
-        # Measured, not assumed: produced garbage at batch 1 (CER 77-332%,
-        # finish_reason "length"), the same corruption class as qwen3_vl's
-        # #48037. Not needed either -- allow_force_argmax alone (tt/model.py)
-        # already clears the decode-rate gate.
+        # Corrupts output at batch 1 (qwen3_vl #48037); argmax alone clears the decode gate.
         "supports_sample_on_device": False,
     }
 
@@ -88,8 +87,7 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
 
         dtype = ttnn.bfloat8_b
 
-        # Accuracy over performance: bfp8 measured the same as bf16 on the vision
-        # tower (PCC 0.979 vs 0.978), and OCR pays for precision in characters.
+        # bfp8 scores the same vision-tower PCC as bf16.
         text_args = ModelArgs(
             mesh_device,
             instruct=True,
@@ -170,12 +168,7 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
         return pv, grid
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, enable_trace, **kwargs):
-        """Vision, splice, M-RoPE and prefill, one user at a time.
-
-        Returns ``(logits, rope_deltas)``. The second element is required because
-        this checkpoint declares ``mrope_section``, so vLLM's ``uses_mrope`` is
-        True and the plugin threads the deltas into every decode step.
-        """
+        """Vision, splice, M-RoPE and prefill per user; also returns rope_deltas, since uses_mrope is True."""
         if enable_trace:
             # A trace captured here would be invalidated by the first image at a
             # new vision bucket, which compiles. Buckets are warmed explicitly
@@ -250,12 +243,7 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
         return output_logits, rope_deltas
 
     def warmup_model_prefill(self, *args, enable_trace: bool = False, **kwargs):
-        """Compile the vision buckets in the plugin's phase-one warmup.
-
-        Prefill tracing stays off for this model, so the phase-two call (this
-        method with ``enable_trace=True``) has nothing to do; see
-        ``DropInVisionTransformer.warmup_buckets`` for why phase one matters.
-        """
+        """Warm the vision buckets in phase one; phase two (enable_trace=True) has nothing to trace."""
         if enable_trace:
             return
         warmed = self.visual_model.warmup_buckets()

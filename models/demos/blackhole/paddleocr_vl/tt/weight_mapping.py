@@ -1,15 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rename PaddleOCR-VL's vision weights onto the qwen36 vision tower's keys.
-
-The two checkpoints are dimensionally identical, so this reuses
-``models/demos/blackhole/qwen36/tt/vision`` and only renames keys onto its
-layout. Three tensors have no qwen36 counterpart and are returned separately
-for the host seam to consume instead: the patch embedding, the position
-table, and ``ln_post`` (kept on device rather than the host, unlike the other
-two, since it feeds straight into the merger).
-"""
+"""Rename PaddleOCR-VL vision weights onto qwen36's keys; patch embedding and position table go to the host."""
 
 from __future__ import annotations
 
@@ -50,11 +42,7 @@ _MERGER_RENAMES = {
 
 
 class UnmappedVisionKeys(RuntimeError):
-    """Raised when a vision weight has nowhere to go.
-
-    Silently dropping a weight produces a model that loads cleanly and is subtly
-    wrong, which is far more expensive to debug than an import-time failure.
-    """
+    """A vision weight with no destination, raised rather than silently dropped."""
 
 
 def split_host_tensors(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -71,18 +59,7 @@ def _rename_layer_key(layer_num: str, rest: str) -> str | None:
 
 
 def _to_meta_rope_format(key: str, tensor: torch.Tensor, vision_head_dim: int) -> torch.Tensor:
-    """Permute a vision q/k projection into the interleaved meta RoPE layout.
-
-    ``ModelArgs.load_state_dict`` converts the *text* projections (with the text
-    head dim) but passes vision weights through untouched -- see
-    ``map_hf_to_meta_keys_vision_only``, which only renames. The reused
-    ``VisionAttention`` applies ``rotary_embedding_llama``, which expects the
-    meta interleaving, so the permute has to happen here and with the *vision*
-    head dim of 72. This mirrors what qwen36 does when it converts its
-    vision-only state dict.
-
-    Only q and k are affected; v and the output projection carry no rotation.
-    """
+    """Permute vision q/k into meta RoPE layout with the vision head dim; ModelArgs only converts text weights."""
     if not (".attention.wq." in key or ".attention.wk." in key):
         return tensor
     n_heads = tensor.shape[0] // vision_head_dim
@@ -97,16 +74,7 @@ def map_vision_state_dict(
     vision_head_dim: int = 72,
     strict: bool = True,
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-    """Split a converted PaddleOCR-VL state dict into (device weights, host weights).
-
-    Returns the renamed vision/merger weights the qwen36 modules load, and the
-    host-side tensors. Text weights (``layers.*``, ``tok_embeddings``, ``norm``,
-    ``output``) are passed through untouched so the caller can hand the same
-    dict to both the text and vision models.
-
-    ``vision_head_dim`` is the tower's own head dim (1152/16), not the text
-    decoder's 128; it only affects the q/k RoPE permute.
-    """
+    """Split into (device weights, host weights); text weights pass through. vision_head_dim is 72, not the text 128."""
     host = split_host_tensors(state_dict)
     device: dict[str, torch.Tensor] = {}
     unmapped: list[str] = []

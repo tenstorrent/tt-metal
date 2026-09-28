@@ -1,24 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measure served OCR latency and decode throughput per vision bucket.
-
-Streams the response so the two halves can be separated the way a user
-experiences them:
-
-*TTFT* is the wall time from sending the request to the first content token. For
-this model it covers the host patch embedding, the vision tower over the whole
-padded bucket, the splice, and the text prefill. It grows with image size
-because the tower's work does, which is why results are reported per bucket
-rather than as one number.
-
-*Decode rate* is the remaining tokens over the remaining time, so it excludes
-prefill and is comparable to a text model's tokens/s/user.
-
-Each bucket is warmed before timing, then measured several times and reported by
-median: the first request after a period of idleness is not representative, and
-a single sample on a device shared with nothing else still moves by tens of
-milliseconds.
+"""Per-bucket served TTFT and decode tok/s (median of --reps after warmup); exits non-zero on a gate miss.
 
 Run (server on :8100)::
 

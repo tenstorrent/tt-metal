@@ -1,28 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lock in the host-seam invariants the vision port is built on.
-
-The tower reuses ``qwen36``'s kernels unchanged, which is only sound because of
-three facts about PaddleOCR-VL specifically. Each is cheap to check on CPU and
-expensive to discover the hard way at PCC time, so they are asserted here rather
-than assumed:
-
-1. The image processor emits patches in **raster** order, and the rotary
-   positions are plain ``(row, col)`` to match. PaddleOCR merges 2x2 blocks in
-   the projector rather than inside the encoder, so unlike Qwen it passes
-   ``merge_size=1`` when building position ids. If a future checkpoint moved the
-   merge into the encoder, this test fails instead of the model quietly
-   regressing.
-
-2. Our rotary tables reproduce ``PaddleOCRVisionRotaryEmbedding`` exactly.
-
-3. Permuting tokens into merge-block order and then reshaping contiguously is
-   *identical* to the projector's ``reshape(...).transpose(2, 3)`` gather. This
-   is what lets ``PatchMerger`` be reused with no device-side gather.
-
-No device required.
-"""
+"""CPU checks of the host-seam invariants that let qwen36's tower and PatchMerger be reused unchanged."""
 
 from __future__ import annotations
 

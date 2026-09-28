@@ -1,17 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""S2 gate: score the vision tower against the HuggingFace reference.
-
-Runs the real patch tensors recorded by ``generate_goldens.py`` through the
-Blackhole tower and compares the projected image embeddings to what HF produced
-from the same input. Those embeddings are what gets spliced into the text
-stream, so this is the gate that decides whether the vision half is correct.
-
-The comparison is on the projector output rather than the raw tower output,
-because our tower deliberately emits tokens in merge-block order while HF's is
-raster. The projector output is order-identical between the two by construction
-(see ``test_vision_permutation.py``), which makes it the natural meeting point.
+"""S2 gate: projector-output PCC vs goldens (the projector output is order-identical to HF; the tower's is not).
 
 Run::
 
