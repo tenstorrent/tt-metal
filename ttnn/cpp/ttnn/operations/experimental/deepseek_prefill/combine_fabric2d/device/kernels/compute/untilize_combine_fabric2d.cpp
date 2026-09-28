@@ -9,6 +9,9 @@
 // rows come out a block of tiles at a time so the input window stays small -- a whole tile-row is 458 kB at
 // the production shape and would not fit L1 on top of the output ring.
 //
+// Nothing here is format-specific: cb_in is declared in the dispatched buffer's format and cb_out as
+// BFLOAT16, so a BFLOAT8_B tile is dequantised by the unpacker on its way through.
+//
 // How many batches there are is data-dependent, so the dataflow kernel works it out and leaves it in
 // cb_batches before the first one arrives. Everything else this kernel needs is producer-consumer ordering
 // on the two circular buffers.

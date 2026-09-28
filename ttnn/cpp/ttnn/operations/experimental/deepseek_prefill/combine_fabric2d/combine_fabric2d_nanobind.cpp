@@ -21,8 +21,9 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
 
         Called exactly like `ttnn.experimental.deepseek_prefill.combine`, plus `expert_offsets`.
 
-            dispatched_buffer     the tokens, ROW_MAJOR or TILE. A chip's token range for one expert
-                                  holds that expert's tokens grouped by the chip they ORIGINATED on.
+            dispatched_buffer     the tokens: BFLOAT16 ROW_MAJOR, BFLOAT16 TILE or BFLOAT8_B TILE. A
+                                  chip's token range for one expert holds that expert's tokens grouped
+                                  by the chip they ORIGINATED on.
             dispatched_metadata   3 int32 per token: (linearized_coord, token_idx, topk_idx). The
                                   token's destination slot is page token_idx * num_experts_per_tok +
                                   topk_idx of the origin chip's output.
@@ -35,8 +36,10 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         Returns the combined output, (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim) BFLOAT16
         ROW_MAJOR per device.
 
-        BFLOAT16 input only. There is no fp8 output path: fp8 comes out of the packer, and the untilize
-        here runs on cores that do not write the output.
+        The output is BFLOAT16 whatever the input: a BFLOAT8_B buffer is dequantised by the untilize,
+        exactly, since every bfp8 value is representable in BFLOAT16. There is no BFLOAT8_B ROW_MAJOR
+        input (bfp8 only exists tiled) and no fp8 output path: fp8 comes out of the packer, and the
+        untilize here runs on cores that do not write the output.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),
