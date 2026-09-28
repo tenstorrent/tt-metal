@@ -380,67 +380,70 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_segment_core.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_rational_parity_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_cbrt_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_dense.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_dense_polynomial.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_config_tile.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_action_coordinate.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_finalize.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_prepare.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_symmetric_constant.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_encoded_domain_finalize.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalization_owner.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_gradient_finalize.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dst_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_raw_class_policy.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_core_total.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_exp_pool_init.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_reciprocal_init.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_target_special_policy.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_zone_gradient_finalize.inc
+    inc/api/compute/eltwise_unary/celu_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_finite_reciprocal.h
+    inc/api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_exp.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_asymptotic_factor.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_domain_symmetric_constant.inc
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dual_tile.inc
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_tti_replay.h
     inc/api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_exp_correction_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_finite_reciprocal.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_erfinv_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log_square_factorized_odd.h
     ckernels/common/llk_sfpu/ckernel_sfpu_exp2_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_paired.h
     ckernels/common/llk_sfpu/ckernel_sfpu_expm1_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_factored_cw_expm1_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_clamped_affine.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_dst_tile.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_selected_exp_pool_init.inc
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_zone_gradient_finalize.inc
-    inc/api/compute/eltwise_unary/celu_bw_tt_poly_bf16.h
-    inc/api/compute/eltwise_unary/elu_bw_tt_poly_bf16.h
-    inc/api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h
-    inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardshrink_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_clamped_affine.h
+    inc/api/compute/eltwise_unary/hardsigmoid_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
+    inc/api/compute/eltwise_unary/hardswish_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/hardswish_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h
-    inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/leaky_relu_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_polynomial_single_tile.inc
     inc/api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_normalized_log_odds.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_normalized_log_odds_core.h
+    inc/api/compute/eltwise_unary/logit_tt_poly_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square_core.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
     inc/api/compute/eltwise_unary/softplus_bw_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/softshrink_bw_tt_poly_bf16.h
     ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_replay.inc
     ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tt_poly_rational_squared_wh_replay.inc
     inc/api/compute/eltwise_unary/softsign_bw_tt_poly_bf16.h
     inc/api/compute/eltwise_unary/tanhshrink_bw_tt_poly_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_cbrt_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_newton_root_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log2.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket_core.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_erfinv_bf16.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log_square_factorized_odd.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
-    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
-    inc/api/compute/eltwise_unary/hardswish_tt_poly_bf16.h
-    inc/api/compute/eltwise_unary/leaky_relu_bw_tt_poly_bf16.h
 )

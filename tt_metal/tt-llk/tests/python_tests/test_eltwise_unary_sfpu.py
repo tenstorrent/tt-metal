@@ -1397,6 +1397,7 @@ _TT_POLY_FP32_DEST = {
     "hardtanh": (),
     "log10": (),
     "log2": (),
+    "logit": (),
     "polygamma": (),
     "relu": (),
     "selu": (),
@@ -1404,7 +1405,11 @@ _TT_POLY_FP32_DEST = {
 }
 _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ("erfinv",)
-_TT_POLY_ADAPTER_OPERATIONS = {"hardswish": "hardswish", "log10": "log10"}
+_TT_POLY_ADAPTER_OPERATIONS = {
+    "hardswish": "hardswish",
+    "log10": "log10",
+    "logit": "logit",
+}
 _TT_POLY_NATIVE_ARCHITECTURES = {}
 
 
@@ -1546,6 +1551,7 @@ _GENERATED_UNARY_CASES = [
     ),
     (None, "log10", True, True, 32, "None", "ckernel_sfpu_log.h"),
     (MathOperation.LogWithBase, "log2", True, True, 32, "None", "ckernel_sfpu_log.h"),
+    (None, "logit", False, False, 32, "None", "ckernel_sfpu_logit_bf16.h"),
     (
         MathOperation.Polygamma,
         "polygamma",
@@ -1676,6 +1682,10 @@ def _tt_poly_reference_log10(x):
     return getattr(importlib.import_module("torch"), "log10")(x.double(), **{})
 
 
+def _tt_poly_reference_logit(x):
+    return getattr(importlib.import_module("torch"), "logit")(x.double(), **{})
+
+
 _TT_POLY_FORWARD_REFERENCES = {
     "erfinv": (
         _tt_poly_reference_erfinv,
@@ -1690,6 +1700,7 @@ _TT_POLY_FORWARD_REFERENCES = {
         (),
     ),
     "log10": (_tt_poly_reference_log10, ((128, 32640),), (), ()),
+    "logit": (_tt_poly_reference_logit, ((128, 16256),), (16255,), ()),
 }
 
 
@@ -1755,6 +1766,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "hardtanh",
     "log10",
     "log2",
+    "logit",
     "polygamma",
     "relu",
     "selu",
@@ -1998,6 +2010,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "hardtanh",
     "log10",
     "log2",
+    "logit",
     "polygamma",
     "relu",
     "selu",

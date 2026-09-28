@@ -1099,6 +1099,7 @@ _PAIRED_GENERATED = {
     "hardtanh_bw": "backward_where_factor",
     "leaky_relu_bw": "backward_complete",
     "log_sigmoid_bw": "backward_complete",
+    "logit": "dedicated_unary",
     "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
     "softsign_bw": "backward_complete",
