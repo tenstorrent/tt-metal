@@ -33,6 +33,9 @@ Ask in one message for what you cannot find out yourself, with defaults proposed
 
 - Checkpoint: reachable, size, gated or not; it downloads to `/localdev/$USER/bringup/<model>/hf/`
   (`snapshot_download(<id>, local_dir=...)`). The download metadata records the revision; put it in `hf.revision`.
+  A layer subset still needs the whole checkpoint once, for the HF sanity (smoke, accuracy floor); task R.4 then trims
+  it to layers 0..last subset layer (F47; `checkpoint.trim_drop` globs drop MTP or vision towers too, `checkpoint.trim:
+  false` keeps everything). Check the free disk for the whole download; the trimmed size is what stays.
 - Box: `ls /dev/tenstorrent | wc -l` chips; `tt-smi -ls` for the architecture. Never `tt-smi -r`.
 - Config (the text config for multimodal checkpoints): layers, hidden, heads, KV heads, head_dim, experts, attention
   type per layer, sliding window. These give `block_types` (one entry per distinct block, every layer exactly once, a
