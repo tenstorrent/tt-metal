@@ -2,24 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import torch
-import pytest
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
-from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    generate_bfloat16_bits,
-    generate_bfloat16_bits_in_range,
-    to_tt_tensor,
-    bf16_bits_to_float,
-    bf16_quantize_rne,
-    float_to_bf16_bits,
-    SMALLEST_NORMAL_BF16,
-    MAX_BF16,
-)
-
-pytestmark = pytest.mark.use_module_device
-
 """
 Category 6: Ops with multiple/special parameters
 
@@ -58,7 +40,8 @@ Accuracy criteria
       A PCC over the whole grid is dominated by the largest-magnitude decade,
       so tanh, sigmoid_accurate and polygamma additionally get a per-element
       ULP assertion over the well-conditioned sub-range their replaced tests
-      covered.
+      covered. softplus's negative tail is ULP-gated too: a whole-grid PCC
+      stays near 1.0 when that tail is flushed to 0.
 
 Coverage that deliberately lives elsewhere (recorded here so an unrelated
 refactor of those files doesn't silently delete coverage this one relies on):
@@ -118,6 +101,26 @@ read off the failing elements.
     never asserted the band either -- it called torch.allclose and discarded
     the result.
 """
+
+import math
+
+import pytest
+import torch
+import ttnn
+
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    MAX_BF16,
+    SMALLEST_NORMAL_BF16,
+    bf16_bits_to_float,
+    bf16_quantize_rne,
+    float_to_bf16_bits,
+    generate_bfloat16_bits,
+    generate_bfloat16_bits_in_range,
+    to_tt_tensor,
+)
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+
+pytestmark = pytest.mark.use_module_device
 
 
 MAX_BF16_VAL = torch.finfo(torch.bfloat16).max
@@ -755,6 +758,23 @@ def test_softplus_op(device, beta, threshold_val):
     finite = torch.isfinite(golden) & torch.isfinite(result)
     _assert_excluded_region(~finite, "softplus non-finite", max_fraction=0.05)
     assert_with_pcc(golden[finite], result[finite], pcc=0.999)
+
+    # The bf16 kernel used to clamp the residual to 0 for |beta*x| > 5, so every input with
+    # beta*x < -5 came back exactly 0 while the exact answer was still a normal bf16. PCC over
+    # the whole grid stays ~1.0 through that (the large outputs dominate), so gate the tail on
+    # ULP. t > -80 stays above the point where exp(t) itself drops through the fp32 normal floor.
+    golden_bf16 = golden.to(torch.bfloat16)
+    result_bf16 = result.to(torch.bfloat16)
+    t = beta * input_tensor
+    tail = finite & (t < -5.0) & (t <= threshold_val) & (t > -80.0)
+    assert tail.any(), f"softplus(beta={beta}, threshold={threshold_val}) negative-tail window is empty"
+    # Positive beta keeps softplus in (0, inf). Negative beta flips the sign, so the
+    # zero-tail regression is the ULP check below rather than a positivity check.
+    if beta > 0:
+        assert torch.all(
+            result_bf16[tail] > 0
+        ), f"softplus(beta={beta}, threshold={threshold_val}) returned 0 on the negative tail"
+    assert_with_ulp(expected_result=golden_bf16[tail], actual_result=result_bf16[tail], ulp_threshold=1)
 
 
 def test_softplus_beta_zero(device):
