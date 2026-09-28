@@ -422,3 +422,10 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - The default gate already passes (all five steps are registered on device): pcc_swap_out 0.999988, out rel 0.0050 / first rows 0.0045; router pcc 0.99619, overlap 0.98975 golden / 0.99915 iso, matched rows 1885 / 2034, matched rel 0.00275 / 0.00147, nnz 8, row sums [0.9974, 1.0023]. 1 passed. (The first `FAIL pcc=0` lines come from the precompile collect pass.)
 - Tightest margin: router overlap vs golden, 0.98975 against 0.985 (the prior's was 0.988). The upstream device ffn_norm error causes it; the iso overlap of 0.999 shows the device router itself is close.
 - Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_05_router.py`
+
+## C.full_moe.experts.test.1 (test review, experts, layer 5), 2026-09-28
+- Replaced the rendered one-liner with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_moe_experts.py` (same golden and CPU reference). Only the docstring changed: an adoption note. Checks: PCC >= 0.99 (gated), numel, finite, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03], worst per-token rel L2 <= 0.1. The prior's docstring records the mutation study (bfp8 x fails rel/ratio on layer 5's outlier channels; dropped experts/pairs, scale and capacity bugs). Every check runs on the gathered [2048, 4096] output, so none depends on the mesh shape.
+- BRINGUP_IMPL=reference: pcc 0.999987, rel 0.0050, ratio [0.9868, 1.0162], worst row 0.0164: PASS. BRINGUP_IMPL=stub: pcc 0: FAIL.
+- The default gate already passes (the device experts are registered from sliding_moe): pcc 0.999977, rel 0.0071, ratio [0.9863, 1.0212], worst row 0.0216 (row 12). 1 passed. (The first `FAIL pcc=0` line comes from the precompile collect pass.)
+- Tightest margin: norm ratio max 1.0212 against 1.03.
+- Re-run: `PYTHONPATH=$PWD [BRINGUP_IMPL=reference|stub] scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_experts.py`
