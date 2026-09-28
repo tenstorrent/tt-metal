@@ -1383,6 +1383,7 @@ _TT_POLY_NATIVE_CALLS = {
     )
 }
 _TT_POLY_FP32_DEST = {
+    "abs": (),
     "acos": (),
     "acosh": ("blackhole", "wormhole"),
     "asinh": (),
@@ -1521,6 +1522,7 @@ class _TTPolyGeneratedBF16(TemplateParameter):
 
 
 _GENERATED_UNARY_CASES = [
+    (MathOperation.Abs, "abs", True, False, 32, "None", "ckernel_sfpu_abs.h"),
     (
         MathOperation.Acos,
         "acos",
@@ -2144,6 +2146,7 @@ def test_tt_poly_generated_bf16_llk_disabled(arguments):
 
 
 _TT_POLY_PERF_OPERATIONS = (
+    "abs",
     "acos",
     "acosh",
     "asinh",
@@ -2403,6 +2406,7 @@ def _tt_poly_scalar_perf_binding(operation, dest_acc):
 
 
 _TT_POLY_SCALAR_PERF_OPERATIONS = (
+    "abs",
     "acos",
     "acosh",
     "asinh",
