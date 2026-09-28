@@ -46,7 +46,8 @@ def main(log, envf, out):
             "iters": "",
         }
     layers = cfg["layers"]
-    rows_ = 8 // int(cfg["stages"])
+    built = next((r for r in recs if r["kind"] == "built"), None)  # the mesh actually opened (BUDGET_MESH)
+    rows_ = built["mesh"][0] if built and "mesh" in built else 8 // int(cfg["stages"])
     base = dict(
         run_id=env["run_id"],
         timestamp=env["date"],

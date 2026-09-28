@@ -29,6 +29,8 @@ Env:
   BUDGET_ITERS       timed forwards per point                                             [default 5]
   BUDGET_FILL        real | none. none skips the history fill (attends a zeroed cache)   [default real]
   BUDGET_STAGES      1, 2 or 4 (sub-mesh (8/S, 4)); BUDGET_STAGE picks which one      [default 2 / 0]
+  BUDGET_MESH        RxC -> open that mesh directly instead of carving the 8x4 (e.g. 4x4 on a sub-torus
+                     with TT_VISIBLE_DEVICES + its mesh graph descriptor); stages still set the layer range
   BUDGET_TOKENS      metadata.json with token_ids, tiled to length                       [required]
   BUDGET_ANY_LAYERS  1 -> allow BUDGET_LAYER_IDS outside the stage's own layer range     [default 0]
   BUDGET_MEM         1 -> report per-bank DRAM in use after the last point               [default 0]
@@ -142,9 +144,12 @@ def main():
     )
 
     set_fabric_config_from_env()
-    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
+    direct = os.getenv("BUDGET_MESH")
+    shape = tuple(int(x) for x in direct.lower().split("x")) if direct else (8, 4)
+    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(*shape), l1_small_size=L1_SMALL_SIZE)
     try:
-        mesh = galaxy.create_submeshes(ttnn.MeshShape(8 // stages, 4))[stage] if stages > 1 else galaxy
+        carve = stages > 1 and not direct
+        mesh = galaxy.create_submeshes(ttnn.MeshShape(8 // stages, 4))[stage] if carve else galaxy
         t0 = time.perf_counter()
         runtime, kv_cache = build(mesh, layer_ids, W, capacity, stages, stage)
         emit(kind="built", load_s=round(time.perf_counter() - t0, 1), mesh=list(mesh.shape))
