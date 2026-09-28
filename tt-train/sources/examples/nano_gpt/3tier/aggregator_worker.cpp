@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
     auto &socket_manager = ttml::autograd::ctx().get_socket_manager();
 
-    auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
+    auto [effective_max_steps, vocab_size] = three_tier_arch::get_effective_max_steps_and_vocab_size(config);
     auto *device = &ttml::autograd::ctx().get_device();
 
     auto num_devices = static_cast<uint32_t>(device->num_devices());
@@ -151,29 +151,16 @@ int main(int argc, char **argv) {
     send_weights_from_optimizer_to_workers(
         socket_manager, workers_and_aggregator_ctx, aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
 
-    uint32_t global_step = 0;
-    for (uint32_t epoch = 0; config.num_epochs == 0 || epoch < config.num_epochs; ++epoch) {
-        for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
-            send_aggregated_gradients_from_workers_to_optimizer(
-                socket_manager,
-                workers_and_aggregator_ctx,
-                aggregator_and_optimizer_ctx,
-                sorted_model_parameters,
-                workers,
-                device_config.enable_ddp);
-            send_weights_from_optimizer_to_workers(
-                socket_manager,
-                workers_and_aggregator_ctx,
-                aggregator_and_optimizer_ctx,
-                sorted_model_parameters,
-                workers);
-            if (global_step >= config.max_steps) {
-                break;
-            }
-        }
-        if (global_step >= config.max_steps) {
-            break;
-        }
+    for (uint32_t step = 0; step < effective_max_steps; ++step) {
+        send_aggregated_gradients_from_workers_to_optimizer(
+            socket_manager,
+            workers_and_aggregator_ctx,
+            aggregator_and_optimizer_ctx,
+            sorted_model_parameters,
+            workers,
+            device_config.enable_ddp);
+        send_weights_from_optimizer_to_workers(
+            socket_manager, workers_and_aggregator_ctx, aggregator_and_optimizer_ctx, sorted_model_parameters, workers);
     }
 
     distributed_ctx->barrier();
