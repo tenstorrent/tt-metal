@@ -138,8 +138,8 @@ static PowerExperimentConfig resolve_power_experiment() {
     PowerExperimentConfig cfg;
 
     // POWER_CASE, when set, overrides all four individual flags with one of the canonical
-    // scenarios. Cases 1-4 all hold the writer at 100% amplification so that turning the reader
-    // and/or compute off gives a clean single-variable comparison against case 1.
+    // scenarios. Cases 1-5 all hold the writer at 100% amplification so that turning exactly one
+    // of reader / compute / writer off gives a clean single-variable comparison against case 1.
     if (const char* pc = std::getenv("POWER_CASE"); pc != nullptr && *pc != '\0') {
         const int c = std::stoi(pc);
         switch (c) {
@@ -148,8 +148,13 @@ static PowerExperimentConfig resolve_power_experiment() {
             case 2: cfg = {false, true,  false, 100};  break;  // compute_idle
             case 3: cfg = {true,  true,  false, 100};  break;  // reader_compute_idle
             case 4: cfg = {true,  false, false, 100};  break;  // reader_idle2
+            // Case 5 is the writer's own idle case, symmetric with cases 2 and 4. Case 0 was the
+            // stand-in for it before this existed, but case 0 only turns write amplification
+            // off, which measures the marginal cost of the extra writes rather than the
+            // writer's full contribution.
+            case 5: cfg = {false, false, true,  100};  break;  // writer_idle
             default:
-                TT_THROW("POWER_CASE must be in [0, 4], got {}", c);
+                TT_THROW("POWER_CASE must be in [0, 5], got {}", c);
         }
         fmt::print(
             "POWER_CASE={} -- reader={} compute={} writer={} write_amplification_pct={}\n",
