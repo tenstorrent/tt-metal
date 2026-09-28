@@ -828,7 +828,8 @@
       timeout: 22
       tier: 1
     bh_galaxy:
-      timeout: 10
+      # The suite was still passing the RoPE sweep when the 10-minute limit expired.
+      timeout: 30
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
