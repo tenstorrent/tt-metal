@@ -6,15 +6,29 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 
+// See kernels/compute/mm_power.cpp. With a BLOCK_M x BLOCK_N output block, one column slice of
+// A and one row slice of B feed BLOCK_M * BLOCK_N multiplies, so per multiply this reads
+// (BLOCK_M + BLOCK_N) / (BLOCK_M * BLOCK_N) tiles instead of 2.
+#ifndef BLOCK_M
+#define BLOCK_M 1
+#endif
+#ifndef BLOCK_N
+#define BLOCK_N 1
+#endif
+
+constexpr uint32_t kBlockM = BLOCK_M;
+constexpr uint32_t kBlockN = BLOCK_N;
+
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t Mt = get_arg_val<uint32_t>(2);
     uint32_t Kt = get_arg_val<uint32_t>(3);
     uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(5);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(6);
+    uint32_t block_start_id = get_arg_val<uint32_t>(5);
+    uint32_t num_output_blocks = get_arg_val<uint32_t>(6);
     uint32_t num_iterations = get_arg_val<uint32_t>(7);
+    uint32_t blocks_per_row = get_arg_val<uint32_t>(8);  // Nt / kBlockN
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
@@ -28,35 +42,39 @@ void kernel_main() {
     const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
-        for (uint32_t output_tile = 0; output_tile < num_output_tiles; output_tile++) {
-            uint32_t current_tile_id = output_tile_start_id + output_tile;
-            uint32_t out_row = current_tile_id / Nt;
-            uint32_t out_col = current_tile_id % Nt;
+        for (uint32_t blk = 0; blk < num_output_blocks; blk++) {
+            const uint32_t block_id = block_start_id + blk;
+            const uint32_t block_row = block_id / blocks_per_row;
+            const uint32_t block_col = block_id % blocks_per_row;
+            const uint32_t row0 = block_row * kBlockM;  // first output tile row in the block
+            const uint32_t col0 = block_col * kBlockN;  // first output tile column in the block
 
             for (uint32_t k = 0; k < Kt; k++) {
-                // When HIGH_POWER_DISABLE_READER is set the reader keeps its full CB handshake --
-                // so compute still gets a tile "delivered" every iteration and never deadlocks --
-                // but issues no DRAM traffic. Compute then runs on whatever stale data is already
-                // sitting in that L1 buffer, which is harmless: the app never verifies its output.
                 {
-                    uint32_t tile_A = out_row * Kt + k;
-                    cb_reserve_back(cb_id_in0, 1);
-#ifndef HIGH_POWER_DISABLE_READER
+                    // Column slice of A: rows row0..row0+kBlockM-1 at inner index k.
+                    cb_reserve_back(cb_id_in0, kBlockM);
                     uint32_t l1_addr = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(tile_A, a, l1_addr);
+#ifndef HIGH_POWER_DISABLE_READER
+                    for (uint32_t m = 0; m < kBlockM; m++) {
+                        noc_async_read_tile((row0 + m) * Kt + k, a, l1_addr);
+                        l1_addr += in0_tile_bytes;
+                    }
                     noc_async_read_barrier();
 #endif
-                    cb_push_back(cb_id_in0, 1);
+                    cb_push_back(cb_id_in0, kBlockM);
                 }
                 {
-                    uint32_t tile_B = k * Nt + out_col;
-                    cb_reserve_back(cb_id_in1, 1);
-#ifndef HIGH_POWER_DISABLE_READER
+                    // Row slice of B: inner index k, columns col0..col0+kBlockN-1.
+                    cb_reserve_back(cb_id_in1, kBlockN);
                     uint32_t l1_addr = get_write_ptr(cb_id_in1);
-                    noc_async_read_tile(tile_B, b, l1_addr);
+#ifndef HIGH_POWER_DISABLE_READER
+                    for (uint32_t n = 0; n < kBlockN; n++) {
+                        noc_async_read_tile(k * Nt + (col0 + n), b, l1_addr);
+                        l1_addr += in1_tile_bytes;
+                    }
                     noc_async_read_barrier();
 #endif
-                    cb_push_back(cb_id_in1, 1);
+                    cb_push_back(cb_id_in1, kBlockN);
                 }
             }
         }
