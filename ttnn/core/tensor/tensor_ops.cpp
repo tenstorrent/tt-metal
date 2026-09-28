@@ -127,6 +127,15 @@ Tensor create_device_tensor(
 
 class RetainedTensorViewFactory {
 public:
+    // A reinterpreted storage depends on a root holder that the retained-view chain does not track, so the root
+    // could be deallocated while a view of it still reports allocated.
+    static void validate_source(const DeviceStorage& source) {
+        TT_FATAL(
+            source.root_mesh_tensor_holder_ == nullptr,
+            "A sharded tensor view requires a source that owns its allocation or is itself a sharded tensor view; "
+            "reinterpreted storage is not supported");
+    }
+
     static DeviceStorage create(const DeviceStorage& owning_storage, MeshTensor view_mesh_tensor) {
         return DeviceStorage::create_retained_view(owning_storage, std::move(view_mesh_tensor));
     }
@@ -136,6 +145,7 @@ Tensor experimental::create_sharded_tensor_view(
     const Tensor& owner, const TensorSpec& tensor_spec, DeviceAddr shard_offset) {
     TT_FATAL(owner.storage_type() == StorageType::DEVICE, "A sharded tensor view requires device storage");
     const auto& owner_storage = owner.device_storage();
+    RetainedTensorViewFactory::validate_source(owner_storage);
     const auto& owner_buffer = owner_storage.get_mesh_buffer();
     TT_FATAL(
         owner_buffer.global_layout() == tt::tt_metal::distributed::MeshBufferLayout::REPLICATED,

@@ -111,6 +111,18 @@ TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRetainsOwnerAndValidatesBoun
     EXPECT_EQ(view->buffer()->address(), owner_address + view_offset);
 }
 
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRejectsReinterpretedSource) {
+    const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
+    const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    Tensor reinterpreted = ttnn::unchecked_reinterpret_layout(owner, Layout::ROW_MAJOR);
+
+    // A reinterpreted tensor depends on its source's allocation, which a retained view would not track.
+    EXPECT_THAT(
+        [&] { (void)ttnn::experimental::create_sharded_tensor_view(reinterpreted, viewSpec, 4096); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("reinterpreted storage is not supported")));
+}
+
 TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewDeallocationPreservesOwner) {
     constexpr uint32_t view_offset = 4096;
     const TensorSpec owner_spec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
