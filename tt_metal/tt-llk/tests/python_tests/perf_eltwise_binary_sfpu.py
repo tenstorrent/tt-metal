@@ -1104,6 +1104,7 @@ _PAIRED_GENERATED = {
     "multigammaln": "dedicated_unary",
     "multigammaln_p4": "dedicated_unary",
     "selu_bw": "backward_complete",
+    "silu_bw": "backward_complete",
     "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
     "softsign_bw": "backward_complete",
