@@ -88,6 +88,10 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
+# Dense KV dedup (Kimi-K2.7): the runner reads it; the producer's table-driven read-back needs nothing.
+if [ -n "${PREFILL_TP_SHARD_KV:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV};"
+fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))

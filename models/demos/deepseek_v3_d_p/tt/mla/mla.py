@@ -23,7 +23,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCache,
+    MlaKvCacheFormat,
+    MlaKvCacheGeometry,
+    declared_seq_shard_factor,
+)
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -2329,14 +2334,4 @@ class ttMLA:
     def _declared_seq_shard_factor(t) -> int:
         """Product of mesh extents over the axes whose placement shards tensor dim 2 (mirrors the op's
         tensor_dim_shard_factor)."""
-        topology = t.tensor_topology()
-        dist = topology.distribution_shape()
-        placements = topology.placements()
-        dist_dims = tuple(dist)
-        if len(placements) != len(dist_dims):
-            return 0
-        factor = 1
-        for axis, placement in enumerate(placements):
-            if isinstance(placement, ttnn.PlacementShard) and placement.dim == 2:
-                factor *= dist_dims[axis]
-        return factor
+        return declared_seq_shard_factor(t)

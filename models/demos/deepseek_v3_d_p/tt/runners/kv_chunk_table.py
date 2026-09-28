@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_block_cyclic,
+    is_tp_deduped_kv_cache,
     merged_num_layers,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
@@ -127,12 +128,14 @@ def build_and_serialize_kv_chunk_table(
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
     stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
 
-    KV DEDUP is derived, not passed. A sparse/DSA model (``index_kv_cache`` given) always stripes its
-    block-cyclic caches across SP*TP, so its table addresses each (row, col) device individually instead
-    of one group per SP row; a dense model never does. Deriving it here is what keeps the table's
-    addressing and the caches' allocation from disagreeing — a mismatch makes EVERY address wrong, with
-    no error. ``tp_axis`` names the TP mesh axis in either case — it is the dflash head-count geometry
-    and is not itself the dedup switch."""
+    KV DEDUP is derived, not passed: read from the KVPE cache's declared topology
+    (:func:`is_tp_deduped_kv_cache`). A deduped cache stripes its sequence across SP*TP, so its table
+    addresses each (row, col) device individually instead of one group per SP row. A sparse/DSA model
+    always dedups; a dense model (Kimi-K2.7) does when its runner allocated it with ``tp_axis``
+    (PREFILL_TP_SHARD_KV=1). Deriving it here is what keeps the table's addressing and the caches'
+    allocation from disagreeing — a mismatch makes EVERY address wrong, with no error. ``tp_axis`` names
+    the TP mesh axis in either case — it is the dflash head-count geometry and is not itself the dedup
+    switch."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -166,6 +169,7 @@ def build_and_serialize_kv_chunk_table(
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
     stage_layout = stage_layouts[0] if stage_layouts else None
+    kv_dedup = is_tp_deduped_kv_cache(primary_cache, mesh_shape)
 
     def _builder(*, config, chunk_size_bytes, num_users):
         return create_kv_chunk_address_table_block_cyclic(
@@ -181,6 +185,7 @@ def build_and_serialize_kv_chunk_table(
             num_my_layers=num_my_layers,
             stage_layout=stage_layout,
             layer_rows=layer_rows,
+            tp_axis=tp_axis if kv_dedup else None,
         )
 
     return serialize_kv_chunk_table(
@@ -257,7 +262,14 @@ def _build_and_serialize_merged_kv_chunk_table(
             raise ValueError(f"unknown KV table cache kind: {kind!r} (expected 'kvpe', 'index', or 'dflash')")
 
     block_cyclic = [(name, cache) for name, cache, head_idx in entries if head_idx is None]
-    kv_dedup = index_config_name is not None
+    # Every block-cyclic cache of one model shares one layout; the KVPE cache (config 0) decides it. The
+    # sparse index cache is always deduped, so a KVPE that is not would be a mis-allocated pair.
+    kv_dedup = is_tp_deduped_kv_cache(block_cyclic[0][1], mesh_shape)
+    for name, cache in block_cyclic:
+        assert is_tp_deduped_kv_cache(cache, mesh_shape) == kv_dedup, (
+            f"KV table config {name!r} is {'not ' if kv_dedup else ''}TP-deduped but the KVPE cache "
+            f"{'is' if kv_dedup else 'is not'}; every block-cyclic cache must share one layout"
+        )
     if stage_layouts is None:
         stage_layouts = [
             allgather_kv_stage_layout(

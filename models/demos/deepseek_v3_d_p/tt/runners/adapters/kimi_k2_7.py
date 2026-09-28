@@ -39,6 +39,10 @@ class KimiK27Adapter(MLAPrefillAdapter):
     # it. No other model may enable PREFILL_DFLASH.
     supports_dflash = True
 
+    # PREFILL_TP_SHARD_KV=1: dense KV dedup. ring_mla's full-mesh split-KV gather reads the SP*TP-striped
+    # KVPE cache in place, so each chip holds 1/(sp*tp) of the cache instead of 1/sp. Needs a 2D fabric.
+    supports_tp_shard_kv = True
+
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.7-Code"
     env_var = "KIMI_K2_7_HF_MODEL"

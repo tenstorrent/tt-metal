@@ -84,6 +84,13 @@ DFLASH_ENABLED = (
     ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
 )
 
+# KV dedup for a dense model: shard the KV cache across TP as well as SP (1/(sp*tp) slice per device)
+# instead of TP-replicating it. Storage only; cache content is bit-identical. Sparse models always dedup.
+TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", "0") == "1"
+assert not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv, (
+    f"PREFILL_TP_SHARD_KV=1 is not supported by model {ADAPTER.name!r}: its adapter does not allocate a "
+    f"TP-deduped KV cache, so TP-sharded writes would land in a TP-replicated cache."
+)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
@@ -413,6 +420,7 @@ def _print_config() -> None:
             f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
+        ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -518,6 +526,7 @@ def main() -> None:
         kv_only_last_layer=is_last_rank,
         dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",

@@ -86,8 +86,10 @@ class TtPrefillRuntimeConfig:
     # capture the forward as ONE trace segment (no per-chunk swaps -> faster replay); costs the overlap.
     overlap_shared_expert_with_dispatch: bool = True
     # KV dedup: also shard the KV/index caches across tp_axis, so each of the sp*tp devices stores a
-    # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated and how the
-    # KV chunk address table was built; sparse (DSA) path only.
+    # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated (the KV
+    # chunk address table derives it from the cache itself). None keeps ttMLA's derivation (sparse/DSA
+    # always dedups, dense does not); True opts a dense model into the ring_mla split-KV path.
+    tp_shard_kv: Optional[bool] = None
 
     @property
     def sp_factor(self) -> int:
@@ -253,6 +255,8 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
+            # Forwarded only when set: MODEL_CLS subclasses that do not take it (Kimi-K3) never see it.
+            **({"tp_shard_kv": self.config.tp_shard_kv} if self.config.tp_shard_kv is not None else {}),
         )
         self.model_built = True
 
@@ -1041,6 +1045,13 @@ class TtPrefillRuntime:
             "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
             "host reconstruction, and every sparse/DSA model TP-dedups its caches. Use the mock-migration "
             "producer read-back to validate a sparse model's cache."
+        )
+        # A dense model TP-dedups too under PREFILL_TP_SHARD_KV=1; the index-cache check above cannot see it.
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache
+
+        assert not is_tp_deduped_kv_cache(kv_caches.kvpe.storage, self.config.mesh_shape), (
+            "read_slot_kv keeps one TP column, and this KVPE cache is TP-deduped (PREFILL_TP_SHARD_KV=1): it "
+            "would drop (tp-1)/tp of the tokens. Use the mock-migration producer read-back instead."
         )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers

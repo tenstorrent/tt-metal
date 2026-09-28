@@ -266,6 +266,29 @@ def merged_num_layers(stage_layout):
     return total
 
 
+def declared_seq_shard_factor(t) -> int:
+    """Product of mesh extents over the axes whose placement shards tensor dim 2 (mirrors the op's
+    tensor_dim_shard_factor). 0 when the topology does not describe the tensor's mesh."""
+    topology = t.tensor_topology()
+    dist_dims = tuple(topology.distribution_shape())
+    placements = topology.placements()
+    if len(placements) != len(dist_dims):
+        return 0
+    factor = 1
+    for axis, placement in enumerate(placements):
+        if isinstance(placement, ttnn.PlacementShard) and placement.dim == 2:
+            factor *= dist_dims[axis]
+    return factor
+
+
+def is_tp_deduped_kv_cache(t, mesh_shape) -> bool:
+    """Whether a block-cyclic KV cache is TP-deduped: its sequence (dim 2) declared sharded across SP
+    *and* TP, so each of the sp*tp chips holds a distinct stripe. Read from the allocation's own topology
+    (init_kvpe_cache(tp_axis=...) stamps it) so a consumer cannot disagree with how the cache was built."""
+    sp, tp = mesh_shape
+    return tp > 1 and declared_seq_shard_factor(t) == sp * tp
+
+
 def create_kv_chunk_address_table_block_cyclic(
     config,
     mesh_device,
@@ -279,6 +302,7 @@ def create_kv_chunk_address_table_block_cyclic(
     num_my_layers=None,
     stage_layout=None,
     layer_rows=None,
+    tp_axis=None,
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
@@ -306,6 +330,9 @@ def create_kv_chunk_address_table_block_cyclic(
             maps slot -> model layer, keeping published rows on the model's layer axis so a consumer
             indexing by layer needs no change. None (every layer owns a slab) means row == layer, which
             is what DeepSeek / Kimi-K2 / GLM want.
+        tp_axis: KV dedup. None (TP-replicated cache) gives one device group per SP row; the TP mesh axis
+            (TP-deduped cache, see init_kvpe_cache) addresses each (row, col) device individually. Must
+            match how the cache was allocated -- see is_tp_deduped_kv_cache.
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -352,6 +379,7 @@ def create_kv_chunk_address_table_block_cyclic(
         config_id=0,
         stage_layout=stage_layout,
         layer_rows=layer_rows,
+        tp_axis=tp_axis,
     )
 
 

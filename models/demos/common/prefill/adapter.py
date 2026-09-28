@@ -69,6 +69,10 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # KV dedup (PREFILL_TP_SHARD_KV) for a DENSE model: shard the KV cache across TP too, so each of the
+    # sp*tp devices holds a distinct 1/(sp*tp) slice instead of tp copies. Sparse (DSA) models always
+    # dedup and ignore this. Only adapters with supports_tp_shard_kv honor it (the runner asserts).
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -131,6 +135,10 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # Opting in promises that ``allocate_kv_cache`` allocates TP-deduped caches and ``build_runtime`` builds
+    # a TP-deduped reader when ``params.tp_shard_kv`` is set; otherwise TP-sharded writes would land in a
+    # TP-replicated cache. The runner asserts on this.
+    supports_tp_shard_kv: bool = False
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
