@@ -422,6 +422,15 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 #if !defined(TT_POLY_LLK_DISABLE)
     if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
         !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
+        ops_chain[0].type() == UnaryOpType::LOGSIGMOID) {
+        unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";
+        unary_defines["SFPU_OP_CHAIN_0_INIT_0"] = "logsigmoid_tt_poly_bf16_tile_init();";
+        unary_defines["SFPU_OP_CHAIN_0_FUNC_0"] = "logsigmoid_tt_poly_bf16_tile(0);";
+    }
+#endif
+#if !defined(TT_POLY_LLK_DISABLE)
+    if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
+        !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
         ops_chain[0].type() == UnaryOpType::LOGIT && ops_chain[0].get_params_if<float>().size() == 1 &&
         ops_chain[0].get_param_if<float>(0) == -1.0f) {
         unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";

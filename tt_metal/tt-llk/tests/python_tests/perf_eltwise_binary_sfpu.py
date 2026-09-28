@@ -1100,6 +1100,7 @@ _PAIRED_GENERATED = {
     "leaky_relu_bw": "backward_complete",
     "log_sigmoid_bw": "backward_complete",
     "logit": "dedicated_unary",
+    "logsigmoid": "dedicated_unary",
     "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
     "softsign_bw": "backward_complete",
