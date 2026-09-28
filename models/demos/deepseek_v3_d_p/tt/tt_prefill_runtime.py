@@ -529,10 +529,7 @@ class TtPrefillRuntime:
         Stand-in input for a non-first rank until the upstream sync op overwrites it in place. Both
         packed forms are sized here -- DFlash widens, MTP heightens -- and `_prepare_trace` captures it.
 
-        ``dflash_packed=False`` asks for the HIDDEN-only width even under DFlash. The traced path wants
-        that: it unpacks the received activation EAGERLY (an ordinary slice, outside the capture) and
-        copies only the hidden half into the captured input, so the captured graph is byte-identical to
-        a non-DFlash one. Only the D2D receive buffer has to be the full 2H.
+        ``dflash_packed=False`` asks for the hidden-only width under DFlash, which the traced path needs.
         """
         rows = (
             d2d_activation_rows(
@@ -764,10 +761,6 @@ class TtPrefillRuntime:
             actual_end=None,
             cache_user_id=0,
             metadata=self._trace_metadata,
-            # DFlash: the drafter's FC tap fires from INSIDE the forward, so it has to be wired here or
-            # the capture records no tap at all and the drafter's accumulator is never even allocated
-            # (its first-tap branch allocates, which is also why this must run on the warm passes that
-            # precede begin_capture()). None when DFlash is off.
             on_layer_hidden=self._on_layer_hidden,
         )
 
@@ -776,11 +769,6 @@ class TtPrefillRuntime:
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
         capture_trace() later, once any ack/completion callback is registered. Called once from compile()."""
         chunk = self.config.chunk_size
-        # Persistent input at a stable (captured) address; seeded with zeros, overwritten per chunk. On a
-        # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
-        # Under DFlash a non-first rank RECEIVES [hidden || drafter-partial], but the capture must see
-        # the hidden alone -- prefill_chunk unpacks before the copy below. make_chunk_input would hand
-        # back the 2H receive buffer, so ask for the hidden-only width explicitly.
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
             # The upstream drafter partial has to survive the replay too, so it gets a persistent home
@@ -815,13 +803,6 @@ class TtPrefillRuntime:
         ttnn.synchronize_device(self.mesh_device)
 
     def _layer_complete_cb(self, request_id: int):
-        """This chunk's per-layer completion callback, or None if no sink is wired.
-
-        Binds request_id by value into a fresh closure per call: the pipelined sink needs it to build a
-        globally-dense key (seq = request_id*num_layers + layer_idx), and capturing per call means there
-        is no shared mutable chunk index for the synchronously-fired callback to race on. Single-host
-        layer-ack mode ignores request_id. Shared by the eager and traced paths so the drafter's
-        post-replay acks are keyed exactly like the verifier's."""
         if self._layer_completion_sink is None:
             return self._on_layer_complete
         sink = self._layer_completion_sink
@@ -955,21 +936,13 @@ class TtPrefillRuntime:
                 "use_trace: prefill_chunk needs the packed metadata_msg to populate the per-chunk metadata "
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
-            # DFlash: the drafter's tap fires INSIDE the captured forward, but everything around it is
-            # eager and must be driven here, exactly as the eager branch below does it. reset() no longer
-            # frees the tap accumulator (that would be a per-chunk allocation the capture cannot have) --
-            # it only drops any upstream partial left behind by a failed chunk.
+
             model_input = input_tensor
             if self.config.dflash_enabled:
                 self.drafter.reset()
                 if not self.config.is_first_rank:
-                    # Unpack EAGERLY, before the copy: the capture sees the hidden alone, so the recorded
-                    # graph is identical to a non-DFlash one and only this slice pays for the packing.
                     model_input, partial = self._unpack_activation(input_tensor)
                     ttnn.deallocate(input_tensor)
-                    # Park the partial at its pre-capture address and free every post-capture buffer
-                    # BEFORE the replay: nothing allocated since capture_trace() may still be live when
-                    # replay() runs, or the captured forward's scratch writes land on it.
                     ttnn.copy(partial, self._trace_partial_in)
                     ttnn.deallocate(partial)
             ttnn.copy(model_input, self._trace_input)
@@ -1004,11 +977,7 @@ class TtPrefillRuntime:
 
             if self.config.dflash_enabled:
                 # The drafter's KV finalize runs AFTER the replay and stays eager, reading the tap
-                # accumulator the recorded taps just rewrote in place. It is not part of the capture, so
-                # it still takes the chunk's scalars on host -- and on the traced path those are exactly
-                # what the caller is allowed to withhold. Fail loudly rather than write chunk 0's slot:
-                # a metadata-driven drafter finalize (the update_padded_kv_cache / indexed-rope metadata
-                # overloads already exist) is what would lift this.
+                # accumulator the recorded taps just rewrote in place.
                 assert None not in (slot_id, actual_start, actual_end), (
                     "traced DFlash needs the chunk scalars on host (slot_id/actual_start/actual_end): the "
                     "drafter's KV finalize runs eagerly after the replay and has no metadata overload yet. "
@@ -1022,17 +991,12 @@ class TtPrefillRuntime:
                         actual_start,
                         slot_idx=slot_id,
                         actual_end=actual_end,
-                        # The verifier's own acks are recorded inside the capture and fire on replay; the
-                        # drafter's are emitted here, after it, through the service bound at capture time.
                         d2h_service=self._trace_d2h_service,
                         metadata_msg=self._trace_metadata_msg,
                         on_layer_complete=self._layer_complete_cb(request_id),
                         layer_ack_base=self.config.first_layer_idx + self.config.num_layers,
                     )
                     return None
-                # Non-last rank: pack the partial alongside the hidden. NOT _pack_activation -- that
-                # consumes its hidden, and _trace_output is the persistent captured buffer the next
-                # replay writes into. The packed tensor IS fresh per chunk, so the driver frees it.
                 partial = self.drafter.export_partial()
                 packed = ttnn.concat([self._trace_output, partial], dim=3)
                 ttnn.deallocate(partial)

@@ -51,7 +51,7 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 # share a file. What it pins, and why, since JSON cannot say it:
 #   PREFILL_USE_TRACE=1    -- the verifier forward IS trace-captured with dflash on. The drafter's FC tap
 #      fires inside that forward and is allocation-free after warmup; its KV finalize runs after the
-#      captured forward returns and stays eager. Export PREFILL_USE_TRACE=0 to A/B (env beats manifest).
+#      captured forward returns and stays eager.
 #   PREFILL_LAYER_ACK_D2H=1 -- each rank stands up its own LayerAckService from D2H device records.
 #      Without it the non-first ranks take the host-ring branch and connect() to
 #      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished
