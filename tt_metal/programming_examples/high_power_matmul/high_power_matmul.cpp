@@ -127,6 +127,10 @@ struct PowerExperimentConfig {
     bool disable_compute = false;
     bool disable_writer = false;
     uint32_t write_amplification_pct = 0;
+    // Which per-tile instruction the compute kernel runs. The reader and writer are identical
+    // for every value, so this varies the math unit's work against fixed data movement -- see
+    // kernels/compute/mm_power.cpp.
+    std::string op = "matmul";
 };
 
 static bool env_flag(const char* name) {
@@ -134,8 +138,36 @@ static bool env_flag(const char* name) {
     return v != nullptr && std::string(v) == "1";
 }
 
+// HIGH_POWER_OP value -> the JIT define the compute kernel branches on.
+static const std::map<std::string, std::string> kComputeOps = {
+    {"matmul", "HIGH_POWER_OP_MATMUL"},
+    {"add", "HIGH_POWER_OP_ADD"},
+    {"silu", "HIGH_POWER_OP_SILU"},
+    {"exp", "HIGH_POWER_OP_EXP"},
+    {"sigmoid", "HIGH_POWER_OP_SIGMOID"},
+    {"gelu", "HIGH_POWER_OP_GELU"},
+    {"recip", "HIGH_POWER_OP_RECIP"},
+};
+
+static std::string resolve_compute_op() {
+    const char* v = std::getenv("HIGH_POWER_OP");
+    if (v == nullptr || *v == '\0') {
+        return "matmul";
+    }
+    std::string op(v);
+    if (kComputeOps.find(op) == kComputeOps.end()) {
+        std::string valid;
+        for (const auto& [name, _] : kComputeOps) {
+            valid += (valid.empty() ? "" : ", ") + name;
+        }
+        TT_THROW("HIGH_POWER_OP must be one of [{}], got '{}'", valid, op);
+    }
+    return op;
+}
+
 static PowerExperimentConfig resolve_power_experiment() {
     PowerExperimentConfig cfg;
+    const std::string op = resolve_compute_op();
 
     // POWER_CASE, when set, overrides all four individual flags with one of the canonical
     // scenarios. Cases 1-5 all hold the writer at 100% amplification so that turning exactly one
@@ -156,13 +188,15 @@ static PowerExperimentConfig resolve_power_experiment() {
             default:
                 TT_THROW("POWER_CASE must be in [0, 5], got {}", c);
         }
+        cfg.op = op;
         fmt::print(
-            "POWER_CASE={} -- reader={} compute={} writer={} write_amplification_pct={}\n",
+            "POWER_CASE={} -- reader={} compute={} writer={} write_amplification_pct={} op={}\n",
             c,
             cfg.disable_reader ? "idle" : "real",
             cfg.disable_compute ? "idle" : "real",
             cfg.disable_writer ? "idle" : "real",
-            cfg.write_amplification_pct);
+            cfg.write_amplification_pct,
+            cfg.op);
         return cfg;
     }
 
@@ -174,6 +208,7 @@ static PowerExperimentConfig resolve_power_experiment() {
         amp != nullptr && *amp != '\0') {
         cfg.write_amplification_pct = static_cast<uint32_t>(std::stoul(amp));
     }
+    cfg.op = op;
     return cfg;
 }
 
@@ -389,6 +424,7 @@ int main(int argc, char* argv[]) {
                 reader_defines["HIGH_POWER_DISABLE_READER"] = "1";
             }
             std::map<std::string, std::string> compute_defines{{"BLOCK_M", bm}, {"BLOCK_N", bn}};
+            compute_defines[kComputeOps.at(power_cfg.op)] = "1";
             if (power_cfg.disable_compute) {
                 compute_defines["HIGH_POWER_DISABLE_COMPUTE"] = "1";
             }
