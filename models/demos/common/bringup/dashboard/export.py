@@ -10,7 +10,8 @@
 Reads: tasks.yaml, state.json, results/*.json (metrics, plan_memory.json, block_graphs.json, <task>_profile.json),
 components.yaml, plan.yaml (optional ``chips``, ``ccl_per_layer``, ``profile_sections``), findings.yaml, the HF config.
 Sections: progress, gate ladder, model graph + layer strip, op coverage, findings, chunk timing, sharding (memory
-from the plan gate), where the time goes (warm per-section, per-chip profile), PCC trail by layer.
+from the plan gate), where the time goes (warm per-section, per-chip profile), PCC trail by layer; with a spec
+``prior``, a vs-prior view (accuracy, chunk time and TTFT, task status next to the prior bring-up's).
 """
 
 from __future__ import annotations
@@ -270,6 +271,7 @@ def build(spec) -> dict:
         "plan_chips": plan_doc.get("chips") or [],
         "plan_ccl": plan_doc.get("ccl_per_layer") or [],
         "profile": load_profile(spec, res, plan_doc),
+        "prior": load_prior(spec),
         "findings": findings,
         "thresholds": {k: spec.threshold(k, v) for k, v in DEFAULT_THRESHOLDS.items()},
         "source": str(spec.bringup_dir.relative_to(spec.repo)),
@@ -399,12 +401,189 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
         "steps": steps,
         "views": views,
         "timeline": prof.get("timeline"),
+        "chunk": [a, b],
         "source": prof_p.name,
         "heading": f"Where the time goes: one {a:,}→{b:,} chunk",
         "note": f"Device kernel time per section, summed over {len(prof.get('layers', []))} layers of one {b - a:,}-token chunk "
         f"at positions {a:,}-{b - 1:,} (golden prefix loaded, warm run). Per chip = that chip's own programs; the bar "
         f"uses the slowest chip per section. Source {prof_p.name}"
         + (f"; before = X.1 (chunk {base['wall_ms']:.0f} ms)." if base else "."),
+    }
+
+
+ACC_KEY = re.compile(r"^(pcc_|text_top|top[15]_|final_hidden)")
+PER_LAYER = re.compile(r"^pcc_(layer|state_key|state_value|hidden)_L\d+$")
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _delta(a, b):
+    """this - prior, or None when either side is missing."""
+    return round(a - b, 9) if _num(a) and _num(b) else None
+
+
+def _side(spec) -> dict:
+    """What the vs-prior view needs from one bring-up: per-task result metrics, the current profile, the latest TTFT."""
+    led = Ledger(spec.bringup_dir)
+    res = led.results_dir
+    tids = led.topo_order()
+    metrics = {tid: {k: v["value"] for k, v in M.load(tid, res).items()} for tid in tids}
+    ttft = None
+    for tid in tids:  # the latest task's full prefill wins (ledger order), as for the position sweep
+        for r in timing_rows(spec, {"id": tid}, M.load(tid, res)):
+            if r["headline"].startswith("0->") and r["how"].startswith("warm"):
+                ttft = r
+    return {
+        "led": led,
+        "tids": tids,
+        "metrics": metrics,
+        "profile": load_profile(spec, res, load_yaml(spec.bringup_dir / "plan.yaml")),
+        "ttft": ttft,
+    }
+
+
+def load_prior(spec) -> dict | None:
+    """This run next to its prior bring-up (spec ``prior``): accuracy per matching task and layer, the current
+    profile's chunk time per section and per block type, the 0->seq TTFT, and the runs.compare task rows."""
+    if not spec.data.get("prior"):
+        return None
+    from models.demos.common.bringup.core.runs import compare
+
+    ps = spec.prior_spec() if (spec.prior / "bringup" / "spec.yaml").exists() else None
+    mesh = lambda s: "x".join(map(str, s.mesh))  # noqa: E731
+    head = {"this": {"label": mesh(spec), "model": spec.model}, "source": spec.data["prior"]}
+    if ps is None:
+        return {**head, "prior": {"label": "?", "model": spec.data["prior"]}, "error": "no bringup/spec.yaml"}
+    head["prior"] = {"label": mesh(ps), "model": ps.model}
+    if head["prior"]["label"] == head["this"]["label"]:  # same mesh: tell them apart by model name
+        head["this"]["label"], head["prior"]["label"] = spec.model, ps.model
+    A, B = _side(spec), _side(ps)
+    order = A["tids"] + [t for t in B["tids"] if t not in A["tids"]]
+
+    layers, gate = [], []
+    for tid in order:
+        ma, mb = A["metrics"].get(tid, {}), B["metrics"].get(tid, {})
+        lays = sorted(
+            {int(k.rsplit("L", 1)[1]) for k in (*ma, *mb) if re.match(r"pcc_layer_L\d+$", k)}
+        )  # per-layer PCC of the device runs (ladder, perf runs)
+        for li in lays:
+            k = f"pcc_layer_L{li:02d}"
+            a, b = ma.get(k), mb.get(k)
+            layers.append({"task": tid, "layer": li, "this": a, "prior": b, "delta": _delta(a, b)})
+        for k in sorted(set(ma) | set(mb)):
+            if ACC_KEY.match(k) and not PER_LAYER.match(k):
+                a, b = ma.get(k), mb.get(k)
+                if _num(a) or _num(b):
+                    gate.append({"task": tid, "metric": k, "this": a, "prior": b, "delta": _delta(a, b)})
+
+    def prof_sum(P):
+        if not P:
+            return {}
+        out = {
+            "device_ms": round(sum(s["ms"] for s in P["steps"]), 2),
+            "wall_ms": P["wall_ms"],
+            "source": P["source"],
+            "sections": {s["key"]: s["ms"] for s in P["steps"]},
+            "blocks": {v["id"]: round(sum(s["ms"] for s in v["steps"]), 2) for v in P["views"][1:]},
+            "block_labels": {v["id"]: v["label"] for v in P["views"][1:]},
+        }
+        a, b = P.get("chunk") or [0, 0]
+        out["chunk"] = f"{kt(a)}->{kt(b)}" if b else ""
+        return out
+
+    pa, pb = prof_sum(A["profile"]), prof_sum(B["profile"])
+    chunk = pa.get("chunk") or pb.get("chunk") or "one chunk"
+    if pa.get("chunk") and pb.get("chunk") and pa["chunk"] != pb["chunk"]:
+        chunk = f"{pa['chunk']} vs {pb['chunk']}"
+
+    def row(what, a, b, unit, src_a=None, src_b=None, short=None):
+        r = {"what": what, "this": a, "prior": b, "delta": _delta(a, b), "unit": unit, "src": [src_a, src_b]}
+        return {**r, "short": short} if short else r
+
+    ta, tb = A["ttft"], B["ttft"]
+    tt = lambda t: round(t["seconds"] * 1e3, 1) if t else None  # noqa: E731
+    perf = [
+        row(
+            f"{chunk} chunk, device",
+            pa.get("device_ms"),
+            pb.get("device_ms"),
+            "ms",
+            pa.get("source"),
+            pb.get("source"),
+            "chunk device",
+        ),
+        row(
+            f"{chunk} chunk, wall",
+            pa.get("wall_ms"),
+            pb.get("wall_ms"),
+            "ms",
+            pa.get("source"),
+            pb.get("source"),
+            "chunk wall",
+        ),
+        row(
+            f"{(ta or tb or {}).get('headline', '0->seq')} TTFT (warm, no LM head)",
+            tt(ta),
+            tt(tb),
+            "ms",
+            ta and ta["task"],
+            tb and tb["task"],
+            f"TTFT {(ta or tb or {}).get('headline', '')}",
+        ),
+    ]
+    sec_keys = list(pa.get("sections", {})) + [k for k in pb.get("sections", {}) if k not in pa.get("sections", {})]
+    sections = [
+        row(k, pa.get("sections", {}).get(k), pb.get("sections", {}).get(k), "ms")
+        for k in sorted(
+            sec_keys, key=lambda k: -max(pa.get("sections", {}).get(k, 0), pb.get("sections", {}).get(k, 0))
+        )
+    ]
+    bts = list(spec.data.get("block_types") or {}) + [
+        b for b in ps.data.get("block_types") or {} if b not in (spec.data.get("block_types") or {})
+    ]
+    blocks = [
+        row(
+            (pa.get("block_labels") or pb.get("block_labels") or {}).get(bt, bt),
+            pa.get("blocks", {}).get(bt),
+            pb.get("blocks", {}).get(bt),
+            "ms/layer",
+            short=bt,
+        )
+        for bt in bts
+        if bt in pa.get("blocks", {}) or bt in pb.get("blocks", {})
+    ]
+
+    in_a, in_b = set(A["tids"]), set(B["tids"])
+    tasks = []
+    for r in compare(B["led"], A["led"]) + [
+        {k: tuple(reversed(v)) if isinstance(v, tuple) else v for k, v in r.items()}
+        for r in compare(A["led"], B["led"])
+        if r["task"] not in in_a
+    ]:
+        tid = r["task"]
+        pick = lambda v: [v[1] if tid in in_a else None, v[0] if tid in in_b else None]  # noqa: E731  (this, prior)
+        tasks.append(
+            {
+                "task": tid,
+                "status": pick(r["status"]),
+                "attempts": pick(r["attempts"]),
+                "debugger": pick(r["debugger"]),
+                "duration_s": pick(r["duration_s"]),
+                "agent_defs_changed": len(r["agent_defs_changed"]),
+                "metric_deltas": len(r["metric_deltas"]),
+            }
+        )
+    return {
+        **head,
+        "chunk": chunk,
+        "layers": layers,
+        "gate": gate,
+        "perf": perf,
+        "sections": sections,
+        "blocks": blocks,
+        "tasks": tasks,
     }
 
 

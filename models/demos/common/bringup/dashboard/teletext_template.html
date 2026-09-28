@@ -88,7 +88,7 @@ body{margin:0;min-height:100vh;padding:20px 16px 32px;background:#0c0b0a radial-
       <button type="button" id="bidx">100</button>
     </div>
   </div>
-  <p class="hint">Type a page number <kbd>100</kbd>-<kbd>106</kbd> &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> pages &middot; <kbd>&uarr;</kbd><kbd>&darr;</kbd> subpages &middot; <kbd>H</kbd> hold (stops the index / graph carousel) &middot; <kbd>R</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>B</kbd> fastext</p>
+  <p class="hint">Type a page number <kbd>100</kbd>-<kbd id="lastpg">106</kbd> &middot; <kbd>&larr;</kbd><kbd>&rarr;</kbd> pages &middot; <kbd>&uarr;</kbd><kbd>&darr;</kbd> subpages &middot; <kbd>H</kbd> hold (stops the index / graph carousel) &middot; <kbd>R</kbd><kbd>G</kbd><kbd>Y</kbd><kbd>B</kbd> fastext</p>
   <div class="sr" aria-live="polite" id="live"></div>
 </div>
 
@@ -272,8 +272,8 @@ function pIndex(){
     const id = abbrId(t.id, 14); b.t(y, 6, id, WHT); b.t(y, 7 + id.length, t.waiting ? "WAIT" : l, t.waiting ? MAG : c, null, 1);
     b.t(y, 12 + id.length, trunc(t.waiting || t.reason || t.title, W - 12 - id.length), WHT); y++; });
   // index of pages
-  y = Math.max(y, 21);
   const idx = PAGES.filter(p => p.n !== 100);
+  y = Math.max(y, 23 - Math.ceil(idx.length / 3));
   idx.forEach((p, i) => { const r = y + Math.floor(i / 3), c = (i % 3) * 13 + 1; if (r > 22) return;
     b.t(r, c, String(p.n), WHT); b.t(r, c + 4, p.short, [CYN, GRN, YEL][i % 3]); });
   return [b];
@@ -516,6 +516,49 @@ function pFindings(){
   return flow(lines, () => new Buf(), 4, 22).map((b, i, a) => { banner(b, "Findings + gaps", BLU, YEL, i, a.length, RED); return b; });
 }
 
+function pPrior(){
+  const P = D.prior, lines = [], A = trunc(P.this.label, 7), B = trunc(P.prior.label, 7);
+  const mk = () => { const b = new Buf(); b.t(3, 0, "THIS", CYN); b.t(3, 5, A.toUpperCase(), WHT); b.t(3, 13, "PRIOR", CYN); b.t(3, 19, B.toUpperCase(), WHT);
+    b.tr(3, W - 1, "D=THIS-PRIOR", CYN); return b; };
+  if (P.error){ const b = mk(); banner(b, "Versus prior", GRN, BLK, 0, 1, MAG); noData(b, 6, `Prior ${P.source}: ${P.error}`); return [b]; }
+  const pc = v => v == null ? "-" : v.toFixed(5), dpc = d => d == null ? "-" : d === 0 ? "0" : (d > 0 ? "+" : "-") + expo(Math.abs(d));
+  const ms = v => v == null ? "-" : v >= 1000 ? v.toFixed(0) : v.toFixed(1);
+  const dms = r => r.delta == null ? "-" : (r.delta > 0 ? "+" : "") + (Math.abs(r.delta) >= 100 ? r.delta.toFixed(0) : r.delta.toFixed(1));
+  const dcol = r => r.delta == null || !r.prior || Math.abs(r.this / r.prior - 1) < 0.01 ? WHT : r.delta < 0 ? GRN : RED;
+  const cols = (lab, lc, a, b2, d, dc) => ({draw(bb, r){ bb.t(r, 0, trunc(lab, 15), lc); bb.tr(r, 22, a, a === "-" ? CYN : YEL); bb.tr(r, 30, b2, b2 === "-" ? CYN : WHT); bb.tr(r, W - 1, d, dc); }});
+  const colHdr = (a, b2) => ({draw(bb, r){ bb.tr(r, 22, a, CYN); bb.tr(r, 30, b2, CYN); bb.tr(r, W - 1, "DELTA", CYN); }});
+  // performance: the current profile's chunk, the TTFT, per block type, per section
+  lines.push(hdrLine("Performance", `${P.chunk} ms`, BLU, YEL)); lines.push(colHdr(A.toUpperCase(), B.toUpperCase()));
+  P.perf.forEach(r => lines.push(cols(r.short || r.what, WHT, ms(r.this), ms(r.prior), dms(r), dcol(r))));
+  if (P.blocks.length){ lines.push(gapLine); lines.push(hdrLine("Per block type", "ms/layer", BLU, YEL));
+    P.blocks.forEach(r => lines.push(cols(r.short || r.what, WHT, ms(r.this), ms(r.prior), dms(r), dcol(r)))); }
+  if (P.sections.length){ lines.push(gapLine); lines.push(hdrLine("Per section", "ms", BLU, YEL));
+    P.sections.forEach(r => lines.push(cols(r.what, WHT, ms(r.this), ms(r.prior), dms(r), dcol(r)))); }
+  // accuracy: the worst layer PCC per matching task, then the headline gate metrics (component and swap PCC left out)
+  const worst = {};
+  P.layers.forEach(r => { const w = worst[r.task] || (worst[r.task] = {task:r.task, this:null, prior:null});
+    ["this", "prior"].forEach(k => { if (r[k] != null && (w[k] == null || r[k] < w[k])) w[k] = r[k]; }); });
+  const WL = Object.values(worst);
+  lines.push(gapLine); lines.push(hdrLine("Worst layer PCC", `${WL.length} runs`, BLU, YEL));
+  if (!WL.length) lines.push({draw(b, r){ b.t(r, 1, "none recorded on either side yet", WHT); }});
+  WL.forEach(w => lines.push(cols(w.task, WHT, pc(w.this), pc(w.prior), dpc(w.this != null && w.prior != null ? w.this - w.prior : null), WHT)));
+  let last = null;
+  const G = P.gate.filter(r => !/_L\d+$|^pcc_swap_/.test(r.metric));
+  lines.push(gapLine); lines.push(hdrLine("Gate metrics", String(G.length), BLU, YEL)); last = null;
+  if (!G.length) lines.push({draw(b, r){ b.t(r, 1, "none recorded on either side yet", WHT); }});
+  G.forEach(r => { if (r.task !== last){ last = r.task; lines.push({draw(b, rr){ b.t(rr, 0, abbrId(r.task, 20), MAG); }}); }
+    lines.push(cols(" " + r.metric.replace(/^pcc_/, ""), WHT, typeof r.this === "number" ? fmt(r.this).slice(0, 7) : "-", typeof r.prior === "number" ? fmt(r.prior).slice(0, 7) : "-", dpc(r.delta), WHT)); });
+  // tasks: status per matching task id (runs.compare)
+  const T = P.tasks, pass = i => T.filter(t => t.status[i] === "PASS").length, has = i => T.filter(t => t.status[i] != null).length;
+  lines.push(gapLine); lines.push(hdrLine("Tasks", `${pass(0)}/${has(0)} vs ${pass(1)}/${has(1)}`, BLU, YEL));
+  lines.push({draw(b, r){ b.t(r, 21, A.toUpperCase().slice(0, 5), CYN); b.t(r, 27, B.toUpperCase().slice(0, 5), CYN); b.tr(r, W - 1, "TRIES", CYN); }});
+  T.forEach(t => lines.push({draw(b, r){ b.t(r, 0, abbrId(t.task, 20), WHT);
+    const s0 = t.status[0] ? st(t.status[0]) : [CYN, "-", 0], s1 = t.status[1] ? st(t.status[1]) : [CYN, "-", 0];
+    b.t(r, 21, s0[1], s0[0], null, s0[2]); b.t(r, 27, s1[1], s1[0]);
+    const a = v => v == null ? "-" : String(v); b.tr(r, W - 1, `${a(t.attempts[0])}/${a(t.attempts[1])}`, WHT); }}));
+  return flow(lines, mk, 4, 22).map((b, i, a) => { banner(b, `Vs prior ${A}/${B}`, GRN, BLK, i, a.length, MAG); return b; });
+}
+
 const PAGES = [
   {n:100, name:"Index", short:"Index", build:pIndex},
   {n:101, name:"Gate ladder", short:"Gates", build:pLadder},
@@ -525,6 +568,7 @@ const PAGES = [
   {n:105, name:"Timing and profile", short:"Timing", build:pTiming},
   {n:106, name:"Findings and gaps", short:"Finds", build:pFindings},
 ];
+if (D && D.prior) PAGES.push({n:107, name:"Versus prior", short:"Prior", build:pPrior});
 function buildAll(){ const out = {};
   for (const p of PAGES){ try { out[p.n] = p.build(); }
     catch (err){ const b = new Buf(); banner(b, p.name, RED, WHT, 0, 1); b.t(4, 0, "PAGE ERROR", RED, null, 1); wrap(String(err && err.message || err), 40).slice(0, 6).forEach((l, i) => b.t(6 + i, 0, l, WHT)); out[p.n] = [b]; } }
@@ -640,6 +684,7 @@ if (typeof document !== "undefined" && document.getElementById("grid")){
   document.getElementById("bhold").onclick = toggleHold; document.getElementById("bidx").onclick = () => goTo(100);
   const fit = () => { const h = grid.getBoundingClientRect().height; if (h > 0) grid.style.setProperty("--fs", (h / 24 * 1.12).toFixed(2) + "px"); };
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(grid); else window.addEventListener("resize", fit);
+  document.getElementById("lastpg").textContent = String(PAGES[PAGES.length - 1].n);
   fit(); show(100);
 }
 </script>
