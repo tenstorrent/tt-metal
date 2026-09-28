@@ -13,9 +13,11 @@ import ttnn
 from models.demos.minimax_m3.utils.fabric_env import (
     moe_combine_from_env,
     moe_dispatch_from_env,
+    moe_hybrid_threshold_from_env,
     moe_load_stats_file_from_env,
     moe_load_stats_from_env,
     moe_topology_from_env,
+    moe_weights_nd_sharded_from_env,
 )
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
@@ -218,6 +220,9 @@ class MLP:
             load_stats=moe_load_stats_from_env(),
             load_stats_file=moe_load_stats_file_from_env(),
             global_layer_idx=layer_idx,
+            # M3_MOE_W_NDSHARD (default 0: interleaved) / M3_MOE_HYBRID_THRESHOLD (default 0: off).
+            routed_expert_weights_dram_nd_sharded=moe_weights_nd_sharded_from_env(),
+            routed_expert_hybrid_token_threshold=moe_hybrid_threshold_from_env(),
         )
         self.ep_num_links = ccl_manager.num_links
 

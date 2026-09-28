@@ -9,6 +9,7 @@ the same way as the production runner (``PREFILL_FABRIC_MODE`` in
 
 The ``M3_MOE_*`` knobs select the routed-expert MoE's EP transport (tt/mlp.py -> TtMiniMaxMoE); all
 default to today's path. ``M3_MOE_LOAD_STATS`` turns on a per-layer expert-load readback (host sync).
+``M3_MOE_W_NDSHARD`` / ``M3_MOE_HYBRID_THRESHOLD`` pick the routed-expert weight placement and op split.
 """
 
 import os
@@ -101,6 +102,35 @@ def moe_load_stats_from_env(var="M3_MOE_LOAD_STATS"):
 def moe_load_stats_file_from_env(var="M3_MOE_LOAD_STATS_FILE"):
     """``M3_MOE_LOAD_STATS_FILE=<path>`` -> JSON-lines file for the raw per-expert counts, or None."""
     return os.getenv(var, "").strip() or None
+
+
+def moe_weights_nd_sharded_from_env(var="M3_MOE_W_NDSHARD"):
+    """``M3_MOE_W_NDSHARD=0|1`` -> routed-expert weights DRAM-interleaved (0, default) or DRAM ND-sharded (1).
+
+    Always an explicit bool, so TtRoutedExpert's arch default (ND-sharded on Blackhole) never applies
+    silently. The weight cache holds host tensors either way, so flipping it reuses the same cache.
+    """
+    value = os.getenv(var, "").strip().lower() or "0"
+    if value not in ("0", "1"):
+        raise ValueError(f"{var} must be 0 or 1 (got {os.getenv(var)!r})")
+    return value == "1"
+
+
+def moe_hybrid_threshold_from_env(var="M3_MOE_HYBRID_THRESHOLD"):
+    """``M3_MOE_HYBRID_THRESHOLD=<int>`` -> TtRoutedExpert hybrid_token_threshold, or None when 0 / unset.
+
+    T > 0: experts with <= T tokens run moe_fused_swiglu, the rest unified_routed_expert_moe (both with
+    SwiGluOai). The measured crossover is ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED (128) in
+    deepseek_v3_d_p/reference/minimax_m3_config.py. T >= max tokens per expert runs moe_fused_swiglu only.
+    """
+    raw = os.getenv(var, "").strip() or "0"
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{var} must be a non-negative int (got {os.getenv(var)!r})") from None
+    if value < 0:
+        raise ValueError(f"{var} must be a non-negative int (got {value})")
+    return value or None
 
 
 def fabric_router_config_from_env():

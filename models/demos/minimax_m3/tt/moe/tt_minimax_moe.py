@@ -69,6 +69,8 @@ class TtMiniMaxMoE(LightweightModule):
         load_stats: bool = False,
         load_stats_file=None,
         global_layer_idx=None,
+        routed_expert_weights_dram_nd_sharded: bool = False,
+        routed_expert_hybrid_token_threshold=None,
     ):
         """topology: v1 dispatch and v1 combine on cluster_axis=0 (the TP collectives on axis 1 stay Linear).
         combine_version: "v1" = deepseek_prefill.combine, "v2" = combine_fabric2d (Ring on a torus fabric).
@@ -76,6 +78,10 @@ class TtMiniMaxMoE(LightweightModule):
         load_stats: read the per-expert token counts back every forward and log one M3_MOE_LOAD line (host
            sync; measurement runs only). load_stats_file: also append the raw counts there as JSON lines.
         global_layer_idx: model layer index for the load-stats line only (layer_idx names the weight cache).
+        routed_expert_weights_dram_nd_sharded: expert weights DRAM ND-sharded (True) or interleaved (False).
+           Always passed to TtRoutedExpert explicitly; its None default would pick ND-sharded on Blackhole.
+        routed_expert_hybrid_token_threshold: None = unified_routed_expert_moe for every expert; T = experts
+           with <= T tokens run moe_fused_swiglu instead (SwiGluOai is supported by both ops).
         """
         super().__init__()
         assert combine_version in ("v1", "v2"), f"combine_version must be 'v1' or 'v2', got {combine_version!r}"
@@ -218,6 +224,8 @@ class TtMiniMaxMoE(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            weights_dram_nd_sharded=bool(routed_expert_weights_dram_nd_sharded),
         )
         # M3's own reduce module (tt/moe/tt_reduce.py), not DeepSeek's: same shared post_combine_reduce
         # kernel, but the closing collective goes through the caller's reduce_scatter_fn — M3 passes
