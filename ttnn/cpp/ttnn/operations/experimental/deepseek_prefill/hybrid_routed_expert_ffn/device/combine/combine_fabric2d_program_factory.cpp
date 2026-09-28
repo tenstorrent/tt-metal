@@ -118,7 +118,7 @@ L1Layout compute_l1_layout(
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and the control region is read straight out of DRAM.
     l.control = align_l1(l.pkt_hdr_ring + hdr_ring_bytes);
     uint32_t end = l.control + control_bytes;
-    if (dispatched_is_tiled(tensor_args)) {
+    {
         // Untilizer cores share no hand-placed memory with the cores above, so their layout starts over at
         // the base -- it has to, because that is where the framework puts cb_out and cb_out IS the batch ring.
         l.unt_ring = align_l1(base);
@@ -417,20 +417,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .initial_value = 0});
     }
 
-    // Overlapped, the data-movement kernels can time where combine's tail goes; see
-    // combine_fabric2d_tail_probe.hpp. It only compiles in under the device profiler.
     // TT_CMBF2D_IDLE=1 is a measurement mode: combine's data-movement kernels exit at once and only the
     // collector runs, so the routed expert is timed as overlapped but with no combine traffic beside it.
     static const bool idle =
         std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
-    const auto add_tail_probe = [&](tt::tt_metal::KernelDescriptor& kernel) {
+    const auto add_idle_mode = [&](tt::tt_metal::KernelDescriptor& kernel) {
         if (idle && sems.waits_for_routed_expert) {
             kernel.defines.emplace_back("CMBF2D_IDLE", "1");
-        }
-        if (sems.waits_for_routed_expert) {
-            const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
-            kernel.defines.emplace_back("CMBF2D_TAIL_READY_SEM", std::to_string(sems.ready()));
-            kernel.defines.emplace_back("CMBF2D_TAIL_FINAL_STEP", std::to_string(passes * args.experts_per_chip));
         }
     };
 
@@ -453,7 +446,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
             .noc = tt::tt_metal::NOC::NOC_1,
         };
-        add_tail_probe(snd);
+        add_idle_mode(snd);
         auto snd_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(snd));
 
@@ -464,8 +457,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "reader_combine_fabric2d.cpp";
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
-        add_tail_probe(rdr);
+        add_idle_mode(rdr);
         rdr.compile_time_args =
             hyb_cmbf2d::ReaderCtArgs(
                 args, tensor_args, coord, self, work, l1, plan, untilizers_for_stream(groups, stream, sems, l1))
@@ -542,7 +534,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .noc = tt::tt_metal::NOC::NOC_0,
             };
             hyb_cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
-            add_tail_probe(kernel);
+            add_idle_mode(kernel);
             desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
@@ -567,18 +559,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     if (sems.waits_for_routed_expert) {
         const auto& collector = placement.at(coord).collector.value();
 
-        // The cores that read routed-expert output and so wait on `ready` -- the untilizers when it is tiled,
-        // otherwise the readers, which then read it straight from DRAM -- and the stream cores in any case: the
-        // tail probe reads `ready` there to tell when the routed expert is done.
+        // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can
+        // run ahead of it. The readers consume what the untilizers staged in L1 and are ordered behind them.
         std::vector<CoreCoord> waiting;
         for (const auto& group : groups) {
             for (const auto& untilizer : group) {
                 waiting.push_back(untilizer.worker_virtual);
             }
         }
-        for (const auto& [stream, self] : placement.at(coord).streams) {
-            waiting.push_back(self.worker_virtual);
-        }
+        // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
+        TT_FATAL(!waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
         const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
         auto* dev = args.device;
         const auto re_first = dev->worker_core_from_logical_core(
@@ -637,7 +627,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     auto* mesh_device = operation_attributes.device;
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
-    const uint32_t per_group = dispatched_is_tiled(tensor_args) ? untilizers_per_group() : 0;
+    const uint32_t per_group = untilizers_per_group();
     const auto sems = allocate_ring_semaphores(
         mesh_device,
         operation_attributes.num_links,

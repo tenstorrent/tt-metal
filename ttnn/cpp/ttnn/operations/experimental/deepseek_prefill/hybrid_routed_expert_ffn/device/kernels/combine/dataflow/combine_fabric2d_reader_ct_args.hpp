@@ -106,7 +106,7 @@ struct ReaderCtArgs {
         my_dg_index(op::my_dg_index(args, coord)),
         control_addr(l1.control),
         meta_prefetch_cap(META_PREFETCH),
-        walks_down(op::dispatched_is_tiled(tensor_args) && op::stream_is_cw(plan.stream)),
+        walks_down(op::stream_is_cw(plan.stream)),
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),

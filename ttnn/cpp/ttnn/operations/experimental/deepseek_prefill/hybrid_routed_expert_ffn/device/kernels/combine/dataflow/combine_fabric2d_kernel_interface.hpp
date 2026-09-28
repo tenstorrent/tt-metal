@@ -38,10 +38,6 @@ inline uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) * sizeof(uint16_t);
 }
 
-inline bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
-    return tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE;
-}
-
 // Tiles across one token, which is also the tiles in the tile-row a batch untilizes.
 inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) /
