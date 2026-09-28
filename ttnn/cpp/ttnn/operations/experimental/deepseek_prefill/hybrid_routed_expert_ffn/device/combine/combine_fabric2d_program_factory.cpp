@@ -197,18 +197,15 @@ struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore fwd_arrived;
     uint32_t untilizers_per_group = 0;
     uint32_t num_links = 0;
-    bool waits_for_routed_expert = false;
 
     static constexpr uint32_t FILLED = 0;
     static constexpr uint32_t FREED = 1;
     uint32_t untilized(uint32_t j) const { return 2 + j; }
     uint32_t unt_freed(uint32_t c) const { return 2 + untilizers_per_group + c; }
     bool has_untilizers() const { return untilizers_per_group != 0; }
-    // Overlapped with the routed expert, one more: the `ready` count the collector publishes to every combine
-    // core. Same id on every combine core, like the rest.
+    // The `ready` count the collector publishes to every combine core. Same id on every one, like the rest.
     uint32_t ready() const { return has_untilizers() ? unt_freed(num_links) : 2; }
-    uint32_t ready_gate() const { return waits_for_routed_expert ? ready() : hyb_cmbf2d::NO_READY_GATE; }
-    uint32_t num_program_semaphores() const { return ready() + (waits_for_routed_expert ? 1 : 0); }
+    uint32_t num_program_semaphores() const { return ready() + 1; }
 
     uint32_t lowest_address() const { return static_cast<uint32_t>(fwd_arrived.address()); }
 };
@@ -220,7 +217,6 @@ RingSemaphores allocate_ring_semaphores(
     ttnn::MeshDevice* mesh,
     uint32_t num_links,
     uint32_t untilizers_per_group,
-    bool waits_for_routed_expert,
     const tt::tt_metal::GlobalSemaphore* provided) {
     // Allocated on the full worker grid so the address is uniform across the mesh. One fwd_arrived semaphore
     // serves every stream: each stream is drained by a different worker core, so the per-core copy at this
@@ -232,8 +228,7 @@ RingSemaphores allocate_ring_semaphores(
             ? *provided
             : ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1),
         untilizers_per_group,
-        num_links,
-        waits_for_routed_expert};
+        num_links};
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
@@ -405,9 +400,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             combine_cores.insert(CoreRange(untilizer.logical));
         }
     }
-    if (sems.waits_for_routed_expert) {
-        combine_cores.insert(CoreRange(placement.at(coord).collector.value().logical));
-    }
+    combine_cores.insert(CoreRange(placement.at(coord).collector.value().logical));
     for (uint32_t id = 0; id < sems.num_program_semaphores(); id++) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = id,
@@ -421,7 +414,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     static const bool idle =
         std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
     const auto add_idle_mode = [&](tt::tt_metal::KernelDescriptor& kernel) {
-        if (idle && sems.waits_for_routed_expert) {
+        if (idle) {
             kernel.defines.emplace_back("CMBF2D_IDLE", "1");
         }
     };
@@ -503,7 +496,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
             plan.expert_table_page_base = chip_plan.expert_table_page_base;
-            plan.ready_sem = sems.ready_gate();
+            plan.ready_sem = sems.ready();
             plan.my_index = j;
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
@@ -555,7 +548,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    if (sems.waits_for_routed_expert) {
+    {
         const auto& collector = placement.at(coord).collector.value();
 
         // Only the untilizers: they are the cores that read routed-expert output from DRAM, so only they can
@@ -627,12 +620,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
     const uint32_t per_group = untilizers_per_group();
-    const auto sems = allocate_ring_semaphores(
-        mesh_device,
-        operation_attributes.num_links,
-        per_group,
-        operation_attributes.wait_for_routed_expert,
-        l1_resources.fwd_arrived);
+    const auto sems =
+        allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources.fwd_arrived);
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
@@ -641,25 +630,14 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address(),
         l1_resources.arena);
-    if (operation_attributes.wait_for_routed_expert) {
-        // Two worker rows of 11 hold at most 8 untilizers per group before whole-column dealing runs out, and
-        // the collector needs one cell of what is left.
-        TT_FATAL(
-            per_group <= 8,
-            "combine_fabric2d: overlapped with the routed expert, CMBF2D_UNTILIZERS_PER_GROUP must be at most 8 "
-            "(got {})",
-            per_group);
-        TT_FATAL(
-            operation_attributes.routed_expert_writers > 0,
-            "combine_fabric2d: overlapped with the routed expert, the number of routed-expert writer cores must "
-            "be set");
-    }
-    const auto placement = decide_placement(
-        mesh_device,
-        operation_attributes.axis,
-        operation_attributes.num_links,
-        per_group,
-        operation_attributes.wait_for_routed_expert);
+    // Two worker rows of 11 hold at most 8 untilizers per group before whole-column dealing runs out, and the
+    // collector needs one cell of what is left.
+    TT_FATAL(per_group <= 8, "combine_fabric2d: CMBF2D_UNTILIZERS_PER_GROUP must be at most 8 (got {})", per_group);
+    TT_FATAL(
+        operation_attributes.routed_expert_writers > 0,
+        "combine_fabric2d: the number of routed-expert writer cores must be set");
+    const auto placement =
+        decide_placement(mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group);
     const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args);
 
     // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a sender can
@@ -692,7 +670,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
                  dram,
                  sems,
                  l1_resources.arena)});
-        if (collectors != nullptr && sems.waits_for_routed_expert) {
+        if (collectors != nullptr) {
             (*collectors)[coord] =
                 CollectorTarget{placement.at(coord).collector.value().worker_virtual, l1.collector_counts};
         }

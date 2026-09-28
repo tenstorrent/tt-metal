@@ -165,13 +165,11 @@ void kernel_main() {
     // Overlapped with the routed expert, a step's tile-rows are its output: wait until it reports them written.
     // Only here, not in the counting walk above, which must finish before any expert is ready.
     const auto wait_for_expert = [&](uint32_t step) {
-        if constexpr (ct.ready_sem != hyb_cmbf2d::NO_READY_GATE) {
-            const uint32_t local =
-                hyb_cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
-            hyb_cmbf2d::wait_for_ready(
-                ct.ready_sem,
-                hyb_cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
-        }
+        const uint32_t local =
+            hyb_cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
+        hyb_cmbf2d::wait_for_ready(
+            ct.ready_sem,
+            hyb_cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local));
     };
 
     Ring ring;
