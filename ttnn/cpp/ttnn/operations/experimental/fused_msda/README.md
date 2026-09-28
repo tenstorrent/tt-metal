@@ -220,6 +220,9 @@ output tile:
 reader  -> compute   geom_x, geom_y, attn_tile  [+ offset_x, offset_y for V2]
 compute -> reader    x0, y0                     floor(px), floor(py) as bf16
 reader  -> compute   4 x input_tiles            the gathered bilinear corners
+                                                (one row-major block of all 4
+                                                when D % 32 == 0, tilized by
+                                                compute into tiled_input)
 compute -> compute   4 x scalar_tile            attn * corner coefficient
 ```
 
@@ -228,7 +231,7 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 | `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row | 32 | `align(D*2)` |
 | `c_1` `attn_scratch` | reader-only arena for attention weights | 32 (packed) or 32*L | `align(attn_stick)` |
 | `c_2` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
-| `c_3` `input_tile` | reader → compute, the `V_corner` values | `8 * n_d_tiles` | 2048 |
+| `c_3` `input_tile` | reader → compute, the `V_corner` values: tiles, or a row-major `[NW \| NE \| SW \| SE]` block per point when `D % 32 == 0` | `8 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | compute → compute, `attn * bilinear_coeff` per row | 8 | 2048 |
 | `c_5` `output_scratch` | writer-only stick assembly | 1 | `align(H*D*2)` |
 | `c_6` `ref_scratch` | **V2 only** — reference points arena | 32*R | `align(2*2)` |
@@ -238,6 +241,7 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 | `c_12` `x0`, `c_13` `y0` | compute → reader, the floored corner | 3 | 2048 |
 | `c_14` `frac_x`, `c_15` `frac_y` | compute → compute, `px - floor(px)` | 2 | 2048 |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
+| `c_17` `tiled_input` | compute → compute, the tilized corners (only when `D % 32 == 0`) | `8 * n_d_tiles` | 2048 |
 
 `n_d_tiles = ceil(D / 32)`. CB pressure for the BEVFormer shape
 (`D=32, L=4, P=4`) is ~105 KB.
@@ -295,7 +299,9 @@ a meaningful column 0 — so a query occupies one lane of a 32x32 tile throughou
   a tail row's scalar zero. Columns 1..31 are zeroed once per CB slot at reader
   startup, so an uninitialised L1 bit pattern never reaches the SFPU as a NaN.
 * **input tile** (reader → compute): rows that are in range **and** in bounds
-  hold the gathered value stick; every other row is explicitly zeroed.
+  hold the gathered value stick; every other row is explicitly zeroed. In the
+  row-major block the same holds per corner slot: an in-range, in-bounds slot
+  holds its stick, every other slot and every row `>= v_rows` is zeroed.
 * **scalar tile** (compute → compute): column 0 for all 32 rows, from the
   fractions and the attention weight.
 
@@ -354,9 +360,14 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
    tiles and push them. No arithmetic — the reader moves bit patterns;
 3. take `x0`, `y0` back from the SFPU, decode them with integer shifts, and
    form the four per-corner in-bounds flags;
-4. for each of the four corners: issue `v_rows` NoC reads of the `D`-wide value
-   stick at page `(b*S + level_start[l] + cy*W_l + cx) * H + h`, scatter them
-   into `n_d_tiles` tile rows, zero the rows it skipped, and push.
+4. when `D % 32 == 0`: reserve one block for all four corners and land each
+   corner's `D`-wide stick straight in its slot of row `r`
+   (`r * 4*D*2 + c * D*2`), zero the skipped slots while the reads are in
+   flight, barrier, and push once. The reader copies no value data. Other `D`:
+   for each corner, read the sticks into `value_scratch`, scatter them into
+   `n_d_tiles` tile rows, zero the rows it skipped, and push. The stick is at
+   page `(b*S + level_start[l] + cy*W_l + cx) * H + h` (canonical) or
+   `b*S + ...` at byte offset `h*D*2` (packed).
 
 Only the readers differ between V1 and V2, and only in which staged bf16 pair
 step 2 calls the primary and which the secondary.
@@ -369,6 +380,9 @@ step 2 calls the primary and which the secondary.
   `attn * corner_coeff` — the scalar tile the reduction consumes. Out-of-bounds
   corners are *not* masked here: this kernel has no bounds information, which
   is why the reader zeroes the input rows it skipped (§6).
+* for `D % 32 == 0`, one `tilize_block` per point turns the reader's row-major
+  block into `4 * n_d_tiles` tiles in `tiled_input` on the unpacker, with L1
+  accumulate off;
 * the reduction — `4 * L * P` iterations of `mul_tiles_bcast<COL>(input,
   scalar)` packed into the output CB with `pack_reconfig_l1_acc(1)` after the
   first, so the accumulator lives in L1 on the owning core for the whole

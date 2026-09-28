@@ -263,6 +263,13 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     constexpr uint8_t frac_x_cb = tt::CBIndex::c_14;
     constexpr uint8_t frac_y_cb = tt::CBIndex::c_15;
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
+    constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
+
+    // Row-major staging: when D is a whole number of tile widths, the reader
+    // lands the four corners of a point side by side as a row-major block and
+    // compute tilizes it on the unpacker, so the reader copies nothing. Other
+    // D fall back to the reader scattering sticks into tile faces.
+    const bool rm_staging = s.head_dim % TILE_WIDTH == 0;
 
     auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
         descriptor.cbs.push_back(CBDescriptor{
@@ -291,6 +298,17 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
     // The sample stream, sized so that reader and compute can each run one
     // sampling point ahead of the other (see kGeomCbPages and friends).
     push_cb(input_tile_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
+    // Row-major staging packs the four corner slots of a row back to back, so a
+    // slot must be exactly D*2 bytes; alignment padding would shift the tile
+    // columns compute tilizes.
+    TT_FATAL(
+        !rm_staging || value_stick_aligned == value_stick_raw,
+        "fused_msda: row-major staging needs an unpadded value stick ({} B aligned vs {} B raw)",
+        value_stick_aligned,
+        value_stick_raw);
+    if (rm_staging) {
+        push_cb(tiled_input_cb, kInputCbGroups * n_d_tiles, tile_nbytes, data_format);
+    }
     push_cb(scalar_tile_cb, kScalarCbPages, tile_nbytes, data_format);
     // The geometry pipeline. Always allocated, including the offset pipes on
     // V1 where the compute kernel names but never reads them: 8 KB of L1
@@ -347,6 +365,7 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         x0_cb,
         y0_cb,
         kGeomCbPages,
+        static_cast<uint32_t>(rm_staging),
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
@@ -385,6 +404,8 @@ ProgramDescriptor FusedMSDAOperation::create_descriptor(
         s.num_levels,
         s.num_points,
         static_cast<uint32_t>(attrs.from_offsets),
+        static_cast<uint32_t>(rm_staging),
+        tiled_input_cb,
     };
     // fp32 destination: the geometry builds px, which reaches the feature map's
     // extent. In a 16-bit destination the ulp at 200 is 1.0, so floor(px) and
