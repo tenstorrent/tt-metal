@@ -1,0 +1,154 @@
+# Model spec for the gated bring-up framework (models/demos/common/bringup).
+# Tencent Hy4 Preview (text decoder only; MTP skipped), layers 0-5, chunked prefill on the 4x Blackhole p150b QuietBox,
+# mesh 2x2, FABRIC_2D. The full model (~780B params, ~104 GiB per chip even with bfp4 experts) does not fit the box;
+# layers 0-5 cover all three block types. A subset result is never reported as full-model.
+# Feasibility study: hy4_preview_findings.md (repo root). Written by the /bringup intake skill, approved by the owner.
+model: hy4_preview_d_p
+display_name: Hy4 Preview (layers 0-5)
+hf_id: tencent/Hy4-preview
+model_dir: models/demos/hy4_preview_d_p
+hooks: models.demos.hy4_preview_d_p.bringup.hooks
+num_layers: 78
+prior: null
+layers: "0-5"
+box:
+  name: Blackhole QuietBox, 4x p150b, mesh 2x2 (FABRIC_2D)
+  chip: Blackhole p150b
+  mesh: [2, 2]
+  chip_dram_gb: 32
+  device_params: {fabric_config: FABRIC_2D, l1_small_size: 24576}   # owner: always 2D fabric
+  test_timeout_s: 3600
+target: {seq: 56320, chunk: 5120, dtype: bf16}
+ladder:
+  - {name: s4096, seq: 4096, chunk: 2048, full_dumps: true}     # 2k->2k; the second chunk is the first sparse one (top-2048)
+  - {name: s16384, seq: 16384, chunk: 8192}                     # 8k->8k
+  - {name: last, seq: 56320, chunk: 5120, golden: s56320, prefix_from_golden: true}   # golden 50k prefix, device 50k->55k
+  - {name: s56320, seq: 56320, chunk: 5120}                     # all 11 chunks on device
+block_types:
+  dense_full:                      # layer 0: gated DSA sparse MLA (64 heads, q_lora 2048, kv_lora 512, qk 192+64, v 256,
+    layers: [0]                    #   scale 1/16, learnable sink per head, sigmoid output gate) with its own indexer
+    representative: 0              #   (32 heads x 128, top-2048) + dense SwiGLU 18432; iHC 4-stream residual
+  moe_full:                        # same attention with its own indexer + MoE (256 experts top-8, 1 shared expert,
+    layers: "1,5,9,13,17,21,25,29,33,37,41,45,49,53,57,61,65,69,73,77"   # sigmoid + correction bias, x2.827,
+    representative: 1              #   routed SwiGLU clamped at 10)
+  moe_shared:                      # same attention, no indexer: reuses the latest full layer's top-k selection; MoE
+    layers: "2-4,6-8,10-12,14-16,18-20,22-24,26-28,30-32,34-36,38-40,42-44,46-48,50-52,54-56,58-60,62-64,66-68,70-72,74-76"
+    representative: 2
+state:
+  kind: mla                        # MLA latent cache + indexer key cache
+  tensors: [kv_latent, index_key]  # kv_latent [seq, 576] = kv_a_layernorm(latent 512) | k_pe 64 (RoPE applied);
+                                   #   index_key [seq, 128] = LayerNorm(wk(h)) with RoPE; empty [0, 128] on shared layers
+  format: mla_latent
+thresholds: {component: 0.99, block: 0.98, layer: 0.97, state: 0.97, final_hidden: 0.97, top5: 0.9}
+text:                              # instruction-tuned reasoning model: the book is the model's no_think reply
+  source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
+  wrap: model_turn
+  request: "Recite the Project Gutenberg text of A Tale of Two Cities by Charles Dickens, from the start."
+  template_kwargs: {reasoning_effort: no_think}
+  min_top1: 0.4
+hf:
+  revision: 705d81ee51566a186d645b74c974d642ef2828fe
+  parity_seq: 4096                 # > index_topk 2048, so HF parity exercises the sparse selection
+  custom_loader: true              # transformers 5.17 hy_v4 code vendored (python_env has 5.12.1); 1.56 TB bf16 > host
+                                   #   RAM: the HF sanity runs at R.2 on hooks.hf_model, experts read lazily from mmap
+checkpoint:
+  trim_drop: ["model.mtp_layers.*"]   # R.4 (F47) keeps layers 0-5 + embed / norm / hc_head / lm_head after the sanity
+  expect:
+    "model.embed_tokens.weight": [120832, 6144]
+    "lm_head.weight": [120832, 6144]
+    "model.norm.weight": [6144]
+    "model.hc_head.hc_head_fn": [4, 24576]
+    "model.layers.*.hc_attn_layer.hc_pre.hc_fn": [8, 24576]
+    "model.layers.*.hc_mlp_layer.hc_pre.hc_fn": [8, 24576]
+    "model.layers.*.self_attn.q_a_proj.weight": [2048, 6144]
+    "model.layers.*.self_attn.q_b_proj.weight": [16384, 2048]
+    "model.layers.*.self_attn.kv_a_proj_with_mqa.weight": [576, 6144]
+    "model.layers.*.self_attn.kv_b_proj.weight": [28672, 512]
+    "model.layers.*.self_attn.o_proj.weight": [6144, 16384]
+    "model.layers.*.self_attn.linear_gate.weight": [16384, 6144]
+    "model.layers.*.self_attn.learnable_sink_param": [64]
+    "model.layers.0.self_attn.indexer.wq_b.weight": [4096, 2048]
+    "model.layers.1.self_attn.indexer.wk.weight": [128, 6144]
+    "model.layers.5.self_attn.indexer.weights_proj.weight": [32, 6144]
+    "model.layers.0.mlp.gate_proj.weight": [18432, 6144]
+    "model.layers.0.mlp.down_proj.weight": [6144, 18432]
+    "model.layers.*.mlp.gate.weight": [256, 6144]
+    "model.layers.*.mlp.gate.e_score_correction_bias": [256]
+    "model.layers.*.mlp.experts.gate_up_proj": [256, 4096, 6144]
+    "model.layers.*.mlp.experts.down_proj": [256, 6144, 2048]
+    "model.layers.*.mlp.shared_experts.gate_proj.weight": [2048, 6144]
+  count:
+    "model.layers.*.self_attn.learnable_sink_param": 78
+    "model.layers.*.self_attn.indexer.wk.weight": 21
+    "model.layers.*.mlp.gate.weight": 77
+  config:
+    num_hidden_layers: 78
+    hidden_size: 6144
+    num_attention_heads: 64
+    q_lora_rank: 2048
+    kv_lora_rank: 512
+    qk_nope_head_dim: 192
+    qk_rope_head_dim: 64
+    v_head_dim: 256
+    index_n_heads: 32
+    index_head_dim: 128
+    index_topk: 2048
+    n_routed_experts: 256
+    num_experts_per_tok: 8
+    moe_intermediate_size: 2048
+    intermediate_size: 18432
+    hc_mult: 4
+    swiglu_limit: 10.0
+contract: {adapter: hy4_preview_d_p}
+agents:
+  rules:                           # the owner's rules, shown in every brief
+    - "Always use 2D fabric: the mesh (2x2) opens with ttnn.FabricConfig.FABRIC_2D (spec box.device_params). Configure
+      CCLs, dispatch and combine for it; never open a device or build a test with FABRIC_1D, FABRIC_1D_RING or a torus."
+    - "Text decoder only: never build, load or test the MTP layer (model.mtp_layers.*)."
+    - "The CPU reference (reference role) is a chunked sparse CPU implementation of Hy4 (MLA latent cache, indexer
+      top-2048, sinks, output gate, iHC), validated against the vendored HF code (transformers 5.17 hy_v4, in
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/hf_code) at short lengths. HF eager attention caches expanded K/V
+      and builds 64xSxS scores, so it cannot run at 56k; never upgrade the shared python_env (5.12.1), vendor and adapt
+      the code instead. The full checkpoint is 1.56 TB bf16 and does not fit the 503 GB host RAM: the R.1 hook
+      hf_model(spec, None) reads routed experts lazily (mmap, only the selected experts of each token), or streams
+      layers; the layers 0-5 reference can load everything up front. iHC and the LM head run in fp32 as in HF."
+    - "Read hy4_preview_findings.md (repo root) first: the component table maps every Hy4 component to existing code,
+      mostly models/demos/deepseek_v3_d_p (GLM-5.2 config and indexer sharing, tt/mla ttMLA + TtIndexer, Kimi-K3's
+      output gate, DeepSeek-V4's sinks-in-SDPA and tt/mhc, tests/sparse_mla) and models/demos/mimo_v2_6_d_p_2x2 (MoE on
+      2x2). Treat it as a starting point, not verified fact. Note ttnn.transformer.sparse_sdpa multiplies the sink by
+      scale (sparse_sdpa.hpp): pass sink / scale, and an explicit scale of 1/16."
+    - "Be aware of the bring-up ops in ttnn/ttnn/bringup (INDEX.md: dispatch, combine, offset_cumsum,
+      unified_routed_expert_ffn with ClampedSiluGlu, sdpa, rms_norm_ttnn); use them as you see fit. Never edit an
+      existing TTNN op: fork it (skill bringup-fork-op) or extend an existing fork behind an option."
+  model: null
+  timeout_s: 14400
+  read:
+    reference:
+      - /localdev/dnijemcevic/bringup/hy4_preview_d_p/hf_code/modeling_hy_v4.py
+      - /localdev/dnijemcevic/bringup/hy4_preview_d_p/hf_code/configuration_hy_v4.py
+      - /localdev/dnijemcevic/bringup/hy4_preview_d_p/hf/config.json
+      - models/demos/deepseek_v3_d_p/reference/cpu_deepseek_v32
+      - models/demos/deepseek_v3_d_p/tests/sparse_mla/sparse_mla_reference.py
+      - models/demos/mimo_v2_6_d_p/reference
+      - hy4_preview_findings.md
+    plan:
+      - hy4_preview_findings.md
+      - models/demos/deepseek_v3_d_p/reference/glm_5_2_config.py
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/deepseek_v3_d_p/tt/mhc
+      - models/demos/deepseek_v3_d_p/tests/sparse_mla
+      - models/demos/mimo_v2_6_d_p_2x2/tt
+      - models/demos/mimo_v2_6_d_p_2x2/bringup/plan.yaml
+    implement:
+      - hy4_preview_findings.md
+      - models/demos/deepseek_v3_d_p/reference/glm_5_2_config.py
+      - models/demos/deepseek_v3_d_p/tt/mla
+      - models/demos/deepseek_v3_d_p/tt/mhc
+      - models/demos/deepseek_v3_d_p/tests/sparse_mla
+      - models/demos/mimo_v2_6_d_p_2x2/tt
+  policy: {}
+paths:
+  hf: /localdev/dnijemcevic/bringup/hy4_preview_d_p/hf
+intake:
+  smoke: {prompt: "What is the capital of France? Answer in one word.", expect: "Paris"}
+dashboard: {styles: [standard, teletext]}   # owner: both
