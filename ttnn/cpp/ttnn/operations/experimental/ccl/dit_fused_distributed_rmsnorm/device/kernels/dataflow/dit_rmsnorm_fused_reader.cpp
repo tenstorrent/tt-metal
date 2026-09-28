@@ -103,15 +103,14 @@ void kernel_main() {
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
     constexpr auto recip_args = TensorAccessorArgs<rope_sin_args.next_compile_time_args_offset()>();
 
-    uint32_t arg_idx = 0;
-    const uint32_t input_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t weight_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t bias_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t rope_cos_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t rope_sin_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t recip_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t weight_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t bias_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t rope_cos_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t rope_sin_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t tile_row_start = get_arg_val<uint32_t>(0);
+    const uint32_t tile_row_end = get_arg_val<uint32_t>(1);
 
     Noc noc;
 
