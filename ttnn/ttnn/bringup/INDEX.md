@@ -29,4 +29,4 @@ users are switched back.
 | `combine` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine` @ `67ca5f3af48` | 1-device dispatch axis (no fabric) | ernie45_d_p, gemma4_a4b_d_p, mimo_v2_6_d_p |
 | `offset_cumsum` | `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum` @ `67ca5f3af48` | 1-device dispatch axis (no all_gather) | ernie45_d_p, gemma4_a4b_d_p, mimo_v2_6_d_p |
 | `rms_norm_ttnn` (`ttnn.bringup.rms_norm`) | ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1cbc98`); drop-in for `ttnn.rms_norm` | ai-generated perf optimized version; C++ host side (device op + program factory, program cache), Python builder kept as the parity reference; opt-in `return_residual_sum` (also returns t = x + r, TILE, C++ op only) | mimo_v2_6_d_p |
-| `sdpa` | `ttnn/cpp/ttnn/operations/transformer/sdpa` @ `99f7e834cea` | (see CHANGELOG.md) | none yet |
+| `sdpa` | `ttnn/cpp/ttnn/operations/transformer/sdpa` @ `99f7e834cea` | non-MLA V head dim narrower than K's (a narrower V tensor; output has V's width): scaled_dot_product_attention and chunked_scaled_dot_product_attention | none yet (mimo_v2_6_d_p will use it) |
