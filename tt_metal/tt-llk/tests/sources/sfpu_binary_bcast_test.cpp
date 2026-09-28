@@ -43,8 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    // Two unpack_A calls per loop (A then B). NONE posts SrcA plus a SrcB zerosrc
-    // dvalid (WA #1230) every face, including dest_acc=No. MATH_ISOLATE mocks that.
+    // Mocks post the same src dvalids per tile as _llk_unpack_A_.
     const std::uint32_t src_handshake_iters = LOOP_FACTOR * INPUT_TILES_PER_LOOP * num_faces;
 
     {
@@ -69,8 +68,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                // Real NONE unpack posts SrcA plus a SrcB zerosrc dvalid (WA #1230)
-                // every face, including dest_acc=No. MATH_ISOLATE must match that.
                 _perf_unpack_loop_set_valid</* src A */ true, /* src B */ true>(/* iterations */ src_handshake_iters);
             }
         }

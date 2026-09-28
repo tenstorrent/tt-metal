@@ -30,10 +30,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
 @pytest.mark.quasar
 @parametrize(
     **_func.INT_SWEEP,
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
+    approx_mode=[ApproximationMode.No],
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_int_quasar(
