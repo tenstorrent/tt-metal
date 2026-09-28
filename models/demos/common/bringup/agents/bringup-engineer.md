@@ -52,8 +52,14 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    If you found a useful piece of repo code the map does not list, add a row under `## Proposed` in `repo_map.md`.
 10. Append a short section to the model's `bringup/BREADCRUMBS.md`: what you did, decisions and why, gotchas, the
    re-run command. Facts only.
-11. Do not commit. The orchestrator commits when the gate passes.
-12. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
+11. Deferring a step (implement role, component tasks only). When TTNN has no proper op for a step (no op, no
+   composition of TTNN ops, no fork of an existing op fits) you may defer it to the op code generator instead: write
+   the op request the brief describes (`plan/op_request.py new`, then the evidence, prompt, reference and binding,
+   until `check` prints `valid`). The step then stays on the CPU through `testing/cpu_bridge.py` and the bring-up
+   continues. The evidence must show what you searched, what you tried and how each failed. Deferring to skip a
+   step that is only hard, or that an existing op, a composition or a fork could do, is cheating.
+12. Do not commit. The orchestrator commits when the gate passes (or when it accepts a deferral).
+13. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
 
 ## Roles
 
@@ -65,7 +71,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   `plan.md` (per layer type: a table with one row per component, what each chip holds, the collective after it, per-chip
   memory; then the per-chip total and the per-layer collectives; copy the shape of the reference plans in the repo map,
   and say in one sentence why for each departure), and `components.yaml` (every step mapped to a TTNN op, NATIVE /
-  COMPOSED / CPU; check the repo map before tagging anything COMPOSED, and record what you searched). You may annotate
+  COMPOSED / CPU / OPGEN; check the repo map before tagging anything COMPOSED, and record what you searched; OPGEN
+  means TTNN has no proper op and the step is requested from the op code generator). You may annotate
   or split tasks in `tasks.yaml` only in this role, before approval.
 - **test**: the orchestrator rendered the component or swap test from the template. Review it against the golden and the
   component: comparison mode (PCC for floats, match or top-k overlap for indices), threshold, anything the template
@@ -73,9 +80,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
   and fail with a zero stub.
 - **implement**: write the TTNN module for the component in `<model_dir>/tt/` and register it in the model's
   `device_component` (and, for integration, `device_model`) hooks. Start from the code the components entry names under
-  `reuse`. Keep every other component on the CPU reference.
+  `reuse`. Keep every other component on the CPU reference. A step tagged OPGEN in `components.yaml` is deferred from
+  the start (rule 11).
 - **assemble**: after the swap tests, build the all-device model (hidden state resident on the device, every block
   through `run_block`) from the validated modules and make it the `device_model` hook; the hybrid stays selectable.
+  A step deferred to op-gen runs through `CpuBridge` (`testing/cpu_bridge.py`), the only host work allowed.
 - **contract**: write the prefill adapter and runtime the engine loads (see
   `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`). The runtime must accept the engine's uint32 device
   input with a padded tail, and must call the layer-completion sink only after that layer's state is on the device.

@@ -9,7 +9,8 @@ is built with ``target.seq`` raised in memory to the longest position, so it siz
 only: the KV prefix is zeros and the tokens are random ids (the work does not depend on the values). Each position runs
 once to compile, then once timed, with one sync and nothing read back.
 
-Records pos_chunk, pos_ms_<start> per position, device_model_hybrid.
+Records pos_chunk, pos_ms_<start> per position, device_model_hybrid, and deferred_cpu_steps / deferred_cpu_ms (the
+CPU bridge's steps and host time over the timed runs, F46).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import time
 import torch
 
 from models.demos.common.bringup.core import metrics
+from models.demos.common.bringup.testing import cpu_bridge
 
 
 def positions(s) -> list[int]:
@@ -49,7 +51,7 @@ def run_positions(s, mesh) -> list[tuple[int, float]]:
     metrics.record("device_model_hybrid", int("Hybrid" in type(model).__name__))
     metrics.record("pos_chunk", chunk)
     vocab = int(s.get("checkpoint.config.vocab_size", 32000) or 32000)
-    rows = []
+    rows, bridge = [], cpu_bridge.BridgeStats()
     for start in starts:
         state = model.new_state(start + chunk)
         tokens = torch.randint(0, vocab, (chunk,))
@@ -68,13 +70,17 @@ def run_positions(s, mesh) -> list[tuple[int, float]]:
             model.free(h)
 
         once()  # compile this position's programs
+        cpu_bridge.STATS.reset()
         t0 = time.time()
         once()
         ms = (time.time() - t0) * 1e3
+        bridge.ms += cpu_bridge.STATS.ms
+        bridge.steps |= cpu_bridge.STATS.steps
         metrics.record(f"pos_ms_{start}", round(ms, 1))
         rows.append((start, ms))
         print(f"position {start}->{start + chunk}: {ms:.1f} ms ({chunk / ms * 1e3:.0f} tok/s)", flush=True)
         _free(state)
         del state
         gc.collect()
+    cpu_bridge.record(metrics, bridge)
     return rows
