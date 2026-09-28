@@ -29,8 +29,6 @@ import ttnn
 MESH_SHAPE = (1, 2)
 # Different values per shard make a shard that lands on the wrong chip visible.
 SHARD_VALUES = (11, 29)
-# The upload takes the pinned-memory path when the IOMMU is on and the local shards exceed this size.
-PINNED_WRITE_THRESHOLD_BYTES = 32 * 1024 * 1024
 
 
 @pytest.fixture(scope="module")
@@ -38,14 +36,18 @@ def co_owned_mesh():
     if not ttnn.using_distributed_env():
         pytest.skip("Requires two ranks that co-own a 1x2 mesh; launch with tt-run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*MESH_SHAPE))
-    assert int(ttnn.distributed_context_get_size()) == 2
-    rank = int(ttnn.distributed_context_get_rank())
-    local_range = mesh_device.get_view().get_local_mesh_coord_range()
-    assert [(coord[0], coord[1]) for coord in local_range] == [(0, rank)]
-    yield mesh_device, rank
-    ttnn.close_mesh_device(mesh_device)
-    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    try:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*MESH_SHAPE))
+        try:
+            assert int(ttnn.distributed_context_get_size()) == 2
+            rank = int(ttnn.distributed_context_get_rank())
+            local_range = mesh_device.get_view().get_local_mesh_coord_range()
+            assert [(coord[0], coord[1]) for coord in local_range] == [(0, rank)]
+            yield mesh_device, rank
+        finally:
+            ttnn.close_mesh_device(mesh_device)
+    finally:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
 def _populated_coords(host_tensor):
@@ -88,9 +90,8 @@ def test_upload_complete_host_tensor(co_owned_mesh, shard_shape):
     host_tensor = _complete_host_tensor(shard_shape)
 
     local_bytes = shard_shape[0] * shard_shape[1] * 2
-    pinned = _iommu_enabled() and local_bytes > PINNED_WRITE_THRESHOLD_BYTES
-    # try_pin can still fall back to an unpinned write, and nothing reports it, so record only the selection.
-    logger.info(f"rank {rank}: {local_bytes} local bytes, pinned write path selected: {pinned}")
+    # The upload path depends on runtime pinning state that Python cannot see, so log only the inputs.
+    logger.info(f"rank {rank}: {local_bytes} local bytes, IOMMU enabled: {_iommu_enabled()}")
 
     device_tensor = ttnn.to_device(host_tensor, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     _assert_local_shard(device_tensor, rank, shard_shape)

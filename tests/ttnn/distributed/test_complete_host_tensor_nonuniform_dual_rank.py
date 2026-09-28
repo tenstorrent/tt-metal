@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -22,15 +23,17 @@ def co_owned_mesh():
     if not ttnn.using_distributed_env():
         pytest.skip("Requires two ranks that co-own a 1x4 mesh; launch with tt-run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
-    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4))
     try:
-        assert int(ttnn.distributed_context_get_size()) == 2
-        rank = int(ttnn.distributed_context_get_rank())
-        owned = [(coord[0], coord[1]) for coord in mesh.get_view().get_local_mesh_coord_range()]
-        assert owned == [(0, 2 * rank), (0, 2 * rank + 1)], owned
-        yield mesh, rank
+        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, 4))
+        try:
+            assert int(ttnn.distributed_context_get_size()) == 2
+            rank = int(ttnn.distributed_context_get_rank())
+            owned = [(coord[0], coord[1]) for coord in mesh.get_view().get_local_mesh_coord_range()]
+            assert owned == [(0, 2 * rank), (0, 2 * rank + 1)], owned
+            yield mesh, rank
+        finally:
+            ttnn.close_mesh_device(mesh)
     finally:
-        ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
@@ -42,11 +45,10 @@ def _populated_coords(tensor):
 @pytest.mark.parametrize("shard_shape", [(32, 64), (8192, 4096)], ids=["small", "64mib"])
 def test_upload_complete_offset_tensor(co_owned_mesh, shard_shape):
     mesh, rank = co_owned_mesh
-    if shard_shape == (8192, 4096):
-        # 64 MiB per local shard exceeds the 32 MiB pinning threshold; IOMMU enables that path.
-        groups = Path("/sys/bus/pci/drivers/tenstorrent").glob("*/iommu_group/type")
-        if not any(path.read_text().startswith("DMA") for path in groups):
-            pytest.skip("The pinned nonuniform upload regression requires IOMMU")
+    # The upload path depends on runtime pinning state that Python cannot see, so log only the inputs.
+    groups = Path("/sys/bus/pci/drivers/tenstorrent").glob("*/iommu_group/type")
+    iommu = any(path.read_text().startswith("DMA") for path in groups)
+    logger.info(f"rank {rank}: {shard_shape[0] * shard_shape[1] * 2} local bytes, IOMMU enabled: {iommu}")
 
     source = torch.cat([torch.full(shard_shape, value, dtype=torch.bfloat16) for value in (11, 29)], dim=1)
     mapper = ttnn.create_mesh_mapper(
