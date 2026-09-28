@@ -61,9 +61,6 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
 
     const uint32_t c_padded_bytes = tiles_per_channel_dim * TILE_WIDTH * tt::datum_size(out_cb_data_format);
-    const uint32_t output_width = input_width / stride_w;
-    const uint32_t patch_size = stride_h * stride_w;
-    const uint32_t output_stick_bytes = patch_size * c_bytes;
     // One super-block = stride_h consecutive input H-rows → one output H-row.
     const uint32_t num_super_blocks = input_tensor.logical_shape()[0] * (input_tensor.logical_shape()[1] / stride_h);
 
@@ -118,9 +115,10 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         .data_format_metadata = out_cb_data_format,
     };
     // src2: RM scratch sized to one full output row; touched only by the writer (self-loop DFB).
+    const uint32_t src2_bytes = static_cast<uint32_t>(tile_native_fold_scratch_bytes(input_tensor, stride_h, stride_w));
     DataflowBufferSpec src2_dfb{
         .unique_id = SRC2,
-        .entry_size = output_stick_bytes * output_width,
+        .entry_size = src2_bytes,
         .num_entries = 1,
         .data_format_metadata = out_cb_data_format,
     };
