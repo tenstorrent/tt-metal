@@ -25,6 +25,38 @@
   "started": "2026-09-28T04:27:33",
   "status": "PASS"
  },
+ "R.2": {
+  "attempts": 0,
+  "duration_s": 681.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T04:39:06"
+   }
+  ],
+  "last_run": "2026-09-28T04:39:06",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/R.2.log",
+  "metrics": {
+   "parity_layers": 6,
+   "pcc_hidden_L00": 0.999999999999983,
+   "pcc_hidden_L01": 1.0000000000000133,
+   "pcc_hidden_L02": 1.0000000000000113,
+   "pcc_hidden_L03": 0.9999999999999892,
+   "pcc_hidden_L04": 0.9999999999999585,
+   "pcc_hidden_L05": 0.9999999999999781,
+   "pcc_logits": 0.9999999999998483,
+   "revision_ok": 1,
+   "revision_pinned": 1,
+   "smoke_ok": 1,
+   "text_next_token_acc": 0.0,
+   "text_top1_acc": 0.9545676708221436,
+   "top1_match_frac": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T04:27:45",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T04:27:18",
