@@ -1,4 +1,4 @@
-name: "[internal] Galaxy stress tests impl"
+name: "[internal] Stress tests impl"
 
 on:
   workflow_call:
@@ -34,7 +34,7 @@ jobs:
     outputs:
       matrix: ${{ steps.apply-runner-labels.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_stress_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/stress_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -56,16 +56,18 @@ jobs:
           sku-config: ./.github/sku_config.yaml
       - name: Apply test selection
         id: apply-test-selection
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          TEST_SELECTION: ${{ inputs.test-selection }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
-          if [ "${{ inputs.test-selection }}" = "all" ]; then
+          if [ "$TEST_SELECTION" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            FILTERED=$(echo "$MATRIX" | jq -c --arg id "${{ inputs.test-selection }}" '[.[] | select(.id == $id)]')
+            FILTERED=$(jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]' <<<"$MATRIX")
             if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/galaxy_stress_tests.yaml and enabled-skus includes the needed SKU."
+              echo "::error::No tests found for test-selection '$TEST_SELECTION'. Ensure id matches tests/pipeline_reorg/stress_tests.yaml and enabled-skus includes the needed SKU."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -74,22 +76,26 @@ jobs:
           fi
       - name: Apply runner labels (topology / extra-tag)
         id: apply-runner-labels
+        env:
+          MATRIX: ${{ steps.apply-test-selection.outputs.matrix }}
+          EXTRA_TAG: ${{ inputs.extra-tag }}
+          TOPOLOGY: ${{ inputs.topology }}
         run: |
-          MATRIX='${{ steps.apply-test-selection.outputs.matrix }}'
-          UPDATED=$(echo "$MATRIX" | jq -c \
-            --arg tag "${{ inputs.extra-tag }}" \
-            --arg topology "${{ inputs.topology }}" \
+          UPDATED=$(jq -c \
+            --arg tag "$EXTRA_TAG" \
+            --arg topology "$TOPOLOGY" \
             'map(.runs_on |= map(
               if . == "in-service" then $tag
               elif startswith("topology-") then $topology
               else . end
-            ))')
+            ))' <<<"$MATRIX")
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$UPDATED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  galaxy-stress-tests:
+  stress-tests:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,11 +109,14 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: wormhole_b0
+        # bh_* SKUs run on Blackhole, anything else on Wormhole, as the ops impl derives it.
+        ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        # As the ops impl sets it: no cache on bh_p150b_civ2.
+        HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:

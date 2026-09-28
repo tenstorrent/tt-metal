@@ -413,8 +413,8 @@ safe-outputs:
 
       - galaxy-profiler-tests
       - galaxy-tests
+      - stress-tests
       - galaxy-sanity
-      - galaxy-stress-tests
 
       - t3000-tests
       - t3000-dispatch-tests
@@ -622,7 +622,7 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `galaxy-sanity` | Galaxy (WH/BH) | Quick Galaxy-reachability check plus the Galaxy health suite, before committing to the heavier Galaxy suites |
 | `galaxy-tests` | Galaxy (WH/BH) | Fabric, CCL, multi-device, large-mesh and multi-tenant isolation code paths |
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
-| `galaxy-stress-tests` | Galaxy | Stability and long-run behaviour |
+| `stress-tests` | Galaxy, T3K and single card | Long-run stress: Galaxy fabric stability, T3K trace stress, ttnn SDPA stress; `test-selection` narrows to one id |
 | `t3000-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
 | `t3000-dispatch-tests` | T3000 (8×WH) | The T3K fast (sanity) suite, on request |
