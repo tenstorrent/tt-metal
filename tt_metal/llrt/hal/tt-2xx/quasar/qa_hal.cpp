@@ -304,7 +304,10 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        const char *quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+        // Snapshot the env once: includes() runs separately for firmware and
+        // kernel builds, and a mid-process env change must not compile them
+        // against different maps.
+        static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
         // TODO: Use UMD supplied variant instead of env var
         // defaults to Quasar if no variant is set
         if (quasar_variant != nullptr && std::string(quasar_variant) == "horizon") {
