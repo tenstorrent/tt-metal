@@ -977,11 +977,15 @@ class MLA1D(AbstractModule):
         q_chunk_size = 0  # Unused in decode mode
         k_chunk_size = K_CHUNK_SIZE
 
+        # On Blackhole each core of a head group pays a fixed cost close to one k chunk of work, so more than four
+        # cores per group is slower at every measured position (tt-metal issue 56785).
+        cores_per_group = {"max_cores_per_head_batch": 4} if ttnn.device.is_blackhole(mesh_device) else {}
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
+            **cores_per_group,
         )
 
         flash_mla_compute_kernel_config = ttnn.WormholeComputeKernelConfig(

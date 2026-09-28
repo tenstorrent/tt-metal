@@ -31,8 +31,12 @@ void kernel_main() {
     constexpr bool use_joint_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(18);
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(19);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(21);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(22);
+    constexpr uint32_t n_partial_col = get_compile_time_arg_val(23);
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
@@ -67,25 +71,39 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
+    // Streaming: one palette [neginf, spatial partial tile, joint tail partial tile] stays fronted; compute
+    // narrows the padded tiles.
+    if constexpr (use_streaming_compute && use_joint_mask) {
+        generate_lightweight_mask_tiles<n_partial_col, k_partial_col, cb_mask_in, false, 0u>(noc);
+    }
+
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
-                generate_mask<false, 0, use_joint_mask, cb_mask_in>(
-                    noc,
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    q_chunk,
-                    0,
-                    mask_chunk_0 != (uint32_t)(-1),
-                    mask_chunk_1 != (uint32_t)(-1),
-                    unpadded_N,
-                    unpadded_L,
-                    false);
+                if constexpr (!use_streaming_compute) {
+                    generate_mask<false, 0, use_joint_mask, cb_mask_in>(
+                        noc,
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        q_chunk,
+                        0,
+                        mask_chunk_0 != (uint32_t)(-1),
+                        mask_chunk_1 != (uint32_t)(-1),
+                        unpadded_N,
+                        unpadded_L,
+                        false);
+                }
 
                 const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
                 const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
                 const auto out_row_end_tile = out_row_start_tile + Sq_chunk_t;
-                write_block(noc, cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
+                if constexpr (use_streaming_compute) {
+                    write_block_row_grouped_trid<false>(
+                        noc, cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes, out_subblock_h, 0);
+                    noc.async_write_barrier();
+                } else {
+                    write_block(noc, cat_out_generator, dst_slice, out_row_end_tile, cb_out, tile_bytes);
+                }
             }
         }
     }

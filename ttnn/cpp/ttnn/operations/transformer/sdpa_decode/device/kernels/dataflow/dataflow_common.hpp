@@ -754,7 +754,14 @@ void read_v(
     uint32_t& barrier_count,
     uint32_t k_base_read_ptr = 0,
     uint32_t k_tile_bytes = 0) {
+    // With SPLIT_KV_NOC the V reads go out on the other NoC so each DRAM endpoint sees the K and V request
+    // streams on separate NoCs (a Blackhole endpoint takes one read request per ~16 cycles per NoC, which
+    // caps pages under 2 KB well below the channel rate when everything comes from one NoC).
+#ifdef SPLIT_KV_NOC
+    Noc noc(1 - noc_index);
+#else
     Noc noc;
+#endif
     CircularBuffer cb_v(cb_v_in);
     cb_v.reserve_back(v_chunk_tiles);
     uint32_t v_write_ptr = cb_v.get_write_ptr();
@@ -841,11 +848,16 @@ void read_kv_mask_chunks(
     uint32_t v_tile_bytes,
     uint32_t PSt) {
     Noc noc;
+#ifdef SPLIT_KV_NOC
+    Noc v_noc(1 - noc_index);
+#else
+    Noc v_noc;
+#endif
     CircularBuffer cb_k(cb_k_in);
     CircularBuffer cb_v(cb_v_in);
-    const uint8_t noc_id = noc.get_noc_id();
-    const uint32_t my_noc_x = my_x[noc_id];
-    const uint32_t my_noc_y = my_y[noc_id];
+    const uint8_t v_noc_id = v_noc.get_noc_id();
+    const uint32_t my_noc_x = my_x[v_noc_id];
+    const uint32_t my_noc_y = my_y[v_noc_id];
 
     uint32_t barrier_count = 0;
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
@@ -884,7 +896,7 @@ void read_kv_mask_chunks(
                 k_read_ptr = k_base_read_ptr + row * k_tile_bytes;  // Increment across K's Col
 
                 for (uint32_t col = 0; col < vDHt; ++col) {  // Col of V
-                    noc.async_read(
+                    v_noc.async_read(
                         v_src,
                         CoreLocalMem<uint32_t>(v_write_ptr),
                         v_tile_bytes,
@@ -903,10 +915,10 @@ void read_kv_mask_chunks(
             uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
-                    noc.async_read(
+                    v_noc.async_read(
                         v_reader, CoreLocalMem<uint32_t>(v_write_ptr), v_tile_bytes, {.page_id = v_tile_id}, {});
                     if (++barrier_count == barrier_threshold) {
-                        noc.async_read_barrier();
+                        v_noc.async_read_barrier();
                         barrier_count = 0;
                     }
                     v_tile_id++;
@@ -915,7 +927,7 @@ void read_kv_mask_chunks(
                 // No padding to skip - V is an independent tensor with contiguous layout
             }
         }
-        noc.async_read_barrier();
+        v_noc.async_read_barrier();
         cb_v.push_back(v_chunk_tiles);
 
         // Update the starting tile id for next iteration
