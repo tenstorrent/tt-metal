@@ -248,7 +248,8 @@ inline void _llk_unpack_AB_custom_mm_run_(
         lltt::replay(0, first_half_instruction_count);
         if (second_half_tiles > 0) {
             const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
-            lltt::replay(replay_buffer_size - second_half_instruction_count, second_half_instruction_count);
+            // Start depends on runtime ct_dim; lltt::replay requires a compile-time start, TT_REPLAY does not
+            TT_REPLAY(replay_buffer_size - second_half_instruction_count, second_half_instruction_count, 0, 0);
         }
     }
 
