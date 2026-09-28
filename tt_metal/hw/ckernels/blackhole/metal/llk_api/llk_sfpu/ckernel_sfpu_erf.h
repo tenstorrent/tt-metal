@@ -18,7 +18,7 @@ namespace ckernel::sfpu {
 // ======================================================================
 // LUT-based erf via piecewise rational P(x)/Q(x)
 //
-// BF16: n8/d8, 1 segment, range [-10.0, 10.0] (parity x²-Horner)
+// BF16: n7/d8 odd rational, range [-10.0, 10.0], evaluated inline in x² (see below)
 // FP32: n16/d16, 1 segment, range [-10.0, 10.0] (parity x²-Horner)
 // ======================================================================
 
@@ -39,16 +39,19 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #else
 
-// n8/d8 rational, coefficients aligned with WH v3 on-device refit (see PR #42540).
-constexpr uint32_t ERF_NUM_DEGREE = 8;
-constexpr uint32_t ERF_DEN_DEGREE = 8;
-constexpr uint32_t ERF_NUM_SEGMENTS = 1;
-constexpr uint32_t ERF_LUT_SIZE = 20;
-constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
-    {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280932447e+00f, 0.0000000000e+00f,
-     2.7609212279e-01f,  0.0000000000e+00f, 4.5400281738e-02f, 0.0000000000e+00f, 7.4481184425e-04f,
-     0.0000000000e+00f,  1.0000000000e+00f, 0.0000000000e+00f, 5.7439188334e-01f, 0.0000000000e+00f,
-     1.3675764810e-01f,  0.0000000000e+00f, 8.2844606784e-03f, 0.0000000000e+00f, 2.4813862145e-05f}};
+// BF16 arm: odd rational x·P(x²)/Q(x²), P of degree 3 and Q of degree 4 in x², Q0 = 1; coefficients aligned with
+// the WH v3 on-device refit (see PR #42540). P0 and Q1 are held in vConstFloatPrgm1/2 (programmed by erf_init).
+template <bool APPROXIMATION_MODE>
+struct ErfBf16Coeffs {
+    static constexpr float P0 = 1.1280932447e+00f;  // vConstFloatPrgm1
+    static constexpr float P1 = 2.7609212279e-01f;
+    static constexpr float P2 = 4.5400281738e-02f;
+    static constexpr float P3 = 7.4481184425e-04f;
+    static constexpr float Q1 = 5.7439188334e-01f;  // vConstFloatPrgm2
+    static constexpr float Q2 = 1.3675764810e-01f;
+    static constexpr float Q3 = 8.2844606784e-03f;
+    static constexpr float Q4 = 2.4813862145e-05f;
+};
 
 #endif
 
@@ -56,6 +59,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
+#ifdef INP_FLOAT32
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
         x = sfpi::symmetric_clamp(x, 10.0f);
         sfpi::vFloat result = piecewise_rational_eval<
@@ -69,6 +73,24 @@ inline void calculate_erf() {
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
         result = sfpi::clamp(result, -1.0f, +1.0f);
+#else
+        // Same shape as the INP_FLOAT32 arm (clamp the signed x, odd rational, saturate to [-1, 1]), evaluated inline
+        // so that P0 and Q1 come from vConstFloatPrgm1/2 (programmed by erf_init) instead of two SFPLOADI per row.
+        using C = ErfBf16Coeffs<APPROXIMATION_MODE>;
+        x = sfpi::symmetric_clamp(x, 10.0f);
+        const sfpi::vFloat x2 = x * x;
+        sfpi::vFloat den = C::Q4 * x2 + C::Q3;
+        sfpi::vFloat num = C::P3 * x2 + C::P2;
+        den = den * x2 + C::Q2;
+        num = num * x2 + C::P1;
+        den = den * x2 + sfpi::vConstFloatPrgm2;  // Q1
+        num = num * x2 + sfpi::vConstFloatPrgm1;  // P0
+        den = den * x2 + 1.0f;                    // Q0
+        num = num * x;
+        sfpi::vFloat result = num * sfpu_reciprocal<APPROXIMATION_MODE>(den);
+        // Saturate to [-1, 1] (see the INP_FLOAT32 arm).
+        result = sfpi::clamp(result, -1.0f, +1.0f);
+#endif
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
@@ -78,6 +100,10 @@ template <bool APPROXIMATION_MODE>
 void erf_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+#ifndef INP_FLOAT32
+    sfpi::vConstFloatPrgm1 = ErfBf16Coeffs<APPROXIMATION_MODE>::P0;
+    sfpi::vConstFloatPrgm2 = ErfBf16Coeffs<APPROXIMATION_MODE>::Q1;
+#endif
 }
 
 }  // namespace ckernel::sfpu

@@ -82,6 +82,17 @@ inline sfpi::vFloat calculate_i1_asymptotic_(const sfpi::vFloat abs_x, const sfp
     return sfpi::copysgn(exp_abs * rsqrt_y * correction, x_signed);
 }
 
+#ifndef INP_FLOAT32
+// BF16 rational p(t)/q(t), t = x², for |x| <= 10.
+constexpr float I1_BF16_N0 = 4.9992737740e-01f;  // vConstFloatPrgm1
+constexpr float I1_BF16_N1 = 5.4503594600e-02f;
+constexpr float I1_BF16_N2 = 1.6126291630e-03f;
+constexpr float I1_BF16_N3 = 2.0223499130e-05f;
+constexpr float I1_BF16_D1 = -1.6242591070e-02f;  // vConstFloatPrgm2
+constexpr float I1_BF16_D2 = 1.0333660750e-04f;
+constexpr float I1_BF16_D3 = -2.5076132990e-07f;
+#endif
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
     constexpr float I1_MAX_INPUT = 88.5f;
@@ -123,10 +134,10 @@ inline void calculate_i1() {
                 -3.0635529988e-16f,
                 7.4301498523e-19f);
 #else
-            sfpi::vFloat numer = PolynomialEvaluator::eval(
-                t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
-            sfpi::vFloat denom =
-                PolynomialEvaluator::eval(t, 1.0f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
+            // N0 and D1 come from vConstFloatPrgm1/2 (programmed by i1_init) instead of two SFPLOADI per row each.
+            sfpi::vFloat numer =
+                PolynomialEvaluator::eval(t, sfpi::vConstFloatPrgm1, I1_BF16_N1, I1_BF16_N2, I1_BF16_N3);
+            sfpi::vFloat denom = PolynomialEvaluator::eval(t, 1.0f, sfpi::vConstFloatPrgm2, I1_BF16_D2, I1_BF16_D3);
 #endif
             val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }
@@ -147,6 +158,10 @@ template <bool APPROXIMATION_MODE>
 void i1_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+#ifndef INP_FLOAT32
+    sfpi::vConstFloatPrgm1 = I1_BF16_N0;
+    sfpi::vConstFloatPrgm2 = I1_BF16_D1;
+#endif
 }
 
 }  // namespace ckernel::sfpu
