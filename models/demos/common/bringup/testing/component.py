@@ -8,6 +8,9 @@ component: one step of one layer alone. Metric ``<metric_prefix>`` (default ``pc
 swap:      the whole block of one layer, with the listed steps on the device and every other step on the CPU
            reference. Metrics ``pcc_swap_<boundary>`` for every boundary and ``pcc_swap_out``. When the block output
            drifts, the step swapped in last is the cause, because every earlier swap already passed its gate.
+
+A step deferred to op-gen (task DEFERRED, F46) runs on the CPU reference in the swap test, as if it were not swapped.
+Its own component test fails in device mode when the model hands it a CPU bridge: a bridged step is not on the device.
 """
 
 from __future__ import annotations
@@ -35,14 +38,20 @@ def _step(ref, layer: int, name: str):
 
 def module_under_test(s, ref, mesh, layer: int, name: str, mode: str | None = None):
     """fn(ref_ctx, dev_ctx, *inputs) for the chosen implementation of one step."""
+    from models.demos.common.bringup.plan.op_request import deferred_steps
+
     mode = mode or impl_mode()
     cpu = ref.component(layer, name)
-    if mode == "reference":
+    if mode == "reference" or (mode == "device" and (s.block_type_of(layer), name) in deferred_steps(s)):
+        if mode == "device":
+            print(f"{name}: deferred to op-gen, runs on the CPU reference")
         return lambda rctx, dctx, *x: cpu(rctx, *x)
     if mode == "stub":
         return lambda rctx, dctx, *x: torch.zeros_like(cpu(rctx, *x))
     dev = s.hooks().device_component(mesh, s, layer, name)
-    return lambda rctx, dctx, *x: dev(dctx, *x)
+    fn = lambda rctx, dctx, *x: dev(dctx, *x)  # noqa: E731
+    fn.cpu_bridge = getattr(dev, "cpu_bridge", False)
+    return fn
 
 
 def run_component_test(
@@ -62,7 +71,15 @@ def run_component_test(
     gl = g.layer(c, layer)
     inputs = [gl[i].float() if gl[i].is_floating_point() else gl[i] for i in st.inputs]
     want = gl[st.output]
+    from models.demos.common.bringup.plan.op_request import deferred_steps
+
+    if impl_mode() == "device" and (s.block_type_of(layer), step) in deferred_steps(s):
+        print(f"FAIL {step}: deferred to op-gen (task DEFERRED); it runs on the CPU until the op is delivered")
+        return False
     fn = module_under_test(s, ref, mesh, layer, step)
+    if getattr(fn, "cpu_bridge", False):
+        print(f"FAIL {step}: device_component returned a CPU bridge; a deferred step is not on the device")
+        return False
     out = fn(reference_ctx(ref, layer, g, c), device_ctx(layer, g, c), *inputs)
     mode = compare_mode or default_mode(want)
     _, ok = compare(

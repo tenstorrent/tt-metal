@@ -4,7 +4,7 @@
 """Run one task's gate and record the verdict. The runner owns the verdict; tests only record numbers.
 
 A gate passes only if, in this order:
-  1. every dep is PASS (else BLOCKED, nothing runs)
+  1. every dep is PASS or DEFERRED (else BLOCKED, nothing runs)
   2. every frozen file matches its hash (else FAIL, nothing runs)
   3. a device task's command goes through scripts/run_safe_pytest.sh or scripts/tt-probe.sh (else FAIL)
   4. the command exits 0 (exit 2 from the safe runner = HANG; the triage report is copied next to the log)
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from models.demos.common.bringup.core import freeze
 from models.demos.common.bringup.core import metrics as M
-from models.demos.common.bringup.core.ledger import Ledger
+from models.demos.common.bringup.core.ledger import Ledger, satisfied
 from models.demos.common.bringup.core.spec import CODE_ROOT, Spec
 
 OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt, "==": operator.eq}
@@ -196,7 +196,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     paths += [rel(p) for p in sorted(ledger.results_dir.glob(f"{task['id']}_*.json"))]
     if task.get("step") == "optests" and (ledger.results_dir / "fork_calls.json").exists():
         paths.append(rel(ledger.results_dir / "fork_calls.json"))
-    paths += [p for p in task.get("paths", []) if (repo / p).exists()]
+    paths += [p for p in task.get("paths", []) if _files_under(repo, [p])]  # an empty folder is no pathspec for git
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
     return [p for p in paths if (repo / p).exists() or _tracked(repo, p)]
@@ -275,9 +275,9 @@ def run_gate(
     """Run the gate. record=False runs it without touching state.json (used by freeze's stub check)."""
     task = ledger.task(tid)
     state = ledger.state()
-    blocked = [d for d in task.get("deps", []) if state.get(d, {}).get("status") != "PASS"]
+    blocked = [d for d in task.get("deps", []) if not satisfied(state.get(d, {}).get("status"))]
     if blocked and not force:
-        return GateResult(tid, "BLOCKED", lines=[f"  deps not PASS: {blocked}"])
+        return GateResult(tid, "BLOCKED", lines=[f"  deps not PASS or DEFERRED: {blocked}"])
 
     now = lambda: time.strftime("%Y-%m-%dT%H:%M:%S")  # noqa: E731
     unfrozen = []
