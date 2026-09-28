@@ -85,27 +85,36 @@ Make the change in the fork only. Keep it as small as the need; the smaller the 
 Forks are shared, so extending one must never change what it already does. Follow this recipe for every change to an
 existing fork, whether it is a new feature, a new argument, a new output or a bug fix:
 
-1. **Baseline first.** Before touching anything, run the fork's whole test suite and write down the counts: its own
-   unit suite (`tests/unit/`, if it has one) and every model's cases (`tests/test_*.py`), with
-   `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests`. Also check the source tests against their
-   recorded baseline: `python -m models.demos.common.bringup.testing.fork_source --fork <fork>`. Known failures stay
-   known; a new one after your change is yours.
+1. **Know the baseline; don't rerun it.** The fork's last known state is on record: the source tests in
+   `tests/source_baseline.json`, and the model cases, which passed at their last O.1. Rerun a baseline before
+   changing anything only if that record is missing or older than the fork's last change.
 2. **Behind an option, default off.** The new behaviour is an argument or enum value whose default keeps today's
    behaviour, return type and program. When it is off, the program must be the one it was: the same kernels
    (e.g. new kernel code only behind a define that is absent when off), the same compile-time and runtime args, and
    the same circular buffers. If the option changes what the program compiles to, add it to the program-cache key
    (the op's `compute_program_hash` / attributes).
-3. **Old tests again, option off.** Rerun the same suite and the source-test check. The counts must match the
-   baseline, and `fork_source` must report no regressions. Where the fork has a program-level check (a parity or
-   descriptor test), it must show the option-off program is unchanged.
+3. **Iterate on the minimum.** A kernel edit changes the kernel's compile hash, so every program using it recompiles,
+   and a full suite would cost many minutes per iteration. While developing, run only:
+   - a handful of targeted cases of the new setting (`-k`);
+   - the case of the model that needs the change (`tests/test_*.py -k <model>`).
+   Write the new tests (step 4) early, so that this loop exercises them. When they pass, run the model's own
+   gate that uses the op (its component test, or the short ladder rung). The change is correct in the op and inside
+   the model only once that passes.
 4. **New tests for the new setting.** Put them in the fork's own tests (`tests/unit/` for an op-level feature). Check
    the new output against a torch reference, cover the shapes, layouts and placements you claim, test the refusals,
    and show once, by hand, that a test fails when the new output is corrupted. A model that starts calling the new
    setting then gets its case through task O.1 (skill `bringup-fork-tests`).
-5. **Record it.** Add a `CHANGELOG.md` entry (below) and update the `INDEX.md` row.
+5. **Then the full regression, once, option off.** Only after step 3 passes:
+   - the fork's unit suite (`tests/unit/`, if it has one);
+   - the source-test check, `python -m models.demos.common.bringup.testing.fork_source --fork <fork>`;
+   - every model's cases, `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/<fork>/tests/test_*.py`.
+   The results must match the baseline, and `fork_source` must report no regressions. Where the fork has a
+   program-level check (a parity or descriptor test), it must show the option-off program is unchanged. If step 5
+   finds a regression, fix it, go back to step 3 for the fix, then repeat step 5.
+6. **Record it.** Add a `CHANGELOG.md` entry (below) and update the `INDEX.md` row.
 
 A bug fix that has to change the default behaviour is the one exception to step 2. Say so in the changelog, and
-rerun every model's cases: they are exactly the models the fix changes.
+rerun every model's cases in step 5: they are exactly the models the fix changes.
 - Kernels compile at run time, so kernel-only edits need no build. Host code (program factory, device operation,
   bindings) does.
 
@@ -148,7 +157,8 @@ the fork and relinks ttnn. If a build dies halfway, run it again before reading 
   (`models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`), with random inputs.
 - Run the fork's whole test folder, not only your cases: `scripts/run_safe_pytest.sh --run-all
   ttnn/ttnn/bringup/<fork>/tests`. Another model's case failing means your change broke that model. When you extended
-  an existing fork, this is step 3 of the recipe in section 3: the counts must match your baseline.
+  an existing fork, this is step 5 of the recipe in section 3: run it once, after the targeted tests and the model's
+  gate pass, not after every edit.
 
 ## 7. For the reviewer
 
