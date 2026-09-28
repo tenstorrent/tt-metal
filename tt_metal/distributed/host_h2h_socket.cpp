@@ -161,6 +161,10 @@ public:
 
     uint64_t credit_puts() const { return credit_puts_; }
     uint64_t done_puts() const { return done_puts_; }
+    void reset_counts() {
+        credit_puts_ = 0;
+        done_puts_ = 0;
+    }
 
 private:
     // Lowest and highest core touched since the last publish. A span, not a bitmask: the
@@ -187,9 +191,9 @@ private:
         if (d.empty()) {
             return {};
         }
-        const uint32_t n = d.hi - d.lo + 1;
-        const std::string e =
-            put(&src[idx(host, d.lo)], static_cast<uint64_t>(n) * sizeof(uint64_t), off(d.lo, ident));
+        // Every core, not d.lo..d.hi: the span is cleared when the put is ISSUED, so a put
+        // landing after a newer one would leave a stale count nothing ever re-sends.
+        const std::string e = put(&src[idx(host, 0)], static_cast<uint64_t>(cores_) * sizeof(uint64_t), off(0, ident));
         if (!e.empty()) {
             return e;
         }
@@ -284,6 +288,10 @@ struct H2HSocket::Impl {
     std::vector<std::chrono::steady_clock::time_point> put_at;
     std::vector<uint64_t> credit_closed;  // sequences already turned into samples
     std::vector<uint64_t> put_to_credit_ns;
+    // Matched-estimator series, plus the per-host cycle marks us_per_frame is measured over.
+    Series series;
+    std::vector<std::chrono::steady_clock::time_point> cycle_at;
+    std::vector<uint64_t> cycle_posts;
 
     bool broken = false;
     std::string err;
@@ -372,7 +380,33 @@ struct H2HSocket::Impl {
                 }
             }
             ++stats.flushes;
+            // first_pending is only armed while pending is non-zero, so a credit-only flush
+            // has no batching window to record and must not dilute the mean.
+            if (pending[h] != 0) {
+                const uint64_t age = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(now - first_pending[h]).count());
+                stats.accum_ns_sum += age;
+                ++stats.accum_flushes;
+                if (cfg.collect_timing && series.accum_ns.size() < kMaxTimingSamples) {
+                    series.accum_ns.push_back(age);
+                }
+            }
             const uint64_t covered = pending[h] + ctrl_pending[h];
+            if (cfg.collect_timing) {
+                // Service time per frame over ONE flush cycle: the interval since this peer's
+                // last flush, over the frames it carried. A guard-only cycle carries none.
+                if (const uint64_t frames = stats.posts - cycle_posts[h]; frames != 0) {
+                    const double us = std::chrono::duration<double, std::micro>(now - cycle_at[h]).count();
+                    if (series.us_per_frame.size() < kMaxTimingSamples) {
+                        series.us_per_frame.push_back(us / static_cast<double>(frames));
+                    }
+                }
+                cycle_at[h] = now;
+                cycle_posts[h] = stats.posts;
+                if (series.covered_bytes.size() < kMaxTimingSamples) {
+                    series.covered_bytes.push_back(covered);
+                }
+            }
             stats.pending_sum += covered;
             stats.pending_max = std::max(stats.pending_max, covered);
             if (covered < cfg.page_bytes) {
@@ -604,10 +638,19 @@ std::unique_ptr<H2HSocket> H2HSocket::create(const Config& cfg, std::string& err
     const uint64_t in_flight_cap =
         static_cast<uint64_t>(cfg.cores) * cfg.ring_pages * cfg.page_bytes;
     im.watermark = std::min<uint64_t>(Impl::watermark_bytes(), std::max<uint64_t>(in_flight_cap / 4, 1));
+    im.cycle_at.assign(cfg.topo.num, std::chrono::steady_clock::now());
+    im.cycle_posts.assign(cfg.topo.num, 0);
     if (cfg.collect_timing) {
         // Sized by cfg.cores, not kProvisionedCores: a 4-core run should not carry 128.
         im.put_at.assign(per_peer * cfg.ring_pages * Impl::kStampLaps, std::chrono::steady_clock::time_point{});
         im.credit_closed.assign(per_peer, 0);
+        // Reserved, not merely capped: these grow inside poll(), and a realloc there lands
+        // on whichever sample is unlucky enough to be taken while the copy runs.
+        im.series.in_flight.reserve(1u << 20);
+        im.series.accum_ns.reserve(1u << 16);
+        im.series.covered_bytes.reserve(1u << 16);
+        im.series.us_per_frame.reserve(1u << 16);
+        im.put_to_credit_ns.reserve(1u << 20);
     }
     return s;
 }
@@ -642,6 +685,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     }
     im.harvest_credits();
     ++im.stats.passes;
+    im.stats.in_flight_sum += im.in_flight;
+    if (im.cfg.collect_timing && im.series.in_flight.size() < kMaxTimingSamples) {
+        im.series.in_flight.push_back(im.in_flight);
+    }
     const uint64_t posts_before = im.stats.posts;
     bool credit_blocked = false;
 
@@ -650,7 +697,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
     im.tx_payload.for_each_live([&](uint32_t c) {
         while (!im.tx_payload.empty(c) && im.flush_epoch[im.tx_payload.front(c).host] > im.tx_payload.front(c).epoch &&
                im.win->test(im.tx_payload.front(c).op)) {
-            (void)im.tx_trailer.push_back(c, im.tx_payload.front(c));
+            if (!im.tx_trailer.push_back(c, im.tx_payload.front(c))) {
+                im.fail("h2h: the trailer ring overflowed on core " + std::to_string(c));
+                return;
+            }
             im.tx_payload.pop_front(c);
         }
     });
@@ -685,7 +735,10 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             f.epoch = im.flush_epoch[f.host];
             im.mark_pending(f.host, static_cast<uint64_t>(f.count) * sizeof(uint64_t));
             ++im.stats.trailer_puts;
-            (void)im.tx_flight.push_back(c, f);
+            if (!im.tx_flight.push_back(c, f)) {
+                im.fail("h2h: the flight ring overflowed on core " + std::to_string(c));
+                return;
+            }
             im.tx_trailer.pop_front(c);
             ++progress;
         }
@@ -740,9 +793,11 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             break;
         }
 
-        // Keyed on the DESTINATION core, not this one: the ring being filled belongs to the
-        // target, so every sender into it must draw slots and credit from one counter.
-        if (im.posted_at(dest_core, host) - im.credit_seen(dest_core, host) >= im.cfg.ring_pages) {
+        // Keyed on the DESTINATION core, whose ring this is, and read ONCE: re-reading it for
+        // credit_room let a lower second value underflow it into a room of ~2^64.
+        const uint64_t seen = im.credit_seen(dest_core, host);
+        const uint64_t used = im.posted_at(dest_core, host) - seen;
+        if (used >= im.cfg.ring_pages) {
             credit_blocked = true;
             continue;
         }
@@ -750,7 +805,7 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         const uint32_t slot = static_cast<uint32_t>(im.posted_at(dest_core, host) % im.cfg.ring_pages);
         // How many queued frames form ONE contiguous transfer: same destination, next slot,
         // next source page, no wrap, within the credit gate -- one put of run x page_bytes.
-        const uint64_t credit_room = im.cfg.ring_pages - (im.posted_at(dest_core, host) - im.credit_seen(dest_core, host));
+        const uint64_t credit_room = im.cfg.ring_pages - used;
         uint32_t run = 1;
         while (run < im.tx_queue.size(c) && run < credit_room && slot + run < im.cfg.ring_pages) {
             const SendTask& n = im.tx_queue.at(c, run);
@@ -791,7 +846,12 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
         im.posted_at(dest_core, host) += run;
         f.epoch = im.flush_epoch[host];
         im.mark_pending(host, static_cast<uint64_t>(run) * t.page_bytes);
-        (void)im.tx_payload.push_back(t.core, f);
+        // Dropping here loses a frame whose payload put already went out: no guard follows
+        // it, nothing retires it, and in_flight never comes back down.
+        if (!im.tx_payload.push_back(t.core, f)) {
+            im.fail("h2h: the payload ring overflowed on core " + std::to_string(t.core));
+            break;
+        }
         im.in_flight += run;
         im.stats.posts += run;
         ++im.stats.payload_puts;
@@ -864,6 +924,8 @@ uint32_t H2HSocket::poll(const Retire& retire, const Deliver& deliver) {
             d.slot = slot;
             d.page_offset = rx_slot_offset(c, slot, im.cfg.page_bytes, im.cfg.rx_data_offset);
             d.page_bytes = im.cfg.page_bytes;
+            // dst and length are the PEER's trailer bytes, unchecked because nothing reads
+            // them yet; consumed() is where an inbound selector (origin) does get bounded.
             d.dst = static_cast<tt_uva_t>(t->dst);
             d.length = t->length;
             d.origin = t->origin;
@@ -936,6 +998,25 @@ void H2HSocket::consumed(uint32_t core, uint32_t pages) {
 const std::vector<uint64_t>& H2HSocket::put_to_credit_ns() const { return impl_->put_to_credit_ns; }
 
 const H2HSocket::PassStats& H2HSocket::pass_stats() const { return impl_->stats; }
+const H2HSocket::Series& H2HSocket::series() const { return impl_->series; }
+
+void H2HSocket::reset_stats() {
+    // credit_puts/done_puts are ASSIGNED from CreditPublisher's running totals rather than
+    // incremented, so those rebase too or the next publish restores the pre-reset count.
+    impl_->stats = PassStats{};
+    impl_->credits.reset_counts();
+    // clear(), not a fresh vector: create()'s reserve() has to survive the reset.
+    impl_->series.in_flight.clear();
+    impl_->series.accum_ns.clear();
+    impl_->series.covered_bytes.clear();
+    impl_->series.us_per_frame.clear();
+    // The latency vector too, or a steady mean divides against a whole-run dwell. NOT
+    // credit_closed: it is a cursor, and rewinding it re-closes sequences already sampled.
+    impl_->put_to_credit_ns.clear();
+    const auto now = std::chrono::steady_clock::now();
+    std::fill(impl_->cycle_at.begin(), impl_->cycle_at.end(), now);
+    std::fill(impl_->cycle_posts.begin(), impl_->cycle_posts.end(), 0);
+}
 
 // Publishes everything consumed() has noted. The chain calls this after its drain loop:
 // deferring one pass is what lets a single put span every core that freed a slot.
@@ -956,8 +1037,14 @@ uint64_t H2HSocket::credit_total(uint32_t core) const {
 }
 
 std::string H2HSocket::barrier() {
-    impl_->publish_credits();
+    // Agreed, not returned rank-locally: a local error handed back from here exits one rank
+    // while its peer walks into the next collective alone. Both decide, then both proceed.
+    const bool published = impl_->publish_credits();
     impl_->flush_dirty(true, /*final_flush=*/true);
+    std::string e = impl_->err;
+    if (!RdmaWindow::agree(published && !impl_->broken, e)) {
+        return e.empty() ? std::string("h2h: a peer's final credit flush failed") : e;
+    }
     return impl_->win->barrier();
 }
 bool H2HSocket::failed() const { return impl_->broken; }
