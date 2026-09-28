@@ -276,3 +276,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - Gate (default impl, device): PCC 0.999996, rel 0.0030, ratio [0.9958, 1.0031], 1 passed.
 - The first "FAIL pcc=0.000000" line in each run is the precompile collect pass (stubbed), not the real result.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_ffn_norm.py`
+
+## S.sliding_moe.04 test (attempt 1)
+- Replaced the rendered template with the 1x4 prior's frozen swap 04 body (same golden/reference), with this run's
+  owner-widened attention limits from swap 02/03 (rel L2 0.022, norm ratio [0.95, 1.08]). ffn_norm limits: rel L2 0.03,
+  row norm ratio [0.97, 1.03]; block out rel L2 <= 0.01.
+- BRINGUP_IMPL=reference passes (out rel 0.0030); BRINGUP_IMPL=stub fails every check.
+- Gate (device): pcc_swap_out 0.999993, out rel 0.0038; attention rel 0.0193 (limit 0.022, tighter margin than the
+  1x4's 0.0145), vs CPU w128 0.0130 (limit 0.015); ffn_norm rel 0.0035.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_04_ffn_norm.py`
