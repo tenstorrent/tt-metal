@@ -858,15 +858,11 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
-#: What a key line says about the run every emitted row below it came from. The sweep
-#: identity is identical on every one of them -- ~63 characters times ~2,000 rows, a
-#: quarter of the file -- so it is stated once per op instead. "except where a row says
-#: otherwise" is not hedging: rows this run did not supersede keep their own suffix.
+#: The run identity, stated once on the op's key line rather than on each of its ~2,000
+#: rows (a quarter of the file). Rows this run did not supersede keep their own suffix.
 _MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
 
-#: The same clause, for stripping a previous run's before writing this one's. Without
-#: it a second `--ulp-emit` appends rather than replaces, and the key line accumulates
-#: one stale run identity per regeneration.
+#: For stripping a previous run's clause, so a re-emit replaces it instead of appending.
 _MEASURED_BY_RE = re.compile(
     r";?\s*measured by: .*?, except where a row says otherwise"
 )
@@ -875,16 +871,13 @@ _MEASURED_BY_RE = re.compile(
 def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """One op's block: each row with its verdict, and the measurement behind it.
 
-    *key_line* keeps whatever it already said. Several ops carry their measurement as a
-    header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
-    provenance for every row of theirs this sweep does not reach. Rewriting the key as
-    a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along. The run identity is *appended* to it.
-
-    Each row still carries its own number, which is what the provenance audit reads and
-    what a budget may only be raised against. What moves to the key line is the part
-    that is the same on every row: which sweep, on which arch, on which day.
+    The run identity is appended to *key_line*, which keeps whatever it already said:
+    a header comment such as `Fill:  # 0 ULP, 115 variants` is the provenance for every
+    row this sweep does not reach. Each row still carries its own number, which is what
+    the provenance audit reads.
     """
+    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+
     order = ("in", "out", "approx", "dest")
     head, sep, comment = key_line.rstrip("\n").partition("#")
     measured_by = _MEASURED_BY.format(suffix=suffix)
@@ -905,12 +898,8 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
         if metric == "unmeasurable":
             note = f"not measurable: {value}"
         elif metric == "tolerance":
-            # Terse on purpose: the clause is repeated on every demoted row, and the
-            # reason it names is stated once in the table header. What has to be *here*
-            # is the pair of numbers, so the claim stays checkable against
-            # `usable_budget_ceiling`.
-            from helpers.sfpu_accuracy_budget import usable_budget_ceiling
-
+            # Just the two numbers: the reason is in the table header, and this pair
+            # keeps the claim checkable against `usable_budget_ceiling`.
             ceiling = usable_budget_ceiling(DataFormat[row["out"]])
             note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":

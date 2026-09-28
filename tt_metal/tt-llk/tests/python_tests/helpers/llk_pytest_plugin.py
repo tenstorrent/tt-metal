@@ -490,19 +490,14 @@ def pytest_configure(config):
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
     if config.getoption("--ulp-measure"):
-        # The assignment stays out of the master-only block below so xdist workers see
-        # it; only the preparation is master-only, or each worker would truncate the
-        # others' rows.
+        # Set in the workers too; only the file preparation below is master-only.
         utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
         if utils_module._ULP_MEASURE_PATH:
-            # Prepared once, like --record-test-order's file below: the parent
-            # directory created, so a path into a missing one cannot raise
-            # FileNotFoundError out of `passed_test` and break the "cannot change a
-            # verdict" promise, and the file truncated, so a second run does not fold
-            # its rows in with the first's.
+            # Create the parent so `passed_test` can never raise FileNotFoundError, and
+            # truncate so a second run does not fold its rows in with the first's.
             measure_path = Path(utils_module._ULP_MEASURE_PATH)
             measure_path.parent.mkdir(parents=True, exist_ok=True)
             measure_path.write_text("", encoding="utf-8")
