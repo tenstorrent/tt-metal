@@ -98,10 +98,7 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
 
     heads = cfg["num_code_groups"] - 1
     talker_table = checkpoint.load_prefixed(TALKER_CODEC_EMBEDDING)["weight"]
-    predictor_tables = [
-        checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX + "model.codec_embedding.")[f"{index}.weight"]
-        for index in range(heads)
-    ]
+    predictor_tables = [state[f"model.codec_embedding.{index}.weight"] for index in range(heads)]
     projection, projection_bias = preprocess_projection(state, device, dtype)
     return {
         "config": cfg,

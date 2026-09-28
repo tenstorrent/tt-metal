@@ -142,10 +142,7 @@ def preprocess_code_predictor_parameters(device, config=None, dtype=ttnn.bfloat1
         # onward the predictor's own, indexed per step. Kept on host because a greedy loop
         # indexes them one row at a time.
         "talker_codec_embedding": checkpoint.load_prefixed(TALKER_CODEC_EMBEDDING)["weight"],
-        "codec_embedding": [
-            checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX + "model.codec_embedding.")[f"{index}.weight"]
-            for index in range(heads)
-        ],
+        "codec_embedding": [state[f"model.codec_embedding.{index}.weight"] for index in range(heads)],
     }
 
 
