@@ -9,7 +9,13 @@ import pytest
 
 import ttnn
 from models.demos.qwen38_27b_qb2.tt import model
-from models.demos.qwen38_27b_qb2.tt.decoder_tp import _TP_POLICY, Qwen38TPDecoder, kv_head_owners, resolve_mesh_tp
+from models.demos.qwen38_27b_qb2.tt.decoder_tp import (
+    _TP_POLICY,
+    Qwen38TPDecoder,
+    kv_head_owners,
+    native_mesh_shape,
+    resolve_mesh_tp,
+)
 
 # A qualified platform is the whole tuple, so each rejection case perturbs exactly one element of
 # an otherwise-valid mesh. The Wormhole rows mirror the Blackhole ones so neither platform's gate
@@ -97,3 +103,18 @@ def test_t3k_policy_fits_a_narrower_grid_and_one_link():
 
 def test_qb2_keeps_its_measured_policy():
     assert 4 not in _TP_POLICY
+
+
+@pytest.mark.parametrize("platform", [_QB2, _T3K], ids=["qb2", "t3k"])
+def test_entry_points_can_size_the_mesh_before_opening_it(monkeypatch, platform):
+    arch, cluster, _, shape = platform
+    monkeypatch.setattr(ttnn, "get_arch_name", lambda: arch.name.lower())
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: cluster)
+    assert native_mesh_shape() == shape
+
+
+def test_unqualified_cluster_has_no_native_mesh_shape(monkeypatch, expect_error):
+    monkeypatch.setattr(ttnn, "get_arch_name", lambda: "wormhole_b0")
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: ttnn.cluster.ClusterType.N300)
+    with expect_error(ValueError, re.escape("requires a Blackhole P300_X2 QB2")):
+        native_mesh_shape()

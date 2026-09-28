@@ -60,6 +60,19 @@ def kv_head_owners(num_kv_heads, tp):
     return [d // (tp // num_kv_heads) for d in range(tp)]
 
 
+def native_mesh_shape():
+    """Mesh shape this host's cluster is qualified for, for callers that open the mesh.
+
+    Readable before any device is open, so an entry point does not have to be told which
+    platform it is on to allocate the right mesh.
+    """
+    arch, cluster = ttnn.get_arch_name(), ttnn.cluster.get_cluster_type()
+    for key, _ in _SUPPORTED_MESHES.items():
+        if key[1] == cluster and key[0].name.lower() == arch:
+            return key[3]
+    raise ValueError(f"Qwen3.8-27B requires {_SUPPORTED_MESH_TEXT}; got arch={arch}, cluster_type={cluster}")
+
+
 def resolve_mesh_tp(mesh_device):
     """Tensor-parallel width for a qualified mesh; raises on any other hardware."""
     key = (
