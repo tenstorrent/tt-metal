@@ -16,15 +16,15 @@ from safetensors import safe_open
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_kv_reference, sliding_kv_indices
-from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig, is_global_layer_by_index
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
 
 PREPARED_GPU_TRACE_LAYOUT = "gemma4_kv_heads_v1"
 
 
 def load_prepared_gpu_cache_heads(path, layer, real_len):
-    configs = range(4) if layer % 6 == 5 else range(4, 36)
-    width = 640 if layer % 6 == 5 else 256
+    configs = range(4) if is_global_layer_by_index(layer) else range(4, 36)
+    width = 640 if is_global_layer_by_index(layer) else 256
     with safe_open(str(path), framework="pt") as tensors:
         if (tensors.metadata() or {}).get("layout") != PREPARED_GPU_TRACE_LAYOUT:
             raise ValueError(f"Layer {layer}: invalid prepared GPU layout in {path}")
@@ -46,7 +46,7 @@ def load_gpu_cache_heads(trace_dir, layer, real_len):
     prepared = Path(trace_dir) / "kv_cache" / f"layer_{layer}.safetensors"
     if prepared.is_file():
         return load_prepared_gpu_cache_heads(prepared, layer, real_len)
-    heads, width = (4, 512) if layer % 6 == 5 else (16, 256)
+    heads, width = (4, 512) if is_global_layer_by_index(layer) else (16, 256)
     directory = Path(trace_dir) / "kv_cache" / f"layer_{layer}"
     shards = sorted(directory.glob("rows_*.safetensors"), key=lambda path: int(path.stem.split("_")[1]))
     parts, position = [], 0
@@ -71,7 +71,7 @@ def load_gpu_cache_heads(trace_dir, layer, real_len):
 
 
 def golden_cache_heads(key, value, layer, real_len):
-    global_layer = layer % 6 == 5
+    global_layer = is_global_layer_by_index(layer)
     heads, width = (4, 512) if global_layer else (16, 256)
     for tensor in (key, value):
         if tensor.ndim != 4 or tensor.shape[:2] != (1, heads) or tensor.shape[2] < real_len or tensor.shape[3] != width:
@@ -211,7 +211,7 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir):
         raise ValueError("Golden verification length must fit the cache")
 
     def read_heads(layer):
-        configs = range(4) if layer % 6 == 5 else range(4, 36)
+        configs = range(4) if is_global_layer_by_index(layer) else range(4, 36)
         for config_id in configs:
             width = 640 if config_id < 4 else 256
             yield config_id, read_cache_head(table, device_map, layer, slot_id, config_id, real_len, width)

@@ -17,6 +17,10 @@ class Gemma4ServiceConfig:
     MAX_USER_SLOTS = 6
 
 
+def is_global_layer_by_index(layer_idx):
+    return layer_idx % 6 == 5
+
+
 def validate_params(params):
     expected = {
         "mesh_shape": Gemma4ServiceConfig.MESH_SHAPE,
@@ -77,7 +81,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     def cache_layer_rows(self, config_id, num_layers):
         if not 0 <= config_id < 36:
             raise ValueError(f"Invalid Gemma4 cache config {config_id}")
-        return {layer: layer for layer in range(num_layers) if (layer % 6 == 5) == (config_id < 4)}
+        return {layer: layer for layer in range(num_layers) if is_global_layer_by_index(layer) == (config_id < 4)}
 
     def cache_head_dim(self, config_id):
         if not 0 <= config_id < 36:
