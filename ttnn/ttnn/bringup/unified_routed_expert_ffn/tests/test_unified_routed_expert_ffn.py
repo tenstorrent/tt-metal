@@ -46,11 +46,24 @@ def _kernel_config(k):
 
 
 def _shard(mesh):
-    return ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh.shape, dims=(None, 0))
+    """Shard dim 0 over every device, row-major: device (r, c) = index d = r * cols + c gets block d."""
+    if tuple(mesh.shape)[0] == 1:
+        return ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh.shape, dims=(None, 0))
+    return ttnn.ShardTensorToMesh(mesh, dim=0)
+
+
+def _experts_of(d, rows, cols, epc):
+    """(chip experts, dispatch-group experts) of device d = r * cols + c, ExpertMapping col-major: the group is mesh
+    column c (its rows chips), chip (r, c) holds experts (c * rows + r) * epc .. + epc - 1. A 1-row mesh: chip c
+    holds c * epc .. + epc - 1 and is its own group."""
+    r, c = divmod(d, cols)
+    chip = (c * rows + r) * epc + torch.arange(epc)
+    group = c * rows * epc + torch.arange(rows * epc)
+    return chip, group
 
 
 def _to_mesh(mesh, t, spec):
-    """t [cols * n0, ...]: device (0, col) gets rows col*n0..(col+1)*n0 (a 1-row mesh; per-device data differs)."""
+    """t [n_dev * n0, ...]: device d (row-major) gets rows d*n0..(d+1)*n0 (per-device data differs)."""
     return ttnn.from_torch(
         t,
         mesh_mapper=_shard(mesh),
@@ -77,40 +90,43 @@ def _pcc(a, b):
 def test_unified_routed_expert_moe(mesh_device, device_params, case):
     c = case
     rows, cols = c["mesh"]
-    assert rows == 1, "inputs are laid out per mesh column (1-row mesh)"
+    n_dev = rows * cols
     N, H, I = c["buffer_rows"], c["emb_dim"], c["hidden_dim"]
     E, epc, S, K = c["num_routed_experts"], c["experts_per_chip"], c["seq_len_per_chip"], c["num_experts_per_tok"]
-    assert E == epc * cols
+    assert E == epc * n_dev
     g = torch.Generator().manual_seed(c["seed"])
 
-    # Counts / regions from random top-k ids by the dispatch rules (chip d holds experts d*epc .. d*epc + epc - 1).
-    table = ref.dispatch_table(E, cols)
+    # Counts / regions from random top-k ids by the dispatch rules: counts over the device's dispatch group (the
+    # experts of its mesh column; the chip itself on a 1-row mesh), regions per chip (_experts_of).
+    chip_experts = [_experts_of(d, rows, cols, epc)[0] for d in range(n_dev)]
     counts, regions = [], []
-    for d in range(cols):
-        _, cnt, reg = ref.offsets_counts_regions(ref.random_topk(S, E, K, g), table[d], epc)
+    for d in range(n_dev):
+        table_row = torch.full((E + 1,), -1, dtype=torch.int32)
+        table_row[_experts_of(d, rows, cols, epc)[1]] = 0
+        _, cnt, reg = ref.offsets_counts_regions(ref.random_topk(S, E, K, g), table_row, epc)
         assert int(cnt.max()) <= c["max_dispatched_tokens_per_expert"] and int((reg + cnt).max()) <= N
         counts.append(cnt)
         regions.append(reg)
-    gidx = torch.arange(E, dtype=torch.int32)  # chip d, local slot le -> global expert d*epc + le
+    gidx = torch.cat(chip_experts).to(torch.int32)  # device d, local slot le -> global expert chip_experts[d][le]
 
     # Random dispatched buffer, random everywhere (padding rows too).
-    x = torch.randn(cols * N, H, generator=g).to(torch.bfloat16)
+    x = torch.randn(n_dev * N, H, generator=g).to(torch.bfloat16)
 
     # Weights ~ N(0, 1/fan_in), rounded to bfp8 on the host; the reference uses the rounded values.
     wspec = c["weights"]
     wdt, wlay = getattr(ttnn.DataType, wspec["dtype"]), getattr(ttnn.Layout, wspec["layout"])
     compose = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-    want = [torch.zeros(N, H) for _ in range(cols)]
+    want = [torch.zeros(N, H) for _ in range(n_dev)]
     tt_w = {"gate": [], "up": [], "down": []}
     for le in range(epc):
         host = {}
         for name, shape, fan_in in (("gate", (H, I), H), ("up", (H, I), H), ("down", (I, H), I)):
-            w = torch.randn(cols * shape[0], shape[1], generator=g) * fan_in**-0.5
+            w = torch.randn(n_dev * shape[0], shape[1], generator=g) * fan_in**-0.5
             t = ttnn.from_torch(w, dtype=wdt, layout=wlay, mesh_mapper=_shard(mesh_device))
-            host[name] = ttnn.to_torch(t, mesh_composer=compose).reshape(cols, *shape)
+            host[name] = ttnn.to_torch(t, mesh_composer=compose).reshape(n_dev, *shape)
             tt_w[name].append(ttnn.to_device(t, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-        for d in range(cols):
-            e = d * epc + le
+        for d in range(n_dev):
+            e = int(chip_experts[d][le])
             r, n = int(regions[d][e]), int(counts[d][e])
             if n:
                 xe = x[d * N + r : d * N + r + n]
@@ -141,7 +157,7 @@ def test_unified_routed_expert_moe(mesh_device, device_params, case):
         got = ttnn.to_torch(dt).float().reshape(N, H)
         routed = torch.zeros(N, dtype=torch.bool)
         for le in range(epc):
-            e = d * epc + le
+            e = int(chip_experts[d][le])
             r, n = int(regions[d][e]), int(counts[d][e])
             routed[r : r + n] = True
         a, b = got[routed], want[d][routed]
