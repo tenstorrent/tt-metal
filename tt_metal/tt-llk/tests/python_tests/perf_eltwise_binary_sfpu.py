@@ -1098,6 +1098,7 @@ _PAIRED_GENERATED = {
     "hardswish_bw": "backward_complete",
     "hardtanh_bw": "backward_where_factor",
     "leaky_relu_bw": "backward_complete",
+    "lgamma": "dedicated_unary",
     "log_sigmoid_bw": "backward_complete",
     "logit": "dedicated_unary",
     "logsigmoid": "dedicated_unary",
