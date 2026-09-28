@@ -1,0 +1,449 @@
+<title>Gated Prefill Bring-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<style>
+:root{
+  --bg:#f5f6f3; --paper:#fcfcfa; --ink:#1b1f1d; --ink2:#48504c; --muted:#6d7571; --line:#d7dbd6; --soft:#eceee9;
+  --agent:#3456a8; --agent-soft:#e3e9f6;
+  --mech:#5e6662; --mech-soft:#e9ebe7;
+  --gate:#1e7a4f; --gate-soft:#dcefe5;
+  --human:#a0620c; --human-soft:#f6e8d2;
+  --over:#7a3f8f; --over-soft:#efe3f3;
+  --fail:#b3402e;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#121413; --paper:#191c1a; --ink:#e4e8e5; --ink2:#b9c0bc; --muted:#8f9893; --line:#2f3431; --soft:#222623;
+    --agent:#86a4ec; --agent-soft:#1c2640; --mech:#a3aba7; --mech-soft:#262a28;
+    --gate:#5cc893; --gate-soft:#15301f; --human:#e3a24a; --human-soft:#33260f;
+    --over:#c99be0; --over-soft:#2c1f33; --fail:#ec7a66;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#121413; --paper:#191c1a; --ink:#e4e8e5; --ink2:#b9c0bc; --muted:#8f9893; --line:#2f3431; --soft:#222623;
+  --agent:#86a4ec; --agent-soft:#1c2640; --mech:#a3aba7; --mech-soft:#262a28;
+  --gate:#5cc893; --gate-soft:#15301f; --human:#e3a24a; --human-soft:#33260f;
+  --over:#c99be0; --over-soft:#2c1f33; --fail:#ec7a66;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 var(--f-body)}
+.page{max-width:1080px;margin:0 auto;padding-inline:20px;padding-block:40px 80px;display:grid;gap:48px}
+.col{max-width:70ch}
+h1,h2,h3{font-family:var(--f-display);line-height:1.15;margin:0;text-wrap:balance}
+h1{font-size:clamp(30px,4.2vw,42px);font-weight:700}
+h2{font-size:25px;font-weight:600}
+h3{font-size:19px;font-weight:600}
+p{margin:0}
+.stack{display:grid;gap:14px}
+section.stack{gap:16px}
+.eyebrow{font:500 12px/1 var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:19px;color:var(--ink2);max-width:66ch}
+code,.mono{font-family:var(--f-mono);font-size:.84em}
+code{background:var(--soft);padding:1px 5px;border-radius:4px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:14px;color:var(--muted)}
+.meta b{color:var(--ink);font-weight:600}
+.rule{border-left:3px solid var(--gate);padding:10px 0 10px 16px;font-size:18px;max-width:70ch}
+figure{margin:0;display:grid;gap:10px}
+.fig{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto}
+.fig svg{display:block;width:100%;height:auto;min-width:760px;color:var(--ink)}
+figcaption{font-size:14.5px;color:var(--muted);max-width:80ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--ink2)}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:6px;border:1.5px solid}
+ol.steps{list-style:none;margin:0;padding:0;display:grid;border-top:1px solid var(--line)}
+ol.steps>li{display:grid;grid-template-columns:52px minmax(0,1fr);gap:16px;padding:18px 0;border-bottom:1px solid var(--line)}
+.num{font:600 24px/1.1 var(--f-display);color:var(--muted);font-variant-numeric:tabular-nums}
+.step-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 12px;margin-bottom:4px}
+.who{font:500 11.5px/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:999px}
+.who.agent{color:var(--agent);background:var(--agent-soft)}
+.who.mech{color:var(--mech);background:var(--mech-soft)}
+.who.human{color:var(--human);background:var(--human-soft)}
+.who.over{color:var(--over);background:var(--over-soft)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+table{border-collapse:collapse;width:100%;font-size:15px}
+th{font:500 12px/1.2 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+pre{margin:0;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px 18px;overflow-x:auto;font:13.5px/1.55 var(--f-mono);color:var(--ink)}
+pre .c{color:var(--muted)}
+ul.plain{margin:0;padding-left:1.2em;display:grid;gap:8px;max-width:72ch}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:8px;align-content:start}
+.card h3{font-size:17px}
+.card p{font-size:15.5px;color:var(--ink2)}
+.card .who{justify-self:start}
+@media (max-width:900px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.two,.cards{grid-template-columns:minmax(0,1fr)} ol.steps>li{grid-template-columns:34px minmax(0,1fr)}}
+.small{font-size:14.5px;color:var(--ink2)}
+a{color:var(--agent)}
+a:focus-visible{outline:2px solid var(--agent);outline-offset:2px}
+</style>
+
+<main class="page">
+
+<header class="stack">
+  <div class="eyebrow">models/demos/common/bringup</div>
+  <h1>Gated prefill bring-up</h1>
+  <p class="lede">A framework that brings up chunked prefill of a Hugging Face transformer on Tenstorrent hardware. A
+    Python script walks a fixed list of tasks. Claude agents write the code for each task, and a test written before
+    that code decides whether the task passed. A supervising Claude session watches the run and reports to a person.</p>
+  <div class="meta">
+    <span><b>Status</b> in use, 4 bring-ups done</span>
+    <span><b>Box</b> 4x Blackhole p150b</span>
+    <span><b>Updated</b> 2026-09-28</span>
+    <span><b>Entry point</b> <code>/bringup</code> skill</span>
+  </div>
+</header>
+
+<section class="stack">
+  <h2>The one rule</h2>
+  <p class="rule">No agent decides that its own work is correct. A step passes when a test that was written, checked
+    against the CPU reference and frozen before any implementation existed says it passes.</p>
+  <div class="col stack">
+    <p>Every test is frozen only after it passes with the CPU reference plugged in and fails with a module that returns
+      zeros. After that, the runner refuses any change to it. An agent can retry within its budget, but it cannot change
+      the test.</p>
+    <p>The goldens (the CPU reference's outputs for a fixed input text) are computed once per checkpoint and hashed.
+      Every accuracy check in the run compares against them.</p>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>Who does what</h2>
+  <div class="cards">
+    <div class="card">
+      <span class="who mech">script</span>
+      <h3>Orchestrator</h3>
+      <p>A plain Python loop (<code>orchestrator.py</code>). It reads <code>tasks.yaml</code>, picks the next task
+        whose dependencies passed, writes a brief, starts an agent, runs the gate and commits. It makes no decisions of its own.</p>
+    </div>
+    <div class="card">
+      <span class="who agent">agent</span>
+      <h3>Bring-up engineer</h3>
+      <p>A fresh <code>claude -p</code> for every step, with one role (reference, plan, test, implement, fix, contract,
+        perf, optests). It gets a brief, a list of files it may touch, and the log of its last failed attempt.</p>
+    </div>
+    <div class="card">
+      <span class="who over">overseer</span>
+      <h3>Supervising session</h3>
+      <p>A Claude Code session running the <code>/bringup</code> skill. It writes the spec with the person, launches the
+        run, reads every gate commit, rejects cheating, fixes the framework when it misbehaves, and publishes the
+        dashboards.</p>
+    </div>
+    <div class="card">
+      <span class="who human">person</span>
+      <h3>Owner</h3>
+      <p>Approves the spec, the sharding plan and the performance picks. Resets the board and pushes. Everything
+        else the overseer decides and logs.</p>
+    </div>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>How one step runs</h2>
+  <figure>
+    <div class="fig">
+      <svg viewBox="0 0 960 330" role="img" aria-label="The orchestrator writes a brief, the agent edits files, the gate runs frozen tests and metrics, a pass commits and moves on, a fail goes back to the agent with the log. The overseer watches the log and the commits; the person answers at approval points.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/>
+          </marker>
+        </defs>
+        <g font-family="var(--f-body)" font-size="14">
+          <!-- overseer band -->
+          <rect x="20" y="16" width="920" height="54" rx="8" fill="var(--over-soft)" stroke="var(--over)" stroke-width="1.2"/>
+          <text x="36" y="40" fill="var(--over)" font-family="var(--f-display)" font-weight="600" font-size="15">Overseer (/bringup session)</text>
+          <text x="36" y="59" fill="var(--ink2)" font-size="13">watches the log, reads each gate commit, reverts cheating, pauses and fixes the framework, republishes the dashboards</text>
+          <!-- person -->
+          <rect x="770" y="100" width="170" height="64" rx="8" fill="var(--human-soft)" stroke="var(--human)" stroke-width="1.2"/>
+          <text x="786" y="124" fill="var(--human)" font-family="var(--f-display)" font-weight="600" font-size="15">Person</text>
+          <text x="786" y="143" fill="var(--ink2)" font-size="13">spec, plan, perf picks,</text>
+          <text x="786" y="159" fill="var(--ink2)" font-size="13">board resets, pushes</text>
+          <!-- orchestrator -->
+          <rect x="20" y="190" width="180" height="84" rx="8" fill="var(--mech-soft)" stroke="var(--mech)" stroke-width="1.2"/>
+          <text x="36" y="215" fill="var(--mech)" font-family="var(--f-display)" font-weight="600" font-size="15">Orchestrator</text>
+          <text x="36" y="235" fill="var(--ink2)" font-size="13">next task from tasks.yaml,</text>
+          <text x="36" y="252" fill="var(--ink2)" font-size="13">brief with role, rules,</text>
+          <text x="36" y="268" fill="var(--ink2)" font-size="13">allowed paths</text>
+          <!-- agent -->
+          <rect x="270" y="190" width="190" height="84" rx="8" fill="var(--agent-soft)" stroke="var(--agent)" stroke-width="1.2"/>
+          <text x="286" y="215" fill="var(--agent)" font-family="var(--f-display)" font-weight="600" font-size="15">Agent (claude -p)</text>
+          <text x="286" y="235" fill="var(--ink2)" font-size="13">writes code in its paths,</text>
+          <text x="286" y="252" fill="var(--ink2)" font-size="13">runs tests on device,</text>
+          <text x="286" y="268" fill="var(--ink2)" font-size="13">builds forks if needed</text>
+          <!-- gate -->
+          <rect x="530" y="190" width="200" height="84" rx="8" fill="var(--gate-soft)" stroke="var(--gate)" stroke-width="1.2"/>
+          <text x="546" y="215" fill="var(--gate)" font-family="var(--f-display)" font-weight="600" font-size="15">Gate (script)</text>
+          <text x="546" y="235" fill="var(--ink2)" font-size="13">frozen tests, metric</text>
+          <text x="546" y="252" fill="var(--ink2)" font-size="13">thresholds, path and</text>
+          <text x="546" y="268" fill="var(--ink2)" font-size="13">device-runner checks</text>
+          <!-- commit -->
+          <rect x="790" y="210" width="150" height="44" rx="8" fill="var(--paper)" stroke="var(--gate)" stroke-width="1.2"/>
+          <text x="806" y="237" fill="var(--gate)" font-family="var(--f-display)" font-weight="600" font-size="15">PASS: commit</text>
+          <!-- arrows -->
+          <line x1="200" y1="232" x2="266" y2="232" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ar)"/>
+          <line x1="460" y1="232" x2="526" y2="232" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ar)"/>
+          <line x1="730" y1="232" x2="786" y2="232" stroke="var(--muted)" stroke-width="1.5" marker-end="url(#ar)"/>
+          <path d="M630,274 L630,306 L365,306 L365,278" fill="none" stroke="var(--fail)" stroke-width="1.5" marker-end="url(#ar)"/>
+          <text x="400" y="300" fill="var(--fail)" font-size="13">FAIL: retry with the log (3 tries, then a debugger agent)</text>
+          <path d="M865,210 L865,186 L110,186 L110,190" fill="none" stroke="var(--muted)" stroke-width="1.2" stroke-dasharray="4 4"/>
+          <text x="560" y="181" fill="var(--muted)" font-size="12.5">next task</text>
+          <line x1="855" y1="164" x2="855" y2="178" stroke="var(--human)" stroke-width="1.5"/>
+          <line x1="480" y1="70" x2="480" y2="186" stroke="var(--over)" stroke-width="1.2" stroke-dasharray="3 4"/>
+        </g>
+      </svg>
+    </div>
+    <figcaption>The loop the orchestrator runs for every task. The script does the same thing every time. The agent is
+      the only creative part, and it never sees a way around the gate. The overseer sits outside the loop and steps in
+      only between tasks.</figcaption>
+  </figure>
+  <div class="col stack">
+    <p>A gate is mechanical. It passes only when all of these hold:</p>
+    <ul class="plain">
+      <li>every dependency passed, and every frozen file still has its recorded hash;</li>
+      <li>the command exits 0, every metric meets its threshold, and every expected result file exists;</li>
+      <li>the device ran only through <code>scripts/run_safe_pytest.sh</code> or <code>scripts/tt-probe.sh</code>;</li>
+      <li>the agent changed files only inside the paths its brief allowed.</li>
+    </ul>
+    <p>The runner then formats the files, commits only the task's paths, and records the metrics in
+      <code>results/&lt;task&gt;.json</code> and <code>state.json</code>. When a person is needed, the orchestrator
+      exits with code 3 and waits. <code>orchestrator resume</code> continues from where it stopped.</p>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>The steps of a bring-up</h2>
+  <p class="col">The order below is the order the ledger runs. A 6-layer MoE model ends up with about 60 tasks; a
+    48-layer one with more component tasks, because each distinct block type gets its own.</p>
+  <ol class="steps">
+    <li><span class="num">1</span><div>
+      <div class="step-head"><h3>Intake</h3><span class="who over">overseer</span><span class="who human">person</span></div>
+      <p>The overseer interviews the person, checks the checkpoint and the box, and writes <code>spec.yaml</code>:
+        target length and chunk size, the ladder of test lengths, block types, owner rules for every agent, dashboard
+        style. Nothing runs until the person approves it.</p></div></li>
+    <li><span class="num">2</span><div>
+      <div class="step-head"><h3>CPU reference (R.1 to R.3)</h3><span class="who agent">agent</span></div>
+      <p>An agent writes a standalone CPU reference of the model, split into the steps a device version would swap one
+        at a time. The gates check it against Hugging Face to PCC 0.9999, check that chunked prefill equals one-shot
+        prefill, and check that each block's graph replays exactly.</p></div></li>
+    <li><span class="num">3</span><div>
+      <div class="step-head"><h3>Goldens and box check (G.*, B.1)</h3><span class="who mech">script</span></div>
+      <p>A script runs the reference over each ladder rung (up to 56k tokens) and stores every layer's outputs and KV
+        state with a content hash. Another opens the mesh and checks that the collectives are exact.</p></div></li>
+    <li><span class="num">4</span><div>
+      <div class="step-head"><h3>Plan (PL.0, PL.1)</h3><span class="who agent">agent</span><span class="who human">person</span></div>
+      <p>An agent maps every component to TTNN ops and shards the model over the mesh. The gate recomputes per-chip
+        memory from the real checkpoint shapes, so a plan that does not fit fails. The person approves it; any later edit to
+        the plan voids the approval.</p></div></li>
+    <li><span class="num">5</span><div>
+      <div class="step-head"><h3>Components and swaps (C.*, S.*)</h3><span class="who agent">agent</span></div>
+      <p>One component at a time (a norm, attention, the router, the experts). A test agent reviews the generated test,
+        the runner freezes it, and an implement agent writes the device module. Then a swap test runs the whole block
+        with steps 1 to n on the device and the rest on the CPU, so an error shows up in the step that caused it.</p></div></li>
+    <li><span class="num">6</span><div>
+      <div class="step-head"><h3>Assemble and ladder (M.1, L.*)</h3><span class="who agent">agent</span><span class="who mech">script</span></div>
+      <p>An agent builds one device model whose hidden state stays on the device from the embedding to the final norm.
+        The ladder then runs it at growing lengths (4k, 16k, the last chunk after a 50k golden prefix, the full 56k) and
+        checks every layer, the KV state and the top-5 tokens. A failure starts a fix agent.</p></div></li>
+    <li><span class="num">7</span><div>
+      <div class="step-head"><h3>Serving contract (K.1)</h3><span class="who agent">agent</span></div>
+      <p>An agent makes the model servable by the shared prefill engine (<code>models/demos/common/prefill</code>): the
+        adapter, the KV layout and address table, and the handover to decode.</p></div></li>
+    <li><span class="num">8</span><div>
+      <div class="step-head"><h3>Performance (X.1, X.2, P.*, X.3)</h3><span class="who mech">script</span><span class="who human">person</span><span class="who agent">agent</span></div>
+      <p>A warm profile, a ranked list of opportunities, the person's picks, one agent task per pick, and a final
+        full-length accuracy and speed check. The next section covers this.</p></div></li>
+    <li><span class="num">9</span><div>
+      <div class="step-head"><h3>Fork tests (O.1)</h3><span class="who agent">agent</span></div>
+      <p>Every call the model makes to a bring-up op gets a random-input test case in that op's folder. See the
+        bring-up ops section.</p></div></li>
+  </ol>
+</section>
+
+<section class="stack">
+  <h2>The overseer</h2>
+  <div class="two">
+    <div class="stack">
+      <p>The orchestrator is fixed code, so something has to handle what it cannot: an agent that needs a file outside
+        its paths, a framework bug, a board that stops responding. That is the overseer, a Claude Code session
+        running the <code>/bringup</code> skill (<code>skill/bringup/SKILL.md</code>).</p>
+      <p>It decides routine things itself and logs each decision in <code>supervision.md</code>. It asks the person only
+        for the spec, the plan, the performance picks, a board reset, a push, or when the data looks wrong (for example
+        implausible accuracy or degenerate text).</p>
+      <p>It never edits the tree while an agent runs, because the path check would charge the edit to that agent. It
+        pauses the orchestrator first.</p>
+    </div>
+    <div class="stack">
+      <p>It reads the diff of every gate commit, not only the verdict. It reverts a commit and reruns the task when the
+        agent:</p>
+      <ul class="plain">
+        <li>loosened a threshold or edited a frozen test, a golden or the ledger;</li>
+        <li>special-cased the test input or read the golden inside the model;</li>
+        <li>hid CPU work in a device module;</li>
+        <li>swallowed an error instead of fixing it;</li>
+        <li>faked an interface to get past a check.</li>
+      </ul>
+      <p>It also republishes both dashboards (a standard page and a teletext page) after every gate.</p>
+    </div>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>Performance</h2>
+  <div class="col stack">
+    <p>Functional bring-up comes first, at HiFi4 everywhere and bfp4 weights only where the checkpoint itself is 4-bit.
+      Speed work starts only after the full model passes every accuracy gate, and each speed change has to pass them
+      again.</p>
+    <p>The profiler books every TTNN call to a layer and a section (<code>L5.attention.sdpa</code>) with its shapes and
+      tensor placement (DRAM or L1, interleaved or sharded). It also records a pipelined timeline of the critical chip
+      with each op's kernel time, the idle gap before it and the host dispatch time. The dashboard shows this per block
+      type.</p>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Task</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td><code>X.1</code></td><td>Warm profile of one long chunk (50k to 55k tokens), per section and per chip.</td></tr>
+        <tr><td><code>X.2</code></td><td>A ranked list of sections by device time, each linked to the known issues and repo-map rows that apply. The run stops here.</td></tr>
+        <tr><td><code>P.*</code></td><td>The person marks picks. Each becomes one perf task with the exact change in its brief, behind a switch so the old path stays selectable. Its gate reruns the frozen tests of every layer the change touches, an accuracy rung and the profile, with a time threshold below the baseline.</td></tr>
+        <tr><td><code>X.3</code></td><td>Final check at the full 56k: per-layer accuracy, warm time-to-first-token, the per-op profile and timeline.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="col small">On MiMo-V2.6 (layers 0 to 5, mesh 1x4) the 50k to 55k chunk went from 1122 ms of device time at
+    X.1 to 204.9 ms after the perf tasks and later fusions. The 2x2 run started at 278.5 ms and ended at 249.9 ms after
+    one pick.</p>
+</section>
+
+<section class="stack">
+  <h2>Bring-up ops</h2>
+  <div class="two">
+    <div class="stack">
+      <p>A bring-up never edits an existing TTNN op. When a model needs an op to behave differently (a missing feature,
+        a precision option, a bug on one mesh shape), the agent copies the op into <code>ttnn/ttnn/bringup/&lt;op&gt;/</code>
+        with <code>fork_op.py</code> and changes the copy. The copy registers as <code>ttnn.bringup.&lt;op&gt;</code>
+        next to the original, builds with <code>./build_metal.sh</code>, and gets a <code>CHANGELOG.md</code> (source
+        path, source commit, every change with its reason) and a row in <code>INDEX.md</code>.</p>
+      <p>Forks are shared. The next model reuses a fork before making a new one, and puts any new behaviour behind an
+        option that is off by default, so the models already using the fork get the same program. A person decides
+        later whether a change goes back into the original op.</p>
+    </div>
+    <div class="stack">
+      <p>Each fork carries two kinds of tests.</p>
+      <ul class="plain">
+        <li>A best-effort selection of the source op's own tests, listed in <code>tests/source.yaml</code> and run in
+          place with the original op's name pointing at the fork. A recorded baseline says which of them pass.</li>
+        <li>One random-input case for every distinct call a model makes, added by task O.1 (skill
+          <code>bringup-fork-tests</code>). The O.1 gate runs every model's cases, so a change made for one model fails
+          if it breaks another.</li>
+      </ul>
+      <p>Extending a fork follows a fixed recipe in skill <code>bringup-fork-op</code>. Start from the recorded
+        baseline, iterate on a few targeted cases and the model's own gate, then run the full regression once.</p>
+    </div>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Fork</th><th>What it adds</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td><code>dispatch</code>, <code>combine</code>, <code>offset_cumsum</code></td><td>MoE token routing on a mesh axis with a single chip (no fabric)</td><td>ERNIE, Gemma-4, MiMo</td></tr>
+        <tr><td><code>unified_routed_expert_ffn</code></td><td>GeluTanh activation, an opt-in high-precision path</td><td>Gemma-4, MiMo</td></tr>
+        <tr><td><code>sdpa</code></td><td>V head size smaller than K (MiMo: K 192, V 128, no padding)</td><td>MiMo</td></tr>
+        <tr><td><code>rms_norm_ttnn</code></td><td>An AI-generated faster norm with a C++ host, an optional fused residual add, fp32 accumulation honoured</td><td>MiMo</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>Prior bring-ups</h2>
+  <div class="col stack">
+    <p>A checkpoint that was already brought up can be brought up again on another mesh or configuration:
+      <code>new --prior &lt;slug&gt; --mesh R,C</code>. The new bring-up shares the prior's checkpoint download, CPU
+      reference and goldens. Its reference and golden tasks pass on their first check without an agent, and every brief
+      gets a section pointing at the prior's matching files. Implement agents copy the prior's modules and adapt them;
+      they never import them.</p>
+    <p>MiMo-V2.6 on a 2x2 mesh ran this way. All 60 tasks passed on their first attempt, and the accuracy matched the
+      1x4 run to four digits.</p>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>What every agent reads first</h2>
+  <div class="col stack">
+    <p><code>knowledge/repo_map.md</code> lists, per problem, the best existing code to start from (a MoE dispatch on a
+      2D mesh, a sliding-window attention, a serving KV contract). <code>knowledge/known_issues.md</code> lists traps
+      the earlier runs found, each with its symptom and fix. Agents add rows as they learn; a format check keeps both
+      files parseable.</p>
+    <p>The spec's <code>agents.rules</code> hold the owner's rules for one model and appear in every brief. The agent
+      definition (<code>agents/bringup-engineer.md</code>) holds the standing rules for all models, for example 2D
+      fabric only, no edits to existing TTNN ops, and HiFi4 during functional bring-up.</p>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>What a run leaves behind</h2>
+  <div class="two">
+    <div class="stack">
+      <h3>In git, per model</h3>
+      <ul class="plain">
+        <li><code>bringup/spec.yaml</code>, <code>tasks.yaml</code>, <code>state.json</code> and <code>results/</code></li>
+        <li><code>plan.md</code>, <code>plan.yaml</code>, <code>opportunities.md</code></li>
+        <li><code>BREADCRUMBS.md</code> (what each agent learned) and <code>supervision.md</code> (every overseer decision)</li>
+        <li><code>tt/</code> (the device model) and <code>tests/bringup/</code> (the frozen tests)</li>
+      </ul>
+    </div>
+    <div class="stack">
+      <h3>Outside git</h3>
+      <p>Everything large lives under <code>/localdev/$USER/bringup/&lt;model&gt;/</code>: the checkpoint in
+        <code>hf/</code>, the goldens, the weight cache, the profiles, and per run the orchestrator log, every brief and
+        every agent transcript.</p>
+    </div>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>Runs so far</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Model</th><th>Mesh</th><th>Tasks</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>ERNIE-4.5 (<code>ernie45_d_p</code>)</td><td>1x4</td><td class="n">-</td><td>The run the framework was built from; it predates the ledger.</td></tr>
+        <tr><td>Gemma-4 A4B (<code>gemma4_a4b_d_p</code>)</td><td>1x4</td><td class="n">78</td><td>0 to 55k warm prefill 5.78 s.</td></tr>
+        <tr><td>MiMo-V2.6-Flash-RL, layers 0 to 5 (<code>mimo_v2_6_d_p</code>)</td><td>1x4</td><td class="n">61</td><td>50k to 55k chunk 204.9 ms device after perf work.</td></tr>
+        <tr><td>MiMo-V2.6-Flash-RL, layers 0 to 5 (<code>mimo_v2_6_d_p_2x2</code>)</td><td>2x2</td><td class="n">60</td><td>Seeded by the 1x4 run; chunk 249.9 ms, the difference is MoE traffic over the fabric.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>Where to start</h2>
+  <div class="col stack">
+    <p>In Claude Code, type <code>/bringup</code> and name the model. The skill does the interview, the spec, the
+      launch and the supervision. To run the pieces by hand:</p>
+  </div>
+  <pre><span class="c"># the shell's default PYTHONPATH points at another checkout</span>
+export PYTHONPATH=$PWD
+B="python -m models.demos.common.bringup"
+$B new --model &lt;slug&gt; --hf-id &lt;org/name&gt;        <span class="c"># or: $B new --prior &lt;slug&gt; --mesh 2,2</span>
+$B approve intake --spec models/demos/&lt;slug&gt;/bringup/spec.yaml
+python -m models.demos.common.bringup.plan.ledger_gen --spec &lt;spec&gt; --early --write
+$B init-run run1 --spec &lt;spec&gt;
+python -m models.demos.common.bringup.orchestrator run --spec &lt;spec&gt;
+$B status --spec &lt;spec&gt;                             <span class="c"># approve plan|perf, rerun --from, fork, compare</span></pre>
+  <div class="col stack">
+    <p class="small">Further reading in the repo: <code>models/demos/common/bringup/README.md</code> (layout and the
+      rules the runner enforces), the three skills under <code>skill/</code>, <code>ttnn/ttnn/bringup/INDEX.md</code>,
+      and <code>dev/BREADCRUMBS.md</code> (how the framework itself was built, changes F1 to F45).</p>
+  </div>
+</section>
+
+</main>
