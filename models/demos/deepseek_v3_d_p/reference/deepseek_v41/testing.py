@@ -13,13 +13,14 @@ E8M0 32x32 block scales, FP4 (float4_e2m1fn_x2) routed experts with E8M0 per-32 
 tables with E8M0 per-32 scales, bf16/fp32 elsewhere.
 """
 
+import math
 from dataclasses import replace
 
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import model as v41
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41.engram import EngramLayout
-from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import FP8_MAX, fast_round_scale, fp4_act_quant
+from models.demos.deepseek_v3_d_p.reference.deepseek_v41.kernel_cpu import FP8_MAX, fast_round_scale
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig
 
 
@@ -166,10 +167,15 @@ def init_weights(model: torch.nn.Module, seed: int = 0) -> None:
             p.copy_(q)
             owner.scale.copy_(s)
         elif p.dtype == torch.float4_e2m1fn_x2:
-            w = (randn(p.size(0), 2 * p.size(1)) * (2 * p.size(1)) ** -0.5).to(torch.bfloat16)
-            q, s = fp4_act_quant(w, v41.fp4_block_size)
-            p.view(torch.uint8).copy_(q.view(torch.uint8))
-            owner.scale.copy_(s)
+            # Random E2M1 codes (both nibbles) with one power-of-2 scale per 32 inputs, drawn directly in
+            # the checkpoint format: quantizing a gaussian costs minutes per layer at real dims. Uniform
+            # codes have RMS ~3.2, so the scale targets an RMS of fan_in^-0.5 like the other weights.
+            fan_in = 2 * p.size(1)
+            codes = torch.randint(0, 256, p.shape, generator=gen, dtype=torch.int32).to(torch.uint8)
+            p.view(torch.uint8).copy_(codes)
+            exp = round(math.log2(fan_in**-0.5 / 3.2))
+            jitter = torch.randint(-1, 2, owner.scale.shape, generator=gen, dtype=torch.int32)
+            owner.scale.copy_(torch.pow(2.0, (exp + jitter).float()).to(torch.float8_e8m0fnu))
         elif leaf == "weight" and "norm" in owner_name.rsplit(".", 1)[-1]:
             p.copy_(1 + 0.1 * randn(*p.shape))
         elif p.dim() >= 2:
