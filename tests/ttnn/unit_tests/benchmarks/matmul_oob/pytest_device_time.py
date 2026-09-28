@@ -10,6 +10,8 @@ ttnn.CONFIG.matmul_auto_config_v2 off and on (TTNN_CONFIG_OVERRIDES) and compari
 correctness and device-time changes of the new matmul default selection.
 
   PYTHONPATH=tests/ttnn/unit_tests/benchmarks/matmul_oob:$PYTHONPATH DEVICE_TIME_OUT=off.jsonl pytest -p pytest_device_time <tests>
+
+DEVICE_TIME_SAMPLE=N keeps every Nth collected test (a fixed, deterministic sample for quick runs).
 """
 
 import json
@@ -26,6 +28,16 @@ for _var in (
 import pytest  # noqa: E402
 
 DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
+
+
+def pytest_collection_modifyitems(config, items):
+    sample = int(os.environ.get("DEVICE_TIME_SAMPLE", "1"))
+    if sample > 1:
+        kept = items[::sample]
+        config.hook.pytest_deselected(items=[i for i in items if i not in kept])
+        items[:] = kept
+
+
 _results = {}
 
 
