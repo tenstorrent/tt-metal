@@ -74,7 +74,14 @@ inline void compact_idma_per_row(
     std::uint32_t num_rows,
     std::uint32_t src_stride,
     std::uint32_t dst_stride) {
-    reset_counters_addrgen_0();
+    // FULL reset, not reset_counters_: that variant keeps "base addresses, sizes and strides
+    // intact", which includes the outer-loop, face-size and banking registers this kernel
+    // never programs. The addrgen and im2col tests in this same binary DO program them on
+    // addrgen_0 of this same logical core, so a counters-only reset inherits their state and
+    // generates wrong addresses -- invisibly, because it only shows up when the whole suite
+    // runs rather than under a --gtest_filter. Every other addrgen user in the tree resets
+    // fully.
+    reset_addrgen_0();
     setup_src_base_start_addrgen_0(src_base);
     setup_src_inner_loop_addrgen_0(src_stride, (std::uint64_t)num_rows * src_stride);
     setup_dest_base_start_addrgen_0(dst_base);
@@ -100,7 +107,7 @@ inline void compact_noc_per_row(
     std::uint32_t dst_stride) {
     UnicastEndpoint ep;
     for (std::uint32_t r = 0; r < num_rows; r++) {
-        noc.async_read_with_state(
+        noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             ep,
             ep,
             row_bytes,
@@ -131,7 +138,6 @@ void kernel_main() {
     } else if (num_channels > CMDBUF_NUM_IDMA_VCS) {
         num_channels = CMDBUF_NUM_IDMA_VCS;
     }
-    const bool fan_out = num_channels > 1;
     const bool use_idma = engine_mode == ENGINE_IDMA_PER_ROW;
 
     const std::uint32_t noc_x = dest_coords >> 16;
@@ -152,12 +158,21 @@ void kernel_main() {
             /*src_addr_inc_en=*/false,  // the addrgen supplies both addresses
             /*dest_addr_inc_en=*/false,
             /*trid_inc_en=*/false,
-            /*req_vc_inc_en=*/fan_out,  // round-robin the per-row packets across the VCs
+            /*req_vc_inc_en=*/true,  // round-robin the per-row packets across the VC window
             /*resp_vc_inc_en=*/false);
+        // The response VC must be passed explicitly. setup_wrapping_vcs_ never reads its `wr`
+        // argument -- it is not the selector it looks like -- and its defaulted resp_start_vc
+        // and resp_end_vc would force RESP_VC 0, which sits INSIDE the request window this
+        // same call programs (CMDBUF_FIRST_IDMA_VC is 0). Sharing a VC between requests and
+        // their responses is the classic NoC deadlock configuration. CMDBUF_WR_RESP_VC is what
+        // setup_vcs_cmdbuf_0(/*wr=*/true) would have selected.
         setup_wrapping_vcs_cmdbuf_0(
             /*wr=*/true,
             /*req_start_vc=*/CMDBUF_FIRST_IDMA_VC,
-            /*req_end_vc=*/CMDBUF_FIRST_IDMA_VC + (fan_out ? num_channels - 1 : 0));
+            /*req_end_vc=*/CMDBUF_FIRST_IDMA_VC + num_channels - 1,
+            /*req_vc_offset=*/0,
+            /*resp_start_vc=*/CMDBUF_WR_RESP_VC,
+            /*resp_end_vc=*/CMDBUF_WR_RESP_VC);
         setup_max_bytes_in_packet_cmdbuf_0(out_row_bytes);
         setup_trids_cmdbuf_0(CMDBUF_DEF_TRID);
         set_len_cmdbuf_0(out_row_bytes);
@@ -170,7 +185,14 @@ void kernel_main() {
         // Set the read state once so the loop pays only for the per-row issue -- the cheapest
         // form of the workaround, which is what makes it a fair baseline.
         UnicastEndpoint ep;
-        noc.set_async_read_state(ep, out_row_bytes, {.noc_x = noc_x, .noc_y = noc_y, .addr = src_base});
+        // <NOC_MAX_BURST_SIZE> selects the ONE-PACKET path. The default max_page_size is
+        // NOC_MAX_BURST_SIZE + 1, which falls through to noc_async_read_with_state -- the
+        // any-len path that rewrites the length register and runs a burst-splitting loop on
+        // every call. Rows here are at most 512 B against a 65536 B burst limit, so one-packet
+        // is legal, and it is what makes this baseline the cheapest NOC read rather than
+        // merely a cheap one.
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            ep, out_row_bytes, {.noc_x = noc_x, .noc_y = noc_y, .addr = src_base});
         compact_noc_per_row(
             noc, noc_x, noc_y, src_base, dst_addr, out_row_bytes, num_rows, pad_row_bytes, out_row_bytes);
     }

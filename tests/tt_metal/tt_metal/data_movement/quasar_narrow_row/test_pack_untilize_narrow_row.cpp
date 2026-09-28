@@ -26,6 +26,7 @@
 // in README.md a like-for-like one.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
@@ -38,8 +39,6 @@ namespace tt::tt_metal {
 using namespace tt::test_utils;
 
 namespace unit_tests::dm::quasar_narrow_row {
-
-constexpr std::uint32_t TEST_ID = 918;
 
 constexpr std::uint32_t TILE_H = 32;
 constexpr std::uint32_t TILE_W = 32;
@@ -119,6 +118,7 @@ std::vector<std::uint32_t> make_tilized_input(std::uint32_t ct_dim) {
 struct Buffers {
     std::shared_ptr<distributed::MeshBuffer> src_dram;  // tilized input
     std::shared_ptr<distributed::MeshBuffer> out_l1;    // dense narrow-row output + guard
+    std::uint32_t max_ct_dim = 0;                       // what the two above were sized for
 };
 
 Buffers make_buffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, std::uint32_t max_ct_dim) {
@@ -133,6 +133,7 @@ Buffers make_buffers(const std::shared_ptr<distributed::MeshDevice>& mesh_device
     return {
         .src_dram = mk(max_ct_dim * TILE_BYTES, BufferType::DRAM),
         .out_l1 = mk(max_out_bytes, BufferType::L1),
+        .max_ct_dim = max_ct_dim,
     };
 }
 
@@ -150,6 +151,15 @@ bool run_narrow_row(
     IDevice* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
+
+    // Outgrowing the buffers is silent otherwise: the stimulus resize() below would TRUNCATE
+    // while the reader still streams cfg.ct_dim tiles, and the gather would write past out_l1
+    // into neighbouring L1. Fail loudly instead.
+    TT_FATAL(
+        cfg.ct_dim <= buffers.max_ct_dim,
+        "ct_dim {} exceeds the {} these buffers were sized for",
+        cfg.ct_dim,
+        buffers.max_ct_dim);
 
     const std::uint32_t ct_dim = cfg.ct_dim;
     const std::uint32_t pad_w = ct_dim * TILE_W;                             // padded row, datums
@@ -316,10 +326,21 @@ bool run_narrow_row(
     }
 
     if (bad != 0 || guard_bad != 0) {
+        // Only name a first wrong datum when there IS one: a guard-only failure means every
+        // in-range datum was placed correctly and the gather overran, and printing
+        // "row 0 col 0" from the never-assigned initialisers points at the wrong end of the
+        // buffer.
+        const std::string detail = bad != 0 ? fmt::format(
+                                                  " (first at row {} col {}: expected 0x{:04x}, got 0x{:04x})",
+                                                  first_bad_r,
+                                                  first_bad_c,
+                                                  first_bad_want,
+                                                  first_bad_got)
+                                            : std::string();
         log_error(
             tt::LogTest,
-            "ct_dim={} last_tile_w={} matrix_w={} engine={} ch={}: {}/{} datums wrong "
-            "(first at row {} col {}: expected 0x{:04x}, got 0x{:04x}), {} guard words clobbered",
+            "ct_dim={} last_tile_w={} matrix_w={} engine={} ch={}: {}/{} datums wrong{}, "
+            "{} guard words clobbered",
             ct_dim,
             cfg.last_tile_w,
             matrix_w,
@@ -327,10 +348,7 @@ bool run_narrow_row(
             cfg.num_channels,
             bad,
             OUT_ROWS * matrix_w,
-            first_bad_r,
-            first_bad_c,
-            first_bad_want,
-            first_bad_got,
+            detail,
             guard_bad);
         return false;
     }
