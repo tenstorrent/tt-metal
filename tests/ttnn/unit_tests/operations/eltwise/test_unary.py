@@ -2340,6 +2340,8 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
     dtype = torch.bfloat16
+    if param == 0.0 and is_wormhole_b0():
+        pytest.xfail("On Wormhole 0/0 already reaches Dest as inf, ahead of the pack that now keeps a NaN")
     in_data = torch.zeros(torch.Size([1, 1, 32, 32]), dtype=dtype)
     input_tensor = ttnn.from_torch(
         in_data,
