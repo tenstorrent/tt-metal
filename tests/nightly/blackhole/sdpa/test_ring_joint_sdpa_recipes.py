@@ -253,6 +253,28 @@ def test_ring_joint_sdpa_recipe_device_lengths(ring_mesh, variant):
         ttnn.release_trace(mesh, trace)
 
 
+@pytest.mark.parametrize("variant", ["fast", "standard", "accurate", "low_precision_bfp8"])
+def test_ring_joint_sdpa_recipe_op_selected_blocking(ring_mesh, variant):
+    """Chunk sizes of 0: the op chooses them."""
+    mesh, semaphores, ccl_column = ring_mesh
+    inputs, joints, backing, logical_n, kwargs, expected, has_joint = ring_case(mesh, variant, "joint_sharded")
+    kwargs.update(q_chunk=0, k_chunk=0)
+    out = run_ring(
+        mesh,
+        semaphores,
+        ccl_column,
+        inputs,
+        joints,
+        backing,
+        logical_n=logical_n,
+        precision=VARIANTS[variant][0],
+        **kwargs,
+    )
+    for chip in range(RING):
+        got = torch.cat([per_chip(out[0])[chip], per_chip(out[1])[chip]], dim=2)
+        assert l2_pct(got, expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
+
+
 def test_ring_joint_sdpa_fast_matches_legacy(ring_mesh):
     mesh, semaphores, ccl_column = ring_mesh
     inputs, joints, backing, logical_n, kwargs, _, _ = ring_case(mesh, "fast", "joint_sharded")

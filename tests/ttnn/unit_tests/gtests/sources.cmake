@@ -5,6 +5,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
     sdpa/test_sliding_window_work_plan.cpp
     sdpa/test_precision_policy.cpp
+    sdpa/test_recipe_blocking.cpp
     sdpa/test_sequence_accessor.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
