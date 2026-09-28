@@ -27,6 +27,10 @@ class AutoportGemma4ForCausalLM:
         self._sampling_on_host = None
         self._decode_batch = None
         self.allow_host_sampling = os.environ.get("GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING") == "1"
+        if os.environ.get("GEMMA4_AUTOPORT_TTFT_DIAGNOSTICS") == "1":
+            from models.autoports.google_gemma_4_26b_a4b_it.tools.ttft_diagnostics import install
+
+            install(self)
         if control_path := os.environ.get("GEMMA4_BENCHMARK_CONTROL"):
             from models.autoports.google_gemma_4_26b_a4b_it.tools.benchmark_runtime import install
 
@@ -184,14 +188,30 @@ class AutoportGemma4ForCausalLM:
         if start_pos is not None and torch.any(torch.as_tensor(start_pos) != 0):
             raise ValueError("Scheduler chunked prefill needs the low-level continuation contract")
         gen = self.generator
-        if on_host:
-            gen._release_trace()
-        else:
+        counts = None
+        if not on_host:
             prompt_lengths = torch.as_tensor(prompt_lens, device=tokens.device).reshape(-1, 1)
-            positions = torch.arange(tokens.shape[-1], device=tokens.device)
             counts = None if output_token_counts is None else self._output_counts(output_token_counts, tokens.shape[0])
             if counts is not None and (counts > prompt_lengths.flatten()).any():
                 raise ValueError("output_token_counts cannot exceed the resumed prefill prefix length")
+        tables = self._tables(page_table, page_tables_per_layer)
+        trace_prefill = (
+            not on_host
+            and getattr(gen, "prefill_trace_enabled", False)
+            and gen.serving_prefill_eligible(sampling_params)
+        )
+        if trace_prefill:
+            # The scheduler may retain max_num_seqs rows in hybrid tables
+            # even for a compact prefill token batch. Only its leading prompt
+            # rows are consumed; retain all columns for the context contract.
+            tables = tuple(table[: tokens.shape[0]] for table in tables)
+        reuse_prefill = trace_prefill and gen.can_reuse_serving_prefill(
+            tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens
+        )
+        if on_host:
+            gen._release_trace()
+        else:
+            positions = torch.arange(tokens.shape[-1], device=tokens.device)
             if counts is not None and counts.any():
                 original_prompt_lengths = prompt_lengths - counts[:, None]
                 prompt_tokens = tokens.masked_fill(positions >= original_prompt_lengths, -1)
@@ -200,14 +220,22 @@ class AutoportGemma4ForCausalLM:
                 )
                 # Re-prefill rebuilds KV state but consumes the next sampling
                 # draw after the retained outputs; prefill does not increment.
-                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, seed_offsets=counts)
+                gen.configure_sampling(
+                    sampling_params, prompt_tokens=prompt_tokens, seed_offsets=counts, _reuse_trace=reuse_prefill
+                )
                 gen.sampler.reset_output_state(output_tokens)
             else:
                 prompt_tokens = tokens.masked_fill(positions >= prompt_lengths, -1)
-                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens)
+                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, _reuse_trace=reuse_prefill)
+        if trace_prefill:
+            output = gen.serving_prefill_tokens(tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens)
+            self._sampling_signature = repr(sampling_params) if gen.prefill_prepared is not None else None
+            self._decode_batch = None
+            host = ttnn.to_torch(ttnn.get_device_tensors(output)[0]).reshape(-1)
+            return host[: len(prompt_lens)].reshape(-1, 1)
         logits = gen.prefill_forward(
             tokens,
-            page_table=self._tables(page_table, page_tables_per_layer),
+            page_table=tables,
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             # vLLM attention tables use compact request rows. empty_slots
@@ -266,7 +294,12 @@ class AutoportGemma4ForCausalLM:
                 # decode sample. The last generated token is this step's input.
                 seed_offsets = (counts - 1).clamp_min(0)
             if signature != self._sampling_signature:
-                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, seed_offsets=seed_offsets)
+                reuse_trace = getattr(gen, "prefill_prepared", None) is not None and gen.can_reuse_serving_decode(
+                    sampling_params
+                )
+                gen.configure_sampling(
+                    sampling_params, prompt_tokens=prompt_tokens, seed_offsets=seed_offsets, _reuse_trace=reuse_trace
+                )
                 if output_tokens is not None:
                     gen.sampler.reset_output_state(output_tokens)
             else:

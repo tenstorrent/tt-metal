@@ -1,0 +1,104 @@
+2026-09-28 09:07:50.011 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+2026-09-28 09:07:50.011 | info     |             UMD | Cluster constructor started. (cluster.cpp:406)
+2026-09-28 09:07:50.011 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-28 09:07:50.011 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-28 09:07:50.016 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:576)
+2026-09-28 09:07:50.017 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-28 09:07:50.097 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-28 09:07:50.097 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-28 09:07:50.097 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-28 09:07:50.097 | info     |             UMD | Cluster constructor completed. (cluster.cpp:665)
+2026-09-28 09:07:50.098 | info     |             UMD | Starting devices in cluster (cluster.cpp:1205)
+2026-09-28 09:07:50.280 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1213)
+2026-09-28 09:07:50.405 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-28 09:07:50.405 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-28 09:07:50.405 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-28 09:07:50.405 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-28 09:07:50.405 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-28 09:07:50.467 | info     |       LLRuntime | Watcher log file: /workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/readiness_vllm/ttft_optimization/watcher_runtime/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-09-28 09:07:50.467 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:568)
+2026-09-28 09:07:50.467 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+2026-09-28 09:07:50.472 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:410)
+2026-09-28 09:07:50.474 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-28 09:07:50.479 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:410)
+2026-09-28 09:07:50.485 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:410)
+2026-09-28 09:07:50.515 | critical |          Always | TT_FATAL: Program size (28464) too large for kernel config buffer (26624) on ACTIVE_ETH (assert.hpp:104)
+Traceback (most recent call last):
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_prefill.py", line 293, in <module>
+    main()
+  File "/workspace/tt-metal/models/autoports/google_gemma_4_26b_a4b_it/tests/check_ttft_prefill.py", line 51, in main
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1024**3)
+  File "/home/container_app_user/tt-metal/ttnn/ttnn/distributed/distributed.py", line 671, in open_mesh_device
+    return ttnn._ttnn.multi_device.open_mesh_device(
+RuntimeError: TT_FATAL @ /home/container_app_user/tt-metal/tt_metal/impl/program/program.cpp:3000: state.offset <= max_size
+info:
+Program size (28464) too large for kernel config buffer (26624) on ACTIVE_ETH
+backtrace:
+ --- /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xa1003a) [0x7cb120e2303a]
+ --- /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xda3) [0x7cb120e0a3e3]
+ --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+ --- tt::tt_metal::Device::configure_fabric()
+ --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+ --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> > const&)
+ --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+ --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e5677) [0x7cb124822677]
+ --- /home/container_app_user/tt-metal/ttnn/ttnn/_ttnn.so(+0x36eeed) [0x7cb1247abeed]
+ --- python(_PyEval_EvalFrameDefault+0x1992) [0x62497332af92]
+ --- python(_PyFunction_Vectorcall+0x7c) [0x62497333faec]
+ --- python(_PyEval_EvalFrameDefault+0x1992) [0x62497332af92]
+ --- python(_PyFunction_Vectorcall+0x7c) [0x62497333faec]
+ --- python(_PyEval_EvalFrameDefault+0x6c0) [0x624973329cc0]
+ --- python(+0x25b036) [0x62497340f036]
+ --- python(PyEval_EvalCode+0x86) [0x62497340ef06]
+ --- python(+0x281a88) [0x624973435a88]
+ --- python(+0x27c0df) [0x6249734300df]
+ --- python(+0x281825) [0x624973435825]
+ --- python(_PyRun_SimpleFileObject+0x1a8) [0x624973434d68]
+ --- python(_PyRun_AnyFileObject+0x47) [0x624973434a47]
+ --- python(Py_RunMain+0x2be) [0x624973428eae]
+ --- python(Py_BytesMain+0x2d) [0x624973402f4d]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7cb1543bad90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7cb1543bae40]
+ --- python(_start+0x25) [0x624973402e45]
+
+2026-09-28 09:07:51.535 | info     |    BuildKernels | JIT cache stats: 36/40 hits (90.0%) [36 cached, 3 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-28 09:07:51.535 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-28 09:07:51.535 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:616)
+2026-09-28 09:07:51.546 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:542)
+2026-09-28 09:07:51.546 | info     |             UMD | Closing devices in cluster (cluster.cpp:1218)
+[qb2-120-p04t04:13669] *** Process received signal ***
+[qb2-120-p04t04:13669] Signal: Segmentation fault (11)
+[qb2-120-p04t04:13669] Signal code: Address not mapped (1)
+[qb2-120-p04t04:13669] Failing at address: 0x60
+[qb2-120-p04t04:13669] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x7cb1543d3520]
+[qb2-120-p04t04:13669] [ 1] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZNK2tt8tt_metal12MetalContext3halEv+0xe)[0x7cb120fe795e]
+[qb2-120-p04t04:13669] [ 2] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZNK2tt8tt_metal6Kernel22binaries_exist_on_diskEPKNS0_7IDeviceERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE+0x36)[0x7cb120e7e786]
+[qb2-120-p04t04:13669] [ 3] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal14EthernetKernel13read_binariesEPNS0_7IDeviceERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEE+0x20)[0x7cb120e82820]
+[qb2-120-p04t04:13669] [ 4] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xa0c38f)[0x7cb120e1f38f]
+[qb2-120-p04t04:13669] [ 5] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xc777b8)[0x7cb12108a7b8]
+[qb2-120-p04t04:13669] [ 6] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xc7773e)[0x7cb12108a73e]
+[qb2-120-p04t04:13669] [ 7] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x83142f)[0x7cb120c4442f]
+[qb2-120-p04t04:13669] [ 8] /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8)[0x7cb15442aea8]
+[qb2-120-p04t04:13669] [ 9] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x831289)[0x7cb120c44289]
+[qb2-120-p04t04:13669] [10] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xc7758e)[0x7cb12108a58e]
+[qb2-120-p04t04:13669] [11] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail5asyncIRKSt8functionIFvvEEJEEEDaOT_DpOT0_+0x1b9)[0x7cb121084239]
+[qb2-120-p04t04:13669] [12] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal17launch_build_stepERKSt8functionIFvvEERSt6vectorISt13shared_futureIvESaIS8_EE+0x18)[0x7cb121068e08]
+[qb2-120-p04t04:13669] [13] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl7compileEPNS0_7IDeviceEb+0x62c)[0x7cb120e062ec]
+[qb2-120-p04t04:13669] [14] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt9tt_fabric36create_and_compile_tt_fabric_programEPNS_8tt_metal7IDeviceE+0xc7)[0x7cb12135f287]
+[qb2-120-p04t04:13669] [15] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt9tt_fabric33create_and_compile_fabric_programEPNS_8tt_metal7IDeviceE+0x44)[0x7cb12135f374]
+[qb2-120-p04t04:13669] [16] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(_ZN2tt8tt_metal6Device14compile_fabricEv+0x1a)[0x7cb120fcf43a]
+[qb2-120-p04t04:13669] [17] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xbe6aac)[0x7cb120ff9aac]
+[qb2-120-p04t04:13669] [18] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x83142f)[0x7cb120c4442f]
+[qb2-120-p04t04:13669] [19] /lib/x86_64-linux-gnu/libc.so.6(+0x99ea8)[0x7cb15442aea8]
+[qb2-120-p04t04:13669] [20] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x831289)[0x7cb120c44289]
+[qb2-120-p04t04:13669] [21] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0xbe68fe)[0x7cb120ff98fe]
+[qb2-120-p04t04:13669] [22] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x991c45)[0x7cb120da4c45]
+[qb2-120-p04t04:13669] [23] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x990750)[0x7cb120da3750]
+[qb2-120-p04t04:13669] [24] /home/container_app_user/tt-metal/build/lib/libtt_metal.so(+0x98fc38)[0x7cb120da2c38]
+[qb2-120-p04t04:13669] [25] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xdc253)[0x7cb13ceb0253]
+[qb2-120-p04t04:13669] [26] /lib/x86_64-linux-gnu/libc.so.6(+0x94a83)[0x7cb154425a83]
+[qb2-120-p04t04:13669] [27] /lib/x86_64-linux-gnu/libc.so.6(clone+0x44)[0x7cb1544b6a94]
+[qb2-120-p04t04:13669] *** End of error message ***

@@ -7,6 +7,7 @@ are tensor parallel; collectives reduce local projections before RMSNorm.
 The caller opens a FABRIC_1D 1x4 mesh and owns paged cache and position tensors.
 """
 
+import os
 from copy import copy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -567,21 +568,41 @@ class _ExpertParallelExperts(OptimizedExperts):
             activation_dtype=None if sliding else ttnn.bfloat8_b,
         )
 
-        def prefill_program(grid, block):
+        self.short_prefill_batch_tokens = int(os.environ.get("GEMMA4_PREFILL_EXPERT_BATCH", "32"))
+        if self.short_prefill_batch_tokens not in (32, 64, 128):
+            raise ValueError("GEMMA4_PREFILL_EXPERT_BATCH must be 32, 64 or 128")
+        prefill_gate_k = int(os.environ.get("GEMMA4_PREFILL_GATE_K", "22"))
+        if prefill_gate_k not in (11, 22, 44, 88):
+            raise ValueError("GEMMA4_PREFILL_GATE_K must be 11, 22, 44 or 88")
+        prefill_down_cores = int(os.environ.get("GEMMA4_PREFILL_DOWN_CORES", "44"))
+        if prefill_down_cores not in (44, 88):
+            raise ValueError("GEMMA4_PREFILL_DOWN_CORES must be 44 or 88")
+
+        def prefill_program(grid, block, rows, columns=1):
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=grid,
                 in0_block_w=block,
                 out_subblock_h=1,
-                out_subblock_w=1,
+                out_subblock_w=columns,
                 out_block_h=1,
-                out_block_w=1,
-                per_core_M=1,
-                per_core_N=1,
+                out_block_w=columns,
+                per_core_M=rows // 32,
+                per_core_N=columns,
                 fuse_batch=False,
                 mcast_in0=True,
             )
 
-        self.prefill_configs = {32: (prefill_program((11, 4), 11), prefill_program((11, 8), 22))}
+        self.prefill_configs = {
+            rows: (
+                prefill_program((11, 4), prefill_gate_k if rows == 32 else (11 if sliding else 22), rows),
+                (
+                    prefill_program((11, 4), 22, rows, 2)
+                    if rows == 32 and prefill_down_cores == 44
+                    else prefill_program((11, 8), 22, rows)
+                ),
+            )
+            for rows in range(32, self.short_prefill_batch_tokens + 1, 32)
+        }
         self.mix_memory = ttnn.L1_MEMORY_CONFIG
         self.mix_program = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(11, 8),
@@ -603,8 +624,24 @@ class _ExpertParallelExperts(OptimizedExperts):
                 mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            for rows in (1, 32)
+            for rows in (1, *range(32, self.short_prefill_batch_tokens + 1, 32))
         }
+
+    def __call__(self, x, routing):
+        if x.shape[-2] == 1:
+            return self._chunk(x, routing, True)
+        width = self.prefill_batch_tokens
+        # Wider batches are an explicit experiment override. Full-model S128
+        # selects32; keep tiny inputs and long chunks on that established path.
+        if 128 <= x.shape[-2] <= 256:
+            width = max(width, self.short_prefill_batch_tokens)
+        outputs = [
+            self._chunk(
+                x[:, :, i : min(i + width, x.shape[-2]), :], routing[:, :, i : min(i + width, x.shape[-2]), :], False
+            )
+            for i in range(0, x.shape[-2], width)
+        ]
+        return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
 
     def _chunk(self, x, routing, decode):
         # Ownership IDs address the replicated router output, not local weights.
@@ -944,14 +981,16 @@ class MultichipDecoder(OptimizedDecoder):
         experts = OptimizedExperts(
             packed,
             gate_dtype=expert_gate_dtype,
-            down_dtype=ttnn.bfloat4_b
-            if precision_config is None
-            else policy_dtype(precision_config["expert_down_dtype"]),
+            down_dtype=(
+                ttnn.bfloat4_b if precision_config is None else policy_dtype(precision_config["expert_down_dtype"])
+            ),
             block_w=6,
             gate_block_w=44,
-            fidelity=ttnn.MathFidelity.LoFi
-            if precision_config is None
-            else policy_fidelity(precision_config["expert_fidelity"]),
+            fidelity=(
+                ttnn.MathFidelity.LoFi
+                if precision_config is None
+                else policy_fidelity(precision_config["expert_fidelity"])
+            ),
             mesh_device=mesh_device,
             active_prefill=True,
             prefill_tokens=32,
@@ -959,9 +998,9 @@ class MultichipDecoder(OptimizedDecoder):
             prefill_down_dtype=ttnn.bfloat4_b,
             prefill_fidelity=ttnn.MathFidelity.LoFi,
             expert_fused_gelu=True,
-            activation_dtype=ttnn.bfloat8_b
-            if precision_config is None
-            else policy_dtype(precision_config["expert_input_dtype"]),
+            activation_dtype=(
+                ttnn.bfloat8_b if precision_config is None else policy_dtype(precision_config["expert_input_dtype"])
+            ),
         )
 
         if sliding:

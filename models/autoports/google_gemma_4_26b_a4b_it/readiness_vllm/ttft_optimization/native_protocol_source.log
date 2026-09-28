@@ -1,0 +1,85 @@
+8938b64b273470a3b3fb3b5d8bbd22e8ab4df7640295f55435ac4384283ec589  /home/container_app_user/tt-metal/python_env/lib/python3.10/site-packages/vllm/benchmarks/serve.py
+    print("Starting initial single prompt test run...")
+    test_prompt, test_prompt_len, test_output_len, test_mm_content = (
+        input_requests[0].prompt,
+        input_requests[0].prompt_len,
+        input_requests[0].expected_output_len,
+        input_requests[0].multi_modal_data,
+    )
+    test_extra_body = _merge_overrides(extra_body, input_requests[0].request_overrides)
+    test_chat_messages = input_requests[0].chat_messages
+
+    assert (
+        test_mm_content is None
+        or isinstance(test_mm_content, dict)
+        or (
+            isinstance(test_mm_content, list)
+            and all(isinstance(item, dict) for item in test_mm_content)
+        )
+    ), "multi_modal_data must be a dict or list[dict]"
+    test_input = RequestFuncInput(
+        model=model_id,
+        model_name=model_name,
+        prompt=test_prompt,
+        api_url=api_url,
+        prompt_len=test_prompt_len,
+        output_len=test_output_len,
+        logprobs=logprobs,
+        multi_modal_content=test_mm_content,
+        ignore_eos=ignore_eos,
+        extra_headers=extra_headers,
+        extra_body=test_extra_body,
+        chat_messages=test_chat_messages,
+    )
+
+    if ready_check_timeout_sec > 0:
+        test_output = await wait_for_endpoint(
+            request_func,
+            test_input,
+            session,
+            timeout_seconds=ready_check_timeout_sec,
+        )
+        if not test_output.success:
+            raise ValueError(
+                "Initial test run failed - Please make sure benchmark "
+                "arguments are correctly specified. "
+                f"Error: {test_output.error}"
+            )
+        else:
+            print("Initial test run completed.")
+    else:
+        print("Skipping endpoint ready check.")
+
+    if num_warmups > 0:
+        print(f"Warming up with {num_warmups} requests...")
+        warmup_pbar = None if disable_tqdm else tqdm(total=num_warmups)
+        warmup_semaphore = (
+            asyncio.Semaphore(max_concurrency)
+            if max_concurrency
+            else contextlib.nullcontext()
+        )
+        warmup_tasks = []
+
+        async def warmup_limited_request_func():
+            async with warmup_semaphore:
+                return await request_func(
+                    request_func_input=test_input, session=session, pbar=warmup_pbar
+                )
+
+        for _ in range(num_warmups):
+            request_task = asyncio.create_task(warmup_limited_request_func())
+            warmup_tasks.append(request_task)
+        _ = await asyncio.gather(*warmup_tasks)
+
+        if warmup_pbar is not None:
+            warmup_pbar.close()
+        print("Warmup run completed.")
+
+    print("Starting main benchmark run...")
+
+    lora_modules_iter: Iterator[str] | None = None
+    if lora_modules:
+        lora_modules_list = list(lora_modules)
+        if lora_assignment == "round-robin":
+            # Deterministic round-robin assignment across requests.
+            lora_modules_iter = iter(

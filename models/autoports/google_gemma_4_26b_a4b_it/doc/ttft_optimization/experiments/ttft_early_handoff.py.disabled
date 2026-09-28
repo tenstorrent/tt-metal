@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Rejected experiment: one-shot host yield before the next runner input build."""
+
+import functools
+import time
+
+
+def install(model):
+    from vllm_tt_plugin.model_runner import TTModelRunner
+
+    pending = False
+    prefill = model.prefill_forward
+    execute = TTModelRunner.execute_model
+
+    @functools.wraps(prefill)
+    def wrapped_prefill(*args, **kwargs):
+        nonlocal pending
+        pending = False
+        result = prefill(*args, **kwargs)
+        state = model.generator.prefill_prepared
+        pending = state is not None and state["key"][0] <= 1024
+        return result
+
+    @functools.wraps(execute)
+    def wrapped_execute(runner, *args, **kwargs):
+        nonlocal pending
+        if runner.model is model and pending:
+            pending = False
+            time.sleep(0)
+        return execute(runner, *args, **kwargs)
+
+    model.prefill_forward = wrapped_prefill
+    TTModelRunner.execute_model = wrapped_execute

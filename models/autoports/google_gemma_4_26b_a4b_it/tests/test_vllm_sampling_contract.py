@@ -206,6 +206,8 @@ def _compat_adapter(monkeypatch):
     monkeypatch.setenv("GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING", "1")
     generator = Mock()
     generator.mesh = None
+    generator.prefill_trace_enabled = False
+    generator.prefill_prepared = None
     generator.model.layer_indices = (0, 1)
     generator.counters = {"token_readbacks": 0, "full_logits_readbacks": 0}
     return AutoportGemma4ForCausalLM(generator, 3), generator
@@ -296,6 +298,7 @@ def test_device_host_device_transition_reconfigures_without_changing_device_defa
 @pytest.mark.parametrize("return_logits", [False, True])
 def test_generator_capture_and_replay_only_sample_in_token_mode(monkeypatch, return_logits):
     gen = Gemma4Generator.__new__(Gemma4Generator)
+    gen.prefill_prepared = None
     gen.mesh = object()
     gen.trace_debug = False
     gen.sampled_mode = True
@@ -541,7 +544,8 @@ def test_prefill_penalty_mask_excludes_padding_and_stale_tokens(monkeypatch, pad
     penalties._copy_int_host_to_device = Mock()
     sampler = SimpleNamespace(_penalties_active=True, tt_penalties=penalties)
 
-    def configure(params, *, prompt_tokens):
+    def configure(params, *, prompt_tokens, _reuse_trace=False):
+        assert not _reuse_trace
         SamplingGenerator.reset_prompt_tokens(sampler, prompt_tokens)
 
     generator.configure_sampling.side_effect = configure

@@ -1,0 +1,30 @@
+{
+  "status": "local_controls_pass_remote_qualification_separate",
+  "model": "google/gemma-4-26B-A4B-it",
+  "revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "tokenizer_class": "GemmaTokenizer",
+  "prompt_mode": "chat",
+  "selected_replay": "../../readiness_vllm/ttft_optimization/acceptance_sync_chat_replay.json",
+  "selected_replay_sha256": "b571ddc123d921f162723d964eb58a2119d0e24518cfdd075bd9ad86b9a519e2",
+  "legacy_replay": "../../readiness_vllm/ttft_optimization/legacy_chat_replay.json",
+  "legacy_replay_sha256": "a3c816873d599c15f9a312bf5a2cbe021ea900e8e38ea43d57032f7caa98c58f",
+  "prompts": 6,
+  "greedy_requests": 18,
+  "all_greedy_match_suite_and_legacy": true,
+  "rendered_prompt_ids_equal_legacy": true,
+  "all_greedy_prompt_usage_matches_rendered_ids": true,
+  "sampled_seed": 71,
+  "sampled_temperature": 0.7,
+  "sampled_top_p": 0.9,
+  "all_six_sampled_text_finish_usage_dictionaries_equal_legacy": true,
+  "greedy_length_capped_prompt_indices": [1, 2, 3, 5],
+  "greedy_stop_completion_tokens_by_index": {"0": 19, "4": 100},
+  "max_tokens": 256,
+  "sampling_suite": {"passed": 72, "skipped": 1, "seconds": 1114.96},
+  "limitations": [
+    "Matched parity does not prove factual accuracy or equivalence for every unseeded draw",
+    "Inherited malformed wording, thermodynamics overstatement and Fibonacci description mismatch remain",
+    "Four longer greedy answers terminate at the output cap",
+    "Separate trace lifecycle tests establish eligibility and replay; chat parity alone is not proof of trace execution"
+  ]
+}

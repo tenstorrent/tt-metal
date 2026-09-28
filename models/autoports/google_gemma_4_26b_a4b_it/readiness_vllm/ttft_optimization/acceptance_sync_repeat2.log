@@ -1,0 +1,16 @@
+RUN s32-o16-c1.json
+{"completed": 10, "median_ttft_ms": 48.76292264088988, "p99_ttft_ms": 53.461813535541296, "mean_tpot_ms": 20.59434946626425, "median_itl_ms": 20.209545269608498}
+RUN s33-o16-c1.json
+{"completed": 10, "median_ttft_ms": 63.08189686387777, "p99_ttft_ms": 65.43063250370324, "mean_tpot_ms": 20.49394955858588, "median_itl_ms": 20.14346793293953}
+RUN s64-o16-c1.json
+{"completed": 10, "median_ttft_ms": 65.64928172156215, "p99_ttft_ms": 69.31845087558031, "mean_tpot_ms": 20.53408199300368, "median_itl_ms": 20.214658696204424}
+RUN s127-o16-c1.json
+{"completed": 10, "median_ttft_ms": 96.5158361941576, "p99_ttft_ms": 98.89001831412315, "mean_tpot_ms": 20.74719948073228, "median_itl_ms": 20.355721935629845}
+RUN s128-o16-c1.json
+{"completed": 10, "median_ttft_ms": 95.59244383126497, "p99_ttft_ms": 102.06768930889666, "mean_tpot_ms": 20.4094462407132, "median_itl_ms": 20.153175573796034}
+RUN s129-o16-c1.json
+{"completed": 10, "median_ttft_ms": 109.50046870857477, "p99_ttft_ms": 113.4438000805676, "mean_tpot_ms": 20.43481543660164, "median_itl_ms": 20.170872565358877}
+RUN s256-o16-c1.json
+{"completed": 10, "median_ttft_ms": 156.89670480787754, "p99_ttft_ms": 159.17378580197692, "mean_tpot_ms": 20.44416636228561, "median_itl_ms": 20.211856346577406}
+RUN s128-o128-c1.json
+{"completed": 3, "median_ttft_ms": 95.02796083688736, "p99_ttft_ms": 97.45022714138031, "mean_tpot_ms": 20.27224039223798, "median_itl_ms": 20.08731570094824}
