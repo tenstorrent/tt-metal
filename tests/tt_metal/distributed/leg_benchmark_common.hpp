@@ -40,7 +40,7 @@ struct LatencySummary {
     double avg_us = 0.0;
     double min_us = 0.0;
     double max_us = 0.0;
-    double p50_us = 0.0;
+    double median_us = 0.0;
     double p99_us = 0.0;
     double avg_cycles = 0.0;
     uint64_t min_cycles = 0;
@@ -65,7 +65,7 @@ inline LatencySummary summarize_latency_cycles(const std::vector<uint64_t>& cycl
         .avg_us = to_us(avg_c),
         .min_us = to_us(static_cast<double>(sorted.front())),
         .max_us = to_us(static_cast<double>(sorted.back())),
-        .p50_us = to_us(static_cast<double>(sorted[sorted.size() / 2])),
+        .median_us = to_us(static_cast<double>(sorted[sorted.size() / 2])),
         .p99_us = to_us(static_cast<double>(sorted[(sorted.size() * 99) / 100])),
         .avg_cycles = avg_c,
         .min_cycles = sorted.front(),
@@ -91,7 +91,7 @@ inline LatencySummary summarize_latency_us(const std::vector<double>& us_values,
         .avg_us = avg_us,
         .min_us = sorted.front(),
         .max_us = sorted.back(),
-        .p50_us = sorted[sorted.size() / 2],
+        .median_us = sorted[sorted.size() / 2],
         .p99_us = sorted[(sorted.size() * 99) / 100],
         .avg_cycles = avg_us * cycles_per_us,
         .min_cycles = static_cast<uint64_t>(sorted.front() * cycles_per_us),
@@ -115,11 +115,48 @@ inline void set_latency_counters(
     state.counters[prefix + "avg_us"] = s.avg_us;
     state.counters[prefix + "min_us"] = s.min_us;
     state.counters[prefix + "max_us"] = s.max_us;
-    state.counters[prefix + "p50_us"] = s.p50_us;
+    state.counters[prefix + "median_us"] = s.median_us;
     state.counters[prefix + "p99_us"] = s.p99_us;
     state.counters[prefix + "avg_cycles"] = s.avg_cycles;
     state.counters[prefix + "min_cycles"] = static_cast<double>(s.min_cycles);
     state.counters[prefix + "max_cycles"] = static_cast<double>(s.max_cycles);
+}
+
+// Mean and median over the SAME series, so the pair says how far a tail is pulling the
+// mean rather than comparing two different populations.
+template <typename T>
+inline double mean_of(const std::vector<T>& v) {
+    if (v.empty()) {
+        return 0.0;
+    }
+    double t = 0.0;
+    for (const T x : v) {
+        t += static_cast<double>(x);
+    }
+    return t / static_cast<double>(v.size());
+}
+
+template <typename T>
+inline double median_of(std::vector<T> v) {
+    if (v.empty()) {
+        return 0.0;
+    }
+    std::sort(v.begin(), v.end());
+    return static_cast<double>(v[v.size() / 2]);
+}
+
+// The one scalar no leg emitted: a steady-state duration. Without it nothing in the CSV can
+// be divided by a message count, and a per-message cost is exactly that division.
+inline void set_work_counters(benchmark::State& state, double secs, uint64_t msgs, uint64_t wire_bytes) {
+    if (secs <= 0.0 || msgs == 0) {
+        return;
+    }
+    const double m = static_cast<double>(msgs);
+    state.counters["steady_secs"] = secs;
+    state.counters["amortized_us_per_msg"] = secs * 1e6 / m;
+    // Payload-only throughput hides the 64 B trailer, and that bias is 64/payload -- monotone
+    // in the page-size sweep axis, so without this the sweep partly measures its own accounting.
+    state.counters["wire_gbps"] = m * static_cast<double>(wire_bytes) / 1e9 / secs;
 }
 
 inline double us_since(std::chrono::steady_clock::time_point t) {

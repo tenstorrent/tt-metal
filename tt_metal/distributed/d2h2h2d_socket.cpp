@@ -59,6 +59,11 @@ std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
     im.cfg = cfg;
     if (cfg.collect_timing) {
         im.published.resize(cfg.cores);
+        // Reserved so the push_backs below never realloc inside poll(), and so reset_timing()
+        // at the warmup boundary does not hand the measured window a fresh empty vector.
+        im.timing.d2h_issue_cycles.reserve(1u << 20);
+        im.timing.d2h_stall_cycles.reserve(1u << 20);
+        im.timing.h2d_publish_to_drained_ns.reserve(1u << 20);
     }
     const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
 
@@ -252,6 +257,28 @@ uint32_t D2H2H2DSocket::poll() {
         im.timing.h2d_drain_ns += ns_since(h2d_t0);
     }
     return progress;
+}
+
+void D2H2H2DSocket::reset_timing() {
+    Impl& im = *impl_;
+    // clear(), not Timing{}: assigning a fresh struct frees the reserves above and the
+    // vectors would then double-and-copy inside poll() across the measured window.
+    im.timing.d2h_issue_cycles.clear();
+    im.timing.d2h_stall_cycles.clear();
+    im.timing.h2h_put_to_credit_ns.clear();
+    im.timing.h2d_publish_to_drained_ns.clear();
+    im.timing.poll_calls = 0;
+    im.timing.d2h_poll_ns = 0;
+    im.timing.h2h_poll_ns = 0;
+    im.timing.h2d_drain_ns = 0;
+    // The pending publish stamps go too: a frame published before the boundary and drained
+    // after it belongs to neither window, so its sample is dropped rather than misdated.
+    for (auto& q : im.published) {
+        q.clear();
+    }
+    if (im.h2h) {
+        im.h2h->reset_stats();
+    }
 }
 
 const L1MapUVA& D2H2H2DSocket::l1() const { return impl_->l1; }
