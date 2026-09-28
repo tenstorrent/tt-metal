@@ -15,6 +15,13 @@ _TOPP_PREFIX = 2048
 
 @dataclass(frozen=True)
 class SpecSamplingParams:
+    """Scalar sampling knobs for spec decode, validated on construction.
+
+    Deliberately not models.common.sampling.SamplingParams: that one is batched (every field may
+    be a list) and carries frequency_penalty/repetition_penalty/log-prob knobs this sampler does
+    not implement, so accepting it would silently ignore them.
+    """
+
     temperature: float  # > 0; 0 is the caller's greedy path
     top_k: int = 0  # 0 disables
     top_p: float = 1.0  # 1.0 disables; must be in (0, 1]

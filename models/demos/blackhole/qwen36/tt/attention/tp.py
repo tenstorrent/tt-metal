@@ -254,23 +254,6 @@ class TPAttention:
         ttnn.deallocate(qkv)
         return qkv3, gate, None
 
-    def _kv_update_shard_cfg(self, n, HD):
-        """HEIGHT-sharded n-row paged_update_cache input: one 32-row tile per core."""
-        cache = getattr(self, "_kvu_cfg_cache", None)
-        if cache is None:
-            cache = self._kvu_cfg_cache = {}
-        if n not in cache:
-            gx = self.mesh.compute_with_storage_grid_size().x
-            assert n <= gx, f"exact-KV write needs n({n}) <= grid width({gx}); use a smaller draft len"
-            cache[n] = ttnn.create_sharded_memory_config(
-                shape=(tpc.TILE_SIZE, HD),
-                core_grid=ttnn.CoreGrid(x=n, y=1),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        return cache[n]
-
     def _col_proj(self, x, weight, decode_progcfg, prefill_progcfg_fn=None):
         """Column-parallel projection. prefill_progcfg_fn overrides only the prefill branch."""
         if not self._dram_sharded:
@@ -816,7 +799,7 @@ class TPAttention:
                 # Aliased page-table rows must be written one row at a time. Slice the interleaved tensor, not the sharded one.
                 k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
                 v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-                _sc1 = self._kv_update_shard_cfg(1, HD)
+                _sc1 = self._kv_shard_cfg(1)
                 _nb = page_table.shape[-1]
                 for i in range(B):
                     # A full-span ttnn.slice aliases its input and must not be deallocated.
@@ -901,37 +884,29 @@ class TPAttention:
                     f"spec_verify_mode at T={B} needs a {_spec_groups}-row page table (one aliased row "
                     f"per candidate group), got {None if spec_page_table is None else spec_page_table.shape}"
                 )
-                _spec_rows = _spec_tiles * ttnn.TILE_SIZE
-                _spec_shape = ttnn.Shape([1, _spec_groups, _spec_rows, HD])
+                _spec_shape = ttnn.Shape([1, _spec_groups, _spec_tiles * ttnn.TILE_SIZE, HD])
                 q = ttnn.reshape(q, _spec_shape, _spec_shape)
-                attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                    q,
-                    keys,
-                    values,
-                    page_table_tensor=spec_page_table,
-                    cur_pos_tensor=cur_pos_tt,
-                    scale=self.scale,
-                    program_config=_spec_cfg,
-                    memory_config=_L1,
-                    spec_multi_pos_tiles=_spec_tiles,
-                )
-                ttnn.deallocate(q)
+                # Spec mode differs only in the page table, the progcfg and the group width.
+                _pt, _cfg, _tiles = spec_page_table, _spec_cfg, _spec_tiles
+            else:
+                _pt, _cfg, _tiles = page_table, sdpa_dec_cfg, 0  # 0 == the op's non-spec default
+            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                keys,
+                values,
+                page_table_tensor=_pt,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=_cfg,
+                # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
+                # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
+                memory_config=_L1,
+                spec_multi_pos_tiles=_tiles,
+            )
+            ttnn.deallocate(q)
+            if _spec_plan is not None:
                 # Output is byte-identical to the legacy [1,B,32,HD]; view it back (same alias trick).
                 attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
-            else:
-                attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                    q,
-                    keys,
-                    values,
-                    page_table_tensor=page_table,
-                    cur_pos_tensor=cur_pos_tt,
-                    scale=self.scale,
-                    program_config=sdpa_dec_cfg,
-                    # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
-                    # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
-                    memory_config=_L1,
-                )
-                ttnn.deallocate(q)
         else:
             # Wormhole reshards the single-head slice directly; Blackhole pads to 32.
             if k.is_sharded():
@@ -1061,7 +1036,7 @@ class TPAttention:
             ttnn.deallocate(k_d)
             ttnn.deallocate(v_d)
             # Identical page-table rows must be written one row at a time. Slice the interleaved tensor.
-            _sc1 = self._kv_update_shard_cfg(1, HD)
+            _sc1 = self._kv_shard_cfg(1)
             for i in range(n):
                 if n == 1:
                     # A full-span slice aliases the input; leave its lifetime to the caller.

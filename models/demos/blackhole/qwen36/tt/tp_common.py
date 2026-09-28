@@ -979,34 +979,6 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
     return torch.cat(shards, dim=0)
 
 
-def tuned_vocab_all_gather(
-    input_tensor, mesh_device, tt_ccl, dim, topology, num_workers_per_link, chunks_per_sync, dtype=ttnn.bfloat16
-):
-    """Vocab all-gather with tunable workers. dtype must match the logits; the drafter gathers fp32."""
-    if list(mesh_device.shape) == [1, 1]:
-        return input_tensor
-    num_links = tt_ccl.get_num_links(None)
-    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-    if input_tensor.dtype != dtype:
-        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, dtype)
-    gathered = ttnn.experimental.all_gather_async(
-        input_tensor,
-        persistent_output_buffer=None,
-        dim=dim,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        num_links=num_links,
-        topology=topology,
-        memory_config=None,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=2,
-        subdevice_id=None,
-    )
-    input_tensor.deallocate(True)
-    return gathered
-
-
 def fc_decode_program_config(mesh_device, k, n):
     """1-tile-tall decode matmul config for k >> n, or None when the shape does not fit."""
     kt, nt = k // 32, n // 32
@@ -1017,20 +989,8 @@ def fc_decode_program_config(mesh_device, k, n):
     cores = nt // per_core_n
     if cores > grid.x * grid.y:
         return None
-    in0_block_w = max((d for d in range(1, 33) if kt % d == 0), default=1)
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True)
-        .bounding_box()
-        .grid_size(),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=per_core_n,
-        per_core_M=1,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+    # cap 32, not the default 8: this matmul streams the full K per core and was tuned at that block.
+    return create_matmul_1d_decode_progcfg(TILE_SIZE, k, n, cores, grid_w=grid.x, in0_block_w_cap=32)
 
 
 def tiny_all_gather(input_tensor, mesh_device, tt_ccl, dim, topology, dtype):

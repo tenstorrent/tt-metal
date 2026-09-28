@@ -18,7 +18,14 @@ def fused_recurrent_gated_delta_rule_ttnn(
     high_precision=True,
 ):
     """Fused recurrent gated delta rule. Returns (o [B, T, H, V], final or per-token state)."""
-    Kd = q.shape[-1]
+    B, H, Kd = q.shape[0], q.shape[2], q.shape[-1]
+    if device is not None:
+        # The device op places one head per core and TT_FATALs deep in the program factory
+        # otherwise; check it here so the failure names the caller's shape.
+        cores = device.compute_with_storage_grid_size()
+        assert (
+            B * H <= cores.x * cores.y
+        ), f"fused recurrent GDN needs B*H ({B}*{H}={B * H}) <= {cores.x * cores.y} compute cores"
     if scale is None:
         scale = Kd**-0.5
     if high_precision:

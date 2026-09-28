@@ -200,22 +200,32 @@ class SpeculativeDecoder:
             ttnn.deallocate(h_next)
             self.mtp_extra_steps += 1
 
+    def _reseed_rows(self, slot0, tokens, T):
+        """Row inputs for one T-row reseed window, shared by the eager, traced and capture paths.
+
+        Real rows alias the sequence; padding rows use the scratch block at position 0. Returns
+        (tok, pos, pt, cos, sin); cos/sin are device tensors the caller deallocates.
+        """
+        m = len(tokens)
+        assert m <= T, f"reseed {m} slots into a {T}-row batch"
+        nb = len(self._pt_row)
+        tok = [int(t) for t in tokens] + [0] * (T - m)
+        pos = list(range(slot0, slot0 + m)) + [0] * (T - m)
+        pt = self._pt_row * m + [self._reseed_scratch_block] * (nb * (T - m))
+        # cos/sin are gathered ON DEVICE off the resident rope table (no host trig, no upload).
+        cos, sin = self.model._rope_tp_cos_sin_decode_rows(pos)
+        return tok, pos, pt, cos, sin
+
     def _reseed_mtp_batched(self, slot0, vhidden, tokens, scratch_only=False):
         """Reseed all verify rows in one forward; padding rows write a scratch block, not the sequence."""
         m = 0 if scratch_only else len(tokens)
         if m == 0 and not scratch_only:
             return
         T = vhidden.shape[-2]
-        assert m <= T, f"reseed {m} slots into a {T}-row batch"
         mesh = self.mesh
         nb = len(self._pt_row)
         rm = ttnn.ROW_MAJOR_LAYOUT
-        # Real rows alias the sequence; padding rows use the scratch block at position 0.
-        tok = [int(t) for t in tokens[:m]] + [0] * (T - m)
-        pos = list(range(slot0, slot0 + m)) + [0] * (T - m)
-        pt = self._pt_row * m + [self._reseed_scratch_block] * (nb * (T - m))
-        # cos/sin are gathered ON DEVICE off the resident rope table (no host trig, no upload).
-        cos, sin = self.model._rope_tp_cos_sin_decode_rows(pos)
+        tok, pos, pt, cos, sin = self._reseed_rows(slot0, tokens[:m], T)
         if self._reseed_traced:
             self.mtp.stage_reseed_window(tok, pos, pt, cos, sin)
             ttnn.deallocate(cos)
@@ -280,17 +290,45 @@ class SpeculativeDecoder:
         self._p_draft_n += len(p_draft)
         return m, next_tok
 
-    def _verify(self, tokens, p):
-        """Replay the verify trace; returns (argmax ids, hidden rows, logits or None)."""
-        lt, vhidden, ids = self.model.verify_traced(
-            tokens,
-            p + 1,
-            read_logits=self.read_verify_logits,
-            clone_rows=False,
-            page_table=self._pt_row,
-            logits_topk=self._logits_topk,
-        )
-        return ids, vhidden, lt
+    def _verify(self, tokens, p, timed=False):
+        """Replay the verify trace; returns (argmax ids, hidden rows, logits or None, device_s, readback_s).
+
+        timed hooks get_device_tensors, which verify_traced calls only once the trace has finished,
+        to split the host readback out of the device time. Both timings are 0.0 when it is off.
+        """
+
+        def _run():
+            lt, vhidden, ids = self.model.verify_traced(
+                tokens,
+                p + 1,
+                read_logits=self.read_verify_logits,
+                clone_rows=False,
+                page_table=self._pt_row,
+                logits_topk=self._logits_topk,
+            )
+            return ids, vhidden, lt
+
+        if not timed:
+            return (*_run(), 0.0, 0.0)
+
+        orig = ttnn.get_device_tensors
+        mark = []
+
+        def hooked(*a, **kw):
+            if not mark:
+                mark.append(time.perf_counter())
+            return orig(*a, **kw)
+
+        ttnn.get_device_tensors = hooked
+        t0 = time.perf_counter()
+        try:
+            out = _run()
+        finally:
+            ttnn.get_device_tensors = orig
+        ttnn.synchronize_device(self.mesh)
+        t1 = time.perf_counter()
+        t_mark = mark[0] if mark else t1
+        return (*out, t_mark - t0, t1 - t_mark)
 
     def _commit(self, mi):
         """Point durable GDN state at accepted-prefix slot mi; mi == K is a host-only early-out."""
@@ -352,27 +390,6 @@ class SpeculativeDecoder:
         """Fence the device, then take a host timestamp."""
         ttnn.synchronize_device(self.mesh)
         return time.perf_counter()
-
-    def _verify_split(self, tokens, p):
-        """Split verify device time from the host readback; returns (ids, hidden, logits, device_s, readback_s)."""
-        orig = ttnn.get_device_tensors
-        mark = []
-
-        def hooked(*a, **kw):
-            if not mark:
-                mark.append(time.perf_counter())
-            return orig(*a, **kw)
-
-        ttnn.get_device_tensors = hooked
-        t0 = time.perf_counter()
-        try:
-            vids, vhidden, vlt = self._verify(tokens, p)
-        finally:
-            ttnn.get_device_tensors = orig
-        ttnn.synchronize_device(self.mesh)
-        t1 = time.perf_counter()
-        t_mark = mark[0] if mark else t1
-        return vids, vhidden, vlt, t_mark - t0, t1 - t_mark
 
     def _log_iter_timing(self, row):
         """Log one iteration and fold it into the mean, excluding the first two iterations."""
@@ -503,17 +520,9 @@ class SpeculativeDecoder:
             and self.traced_reseed
             and getattr(model, "_vfy_rows_out", None) is not None
         ):
-            # Padding rows target the scratch block; capture reads the verify trace's persistent rows buffer.
-            _T = self.K + 1
-            _zeros = [0] * _T
-            _cos, _sin = self.model._rope_tp_cos_sin_decode_rows(_zeros)
-            self.mtp.stage_reseed_window(
-                _zeros,
-                _zeros,
-                [self._reseed_scratch_block] * (_T * len(self._pt_row)),
-                _cos,
-                _sin,
-            )
+            # All-padding window: capture reads the verify trace's persistent rows buffer.
+            _tok, _pos, _pt, _cos, _sin = self._reseed_rows(0, [], self.K + 1)
+            self.mtp.stage_reseed_window(_tok, _pos, _pt, _cos, _sin)
             ttnn.deallocate(_cos)
             ttnn.deallocate(_sin)
             self.mtp.compile_reseed_window(model._vfy_rows_out)
@@ -542,10 +551,10 @@ class SpeculativeDecoder:
 
             # committed = [pending] + drafts[:m]; commit selects the accepted GDN slot.
             if self._timing:
-                vids, vhidden, vlt, _s_verify, _s_read = self._verify_split([pending] + drafts, p)
+                vids, vhidden, vlt, _s_verify, _s_read = self._verify([pending] + drafts, p, timed=True)
                 _t_verify = time.perf_counter()
             else:
-                vids, vhidden, vlt = self._phase("verify", lambda: self._verify([pending] + drafts, p))
+                vids, vhidden, vlt, _, _ = self._phase("verify", lambda: self._verify([pending] + drafts, p))
             # Sampling returns next_token; greedy reads it from vids[mi].
             sampled_next = None
             if self.sampler is not None:

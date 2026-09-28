@@ -323,7 +323,8 @@ def test_demo_text(
         text = tokenizer.decode(generated, skip_special_tokens=True)
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
-        assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
+        # Spec decode stops early at EOS, so this is an upper bound, not an equality.
+        assert 0 < len(generated) <= max_generated_tokens, f"{len(generated)} not in (0, {max_generated_tokens}]"
         _assert_output_quality(text, len(generated), seqlen)
         # Perf JSON for CI target check (validate_perf_targets.py)
         _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
@@ -499,7 +500,15 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")
     profiler.start("compile_decode")
-    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len, sampling=sampling)
+    # Without stop_tokens spec decode runs past EOS, unlike the plain decode path below.
+    _eos = getattr(tokenizer, "eos_token_id", None)
+    dec = SpeculativeDecoder(
+        model,
+        page_table,
+        draft_len=draft_len,
+        stop_tokens={_eos} if _eos is not None else None,
+        sampling=sampling,
+    )
     dec.generate(prompt_ids, min(6, max_generated_tokens))
     profiler.end("compile_decode")
 

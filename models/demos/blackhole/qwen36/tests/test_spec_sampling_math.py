@@ -355,3 +355,41 @@ def test_presence_penalty_zero_is_noop():
         got = with_set.accept(logits, drafts, penalize_base)
         want = without_set.accept(logits, drafts)
         assert got == want, f"case {case}: {got} != {want}"
+
+
+def _degenerate_sampler(vocab=64):
+    return SpecSampler(SpecSamplingParams(1.0, 8, 0.95, seed=5), vocab)
+
+
+def test_recover_degrades_to_draft_when_support_is_one_token():
+    """Zero residual with a single-token support: nothing else to draw, so the draft comes back."""
+    s = _degenerate_sampler()
+    dist = (torch.tensor([5], dtype=torch.int64), torch.tensor([1.0]))
+    assert s._recover(dist, draft=5) == 5
+
+
+def test_recover_picks_the_other_token_when_residual_underflows():
+    """Zero residual but a wider support: fall back to the best token that is not the draft."""
+    s = _degenerate_sampler()
+    dist = (torch.tensor([5, 7], dtype=torch.int64), torch.tensor([1.0, 0.0]))
+    assert s._recover(dist, draft=5) == 7
+
+
+def test_recover_uses_argmax_when_the_draft_was_truncated_away():
+    """Draft outside the support and no residual mass: return the support's most likely token."""
+    s = _degenerate_sampler()
+    dist = (torch.tensor([5, 7], dtype=torch.int64), torch.tensor([0.0, 0.0]))
+    assert s._recover(dist, draft=9) == 5
+
+
+def test_accept_survives_a_one_hot_verify_row():
+    """End to end: a near-deterministic row rejects its draft and still returns a valid token."""
+    vocab, num_drafts = 64, 3
+    logits = torch.full((num_drafts + 1, vocab), -60.0)
+    for row in range(num_drafts + 1):
+        logits[row, row] = 60.0  # one-hot after softmax; every other token underflows to 0
+    drafts = [row + 1 for row in range(num_drafts)]  # never the argmax, so every row rejects
+    m, token, p_draft = _degenerate_sampler(vocab).accept(logits, drafts)
+    assert m == 0, f"a one-hot row should reject its draft, got m={m}"
+    assert 0 <= token < vocab
+    assert p_draft[0] == 0.0, f"draft mass should underflow to 0, got {p_draft[0]}"

@@ -1150,9 +1150,7 @@ class Qwen36Model:
         ttnn.deallocate(last_hidden)
         return logits
 
-    def ttnn_mtp_decode_forward(
-        self, hidden_states, token_id, position, page_table, sharded_lm_head=False, need_logits=True
-    ):
+    def ttnn_mtp_decode_forward(self, hidden_states, token_id, position, page_table, need_logits=True):
         """One MTP draft step at an absolute position (B=1); returns (logits, next_hidden)."""
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
@@ -1181,7 +1179,6 @@ class Qwen36Model:
             cos,
             sin,
             page_table,
-            sharded_lm_head=sharded_lm_head,
             need_logits=need_logits,
         )
 
@@ -1364,7 +1361,7 @@ class Qwen36Model:
         # Prep GDN layers for slot capture (fixed slot bufs; verify writes per-token state into them).
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
         for dn in gdn:
-            dn._ensure_verify_slot_bufs(T)
+            dn._ensure_verify_win(T)
             dn._capture_slots = True
 
         # Compile outside the trace, then snapshot, capture, and restore GDN so values stay at the anchor.
@@ -1518,9 +1515,8 @@ class Qwen36Model:
             ttnn.Tensor(list(range(chunk_start, chunk_start + T)), [T], ttnn.int32, rm), self._vfy_kvpos_buf
         )
 
-        # Re-point slot handles; commit clears them but the traced ops keep the same buffers.
+        # Re-point the state handle; commit clears it but the traced ops keep the same buffer.
         for dn in self._vfy_gdn:
-            dn._verify_slots = dn._slot_bufs
             dn._verify_states = dn._verify_states_buf
             # Replay only advances the conv window, so mark it stale here.
             if dn._win_captured:

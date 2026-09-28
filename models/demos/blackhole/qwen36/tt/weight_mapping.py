@@ -141,33 +141,10 @@ def is_fp8_checkpoint(model_path) -> bool:
 
 
 def load_mtp_tensors(model_path) -> Dict[str, torch.Tensor]:
-    """Read mtp.* from the checkpoint safetensors; AutoModelForCausalLM drops them before remap."""
-    from safetensors import safe_open
+    """Read mtp.* from the checkpoint; AutoModelForCausalLM drops them before remap."""
+    from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
-    model_path = Path(model_path)
-    index_path = model_path / "model.safetensors.index.json"
-    if index_path.is_file():
-        with open(index_path) as f:
-            weight_map = json.load(f)["weight_map"]
-        file_to_keys: Dict[str, list] = {}
-        for key, filename in weight_map.items():
-            if key.startswith("mtp"):
-                file_to_keys.setdefault(filename, []).append(key)
-        files = file_to_keys
-    else:
-        files = {"model.safetensors": None}
-
-    tensors: Dict[str, torch.Tensor] = {}
-    for filename, keys in files.items():
-        path = model_path / filename
-        if not path.is_file():
-            continue
-        with safe_open(str(path), framework="pt") as sf:
-            if keys is None:
-                keys = [k for k in sf.keys() if k.startswith("mtp")]
-            for key in keys:
-                tensors[key] = sf.get_tensor(key)
-    return tensors
+    return load_hf_state_dict_filtered(model_path, ["mtp"])
 
 
 def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:

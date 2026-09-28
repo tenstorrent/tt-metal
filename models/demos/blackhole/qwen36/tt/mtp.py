@@ -375,7 +375,6 @@ class Qwen36MTP:
         cos,
         sin,
         page_table,
-        sharded_lm_head=False,
         need_logits=True,
         alias_kv_write=False,
     ):
@@ -415,23 +414,20 @@ class Qwen36MTP:
                 next_hidden = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             else:
                 next_hidden = ttnn.clone(normed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if sharded_lm_head or getattr(self, "_ondev_argmax", False):
-            logits = ttnn.linear(normed, self.lm_head_weight)  # vocab-sharded shard
+        # Drafter logits are fp32; base/verify stays bf16. shard_argmax skips the vocab all-gather.
+        if self._lm_head_bfp4 is not None and self.shard_argmax:
+            logits = ttnn.linear(
+                normed,
+                self._lm_head_bfp4,
+                dtype=ttnn.float32,
+                compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,  # matches the bfp4 weight
+                    packer_l1_acc=True,  # output unchanged; fp32 dest accumulation stays on
+                ),
+            )
         else:
-            # Drafter logits are fp32; base/verify stays bf16. shard_argmax skips the vocab all-gather.
-            if self._lm_head_bfp4 is not None and self.shard_argmax:
-                logits = ttnn.linear(
-                    normed,
-                    self._lm_head_bfp4,
-                    dtype=ttnn.float32,
-                    compute_kernel_config=ttnn.init_device_compute_kernel_config(
-                        self.device.arch(),
-                        math_fidelity=ttnn.MathFidelity.LoFi,  # matches the bfp4 weight
-                        packer_l1_acc=True,  # output unchanged; fp32 dest accumulation stays on
-                    ),
-                )
-            else:
-                logits = self._lm_head(normed, out_dtype=ttnn.float32, gather=not self.shard_argmax)
+            logits = self._lm_head(normed, out_dtype=ttnn.float32, gather=not self.shard_argmax)
         ttnn.deallocate(normed)
         return logits, next_hidden
 
