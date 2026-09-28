@@ -65,12 +65,10 @@ inline void calculate_square() {
     using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // The store advances Dest; keep explicit operand indices fixed at zero.
         calculate_square_operands<1>(Input{}, Output{});
     }
 }
 
-// Reference adapter for the unified Dest/SrcS API; exercised by test_isolate_sfpu_square_quasar.
 /**
  * @brief Square over one SrcS slice (slots per @ref SrcsLayout).
  *

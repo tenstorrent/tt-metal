@@ -174,7 +174,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // The SFPI slice kernel uses the same layout for its input and output operands.
         LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS ADD requires matching unpack destination and pack source formats");
         // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
         // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
@@ -191,7 +190,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        // SFPU_ISOLATE = the whole TRISC3 SrcS pipeline (UNP_S -> SFPU -> PACK1) without the matmul TRISCs.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             dispatch_sfpu_srcs_format(

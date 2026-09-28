@@ -69,7 +69,7 @@ struct SfpiFormat
  * Indices are SFPI steps (one step = SFP_ROWS rows), not tile indices or raw addresses. Dest is
  * relative to the current cursor; SrcS to UnpackSrcS's base. An operand never advances the Dest
  * cursor (unless FORMAT's store mode does) and never completes SrcS slices; the caller owns
- * traversal and synchronization. Constant offsets compile to immediate addresses.
+ * traversal and synchronization.
  */
 template <SfpuReg REG, class FORMAT>
 class SfpuOperand

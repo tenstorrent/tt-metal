@@ -57,7 +57,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
 
-    // Resolve the SrcS register format once; the SFPI kernel uses one layout for load and store.
     const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
     LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
     dispatch_sfpu_srcs_format(

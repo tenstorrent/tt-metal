@@ -20,17 +20,10 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Select between floating-point operands using a floating-point condition.
+ * @brief WHERE on independently located floating-point operands: output = condition ? true_input : false_input.
  *
- * All four operands independently select Dest/SrcS, layout and base offset in SFPI
- * index units. With default SfpiFormat policies this advances only explicit indices;
- * the caller configures address modes and formats and handles synchronization.
- * Each input range must coincide with the output or be disjoint from it. All three
- * inputs are loaded before the store, allowing the output to overwrite any one input.
- * Keep offsets constant where possible to enable immediate instruction addresses.
- *
- * SrcS callers must supply three populated input ranges and arrange packing/completion.
- * The existing unary/binary SrcS pipeline wrappers do not supply a third input.
+ * Advances explicit indices only; the caller owns setup and synchronization. Each input range must
+ * coincide with the output or be disjoint.
  */
 template <int ITERATIONS, class Condition, class TrueInput, class FalseInput, class Output>
 sfpi_inline void calculate_where_operands(

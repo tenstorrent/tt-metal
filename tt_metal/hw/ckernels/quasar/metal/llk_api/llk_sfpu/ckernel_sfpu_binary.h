@@ -19,11 +19,7 @@ namespace ckernel {
 namespace sfpu {
 
 /**
- * @brief Dest-only compatibility wrapper for binary SFPU ADD, SUB, MUL and DIV.
- *
- * Arguments are Dest tile indices. This wrapper advances the hardware Dest cursor.
- * ADD delegates to calculate_add_operands; callers with independently located operands
- * can call that core directly. SUB, MUL and DIV are not yet on the operand model.
+ * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, MUL and DIV.
  *
  * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
@@ -109,7 +105,6 @@ inline void calculate_sfpu_binary(
     }
 }
 
-// Reference adapter for the unified Dest/SrcS API; exercised by test_sfpu_add_parallel_matmul_quasar.
 /**
  * @brief ADD over one SrcS slice (slots per @ref SrcsLayout).
  *

@@ -85,17 +85,10 @@ SFPU_ADD_FORMATS = input_output_formats(
 ) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 
-# Each functional configuration runs six perf run types on the simulator. One configuration
-# per input format is enough to characterise the SrcS add.
 PERF_COMBINATIONS_PER_FORMAT = 1
 
 
 def _sample_perf_combinations(combinations: list[tuple]) -> list[tuple]:
-    """Keeps PERF_COMBINATIONS_PER_FORMAT configurations per input format.
-
-    The same-format configuration is preferred so each data type is measured without a reformat
-    on the way out through PACK1.
-    """
     by_input_format = defaultdict(list)
     for combination in combinations:
         by_input_format[combination[0].input_format].append(combination)

@@ -11,15 +11,13 @@
 
 namespace ckernel::sfpu {
 
-// The *_srcs adapters address SrcS in SFPI index steps; their slot arithmetic assumes one step
-// is one SFPU pass.
 static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi index step must be one SFPU op");
 
 /**
  * @brief Geometry and slot offsets (in SFPI steps) of one floating-point SrcS slice.
  *
- * Single source for every *_srcs adapter. Must match the unpack/pack base addresses in
- * llk_sfpu_srcs_api.h: in0 at the slice base, in1 at + rows, result at + 2 * rows.
+ * Must match the unpack/pack base addresses in llk_sfpu_srcs_api.h: in0 at the slice base,
+ * in1 at + rows, result at + 2 * rows.
  */
 template <sfpi::DataLayout LAYOUT>
 struct SrcsLayout {
@@ -41,8 +39,8 @@ struct SrcsLayout {
 /**
  * @brief Resolve a runtime SrcS register format to a SrcsLayout once, outside the tile loop.
  *
- * Calls op(SrcsLayout<layout>{}). Pass the register format (unpack_S_dst / pack_S_src), not the
- * L1 format; MX inputs use their unpacked register format.
+ * Pass the register format (unpack_S_dst / pack_S_src), not the L1 format; MX inputs use their
+ * unpacked register format.
  */
 template <class Op>
 sfpi_inline void dispatch_sfpu_srcs_format(const DataFormat format, Op&& op) {

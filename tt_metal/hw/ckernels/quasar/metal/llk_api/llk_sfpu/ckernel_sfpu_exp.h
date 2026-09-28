@@ -5,9 +5,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <limits>
 #include <type_traits>
-#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_ops.h"
@@ -131,19 +131,14 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
-// EXP algorithm policies: apply(vFloat) -> vFloat. The operand loop is independent of the choice.
-
-// HW nonlinear LUT (SFPNONLINEAR EXP); ~1 ULP once the result lands in a bf16 register.
 struct ExpHwLut {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return sfpi::approx_exp(x); }
 };
 
-// fp32 Cody-Waite + degree-6 minimax polynomial (ported from Blackhole); for 32-bit results only.
 struct ExpFp32Accurate {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_(x); }
 };
 
-// Accurate polynomial only for a 32-bit result in non-approximate mode; LUT otherwise.
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
@@ -195,7 +190,6 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     }
 }
 
-// Reference adapter for the unified Dest/SrcS API; not yet wired into a test.
 /**
  * @brief EXP over one SrcS slice (slots per @ref SrcsLayout), algorithm per @ref ExpAlgo.
  *
