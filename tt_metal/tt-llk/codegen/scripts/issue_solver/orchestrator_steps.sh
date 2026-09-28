@@ -1081,6 +1081,12 @@ try:
     run = json.loads((Path(log_dir) / "run.json").read_text())
 except (OSError, ValueError):
     sys.exit(0)
+# The audit lane classifies a retry from sealed receipts for every required
+# leaf, and treats a missing receipt as an evidence problem (ENV_ERROR, no
+# retry). Skipping the later suites there would turn a repairable failure into
+# a terminal one, so the route runs to completion on audit.
+if run.get("runner_pool") == "audit":
+    sys.exit(0)
 members = [s for s in ORDER if s in route.split("+")]
 earlier = [s for s in members if ORDER.index(s) < ORDER.index(next_suite)]
 for arch, result in sorted((run.get("arch_results") or {}).items()):

@@ -1218,7 +1218,7 @@ def test_review_round_validates_candidate_without_original_issue_completion(
     assert run["status"] == ("failed" if stale else "success")
 
 
-def _short_circuit_case(tmp_path, worktree, suite_results, *, suite, route):
+def _short_circuit_case(tmp_path, worktree, suite_results, *, suite, route, pool=None):
     """Minimal state+run.json, then try to advance to `suite`."""
     log_dir = tmp_path / f"sc-{suite}-{route.replace('+', '_')}"
     log_dir.mkdir()
@@ -1239,7 +1239,10 @@ def _short_circuit_case(tmp_path, worktree, suite_results, *, suite, route):
         encoding="utf-8",
     )
     (log_dir / "run.json").write_text(
-        json.dumps({"run_id": "run-1", "arch_results": suite_results}),
+        json.dumps(
+            {"run_id": "run-1", "arch_results": suite_results}
+            | ({"runner_pool": pool} if pool else {})
+        ),
         encoding="utf-8",
     )
     llk = worktree / "tt_metal" / "tt-llk"
@@ -1346,3 +1349,31 @@ def test_a_skipped_arch_does_not_short_circuit(tmp_path, worktree):
         tmp_path, worktree, case, suite="metal", route="llk+metal+ttnn"
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_audit_runs_the_whole_route_after_a_failure(tmp_path, worktree):
+    """On audit the retry classifier needs a sealed receipt for every leaf and
+    treats a missing one as ENV_ERROR with no retry, so skipping the later
+    suites would make a repairable failure terminal."""
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(llk="COMPILE_FAILED"),
+        suite="metal",
+        route="llk+metal+ttnn",
+        pool="audit",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SHORT_CIRCUIT" not in result.stderr
+
+
+def test_prod_still_short_circuits(tmp_path, worktree):
+    result = _short_circuit_case(
+        tmp_path,
+        worktree,
+        _suites(llk="COMPILE_FAILED"),
+        suite="metal",
+        route="llk+metal+ttnn",
+        pool="prod",
+    )
+    assert result.returncode == 21, result.stderr

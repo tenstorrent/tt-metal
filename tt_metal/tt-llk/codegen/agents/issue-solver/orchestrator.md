@@ -224,6 +224,8 @@ suite exits 21 and prints `SUITE_ROUTE_SHORT_CIRCUIT <suite>` with the blocking
 go straight to the outcome rules for the printed verdict — repair, or a stop
 condition — and do not run the remaining suites or retry the advance. The
 repair re-runs the whole route, so the skipped suites lose no coverage.
+On the `audit` pool the helper never short-circuits: its retry classifier needs
+a sealed receipt for every required leaf, so run the whole route there.
 
 The analyzer and worker must leave every required suite at coverage
 `existing` or `added`. If routing returns `missing`, consume one debug retry:

@@ -129,6 +129,8 @@ that failure already routed: go straight to the outcome rules for the printed
 verdict and do not run the remaining suites or retry the advance. One
 architecture's hard failure short-circuits the shared route, because the repair
 re-runs it for every architecture anyway.
+On the `audit` pool the helper never short-circuits: its retry classifier needs
+a sealed receipt for every required leaf, so run the whole route there.
 
 When routing returns `missing`, call `execute_step_coverage_feedback`, spawn
 one shared worker with `FAILURE_CLASS=MISSING_TEST_COVERAGE`, and consume one
