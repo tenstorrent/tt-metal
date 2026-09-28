@@ -1616,7 +1616,9 @@ void call_binary_sfpu_operation_init()
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
-        SFPU_BINARY_INIT_FN(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
+        // POW runs the production kernel (calculate_sfpu_binary_pow, below), whose init is
+        // sfpu_binary_pow_init: it programs the log2/exp2 constants that kernel reads.
+        SFPU_BINARY_INIT_FN(power, sfpu_binary_pow_init, (APPROXIMATION_MODE));
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
@@ -1824,9 +1826,25 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (
-        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY ||
-        BINOP == BinaryOp::POW)
+    else if constexpr (BINOP == BinaryOp::POW)
+    {
+        // Route POW to the dedicated production kernel (calculate_sfpu_binary_pow), matching
+        // what power_binary_tile() dispatches. The generic calculate_sfpu_binary POW arm
+        // (calculate_sfpu_binary_power) is a legacy variant with no production caller, so
+        // measuring and guarding it here said nothing about the kernel ttnn runs.
+        // is_fp32_dest_acc_en = DST_ACCUM_MODE selects the fp32 (Float32 dest) or the
+        // 21f bf16 body.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary_pow,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY)
     {
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {

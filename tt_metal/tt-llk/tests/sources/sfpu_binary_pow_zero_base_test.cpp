@@ -8,8 +8,9 @@
 // base as a scalar and its exponent from Dest. SFPU_UNARY_SCALAR pins the base at +-0.0 and
 // the input tile carries the exponent classes. Both entry points call _sfpu_binary_power_<is_fp32_dest_acc_en>.
 //
-// Note: MathOperation.SfpuElwpow routes to BinaryOp::POW which is a separate implementation in ckernel_sfpu_binary.h
-// Also, sfpu_operations.h hardcodes rpow's base to 2.0f.
+// Note: MathOperation.SfpuElwpow (BinaryOp::POW) also reaches calculate_sfpu_binary_pow, through
+// sfpu_operations.h, but takes both operands from Dest, so a signed-zero base there depends on
+// the stimuli pipeline. sfpu_operations.h hardcodes rpow's base to 2.0f.
 
 #include <cstdint>
 

@@ -18,6 +18,28 @@ namespace ckernel {
 namespace sfpu {
 
 /**
+ * @brief float -> int32 for a value already known to lie in [1, 2**31).
+ *
+ * The unpredicated form of the in-range arm of _float_to_int32_positive_ (conversions.h):
+ * mantissa with the unit bit, shifted by (exponent - 23). The generic helper spends 17
+ * instructions per call on a three-arm v_if/v_elseif/v_else chain for the < 1 and >= 2**31
+ * cases; both callers in _sfpu_binary_power_21f_ clamp their argument into range first, so
+ * this is the same sequence with the two dead arms removed (4 instructions). Kept local to
+ * this kernel on purpose: conversions.h is shared and its helper keeps the guards.
+ *
+ * @param in Value in [1, 2**31). Outside that range the result is not meaningful: below 2**-8
+ *           the shift amount exceeds 31, which SFPSHFT is not relied on to handle, and at or
+ *           above 2**31 the shifted mantissa reaches the sign bit. The callers' clamps rule
+ *           both out.
+ * @return Truncated integer value of @p in.
+ */
+sfpi_inline sfpi::vInt _pow_float_to_int32_in_range_(sfpi::vFloat in) {
+    const sfpi::vInt man = sfpi::exman(in, sfpi::MantissaMode::WithUnitBit);
+    const sfpi::vInt shift = sfpi::exexp(in) - 23;
+    return sfpi::shft(man, shift, sfpi::ShiftMode::Logical);
+}
+
+/**
  * @brief Computes base raised to the power of pow (base**pow)
  *
  * This function implements binary exponentiation using a polynomial approximation algorithm
@@ -35,7 +57,9 @@ namespace sfpu {
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
- * - Overflow/underflow: Clamped to appropriate limits
+ * - Overflow (|result| >= 2**128): +/-Inf, the sign following the negative-base parity rule
+ * - Underflow (|result| < 2**-126): +/-0 (the 2**z exponent field is 0, and the final bf16
+ *   rounding of that denormal pattern is 0)
  *
  * Parity limit: the odd/even test below converts pow through vSMag16, which saturates at
  * +/-32767, so any larger |pow| reads as non-integer and a negative base returns NaN
@@ -44,7 +68,8 @@ namespace sfpu {
  *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
- * - vConstFloatPrgm1 = -127.0f;
+ * - vConstFloatPrgm1 = -127.0f;  (read by _sfpu_binary_power_f32_ only)
+ * - vConstFloatPrgm2 = -0x1.fbfffep+6f;  (-127 + 2**-17, the lower clamp on z below)
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -75,10 +100,30 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     // If (base, exponent) => (0, +inf) or (base, exponent) => (N, -inf) then output should be 0
     // However, intermediary values can overflow, which leads to output increasing again instead of
     // staying at 0.
-    // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
+    // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 from below.
+    //
+    // Both clamps also bound the argument of the unguarded float->int conversion below to
+    // [1, 2**31): (z + 127) * 2**23 is 64 at the lower clamp and 255 * 2**23 * (1 - 2**-24)
+    // at the upper one.
+    //
+    // Lower clamp: -127 + 2**-17, the fp32 value just above -127, rather than -127 itself.
+    // At exactly -127 the sum (z + 127) * 2**23 is 0, whose exponent field would ask the
+    // conversion for a 150-place shift. One ulp above it the sum is 64, the conversion is
+    // in range, and the result is the same as before: an exponent field of 0 whose mantissa
+    // (< 2**16) rounds to +0 in the final bf16 conversion, as the -127 clamp's did. No other
+    // lane can land between the two values, since 2**-17 is the fp32 spacing at 127.
     sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
+    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm2;
     v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
+    v_endif;
+    // Upper clamp: 0x42FFFFFF, the fp32 value just below 128. Lanes with z >= 128 (a result at
+    // or above 2**128, which is +Inf in bf16 as in fp32) evaluate 2**127.99999: an fp32 of
+    // 0x7F7Fxxxx with the low 16 bits above 0x8000, which the round-to-nearest-even bf16
+    // conversion at the end carries into the exponent, giving +Inf (or -Inf once the
+    // negative-base parity below sets the sign). Previously these lanes took the >= 2**31 arm
+    // of the guarded conversion (INT32_MAX) and produced a NaN-class bit pattern.
+    constexpr float high_threshold = 0x1.fffffep+6f;
+    v_if(z_f32 > high_threshold) { z_f32 = high_threshold; }
     v_endif;
 
     // The paper relies on the following formula (c.f. Sections 1 and 5):
@@ -99,7 +144,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     z_f32 = addexp(z_f32, 23);  // equal to multiplying by 2**23
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
+    // (z + 127) * 2**23 is in [64, 255 * 2**23) by the clamps above; see the helper for the range.
+    sfpi::vInt z = _pow_float_to_int32_in_range_(z_f32 + bias);
 
     sfpi::vInt zii = exexp(sfpi::as<sfpi::vFloat>(z));        // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
@@ -112,7 +158,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(sfpi::vInt(0x560e) + zif), sfpi::RoundMode::Nearest);
 
     d2 = d1 * d2;
-    zif = _float_to_int32_positive_(d2 * d3);
+    // d2 * d3 = d1 * (0xf94ee7 + zif) * (0x560e + zif) is ~14468 at zif = 0 and rises
+    // monotonically to ~2**23 * 0.9966 at zif = 2**23 - 1, so it stays inside [1, 2**31).
+    zif = _pow_float_to_int32_in_range_(d2 * d3);
 
     // Restore exponent
     zii = sfpi::as<sfpi::vInt>(sfpi::setexp(sfpi::as<sfpi::vFloat>(zif), 127U + zii));
@@ -296,8 +344,24 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // Reduced argument (s - k) is exact by Sterbenz; add back the tail e.
     sfpi::vFloat frac = (s - k) + e;
 
-    // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
+    // 2**frac = exp(frac * ln2), then scale by 2**k. This is the polynomial core of
+    // _sfpu_exp_fp32_accurate_ (ckernel_sfpu_exp.h), evaluated directly: frac is already
+    // reduced to [-0.5, 0.5] by k = round(s), so the helper's own reduction j = round(a / ln2)
+    // is 0 on every lane and its Cody-Waite subtraction returns a unchanged; its overflow and
+    // underflow guards are dead too, because the caller applies its own 2**k scaling and
+    // overflow check below. Same coefficients and the same MAD chain in the same order, so
+    // the value is bit-identical to the helper's wherever |frac| <= 0.5. |frac| can exceed 0.5
+    // by the FastTwoSum tail e (<= half an ulp of s), where the helper would have re-centred
+    // with j = +/-1: the polynomial is then evaluated a few ulps outside its fitted interval
+    // and the difference is far below one fp32 ulp of the result.
+    const sfpi::vFloat f = frac * LN2;
+    sfpi::vFloat r = 1.37805939e-3f;
+    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
+    r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
+    r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
+    r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    sfpi::vFloat y = r * f + 1.0f;
+    y = y * f + 1.0f;
     // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
     // overflowing magnitude silently becomes a finite value. Detect overflow from the
     // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
@@ -404,7 +468,11 @@ template <bool APPROXIMATION_MODE>
 inline void sfpu_binary_pow_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
+    // -127: the exponent floor _sfpu_binary_power_f32_ clamps s to.
     sfpi::vConstFloatPrgm1 = -127.0f;
+    // -127 + 2**-17: the exponent floor _sfpu_binary_power_21f_ clamps z to (see there for why
+    // it is one fp32 ulp above -127).
+    sfpi::vConstFloatPrgm2 = -0x1.fbfffep+6f;
 }
 
 }  // namespace sfpu
