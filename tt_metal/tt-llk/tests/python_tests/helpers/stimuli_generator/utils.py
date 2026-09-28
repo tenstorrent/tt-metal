@@ -102,6 +102,56 @@ def integer_face_bounds_or_constant(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def resolve_intervals(
+    included: List[Tuple[float, float]],
+    excluded: Optional[List[Tuple[float, float]]] = None,
+) -> List[Tuple[float, float]]:
+    """Subtract closed exclusions from a union of finite, closed intervals."""
+    if not included:
+        raise ValueError("included intervals must be non-empty")
+    for low, high in excluded or []:
+        if low == high:
+            raise ValueError(
+                "excluded intervals must have positive width; "
+                "exclude a neighbourhood around the value instead"
+            )
+
+    def _normalize(intervals):
+        normalized = []
+        for low, high in sorted(intervals):
+            if not math.isfinite(low) or not math.isfinite(high):
+                raise ValueError("interval bounds must be finite")
+            if low > high:
+                raise ValueError(
+                    f"interval lower bound {low} exceeds upper bound {high}"
+                )
+            if normalized and low <= normalized[-1][1]:
+                normalized[-1] = (normalized[-1][0], max(normalized[-1][1], high))
+            else:
+                normalized.append((low, high))
+        return normalized
+
+    remaining = _normalize(included)
+    for excluded_low, excluded_high in _normalize(excluded or []):
+        next_remaining = []
+        for low, high in remaining:
+            if excluded_high < low or excluded_low > high:
+                next_remaining.append((low, high))
+                continue
+            # Represent the remaining domain without the excluded endpoints.
+            if excluded_low > low:
+                next_remaining.append((low, math.nextafter(excluded_low, -math.inf)))
+            if excluded_high < high:
+                next_remaining.append((math.nextafter(excluded_high, math.inf), high))
+        remaining = next_remaining
+
+    if not remaining:
+        raise ValueError(
+            f"excluded intervals {excluded or []} remove all included intervals {included}"
+        )
+    return remaining
+
+
 def _in_intervals(
     values: torch.Tensor, intervals: List[Tuple[float, float]]
 ) -> torch.Tensor:
@@ -149,9 +199,23 @@ def _sample_uniform_intervals(
     """
     if not intervals:
         raise ValueError("intervals must be a non-empty list")
-    lows = torch.tensor([lo for lo, _ in intervals], dtype=torch.float32)
-    highs = torch.tensor([hi for _, hi in intervals], dtype=torch.float32)
+    lows = torch.tensor([lo for lo, _ in intervals], dtype=torch.float64)
+    highs = torch.tensor([hi for _, hi in intervals], dtype=torch.float64)
     lengths = torch.clamp(highs - lows, min=0.0)
+    rounded_lows, rounded_highs = lows.to(dtype), highs.to(dtype)
+    rounded_lows = torch.where(
+        (lengths > 0) & (rounded_lows.double() < lows),
+        torch.nextafter(rounded_lows, torch.full_like(rounded_lows, math.inf)),
+        rounded_lows,
+    )
+    rounded_highs = torch.where(
+        (lengths > 0) & (rounded_highs.double() > highs),
+        torch.nextafter(rounded_highs, torch.full_like(rounded_highs, -math.inf)),
+        rounded_highs,
+    )
+    if (rounded_lows > rounded_highs).any():
+        raise ValueError(f"No representable {dtype} value in an interval: {intervals}")
+    lengths = torch.where(lengths == 0, 1.0, lengths)
     total = lengths.sum()
     if total <= 0:
         raise ValueError("Total interval length must be positive")
@@ -159,9 +223,10 @@ def _sample_uniform_intervals(
     u = torch.rand(size, dtype=torch.float32, generator=generator)
     idx = torch.searchsorted(cdf, u, right=False)
     u_inner = torch.rand(size, dtype=torch.float32, generator=generator)
-    lo_sel = lows[idx]
-    hi_sel = highs[idx]
-    return (lo_sel + u_inner * (hi_sel - lo_sel)).to(dtype)
+    lo_sel = rounded_lows[idx]
+    hi_sel = rounded_highs[idx]
+    values = (lo_sel.double() + u_inner * (hi_sel.double() - lo_sel.double())).to(dtype)
+    return values.clamp(min=lo_sel, max=hi_sel)
 
 
 def _sample_log_uniform_intervals(
@@ -220,13 +285,10 @@ def _sample_integer_intervals(
             clamped.append((lo_i, hi_i))
             counts.append(hi_i - lo_i + 1)
     if not clamped:
-        fallback = max(int_min, min((int_min + int_max) // 2, int_max))
-        warnings.warn(
+        raise ValueError(
             f"No valid integer exists in any interval after clamping to "
-            f"[{int_min}, {int_max}]. Returning constant tensor filled with {fallback}.",
-            stacklevel=3,
+            f"[{int_min}, {int_max}]: {intervals}"
         )
-        return torch.full((size,), fallback, dtype=dtype)
     lengths = torch.tensor(counts, dtype=torch.float32)
     cdf = (lengths / lengths.sum()).cumsum(dim=0)
     u = torch.rand(size, dtype=torch.float32, generator=generator)

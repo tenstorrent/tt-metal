@@ -51,7 +51,7 @@ case "${MODEL:-}" in
   KIMI_K2_7)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
     VARIANT_ID="kimi_k2_7"; LAYERS_ID="L61"; NODE_SUFFIX="-$MARGIN_ID-$TRACE_ID"
-    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
+    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
     ;;
   GLM5_2)
     TEST_FUNC="test_glm_prefill_transformer_chunked_no_pcc"

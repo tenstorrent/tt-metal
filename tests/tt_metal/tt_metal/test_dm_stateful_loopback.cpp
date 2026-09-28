@@ -67,7 +67,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
                 {
                     .runtime_arg_names = {"dram_in_addr", "dram_out_addr", "l1_addr", "dram_bank_id"},
                 },
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         }},
         .work_units = {experimental::WorkUnitSpec{
             .name = "main",

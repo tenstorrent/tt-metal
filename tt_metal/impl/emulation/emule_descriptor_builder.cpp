@@ -9,6 +9,7 @@
 
 #include "emule_descriptor_builder.hpp"
 
+#include <optional>
 #include <set>
 #include <tuple>
 #include <type_traits>
@@ -400,9 +401,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 dd.cap = static_cast<AccessPattern>(static_cast<uint8_t>(c.cap));
                 dd.data_format = static_cast<uint32_t>(c.data_format);
                 // Only valid-format DFBs feed the geometry tables (build_kernel_defines skips Invalid).
+                // Face layout lives on Tile; DFB no longer carries a separate unpack FaceGeometry.
                 if (c.data_format != tt::DataFormat::Invalid) {
                     const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, c.unpack_face_geometry);
+                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, std::nullopt);
                     dd.geom = to_resolved_geom(g, c.data_format);
                 }
                 auto cl = dfb->core_lookup_.find(core);

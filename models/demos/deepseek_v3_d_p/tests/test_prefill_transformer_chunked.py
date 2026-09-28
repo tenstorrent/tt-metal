@@ -203,26 +203,31 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
+    # then re-cut three times. Recentered to CI run 36356786056 / job 108828333472: every chunk came
+    # in 2.4-5.2% under the previous centre (run 34492835936 / job 102927415897), with the drop growing
+    # with KV depth.
     (61, 11, 10): [
-        0.413,
-        0.419,
-        0.452,
-        0.481,
-        0.513,
-        0.549,
-        0.584,
-        0.623,
-        0.676,
-        0.716,
-        0.756,
+        0.403,
+        0.406,
+        0.440,
+        0.468,
+        0.500,
+        0.532,
+        0.562,
+        0.593,
+        0.638,
+        0.678,
+        0.717,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.62842, 0.61427, 0.61065, 0.60118, 0.60427, 0.60544, 0.60353, 0.61104, 0.65888, 0.69774, 0.73711],
+    # Chunks 0-6 lowered to CI run 36032933534 / job 107749492403: they came in 4-30% under the old
+    # baseline and within 0.3-3% of the traced twin in the same run, i.e. the early-chunk dispatch overhead
+    # is gone (same shape on two local Galaxy runs). Chunks 7-10 were in band above baseline; unchanged.
+    (61, 11, 10): [0.437, 0.435, 0.449, 0.478, 0.513, 0.550, 0.581, 0.61104, 0.65888, 0.69774, 0.73711],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -236,7 +241,10 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    (78, 11, 10): [0.543, 0.539, 0.552, 0.545, 0.561, 0.558, 0.557, 0.561, 0.577, 0.582, 0.592],
+    # Recentered to CI run 36356786056 / job 108727344674. Main had already drifted ~13 ms under the
+    # previous centre on every chunk (jobs 108833541819, 108591991106, 108483306778 read 0.530s at
+    # chunk 0); ND-sharded routed-expert weights take a flat ~5 ms more per chunk.
+    (78, 11, 10): [0.525, 0.521, 0.534, 0.528, 0.542, 0.540, 0.539, 0.543, 0.558, 0.564, 0.574],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 

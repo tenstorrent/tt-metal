@@ -18,13 +18,13 @@
  * @brief Semaphore synchronization primitive for programmable cores.
  *
  * The host picks the access mechanism (SemScope) from where the semaphore's binder kernels run and
- * delivers it in a generated binding token; construct with CTAD, `Semaphore s(sem::name);`.
+ * delivers it in a generated binding token; construct from the token, `Semaphore s(sem::name);`.
  *
  * DM builds expose local operations plus the NoC operations (remote up, set/relay/inc multicast).
  *
  * Blackhole UNPACK/PACK builds expose the local operations only, on the Tensix hardware (Sync Unit)
- * semaphore, and require SemScope::COMPUTE_ATOMIC; any other scope is a compile error, so a compute
- * kernel cannot reach a semaphore through a non-atomic path. Compute rules a kernel author must know:
+ * semaphore, and require SemScope::COMPUTE_ATOMIC, the only mechanism the host resolves for a compute
+ * binding; the constructor asserts it. Compute rules a kernel author must know:
  *  - The value is 0..15. More than 15 outstanding credits lose posts silently; a producer that gates
  *    each up() with wait_not_full() can never get there.
  *  - Its capacity (hardware Max) is SemaphoreAdvancedOptions::max_value, the ring depth in credits;
@@ -41,23 +41,21 @@
  *    at compile time if instantiated (a kernel cannot reach them -- construction already fails there).
  * Details and instruction sequences: semaphore_compute_impl.h.
  */
-template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
+template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
-    template <ProgrammableCoreType, SemScope>
+    template <ProgrammableCoreType>
     friend class Semaphore;
 
 public:
-    template <std::uint32_t SEM_ID, SemScope TOK_SCOPE>
-    explicit __attribute__((always_inline)) Semaphore(SemaphoreBindingToken<SEM_ID, TOK_SCOPE>) :
-        handle_(semaphore_detail::sem_l1_offset<core_type, SCOPE>(SEM_ID)) {
-        static_assert(
-            TOK_SCOPE == SCOPE,
-            "construct a bound semaphore with CTAD: `Semaphore s(sem::name);`; spelling "
-            "`Semaphore<>` fixes the scope to LOCAL_NONATOMIC");
+    // From a generated binding token: adopts the mechanism the host resolved for this binding.
+    explicit __attribute__((always_inline)) Semaphore(SemaphoreBindingToken token) :
+        handle_(semaphore_detail::sem_l1_offset<core_type>(token.id, token.scope)) {
+        set_scope(token.scope);
     }
 
+    // Non-Metal-2.0: a bare id carries no host-resolved mechanism, so it is the plain word.
     explicit __attribute__((always_inline)) Semaphore(std::uint32_t semaphore_id) :
-        handle_(semaphore_detail::sem_l1_offset<core_type, SCOPE>(semaphore_id)) {
+        handle_(semaphore_detail::sem_l1_offset<core_type>(semaphore_id, SemScope::LOCAL_NONATOMIC)) {
 #ifdef COMPILE_FOR_TRISC
         // A runtime id is invisible to the host semaphore census, so the host cannot know a
         // compute thread touches this word and cannot force every participant onto the same
@@ -65,14 +63,12 @@ public:
         // plain read-modify-write would drop this thread's atomic update. Compute therefore takes
         // host-generated binding tokens only.
         static_assert(
-            semaphore_detail::always_false<SCOPE>,
+            semaphore_detail::always_false<core_type>,
             "a compute semaphore cannot be built from a runtime semaphore id: bind it in the "
             "ProgramSpec and construct it from the generated token instead -- `Semaphore "
             "s(sem::name);`");
 #else
-        static_assert(
-            SCOPE == SemScope::LOCAL_NONATOMIC,
-            "a runtime semaphore id has no host-resolved mechanism and is LOCAL_NONATOMIC only");
+        set_scope(SemScope::LOCAL_NONATOMIC);
 #endif
     }
 
@@ -89,7 +85,7 @@ public:
      * @param value The value to increment the semaphore by.
      */
     __attribute__((always_inline)) void up(std::uint32_t value) {
-        semaphore_detail::up<core_type, SCOPE>(handle_, value);
+        semaphore_detail::up<core_type>(handle_, scope_, value);
     }
 
     /**
@@ -107,7 +103,7 @@ public:
      * @param value The value to decrement the semaphore by.
      */
     __attribute__((always_inline)) void down(std::uint32_t value) {
-        semaphore_detail::down<core_type, SCOPE>(handle_, value);
+        semaphore_detail::down<core_type>(handle_, scope_, value);
     }
 
     /**
@@ -118,7 +114,7 @@ public:
      * @param value The value to wait for.
      */
     __attribute__((always_inline)) void wait(std::uint32_t value) const {
-        semaphore_detail::wait<SCOPE>(handle_, value);
+        semaphore_detail::wait<core_type>(handle_, scope_, value);
     }
 
     /**
@@ -131,7 +127,7 @@ public:
      * @param value The minimum value to wait for.
      */
     __attribute__((always_inline)) void wait_min(std::uint32_t value) const {
-        semaphore_detail::wait_min<SCOPE>(handle_, value);
+        semaphore_detail::wait_min<core_type>(handle_, scope_, value);
     }
 
 #ifdef COMPILE_FOR_TRISC
@@ -147,7 +143,7 @@ public:
      * @param n Credits the following up() will post (default 1).
      */
     __attribute__((always_inline)) void wait_not_full(std::uint32_t n = 1) const {
-        semaphore_detail::wait_not_full<SCOPE>(handle_, n);
+        semaphore_detail::wait_not_full<core_type>(handle_, scope_, n);
     }
 #endif
 
@@ -160,7 +156,9 @@ public:
      *
      * @param value The value to set the semaphore to.
      */
-    __attribute__((always_inline)) void set(std::uint32_t value) { semaphore_detail::set<SCOPE>(handle_, value); }
+    __attribute__((always_inline)) void set(std::uint32_t value) {
+        semaphore_detail::set<core_type>(handle_, scope_, value);
+    }
 
     /**
      * @brief The settled current value.
@@ -170,7 +168,9 @@ public:
      *
      * @return Current semaphore value.
      */
-    __attribute__((always_inline)) std::uint32_t value() const { return semaphore_detail::current<SCOPE>(handle_); }
+    __attribute__((always_inline)) std::uint32_t value() const {
+        return semaphore_detail::current<core_type>(handle_, scope_);
+    }
 
 #ifndef COMPILE_FOR_TRISC
     /**
@@ -192,7 +192,7 @@ public:
         std::uint32_t noc_y,
         std::uint32_t value,
         std::uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        semaphore_detail::up_remote<core_type, SCOPE>(handle_, noc, noc_x, noc_y, value, vc);
+        semaphore_detail::up_remote<core_type>(handle_, scope_, noc, noc_x, noc_y, value, vc);
     }
 
     /**
@@ -207,10 +207,12 @@ public:
      * @param noc_y The Y coordinate of the remote core in the NoC.
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
-    template <ProgrammableCoreType dst_core_type = core_type, SemScope dst_scope = SemScope::LOCAL_NONATOMIC>
+    template <ProgrammableCoreType dst_core_type = core_type>
     void relay_unicast(
-        const Noc& noc, const Semaphore<dst_core_type, dst_scope>& dst_sem, std::uint32_t noc_x, std::uint32_t noc_y) {
-        semaphore_detail::relay_unicast<SCOPE, dst_scope>(handle_, dst_sem.handle_, noc, noc_x, noc_y);
+        const Noc& noc, const Semaphore<dst_core_type>& dst_sem, std::uint32_t noc_x, std::uint32_t noc_y) {
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);          // relay is unavailable on a cached semaphore
+        ASSERT(dst_sem.scope_ != SemScope::DM_LOCAL_CACHED);  // and cannot target one
+        semaphore_detail::relay_unicast(handle_, dst_sem.handle_, noc, noc_x, noc_y);
     }
 
     /**
@@ -236,7 +238,8 @@ public:
         std::uint32_t noc_y_end,
         std::uint32_t num_dests,
         bool linked = false) {
-        semaphore_detail::set_multicast<opts, SCOPE>(
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // multicast is unavailable on a cached semaphore
+        semaphore_detail::set_multicast<opts>(
             handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, num_dests, linked);
     }
 
@@ -258,20 +261,19 @@ public:
      *             (default is NocOptions::DEFAULT which excludes sender)
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
-    template <
-        NocOptions opts = NocOptions::DEFAULT,
-        ProgrammableCoreType dst_core_type = core_type,
-        SemScope dst_scope = SemScope::LOCAL_NONATOMIC>
+    template <NocOptions opts = NocOptions::DEFAULT, ProgrammableCoreType dst_core_type = core_type>
     void relay_multicast(
         const Noc& noc,
-        const Semaphore<dst_core_type, dst_scope>& dst_sem,
+        const Semaphore<dst_core_type>& dst_sem,
         std::uint32_t noc_x_start,
         std::uint32_t noc_y_start,
         std::uint32_t noc_x_end,
         std::uint32_t noc_y_end,
         std::uint32_t num_dests,
         bool linked = false) {
-        semaphore_detail::relay_multicast<opts, SCOPE, dst_scope>(
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);          // relay is unavailable on a cached semaphore
+        ASSERT(dst_sem.scope_ != SemScope::DM_LOCAL_CACHED);  // and cannot target one
+        semaphore_detail::relay_multicast<opts>(
             handle_, dst_sem.handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, num_dests, linked);
     }
 
@@ -295,8 +297,8 @@ public:
         std::uint32_t noc_y_end,
         std::uint32_t value,
         std::uint32_t num_dests) {
-        semaphore_detail::inc_multicast<SCOPE>(
-            handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, value, num_dests);
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // multicast is unavailable on a cached semaphore
+        semaphore_detail::inc_multicast(handle_, noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, value, num_dests);
     }
 #endif
 
@@ -304,7 +306,17 @@ private:
     // DM: the semaphore word's L1 offset. Compute: the Tensix hardware semaphore index (see
     // semaphore_compute_impl.h::sem_l1_offset).
     std::uintptr_t handle_;
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // The mechanism the host resolved for this semaphore.
+    SemScope scope_;
+    __attribute__((always_inline)) void set_scope(SemScope scope) { scope_ = scope; }
+#else
+    // Every other build has exactly one mechanism, so the scope is a constant and costs nothing.
+#ifdef COMPILE_FOR_TRISC
+    static constexpr SemScope scope_ = SemScope::COMPUTE_ATOMIC;
+#else
+    static constexpr SemScope scope_ = SemScope::LOCAL_NONATOMIC;
+#endif
+    __attribute__((always_inline)) void set_scope(SemScope scope) { ASSERT(scope == scope_); }
+#endif
 };
-
-template <std::uint32_t SEM_ID, SemScope TOK_SCOPE>
-Semaphore(SemaphoreBindingToken<SEM_ID, TOK_SCOPE>) -> Semaphore<ProgrammableCoreType::TENSIX, TOK_SCOPE>;

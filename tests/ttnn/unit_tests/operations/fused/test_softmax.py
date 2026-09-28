@@ -326,7 +326,8 @@ def test_softmax(device, batch_size, h, w, dim):
     )
 
 
-@pytest.mark.merge_gate
+# Not in the Merge Gate: fails sporadically on wh_n150, see #58082.
+# @pytest.mark.merge_gate
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)

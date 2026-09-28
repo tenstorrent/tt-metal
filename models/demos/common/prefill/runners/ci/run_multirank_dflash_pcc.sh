@@ -190,6 +190,7 @@ python3 "${TTRUN_PY}" \
   --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
@@ -284,6 +285,7 @@ set +e
   -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
