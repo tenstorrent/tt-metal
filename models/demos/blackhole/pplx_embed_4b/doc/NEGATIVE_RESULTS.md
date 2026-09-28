@@ -1207,3 +1207,13 @@ bs32 default (§13's "structurally slower" was the epilogue). e2e, sustained_run
 the settled clock drops 40-90 MHz (more power per iteration with less waiting). STS-B 0.8116 / 0.8150 / 0.8135 at
 batch 8 / 16 / 32 (0.8114 / 0.8144 / 0.8146 before; bs32 changes path). The FF13 block knobs are shared with the
 unfused FF1 / FF3: bs32's 4,20,8 1×4 applies only when fused (the unfused path at those blocks: 410.2 ms).
+
+**Blocks re-swept for the new kernel** (`perf_tools/bench_ff13_sweep.py <batch>`, 255 configs per batch: M 4 / 8 / 16,
+K 5-20, N 4 / 8 / 16, subblocks 1×2 … 4×2; the failures are L1 clashes): K_block 20 with a 1×8 subblock wins at every
+batch; the fused kernel takes 1×8 (the old "capped at 1×4" note no longer holds). bs8 8,8,8 1×8 1058.4 → 8,20,8 1×8
+996.0 µs, bs16 4,20,8 1×4 1964.8 → 1×8 1927.4, bs32 4,20,8 1×4 3848.9 → 1×8 3763.7. e2e, 3 alternating rounds:
+cold / sustained bs8 85.0 / 104.1 → 82.5 / 101.4 ms, bs16 158.3 / 210.7 → 157.1 / 209.5, bs32 329.3 / 411.1 →
+326.4 / 408.6; STS-B bs8 0.8114. Landed, applied only with the fused kernel (the block knobs also drive the unfused
+FF1 / FF3). bs1 (`QWEN_FUSE_SWIGLU_BS1=1`, M=512, 110 configs): best 2,20,8 1×2 214.4 µs (the probe's old 2,8,8 1×4
+259.2), but the legacy FF1 + FF3 + mul it replaces is cheaper e2e: 15.6 → 17.6 ms at the old config, 15.7 → 16.0 at
+the best. bs1 stays unfused; the probe's defaults now point at the best config.

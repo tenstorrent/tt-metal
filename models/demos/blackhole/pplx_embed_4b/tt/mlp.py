@@ -215,20 +215,19 @@ class PplxFusedSwigluMLP(MLP):
     def _bs1_fused_config(self, ckc) -> "ttnn.MinimalMatmulConfig":
         """MinimalMatmulConfig for the fused FF1/FF3 at bs=1 (M=512).
 
-        The fused kernel keeps a gate and an up tile per output tile in DST, so
-        subblock_w is capped at 4 (1x8 fails the DST-volume check); with
-        fp32_dest_acc_en the budget halves again. Grid is the full device,
-        clamped for harvested parts. QWEN_MM_BLOCK_FF13 / QWEN_MM_SUBBLOCK_FF13
-        are honoured if set so the config can be swept like the others.
+        Defaults are the best of perf_tools/bench_ff13_sweep.py 1 with the pack-thread SwiGLU kernel (2,20,8 1x2,
+        214 us standalone); the fused path still loses to the legacy FF1 + FF3 + mul at bs1 e2e (15.7 -> 16.0 ms,
+        NEGATIVE_RESULTS 58), so it stays opt-in. A subblock is capped at the DST half (8 tiles, 4 with
+        fp32_dest_acc_en). Grid is the full device, clamped for harvested parts. QWEN_MM_BLOCK_FF13 /
+        QWEN_MM_SUBBLOCK_FF13 are honoured if set so the config can be swept like the others.
         """
         gx, gy = self.args._clamp_grid_to_device((12, 10))
-        mb, kb, nb = self.args._resolve_mm_blocks("QWEN_MM_BLOCK_FF13", default=(4, 8, 8))
+        mb, kb, nb = self.args._resolve_mm_blocks("QWEN_MM_BLOCK_FF13", default=(2, 20, 8))
         fp32 = bool(getattr(ckc, "fp32_dest_acc_en", False))
-        sbh, sbw = self.args._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_FF13", default=(1, 2 if fp32 else 4))
-        # The resolver falls back to the global QWEN_MM_SUBBLOCK (1,8 in the demo),
-        # which the fused kernel cannot take: clamp to the fused DST budget and keep
+        sbh, sbw = self.args._resolve_mm_subblocks("QWEN_MM_SUBBLOCK_FF13", default=(1, 2))
+        # The resolver falls back to the global QWEN_MM_SUBBLOCK (1,8 in the demo): clamp to the DST budget and keep
         # the op's N_block_size % subblock_w == 0 invariant.
-        cap = 2 if fp32 else 4
+        cap = 4 if fp32 else 8
         sbw = min(sbw, cap)
         while sbw > 1 and nb % sbw:
             sbw -= 1
