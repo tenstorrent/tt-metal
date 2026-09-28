@@ -363,16 +363,17 @@ ttsl::hash::hash_t BinaryBackwardDeviceOperation::compute_program_hash(
         other.memory_config(),
         input.padded_shape().volume());
 
-    // Preallocated dtype/layout/mem_config reach the kernels via CB formats and
-    // TensorAccessorArgs, neither refreshable on a cache hit (same as tanh_bw).
-    const auto mix_preallocated = [&](const std::optional<Tensor>& preallocated) {
+    // Slot-tag + presence bit so alternating (input=X, other=none) vs (input=none, other=X)
+    // build distinct programs; writer bakes a TensorAccessorArgs per slot from the output.
+    const auto mix_slot = [&](const std::optional<Tensor>& preallocated, uint32_t slot) {
+        hash = ttsl::hash::hash_objects(hash, slot, preallocated.has_value());
         if (preallocated.has_value()) {
             hash = ttsl::hash::hash_objects(
                 hash, preallocated->dtype(), preallocated->layout(), preallocated->memory_config());
         }
     };
-    mix_preallocated(tensor_args.preallocated_input_grad);
-    mix_preallocated(tensor_args.preallocated_other_grad);
+    mix_slot(tensor_args.preallocated_input_grad, /*slot=*/0u);
+    mix_slot(tensor_args.preallocated_other_grad, /*slot=*/1u);
 
     return hash;
 }

@@ -341,6 +341,54 @@ def test_mul_bw_program_cache_keying(device):
     )
 
 
+def test_mul_bw_alternating_prealloc_slot_isolates_program_cache(device):
+    # Regression for hash collision: (input_grad=L1, other_grad=auto-DRAM) and
+    # (input_grad=auto-DRAM, other_grad=L1) build different programs (writer's per-slot
+    # TensorAccessorArgs differ), so their hashes must not collide.
+    shape = (1, 1, 32, 32)
+    output_mc = ttnn.DRAM_MEMORY_CONFIG
+    prealloc_mc = ttnn.L1_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, output_mc, seed=1)
+    b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, output_mc, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, output_mc, seed=3)
+
+    def _make_l1(shape):
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=prealloc_mc,
+        )
+
+    grad_a_pt = g_pt.float() * b_pt.float()
+    grad_b_pt = g_pt.float() * a_pt.float()
+
+    start = device.num_program_cache_entries()
+
+    input_grad_l1 = _make_l1(shape)
+    out_a = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=output_mc, input_grad=input_grad_l1)
+    assert out_a[0].buffer_address() == input_grad_l1.buffer_address(), "call A: input_grad must reuse prealloc"
+    assert out_a[0].memory_config().buffer_type == ttnn.BufferType.L1
+    assert out_a[1].memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert_with_pcc(grad_a_pt, ttnn.to_torch(out_a[0]).float(), 0.999)
+    assert_with_pcc(grad_b_pt, ttnn.to_torch(out_a[1]).float(), 0.999)
+
+    other_grad_l1 = _make_l1(shape)
+    out_b = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=output_mc, other_grad=other_grad_l1)
+    assert out_b[1].buffer_address() == other_grad_l1.buffer_address(), "call B: other_grad must reuse prealloc"
+    assert out_b[0].memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert out_b[1].memory_config().buffer_type == ttnn.BufferType.L1
+    assert_with_pcc(grad_a_pt, ttnn.to_torch(out_b[0]).float(), 0.999)
+    assert_with_pcc(grad_b_pt, ttnn.to_torch(out_b[1]).float(), 0.999)
+
+    added = device.num_program_cache_entries() - start
+    assert added == 2, (
+        f"expected 2 program cache entries (one per prealloc slot layout), got {added}; "
+        "1 means the hash collides two structurally-different programs"
+    )
+
+
 # ---------------------------------------------------------------------------
 # rejection paths (routing gate + device op TT_FATALs)
 # ---------------------------------------------------------------------------
