@@ -1395,6 +1395,7 @@ _TT_POLY_FP32_DEST = {
     "exp2": (),
     "expm1": (),
     "gelu": (),
+    "hardmish": (),
     "hardsigmoid": (),
     "hardswish": (),
     "hardtanh": (),
@@ -1419,6 +1420,7 @@ _TT_POLY_PRECISION_SPLIT = ("erfinv",)
 _TT_POLY_ADAPTER_OPERATIONS = {
     "asinh": "asinh",
     "gelu": "gelu",
+    "hardmish": "hardmish",
     "hardswish": "hardswish",
     "log10": "log10",
     "logit": "logit",
@@ -1557,6 +1559,15 @@ _GENERATED_UNARY_CASES = [
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
     (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
     (MathOperation.Gelu, "gelu", False, False, 32, "None", "ckernel_sfpu_gelu.h"),
+    (
+        MathOperation.Hardmish,
+        "hardmish",
+        True,
+        False,
+        8,
+        "RC",
+        "ckernel_sfpu_hardmish.h",
+    ),
     (
         MathOperation.Hardsigmoid,
         "hardsigmoid",
@@ -1737,6 +1748,31 @@ def _tt_poly_reference_gelu(x):
     return torch.from_numpy(_declared_forward(x.double().numpy()))
 
 
+def _tt_poly_reference_hardmish(x):
+    def _declared_piece_0(x):
+        return np.broadcast_to(np.asarray(x * 0, dtype=np.float64), x.shape)
+
+    def _declared_piece_1(x):
+        return np.broadcast_to(np.asarray(x * (x + 2) / 2, dtype=np.float64), x.shape)
+
+    def _declared_piece_2(x):
+        return np.broadcast_to(np.asarray(x, dtype=np.float64), x.shape)
+
+    def _declared_forward(x):
+        result = np.full(x.shape, np.nan)
+        finite = np.isfinite(x)
+        bins = np.searchsorted((-2.0, 0.0), x, side="right")
+        active = finite & (bins == 0)
+        result[active] = _declared_piece_0(x[active])
+        active = finite & (bins == 1)
+        result[active] = _declared_piece_1(x[active])
+        active = finite & (bins == 2)
+        result[active] = _declared_piece_2(x[active])
+        return result
+
+    return torch.from_numpy(_declared_forward(x.double().numpy()))
+
+
 def _tt_poly_reference_hardswish(x):
     def _declared_piece_0(x):
         return np.broadcast_to(np.asarray(0, dtype=np.float64), x.shape)
@@ -1829,6 +1865,12 @@ _TT_POLY_FORWARD_REFERENCES = {
             ("below", -13.1875, True, "constant", 0.0),
             ("above", 2.765625, False, "identity", None),
         ),
+    ),
+    "hardmish": (
+        _tt_poly_reference_hardmish,
+        ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
+        (0, 49151, 49152, 49153),
+        (),
     ),
     "hardswish": (
         _tt_poly_reference_hardswish,
@@ -1928,6 +1970,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "exp2",
     "expm1",
     "gelu",
+    "hardmish",
     "hardsigmoid",
     "hardswish",
     "hardtanh",
@@ -2181,6 +2224,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "exp2",
     "expm1",
     "gelu",
+    "hardmish",
     "hardsigmoid",
     "hardswish",
     "hardtanh",

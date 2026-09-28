@@ -1231,7 +1231,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LOGSIGMOID: return {};
-        case UnaryOpType::HARDMISH: return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
+        case UnaryOpType::HARDMISH:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"hardmish_tt_poly_bf16_tile_init();", fmt::format("hardmish_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
         case UnaryOpType::DIGAMMA:
 #if !defined(TT_POLY_LLK_DISABLE)
             if (input_dtype == DataType::BFLOAT16) {
