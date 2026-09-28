@@ -124,3 +124,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   [1.0014, 1.0084], coef 1.0005, PASS. h_mid headroom is small (ratio max 1.0084 vs 1.01) because the SDPA preset biases attention norms
   upward. A perf change to SDPA must re-run this test.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_03_attn_residual.py`
+
+## C.full_dense.ffn_norm.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_full_dense_ffn_norm.py`
+  (same golden, h_mid [2048, 4096] -> ffn_norm). Only the docstring changed. Gate: pcc_ffn_norm_L00 >= 0.99. Asserted extras: output finite,
+  rel L2 <= 0.03, per-token norm ratio in [0.97, 1.03]. Why: PCC passes sum-instead-of-mean and eps 1e-2 (the docstring has the measurements).
+- BRINGUP_IMPL=reference: PCC 0.999997, rel 0.00233, ratio [0.9953, 1.0045], PASS. BRINGUP_IMPL=stub: PCC 0, FAIL.
+- Default gate (2x2): the device module already serves ffn_norm (the norm path attn_norm registered). PCC 0.999996, rel 0.00290,
+  ratio [0.9933, 1.0054], PASS. The first `FAIL pcc=0` line comes from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_ffn_norm.py`
