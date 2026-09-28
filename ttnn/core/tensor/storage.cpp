@@ -220,13 +220,17 @@ const MeshTensor& DeviceStorage::get_mesh_tensor() const {
 
 MeshTensor DeviceStorage::release_mesh_tensor() {
     TT_FATAL(is_allocated(), "Tensor is not allocated");
+    // A released MeshTensor wrapped in a new Tensor would no longer track the view's source, so it could report
+    // allocated after the source is explicitly deallocated.
+    TT_FATAL(
+        !mesh_tensor_holder_->is_retained_view(),
+        "DeviceStorage cannot release a retained view's MeshTensor; the view must stay attached to its source");
     auto result = std::visit(
         ttsl::overloaded{
             [](MeshTensorHolder::Allocated& allocated) -> MeshTensor { return std::move(allocated.mesh_tensor_); },
             [](const auto&) -> MeshTensor { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
     mesh_tensor_holder_->state_ = MeshTensorHolder::DeallocatedDefaultConstructed{};
-    mesh_tensor_holder_->retained_owner_.reset();
     return result;
 }
 

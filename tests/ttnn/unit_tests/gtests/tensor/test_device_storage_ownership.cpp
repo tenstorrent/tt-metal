@@ -434,26 +434,18 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderl
     EXPECT_EQ(released.address(), address);
 }
 
-TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewReleaseDropsRetainedOwner) {
-    constexpr uint32_t viewOffset = 4096;
+TEST_F(DeviceStorageOwnershipTest, ShardedTensorViewRejectsRelease) {
     const TensorSpec ownerSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 64, 32}, {64, 32});
     const TensorSpec viewSpec = make_sharded_l1_tensor_spec(Shape{1, 1, 32, 32}, {32, 32});
-    uint32_t ownerAddress = 0;
-    DeviceStorage viewStorage = [&] {
-        Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-        ownerAddress = owner.buffer()->address();
-        Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, viewOffset);
-        return view.device_storage();
-    }();
+    Tensor owner = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
+    Tensor view = ttnn::experimental::create_sharded_tensor_view(owner, viewSpec, 4096);
+    DeviceStorage viewStorage = view.device_storage();
 
-    {
-        MeshTensor released = viewStorage.release_mesh_tensor();
-    }
-
-    EXPECT_FALSE(viewStorage.is_allocated());
-    Tensor replacement = ttnn::create_device_tensor(ownerSpec, mesh_device_.get());
-    EXPECT_EQ(replacement.buffer()->address(), ownerAddress)
-        << "a released view's empty storage must not keep its source allocation reserved";
+    // A released MeshTensor rewrapped in a new Tensor would lose the view's dependency on its source.
+    EXPECT_THAT(
+        [&] { (void)viewStorage.release_mesh_tensor(); },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("cannot release a retained view")));
+    EXPECT_TRUE(view.is_allocated());
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorLeavesDefaultConstructedState) {

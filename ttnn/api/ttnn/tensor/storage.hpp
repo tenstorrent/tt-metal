@@ -115,7 +115,8 @@ struct DeviceStorage {
     // use release_mesh_tensor instead.
     tt::tt_metal::MeshTensor& get_mesh_tensor();
 
-    // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated.
+    // Moves out the MeshTensor this DeviceStorage holds, throws if the DeviceStorage is deallocated or is a retained
+    // view.
     // post-condition: this DeviceStorage will be equivalent to a default constructed DeviceStorage.
     tt::tt_metal::MeshTensor release_mesh_tensor();
 
