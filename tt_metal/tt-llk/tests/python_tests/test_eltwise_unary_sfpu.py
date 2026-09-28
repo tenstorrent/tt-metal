@@ -1138,6 +1138,7 @@ def eltwise_unary_sfpu(
     relu_min_int_threshold=None,
     twos_complement=False,
     extra_templates=(),
+    declared_golden=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1166,21 +1167,24 @@ def eltwise_unary_sfpu(
         spec_A=spec_A,
     )
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-        **({} if shift_amount is None else {"shift_amount": shift_amount}),
-        **(
-            {}
-            if relu_min_int_threshold is None
-            else {"relu_min_int_threshold": relu_min_int_threshold}
-        ),
-    )
+    if declared_golden is None:
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            mathop,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+            **({} if shift_amount is None else {"shift_amount": shift_amount}),
+            **(
+                {}
+                if relu_min_int_threshold is None
+                else {"relu_min_int_threshold": relu_min_int_threshold}
+            ),
+        )
+    else:
+        golden_tensor = declared_golden(src_A).to(format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -1385,6 +1389,7 @@ _TT_POLY_FP32_DEST = {
     "elu": (),
     "erf": (),
     "erfc": (),
+    "erfinv": (),
     "exp2": (),
     "expm1": (),
     "hardsigmoid": (),
@@ -1396,7 +1401,7 @@ _TT_POLY_FP32_DEST = {
     "sigmoid": (),
 }
 _TT_POLY_COPY_REBASE = {}
-_TT_POLY_PRECISION_SPLIT = ()
+_TT_POLY_PRECISION_SPLIT = ("erfinv",)
 _TT_POLY_ADAPTER_OPERATIONS = {}
 _TT_POLY_NATIVE_ARCHITECTURES = {}
 
@@ -1515,6 +1520,7 @@ _GENERATED_UNARY_CASES = [
     (MathOperation.Elu, "elu", False, False, 32, "None", "ckernel_sfpu_elu.h"),
     (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
+    (MathOperation.Erfinv, "erfinv", True, True, 8, "RC", "ckernel_sfpu_erfinv.h"),
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
     (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
     (
@@ -1582,6 +1588,7 @@ def test_tt_poly_generated_bf16_llk(
         mathop,
         FastMode.No,
         [32, 32],
+        **({} if native else _tt_poly_forward_arguments(op)),
         extra_templates=(
             _TTPolyGeneratedBF16(
                 op,
@@ -1595,6 +1602,88 @@ def test_tt_poly_generated_bf16_llk(
             ),
         ),
     )
+
+
+import importlib
+
+import numpy as np
+
+
+def _bf16_round_ftz(values):
+    rounded = torch.from_numpy(values).to(torch.bfloat16).to(torch.float64).numpy()
+    subnormal = (np.abs(rounded) < 2.0**-126) & (rounded != 0.0)
+    return np.where(subnormal, np.copysign(0.0, rounded), rounded)
+
+
+def _ulp_spacing(values):
+    words = (np.abs(values).astype(np.float32).view(np.uint32) >> 16).astype(np.uint32)
+    upper = (np.minimum(words + 1, 0x7F80) << 16).view(np.float32)
+    lower = (words << 16).view(np.float32)
+    spacing = (upper - lower).astype(np.float64)
+    return np.where(np.isinf(upper), np.float64(2.0**120), spacing)
+
+
+def _apply_finite_constants(golden, coordinate, domain_rows):
+    resolved = np.zeros(coordinate.shape, dtype=bool)
+    for direction, bound, inclusive, kind, value in domain_rows:
+        if direction == "below":
+            owned = coordinate <= bound if inclusive else coordinate < bound
+        else:
+            owned = coordinate >= bound if inclusive else coordinate > bound
+        owned &= np.isfinite(coordinate) & ~resolved
+        resolved |= owned
+        if kind == "constant":
+            golden[owned] = _bf16_round_ftz(
+                np.full(np.count_nonzero(owned), value, dtype=np.float64)
+            )
+    return golden
+
+
+def _tt_poly_reference_erfinv(x):
+    return getattr(importlib.import_module("torch"), "erfinv")(x.double(), **{})
+
+
+_TT_POLY_FORWARD_REFERENCES = {
+    "erfinv": (
+        _tt_poly_reference_erfinv,
+        ((0, 1), (128, 16256), (32768, 32769), (32896, 49024)),
+        (16255, 49023),
+        (),
+    ),
+}
+
+
+def _tt_poly_forward_arguments(op):
+    if op not in _TT_POLY_FORWARD_REFERENCES:
+        return {}
+    reference, intervals, boundaries, domain_rows = _TT_POLY_FORWARD_REFERENCES[op]
+
+    def golden_for(inputs):
+        golden = reference(inputs).double().numpy()
+        golden = _apply_finite_constants(golden, inputs.double().numpy(), domain_rows)
+        return torch.from_numpy(golden).to(torch.bfloat16)
+
+    raw = np.concatenate(
+        [np.arange(first, stop, dtype=np.uint32) for first, stop in intervals]
+    )
+    values = torch.from_numpy((raw << 16).view(np.float32))
+    with np.errstate(all="ignore"):
+        golden = golden_for(values)
+    finite = torch.isfinite(golden).numpy()
+    raw, values = raw[finite], values[finite]
+    assert len(raw), "declared reference has no finite BF16 LLK probes"
+    boundary_values = values[np.isin(raw, boundaries)]
+
+    def distribution(size, dtype, generator):
+        indices = np.linspace(0, len(raw) - 1, size, dtype=np.int64)
+        samples = values[indices].clone()
+        samples[: len(boundary_values)] = boundary_values
+        return samples.to(dtype)
+
+    return {
+        "spec_A": StimuliSpec(distribution=distribution, seed=0),
+        "declared_golden": golden_for,
+    }
 
 
 @pytest.mark.memory_layout("debug")
@@ -1618,6 +1707,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "elu",
     "erf",
     "erfc",
+    "erfinv",
     "exp2",
     "expm1",
     "hardsigmoid",
@@ -1858,6 +1948,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "elu",
     "erf",
     "erfc",
+    "erfinv",
     "exp2",
     "expm1",
     "hardsigmoid",
