@@ -193,7 +193,6 @@ static uint32_t num_worker_sems = 1;
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
 #ifdef FDS_SIGNALLING
-static std::array<uint32_t, max_num_worker_sems> expected_worker_completion_count = {0};
 static std::array<uint32_t, max_num_worker_sems> collected_worker_completion_count = {0};
 static uint32_t tracked_sub_device_mask = 0;
 
@@ -225,7 +224,7 @@ void collect_worker_completions() {
         const uint32_t sub_device_mask = 1U << sub_device_index;
         const uint32_t completed_worker_count = overlay::fds_signalling::dispatch_read_group_count(
             overlay::fds_signalling::go_group_for_sub_device(sub_device_index));
-        const uint32_t expected_worker_count = expected_worker_completion_count[sub_device_index];
+        const uint32_t expected_worker_count = workers_per_sub_device[sub_device_index];
         ASSERT(completed_worker_count <= expected_worker_count);
 
         const uint32_t collected_worker_count = collected_worker_completion_count[sub_device_index];
@@ -245,7 +244,7 @@ void collect_worker_completions() {
 }
 
 // Starts tracking FDS dones for a sub-device just before its go is queued. Clears the dones its workers
-// still hold on the wire from the previous go, then records how many workers must report.
+// still hold on the wire from the previous go.
 FORCE_INLINE
 void begin_worker_completion_tracking(uint32_t sub_device_index) {
     WAYPOINT("FCLW");
@@ -262,12 +261,16 @@ void begin_worker_completion_tracking(uint32_t sub_device_index) {
         workers_with_stale_completion &= ~(1U << worker_lane);
     }
 
-    expected_worker_completion_count[sub_device_index] = workers_per_sub_device[sub_device_index];
     collected_worker_completion_count[sub_device_index] = 0;
     tracked_sub_device_mask |= sub_device_mask;
     last_fds_tracked_sub_device_mask = tracked_sub_device_mask;
     WAYPOINT("FCLD");
 }
+
+// Tracking stops when a sub-device's dones reach its worker count, so no sub-device may be tracked when the
+// worker counts are updated.
+FORCE_INLINE
+void assert_no_sub_device_tracked() { ASSERT(tracked_sub_device_mask == 0); }
 
 FORCE_INLINE
 void init_fds_signalling() {
@@ -313,6 +316,7 @@ void drain_fds_go_wire() {
 #else
 FORCE_INLINE void collect_worker_completions() {}
 FORCE_INLINE void begin_worker_completion_tracking(uint32_t) {}
+FORCE_INLINE void assert_no_sub_device_tracked() {}
 FORCE_INLINE void init_fds_signalling() {}
 FORCE_INLINE void drain_fds_go_wire() {}
 #endif
@@ -731,10 +735,6 @@ void process_dispatch_s_wait_cmd() {
 FORCE_INLINE
 void set_num_worker_sems() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
-#ifdef FDS_SIGNALLING
-    // The worker-semaphore count is about to change, so no round may be open against the old count.
-    ASSERT(tracked_sub_device_mask == 0);
-#endif
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -890,6 +890,7 @@ void kernel_main() {
                 break;
             case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
                 DPRINT("CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS\n");
+                assert_no_sub_device_tracked();
                 cmd_ptr += set_sub_device_worker_counts<telemetry_enabled>(
                     cmd_ptr,
                     workers_per_sub_device,
