@@ -55,6 +55,8 @@ class KDAProgramConfig:
     # Explicit projection matmul schedules; None keeps the auto-selected ttnn.linear configs.
     input_projection_minimal_matmul_config: ttnn.MinimalMatmulConfig | None = None
     output_projection_program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None = None
+    # Stage the sliced QKV block in L1 for its untilize; only for local lengths where it fits comfortably.
+    stage_qkv_in_l1: bool = False
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -106,8 +108,10 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
     group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
     if active_seq_len_local not in group_chunks:
         raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
-    # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
-    input_projection, output_projection = _galaxy_projection_configs() if active_seq_len_local == 640 else (None, None)
+    # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs and
+    # DRAM QKV staging (the 640x9216 BF16 block is ~98 KB per core in L1).
+    galaxy = active_seq_len_local == 640
+    input_projection, output_projection = _galaxy_projection_configs() if galaxy else (None, None)
     return KDAProgramConfig(
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
@@ -121,4 +125,5 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         input_projection_minimal_matmul_config=input_projection,
         output_projection_program_config=output_projection,
+        stage_qkv_in_l1=galaxy,
     )
