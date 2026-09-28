@@ -14,7 +14,7 @@ Note: the dashboard's prior chunk time is 225.5 ms (the prior's X.3 profile); th
 | 2026-09-28 07:55 | X.2 | perf picks | approval point | ad-hoc op profile: vs 1x4 final (204.9 ms) the 2x2 chunk (278.5 ms) loses +47 ms in fabric dispatch/combine and +28.5 ms in full SDPA (HiFi4 under rule 7 vs 1x4's HiFi2). Owner: "just do hifi2 and that's it" -> P.1 (preset A for full layers), gate reruns the full-layer attention component tests and full_dense/full_moe swap tests (monitoring point 6), last rung, profile; X.3 now depends on P.1 | - |
 | 2026-09-28 14:00-14:40 | P.1 X.3 O.1 | gates | - | P.1 (SDPA preset A): device 278.5 -> 249.9 ms, frozen full-layer attention component + swap tests rerun and pass; X.3 full 56k: layer PCC 0.9984-0.9988, state 0.9963, TTFT 2524 ms; O.1: 8 fork calls, 0 uncovered, 0 failed across all models' cases (fork test harnesses generalized to dispatch groups > 1; no fork code changed) | 3187fc945e0, bc86acc0474, a0757f27235 |
 
-## Run1 complete (2026-09-28 14:40): 61/61 PASS, no retries, no debugger, no owner resets
+## Run1 complete (2026-09-28 14:40): 60/60 PASS, no retries, no debugger, no owner resets
 
 vs the 1x4 prior (final state, 204.9 ms chunk after its perf work):
 - accuracy (X.3 full 56k): identical to 4 digits (layer PCC 0.9984-0.9988, state min 0.9963)
