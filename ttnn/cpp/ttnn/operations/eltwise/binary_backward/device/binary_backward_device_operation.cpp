@@ -27,6 +27,10 @@ bool is_supported_dtype(DataType dtype) {
 std::string_view op_name_of(BinaryBackwardOpType op_type) {
     switch (op_type) {
         case BinaryBackwardOpType::MUL_BW: return "MUL_BW";
+        case BinaryBackwardOpType::ADD_BW: return "ADD_BW";
+        case BinaryBackwardOpType::SUB_BW: return "SUB_BW";
+        case BinaryBackwardOpType::RSUB_BW: return "RSUB_BW";
+        case BinaryBackwardOpType::DIV_BW: return "DIV_BW";
     }
     return "BINARY_BW";
 }

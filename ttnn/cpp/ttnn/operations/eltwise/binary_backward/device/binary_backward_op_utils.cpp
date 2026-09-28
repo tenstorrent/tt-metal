@@ -17,7 +17,31 @@ constexpr BinaryBackwardKernelSpec kMulBw{
     .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_mul.cpp",
     .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
     .force_fp32_dest_acc = false,
-    .broadcast_reduce_kernel_path = {},
+};
+
+constexpr BinaryBackwardKernelSpec kAddBw{
+    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_add.cpp",
+    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+    .force_fp32_dest_acc = false,
+};
+
+constexpr BinaryBackwardKernelSpec kSubBw{
+    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_sub.cpp",
+    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+    .force_fp32_dest_acc = false,
+};
+
+constexpr BinaryBackwardKernelSpec kRsubBw{
+    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_rsub.cpp",
+    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+    .force_fp32_dest_acc = false,
+};
+
+// div_bw hits Recip + Square inside the kernel; fp32 dest acc keeps 1/other² accurate.
+constexpr BinaryBackwardKernelSpec kDivBw{
+    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_div.cpp",
+    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+    .force_fp32_dest_acc = true,
 };
 
 }  // namespace
@@ -25,6 +49,10 @@ constexpr BinaryBackwardKernelSpec kMulBw{
 const BinaryBackwardKernelSpec& kernel_spec(BinaryBackwardOpType op_type) {
     switch (op_type) {
         case BinaryBackwardOpType::MUL_BW: return kMulBw;
+        case BinaryBackwardOpType::ADD_BW: return kAddBw;
+        case BinaryBackwardOpType::SUB_BW: return kSubBw;
+        case BinaryBackwardOpType::RSUB_BW: return kRsubBw;
+        case BinaryBackwardOpType::DIV_BW: return kDivBw;
     }
     TT_THROW("binary_backward: unknown BinaryBackwardOpType={}", static_cast<uint32_t>(op_type));
 }
