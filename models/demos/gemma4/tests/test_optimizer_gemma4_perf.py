@@ -4,7 +4,8 @@
 
 The Gemma 4 counterpart of models/tt_transformers/tests/test_optimizer_perf.py: the same stages,
 signposts and printed lines, through gemma4's own Generator (Gemma4Generator.from_pretrained ->
-warmup_model_prefill -> prefill_forward_text -> decode_forward, as demo/text_demo_v2.py drives it),
+prefill_forward_text -> decode_forward, as demo/text_demo_v2.py drives it, without its warmup of
+every prefill length),
 with on-device greedy sampling; each decode step's token comes back to the host, as in the demo.
 
   TT_PERF_OSL_TOKENS   output length (default 256: 255 timed decode steps)
@@ -53,8 +54,14 @@ from models.demos.gemma4.tests.test_optimizer_gemma4_pcc import encode_text  # n
 
 
 def signpost(name: str, enabled: bool) -> None:
-    """Tracy signpost, only under the device profiler. Call sites pass literal names (an optimizer's
-    harness scanner reads `signpost("...")` calls from the source)."""
+    """Tracy signpost when `enabled`. Call sites pass literal names (an optimizer's harness scanner
+    reads `signpost("...")` calls from the source).
+
+    The stage markers are emitted in every mode, not only under the device profiler: tt-opt's
+    call-site discovery runs this test unprofiled and tags each ttnn call with the stage its
+    signposts put it in. Gated on the profiler, every record carried no stage and prefill and
+    decode calls of one shape could not be told apart (2026-09-28). Outside a capture
+    tracy.signpost is a tracy_message plus a log line."""
     if not enabled:
         return
     try:
@@ -149,13 +156,12 @@ def test_optimizer_gemma4_perf(monkeypatch):
                 1, paged_attention_config.max_num_blocks
             )
 
-            if enable_trace:
-                # Captures the prefill traces, compiling full-depth prefills at several sequence
-                # lengths. Only a traced run needs it: under the profiler (trace off) those forwards
-                # were most of a capture that reached 38 GB before it finished (2026-09-28).
-                generator.warmup_model_prefill(
-                    kv_cache=tt_kv_cache, enable_trace=enable_trace, can_sample_on_device=True, greedy_only=True
-                )
+            # No warmup_model_prefill: it captures a prefill trace for every supported length (128,
+            # 512 and 1024 here), and this test only ever runs 128 tokens. The two unused captures
+            # were ~52 s of a ~111 s timed run (2026-09-28). The warm-up prefill() below compiles
+            # and captures the 128-token trace on its first traced call (the generator captures a
+            # length it has no trace for), before any decode trace exists, which is the order the
+            # warmup kept.
 
             def prefill():
                 out = generator.prefill_forward_text(
@@ -183,7 +189,8 @@ def test_optimizer_gemma4_perf(monkeypatch):
                 )
                 return decode_out.long().view(1, 1)
 
-            # Warm-up: one prefill, so the prefill trace is captured before timing. The decode trace is
+            # Warm-up: one prefill, which compiles and captures the prefill trace before timing (and
+            # compiles the eager path under the profiler). The decode trace is
             # captured by the first decode step after the timed prefills (the demo's order); capturing
             # it before them and replaying it after three prefill replays never completed on QB2
             # (2026-09-28), while the demo's prefill-then-decode order ran.
@@ -194,12 +201,13 @@ def test_optimizer_gemma4_perf(monkeypatch):
             prefill_ms = []
             first_token = None
             for _ in range(prefill_samples):
-                signpost("stage:prefill", profiling and not DECODE_ONLY)
+                # Stage markers in every mode (see signpost); each sits outside its timed span.
+                signpost("stage:prefill", not DECODE_ONLY)
                 started = time.perf_counter()
                 first_token = prefill()
                 ttnn.synchronize_device(mesh_device)
                 prefill_ms.append((time.perf_counter() - started) * 1000.0)
-                signpost("stage:prefill:end", profiling and not DECODE_ONLY)
+                signpost("stage:prefill:end", not DECODE_ONLY)
             ttft_ms = statistics.median(prefill_ms)
             signpost("stop", profiling and PREFILL_ONLY)
 
@@ -212,14 +220,14 @@ def test_optimizer_gemma4_perf(monkeypatch):
                 current_pos += 1
                 ttnn.synchronize_device(mesh_device)
                 signpost("start", profiling and DECODE_ONLY)
-                signpost("stage:decode", profiling)
+                signpost("stage:decode", True)
                 decode_start = time.perf_counter()
                 for _ in range(decode_tokens):
                     out_tok = decode_step(out_tok, current_pos)
                     current_pos += 1
                 ttnn.synchronize_device(mesh_device)
                 decode_seconds = time.perf_counter() - decode_start
-                signpost("stage:decode:end", profiling)
+                signpost("stage:decode:end", True)
                 signpost("stop", profiling)
 
             wall_ms = ttft_ms + decode_seconds * 1000.0
