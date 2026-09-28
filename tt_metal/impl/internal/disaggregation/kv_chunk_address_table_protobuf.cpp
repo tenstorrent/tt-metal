@@ -26,9 +26,9 @@ namespace detail {
 
 namespace {
 
-// Run detection: largest chunk_step considered when looking for a periodic address-delta
-// sequence within a (slot, layer) row. Covers block-cyclic layouts up to 64 banks.
-constexpr uint32_t kMaxRunStep = 64;
+// Run detection: largest chunk_step considered when looking for a periodic (slot, layer) row.
+// Covers block-cyclic layouts up to 512 banks; the 16-galaxy decode table repeats every 256 chunks.
+constexpr uint32_t kMaxRunStep = 512;
 
 // Dual-write threshold: while the estimated payload (entries mirror + runs) stays below this,
 // STRIDED_ROWS configs also mirror every chunk into `entries` so pre-runs readers keep
@@ -60,15 +60,16 @@ bool is_unset(const KvCacheLocation& loc) {
     return loc.noc_addr == 0 && loc.size_bytes == 0 && *loc.device_group_index == 0;
 }
 
-// The smallest s with the row's address-delta sequence periodic (addresses affine per residue
-// class mod s), or 0 if none. s is capped at (n-1)/2 so the period is PROVEN by at least one
+// The smallest s such that the row's address-delta sequence is periodic in s (addresses affine
+// per residue class mod s) AND the device group is constant per residue class, or 0 if none. A
+// block-cyclic layout that also rotates across chips has both periods equal, so one run per
+// residue carries its own group. s is capped at (n-1)/2 so the period is PROVEN by at least one
 // repetition — any sequence trivially "fits" a period covering it once, which would compress
 // nothing. 0 = no proven period -> the config cannot be STRIDED_ROWS.
 //
 // Cost: O(n · min(n, kMaxRunStep)) per row, once per export per UNROLLED config (never on the
-// transfer hot path). Measured at 4.4 ms for a 61-layer x 8-slot x 4000-chunk table
-// (1.95M chunks total) — noise against the serialization it precedes.
-uint32_t delta_period(std::span<const KvCacheLocation> row) {
+// transfer hot path).
+uint32_t row_period(std::span<const KvCacheLocation> row) {
     const uint32_t n = static_cast<uint32_t>(row.size());
     if (n <= 1) {
         return 1;
@@ -78,6 +79,11 @@ uint32_t delta_period(std::span<const KvCacheLocation> row) {
         bool ok = true;
         for (uint32_t i = s; i + 1 < n && ok; i++) {
             if (row[i + 1].noc_addr - row[i].noc_addr != row[i - s + 1].noc_addr - row[i - s].noc_addr) {
+                ok = false;
+            }
+        }
+        for (uint32_t i = s; i < n && ok; i++) {
+            if (row[i].device_group_index != row[i - s].device_group_index) {
                 ok = false;
             }
         }
@@ -153,8 +159,8 @@ void emit_run(
 }
 
 // Detection pass for the UNROLLED export path: a config converts to STRIDED_ROWS iff EVERY
-// populated row is dense (no unset holes) with uniform size/group and a proven delta period
-// (see delta_period). All-unset rows are tolerated (they carry no data and read back zeroed),
+// populated row is dense (no unset holes) with uniform size and a proven period in both address
+// and device group (see row_period). All-unset rows are tolerated (they carry no data and read back zeroed),
 // but at least one must exist — an all-unset config would emit zero runs, which import
 // rejects as malformed, so it stays UNROLLED.
 bool config_compressible(
@@ -173,11 +179,10 @@ bool config_compressible(
             if (std::any_of(row.begin(), row.end(), is_unset)) {
                 return false;  // holes — can't cover densely
             }
-            const auto& first = row.front();
-            const bool uniform = std::all_of(row.begin(), row.end(), [&](const KvCacheLocation& l) {
-                return l.size_bytes == first.size_bytes && l.device_group_index == first.device_group_index;
-            });
-            if (!uniform || delta_period(row) == 0) {
+            const uint32_t size_bytes = row.front().size_bytes;
+            const bool uniform_size = std::all_of(
+                row.begin(), row.end(), [&](const KvCacheLocation& l) { return l.size_bytes == size_bytes; });
+            if (!uniform_size || row_period(row) == 0) {
                 return false;
             }
         }
@@ -199,30 +204,41 @@ void emit_row_runs(
     for (uint32_t r = 0; r < row.step; r++) {
         const uint32_t count = (npc - r + row.step - 1) / row.step;
         emit_run(
-            pb, c, slot, layer, r, row.step, count, row.bases[r], row.strides[r], row.size_bytes,
-            *row.device_group_index);
+            pb,
+            c,
+            slot,
+            layer,
+            r,
+            row.step,
+            count,
+            row.bases[r],
+            row.strides[r],
+            row.size_bytes,
+            *row.device_group_indices[r]);
     }
 }
 
 // Detect a populated unrolled row's strided structure as a Row. Call only when
-// config_compressible() returned true — then delta_period() is guaranteed nonzero.
+// config_compressible() returned true — then row_period() is guaranteed nonzero.
 Row detect_row(std::span<const KvCacheLocation> row) {
     Row out;
-    out.step = delta_period(row);
+    out.step = row_period(row);
     out.size_bytes = row.front().size_bytes;
-    out.device_group_index = row.front().device_group_index;
     out.bases.resize(out.step);
     out.strides.resize(out.step);
+    out.device_group_indices.resize(out.step);
     for (uint32_t r = 0; r < out.step; r++) {
         const uint32_t count = (static_cast<uint32_t>(row.size()) - r + out.step - 1) / out.step;
         out.bases[r] = row[r].noc_addr;
         out.strides[r] = static_cast<int64_t>(count > 1 ? row[r + out.step].noc_addr - row[r].noc_addr : 0);
+        out.device_group_indices[r] = row[r].device_group_index;
     }
     return out;
 }
 
 // Emit one run per residue class for every populated row of a config. Call only when
-// config_compressible() returned true — rows are then hole-free, uniform, and periodic.
+// config_compressible() returned true — rows are then hole-free, uniform in size, and periodic in
+// address and device group.
 void emit_config_runs(
     ::tt::disaggregation::proto::KvChunkAddressTable& pb,
     const KvChunkAddressTable::UnrolledGrid& map,
@@ -477,14 +493,15 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
 
     // Strided runs: instantiate a StridedRowMap per STRIDED_ROWS config. Rows must tile
     // densely — each populated row has one run per residue class 0..step-1 with the exact
-    // counts implied by the geometry; anything else is rejected as malformed.
+    // counts implied by the geometry; anything else is rejected as malformed. Each run carries
+    // its residue's device group.
     {
         struct RowAccum {
             uint32_t step = 0;
             uint32_t size_bytes = 0;
-            uint32_t group = 0;
             std::vector<uint64_t> bases;  // indexed by start_chunk (residue)
             std::vector<int64_t> strides;
+            std::vector<uint32_t> groups;
             std::vector<bool> seen;
         };
         std::map<std::tuple<uint32_t, uint32_t, uint32_t>, RowAccum> rows;
@@ -518,13 +535,11 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
             if (acc.bases.empty()) {
                 acc.step = run.chunk_step();
                 acc.size_bytes = run.size_bytes();
-                acc.group = run.device_group_index();
                 acc.bases.resize(run.chunk_step());
                 acc.strides.resize(run.chunk_step());
+                acc.groups.resize(run.chunk_step());
                 acc.seen.resize(run.chunk_step());
-            } else if (
-                acc.step != run.chunk_step() || acc.size_bytes != run.size_bytes() ||
-                acc.group != run.device_group_index()) {
+            } else if (acc.step != run.chunk_step() || acc.size_bytes != run.size_bytes()) {
                 throw std::runtime_error("inconsistent runs for one row in KvChunkAddressTable proto");
             }
             if (acc.seen[run.start_chunk()]) {
@@ -533,6 +548,7 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
             acc.seen[run.start_chunk()] = true;
             acc.bases[run.start_chunk()] = run.base_noc_addr();
             acc.strides[run.start_chunk()] = run.addr_stride();
+            acc.groups[run.start_chunk()] = run.device_group_index();
         }
         for (const auto& [key, acc] : rows) {
             if (std::any_of(acc.seen.begin(), acc.seen.end(), [](bool s) { return !s; })) {
@@ -554,9 +570,12 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
             auto& row = map.rows[static_cast<size_t>(slot) * table.config(cid).num_layers + layer];
             row.step = acc.step;
             row.size_bytes = acc.size_bytes;
-            row.device_group_index = DeviceGroupIndex{acc.group};
             row.bases = acc.bases;
             row.strides = acc.strides;
+            row.device_group_indices.reserve(acc.groups.size());
+            for (const uint32_t g : acc.groups) {
+                row.device_group_indices.emplace_back(g);
+            }
         }
         for (auto& [cid, map] : strided_maps) {
             table.install_strided_map(cid, std::move(map));
