@@ -222,6 +222,12 @@ TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsEmptyWorkload) {
     MeshWorkload workload;
 
     EXPECT_THROW(experimental::program_preparation::prepare(workload, mesh_device_.get()), std::exception);
+
+    // The rejected call must leave the workload open, so the caller can add a program and retry.
+    Program program = CreateProgram();
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
+    EXPECT_NO_THROW(workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(program)));
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(workload, mesh_device_.get()));
 }
 
 TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsReuseOnAnotherMeshDevice) {

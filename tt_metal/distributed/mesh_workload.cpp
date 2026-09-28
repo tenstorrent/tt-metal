@@ -530,6 +530,9 @@ ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDe
     // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
     TT_FATAL(
         !mesh_device->get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
+    // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
+    // check would leave the caller unable to fix the workload and retry.
+    TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
     workload.pimpl_->compile(mesh_device);
     ProgramCapacity result;
     const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
