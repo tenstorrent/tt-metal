@@ -6,7 +6,8 @@ set -euo pipefail
 cd "${TT_METAL_HOME:?Set TT_METAL_HOME}"
 model_dir=models/demos/qwen38_27b_qb2
 results="$PWD/generated/test_reports/qwen38_27b_qb2"
-mkdir -p "$results"
+logs="$PWD/generated/test_logs"
+mkdir -p "$results" "$logs"
 work=$(mktemp -d)
 server_pid=
 stop_server() {
@@ -90,7 +91,7 @@ for capacity in 1 8 16; do
         --async-scheduling --no-enable-prefix-caching --no-enable-chunked-prefill \
         --no-enable-log-requests --no-enable-log-outputs \
         --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-auto-tool-choice \
-        --additional-config "$tt_config" > "$work/server_$capacity.log" 2>&1 &
+        --additional-config "$tt_config" > "$logs/qwen38_server_$capacity.log" 2>&1 &
     server_pid=$!
     wait_started=$SECONDS
     while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do

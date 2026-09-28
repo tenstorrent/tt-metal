@@ -18,11 +18,11 @@ Batch-1 vLLM performance on QB2/P300x2:
 
 | Input / output tokens | Tokens/s/user | TTFT |
 | --- | ---: | ---: |
-| 128 / 128 | 40.37 | 69.30 ms |
+| 128 / 128 | 39.4 | 67.9 ms |
 
 ## Evaluation
 
-CI subset results:
+Evaluation results:
 
 - GPQA Diamond: 9/10 (90%).
 - Terminal-Bench 2.1: 4/5 (80%).
