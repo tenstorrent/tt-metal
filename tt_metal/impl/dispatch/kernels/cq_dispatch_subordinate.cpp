@@ -196,7 +196,6 @@ static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 static std::array<uint32_t, max_num_worker_sems> expected_worker_completion_count = {0};
 static std::array<uint32_t, max_num_worker_sems> collected_worker_completion_count = {0};
 static uint32_t tracked_sub_device_mask = 0;
-static uint32_t fds_last_go_push_timestamp = 0;
 
 FORCE_INLINE
 void push_auto_dispatch_entry(uint32_t value) {
@@ -213,7 +212,6 @@ void send_fds_go(uint32_t sub_device_index) {
     push_auto_dispatch_entry(go_token);
     push_auto_dispatch_entry(overlay::fds_signalling::idle_group_id);
     last_go_token = go_token;
-    fds_last_go_push_timestamp = get_timestamp_32b();
 }
 
 // Adds each tracked sub-device's newly arrived FDS dones to its worker completion semaphore, and stops
@@ -299,7 +297,6 @@ void init_fds_signalling() {
     // wire would be missed. Queue idle ahead of it; the pacing holds idle long enough for every worker to capture.
     overlay::fds_signalling::dispatch_write_go(overlay::fds_signalling::idle_group_id);
     last_go_token = overlay::fds_signalling::idle_group_id;
-    fds_last_go_push_timestamp = get_timestamp_32b();
     WAYPOINT("FACD");
 }
 
@@ -309,10 +306,7 @@ void drain_fds_go_wire() {
     const uint32_t drain_cycles = overlay::auto_dispatch_drain_cycles(
         overlay::dispatch_auto_dispatch_queue_depth,
         overlay::fds_signalling::dispatch_auto_dispatch_pacing_cycle_count);
-    const uint32_t elapsed_cycles = get_timestamp_32b() - fds_last_go_push_timestamp;
-    if (elapsed_cycles < drain_cycles) {
-        overlay::fds_signalling::wait_cycles(drain_cycles - elapsed_cycles);
-    }
+    overlay::fds_signalling::wait_cycles(drain_cycles);
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
 }
 
