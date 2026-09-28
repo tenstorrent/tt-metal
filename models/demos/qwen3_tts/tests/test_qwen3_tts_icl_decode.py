@@ -47,3 +47,15 @@ def test_decode_icl_audio_keeps_every_generated_frame(decoder_weights, split):
     # Must equal the generated span of one full-context decode.
     expected = decode_audio(codes_all, decoder_weights).squeeze()[split * SAMPLES_PER_FRAME :]
     torch.testing.assert_close(audio, expected, atol=1e-4, rtol=0)
+
+
+def test_decoder_is_causal_past_sliding_window(decoder_weights):
+    # The official decoder is causal (causal convs + sliding-window causal attention),
+    # so a prefix decodes identically whatever follows it, including once the total
+    # length exceeds the 72-frame attention window.
+    codes = torch.load(REF_CACHE, weights_only=True)["ref_codes"].long()
+    prefix = codes[:40]
+    joint = torch.cat([codes, codes])  # 102 frames > sliding_window
+    alone = decode_audio(prefix, decoder_weights).squeeze()
+    within = decode_audio(joint, decoder_weights).squeeze()[: alone.shape[-1]]
+    torch.testing.assert_close(alone, within, atol=1e-4, rtol=0)

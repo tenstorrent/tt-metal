@@ -1008,14 +1008,13 @@ def pre_transformer_attention(
     causal_mask = torch.full((seq_len, seq_len), float("-inf"), device=attn_weights.device, dtype=attn_weights.dtype)
     causal_mask = torch.triu(causal_mask, diagonal=1)
 
-    # Apply sliding window mask
+    # Apply sliding window mask: query i attends to keys j with i - sliding_window < j <= i
+    # (transformers create_sliding_window_causal_mask, as used by the official decoder).
     if sliding_window is not None and sliding_window < seq_len:
-        sliding_mask = torch.triu(
-            torch.full((seq_len, seq_len), float("-inf"), device=attn_weights.device, dtype=attn_weights.dtype),
-            diagonal=-sliding_window,
+        too_far = torch.tril(
+            torch.ones(seq_len, seq_len, dtype=torch.bool, device=attn_weights.device), diagonal=-sliding_window
         )
-        sliding_mask = torch.tril(sliding_mask, diagonal=-1)
-        causal_mask = causal_mask + sliding_mask
+        causal_mask = causal_mask.masked_fill(too_far, float("-inf"))
 
     attn_weights = attn_weights + causal_mask
 
