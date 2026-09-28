@@ -30,17 +30,16 @@ struct ScanWorkDistribution {
     tt::tt_metal::CoreRangeSet core_set;
 };
 
-ScanWorkDistribution distribute_scan(
-    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles, bool summary) {
+ScanWorkDistribution distribute_scan(tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles) {
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(batch_heads <= num_cores, "KDA recurrent scan heads {} exceed compute cores {}", batch_heads, num_cores);
+    // State columns evolve independently in both modes, so each head's value columns are split
+    // across as many cores as fit; per-column math is identical for any split.
     uint32_t value_blocks = 1;
-    if (!summary) {
-        for (uint32_t candidate = value_tiles; candidate >= 1; --candidate) {
-            if (value_tiles % candidate == 0 && batch_heads * candidate <= num_cores) {
-                value_blocks = candidate;
-                break;
-            }
+    for (uint32_t candidate = value_tiles; candidate >= 1; --candidate) {
+        if (value_tiles % candidate == 0 && batch_heads * candidate <= num_cores) {
+            value_blocks = candidate;
+            break;
         }
     }
     ScanWorkDistribution result;
@@ -77,7 +76,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
-    const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full, summary);
+    const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full);
     const auto& cores = distribution.core_set;
     const uint32_t Vt = distribution.value_tiles_per_core;
     const uint32_t cc = Ct * Ct;

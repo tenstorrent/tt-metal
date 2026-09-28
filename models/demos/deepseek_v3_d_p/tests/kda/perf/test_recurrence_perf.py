@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Single-device unit test for the Kimi-K3 KDA recurrence summary and scan at Galaxy SP8xTP4 shape.
+
+Per device: 24 TP-local heads, 640 local tokens (20 chunks of 32), key and value dimension 128,
+with the layer's HiFi4 FP32-accumulation compute config. Each op is timed as a traced replay
+loop. Set KDA_RECURRENCE_GOLDEN to a file prefix to save (first run) or bit-compare (later runs)
+the outputs. The latency bounds are calibrated for a single Galaxy Blackhole device.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import run_for_blackhole
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
+    device_protocol,
+    group_summary_height_sharded,
+    host_protocol,
+    run_recurrent,
+    run_summary,
+    to_device,
+)
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+
+pytestmark = [run_for_blackhole(), pytest.mark.perf]
+
+_HEADS = 24
+_CHUNKS = 20
+_DIM = 128
+_BF16 = frozenset({"kd", "q_decay", "final_decay"})
+_REPLAYS = 20
+# Galaxy single-device traced wall time, 2026-09-28: summary 242 us before splitting value columns
+# across cores, 229 us (227 us sharded) after; scan 299 us.
+_MAX_US = {"summary": 240.0, "summary_sharded": 240.0, "scan": 315.0}
+
+
+def _compute_config(device) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
+def _traced_us(device, op) -> tuple[float, list[ttnn.Tensor]]:
+    for output in op():
+        ttnn.deallocate(output)
+    ttnn.synchronize_device(device)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    outputs = op()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    start = time.perf_counter()
+    for _ in range(_REPLAYS):
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed_us = (time.perf_counter() - start) * 1e6 / _REPLAYS
+    ttnn.release_trace(device, trace_id)
+    return elapsed_us, outputs
+
+
+def _check_golden(name: str, outputs: list[torch.Tensor]) -> None:
+    prefix = os.environ.get("KDA_RECURRENCE_GOLDEN")
+    if not prefix:
+        return
+    path = Path(f"{prefix}.{name}.pt")
+    if path.exists():
+        for index, (expected, output) in enumerate(zip(torch.load(path), outputs)):
+            assert torch.equal(expected, output), f"{name} output {index} differs from saved outputs"
+        logger.info(f"{name} outputs bit-identical to {path}")
+    else:
+        torch.save(outputs, path)
+        logger.info(f"saved {name} outputs to {path}")
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
+@pytest.mark.parametrize("op_name", ["summary", "summary_sharded", "scan"])
+def test_kda_recurrence_perf(device, op_name) -> None:
+    host_inputs = host_protocol(_HEADS, _CHUNKS, _DIM, _DIM, bf16_names=_BF16, seed=117)
+    inputs = device_protocol(host_inputs, device)
+    actual_start = make_actual_start(device, 0)
+    compute_config = _compute_config(device)
+    if op_name.startswith("summary"):
+        # The layer height-shards summaries one head per core in L1.
+        memory_config = group_summary_height_sharded(device, _HEADS, _DIM) if op_name == "summary_sharded" else None
+
+        def op():
+            return run_summary(
+                inputs, actual_start=actual_start, compute_kernel_config=compute_config, memory_config=memory_config
+            )
+
+    else:
+        generator = torch.Generator().manual_seed(118)
+        state = to_device(0.05 * torch.randn(_HEADS, _DIM, _DIM, generator=generator), device)
+
+        def op():
+            return run_recurrent(inputs, state, actual_start=actual_start, compute_kernel_config=compute_config)
+
+    elapsed_us, outputs = _traced_us(device, op)
+    logger.info(f"KDA recurrence {op_name} heads={_HEADS} chunks={_CHUNKS} dim={_DIM}: {elapsed_us:.1f} us")
+    _check_golden(op_name.removesuffix("_sharded"), [ttnn.to_torch(output) for output in outputs])
+    assert elapsed_us <= _MAX_US[op_name], f"{op_name} {elapsed_us:.1f} us regressed past {_MAX_US[op_name]} us"
