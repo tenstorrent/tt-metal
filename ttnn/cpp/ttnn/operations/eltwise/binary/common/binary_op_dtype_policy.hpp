@@ -16,6 +16,8 @@ namespace dtype_sets {
 
 using DT = tt::tt_metal::DataType;
 
+inline constexpr std::array fp32_only{DT::FLOAT32};
+
 inline constexpr std::array float_only{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B};
 
 // NEXTAFTER steps by one ULP of the destination format, so it is defined only where the value in

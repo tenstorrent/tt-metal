@@ -185,31 +185,119 @@ def test_div_no_nan_fp32(device):
     assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
-def test_div_no_nan_fp32_quotient_refinement(device):
-    # These pairs give a quotient 2 ULP low with reciprocal-and-multiply on
-    # Wormhole, including one that fails with both old and new reciprocal seeds.
-    a = torch.tensor([0x4F518358, 0x3FCF913C], dtype=torch.int32).view(torch.float32)
-    b = torch.tensor([0x4EDD39E7, 0x3FE28788], dtype=torch.int32).view(torch.float32)
-    a = torch.cat([a, -a, a, -a]).repeat(128).reshape(32, 32)
-    b = torch.cat([b, b, -b, -b]).repeat(128).reshape(32, 32)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_div_no_nan_fp32_quotient_refinement(device, layout):
+    # Scale both adversarial pairs across the normal exponent range. Refining
+    # unscaled operands loses a subnormal residual even when a, b and a/b are normal.
+    a = torch.tensor([0x4F518358, 0x3FCF913C], dtype=torch.int32).view(torch.float32).double()
+    b = torch.tensor([0x4EDD39E7, 0x3FE28788], dtype=torch.int32).view(torch.float32).double()
+    shifts = torch.arange(-126, 127)[:, None] - torch.tensor([31, 0])
+    a, b = torch.ldexp(a, shifts).float().flatten(), torch.ldexp(b, shifts).float().flatten()
+    normal = (a >= torch.finfo(torch.float32).tiny) & (b >= torch.finfo(torch.float32).tiny)
+    a, b = a[normal], b[normal]
+    a, b = torch.cat([a, -a, a, -a]), torch.cat([b, b, -b, -b])
+    a, b = a.repeat(2)[:2048].reshape(64, 32), b.repeat(2)[:2048].reshape(64, 32)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=layout, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=layout, device=device)
+    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    expected = (a.double() / b.double()).float()
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+def test_div_no_nan_fp32_random_exponents(device):
+    generator = torch.Generator().manual_seed(58228)
+    a = torch.randint(0x00800000, 0x7F800000, (65536,), generator=generator, dtype=torch.int32).view(torch.float32)
+    b = torch.randint(0x00800000, 0x7F800000, (65536,), generator=generator, dtype=torch.int32).view(torch.float32)
+    a[::2], b[::3] = -a[::2], -b[::3]
+    expected = (a.double() / b.double()).float()
+    normal = torch.isfinite(expected) & (expected.abs() >= torch.finfo(torch.float32).tiny)
+    # Keep a fixed, tile-aligned shape without making accuracy claims about FTZ results.
+    a, b = torch.where(normal, a, 1.0).reshape(2048, 32), torch.where(normal, b, 1.0).reshape(2048, 32)
+    expected = (a.double() / b.double()).float()
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
-    expected = (a.to(torch.float64) / b.to(torch.float64)).to(torch.float32)
     assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_div_no_nan_zero_denominator(device, dtype):
-    # A zero divisor must yield positive zero, even for a nonfinite numerator.
+    # Cartesian product: both divisor signs for every numerator, including Inf/NaN.
     a = torch.tensor([0.0, -0.0, 1.0, -1.0, float("inf"), -float("inf"), float("nan"), 2.0])
-    a = a.repeat(128).reshape(32, 32)
+    a = a.repeat_interleave(2).repeat(64).reshape(32, 32)
     b = torch.tensor([0.0, -0.0]).repeat(512).reshape(32, 32)
     input_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
     assert torch.all(actual == 0)
     assert not torch.any(torch.signbit(actual))
+
+
+def test_div_no_nan_fp32_special_values(device):
+    values = torch.tensor([0.0, -0.0, 1.0, -1.0, float("inf"), -float("inf"), float("nan"), -float("nan")])
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    a, b = a.flatten().repeat(16).reshape(32, 32), b.flatten().repeat(16).reshape(32, 32)
+    expected = a / b
+    # Preserve the FP32 reciprocal-and-multiply path: Inf/NaN divisors have a
+    # zero reciprocal, so finite numerators give zero and nonfinite ones give NaN.
+    expected = torch.where(~torch.isfinite(b), a * 0.0, expected)
+    expected = torch.where(b == 0, 0.0, expected)
+    expected = torch.where(expected == 0, 0.0, expected)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    finite_or_inf = ~torch.isnan(expected)
+    assert torch.equal(actual[finite_or_inf], expected[finite_or_inf])
+    assert torch.equal(torch.signbit(actual[finite_or_inf]), torch.signbit(expected[finite_or_inf]))
+
+
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_div_no_nan_fp32_broadcast(device, memory_config):
+    generator = torch.Generator().manual_seed(58228)
+    a = torch.randn((2, 1, 32, 32), generator=generator)
+    b = torch.randn((1, 3, 1, 32), generator=generator)
+    b[..., 0] = 0.0
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.div_no_nan(input_a, input_b, memory_config=memory_config)
+    expected = torch.where(b == 0, 0.0, (a.double() / b.double()).float())
+    assert output.memory_config() == memory_config
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(output), ulp_threshold=1)
+
+
+def test_div_no_nan_fp32_subnormal_compatibility(device):
+    tiny = torch.finfo(torch.float32).tiny
+    values = torch.tensor(
+        [
+            0.0,
+            -0.0,
+            2.0**-149,
+            -(2.0**-149),
+            tiny / 2,
+            -tiny / 2,
+            tiny,
+            -tiny,
+            1.0,
+            -1.0,
+            float("inf"),
+            -float("inf"),
+            float("nan"),
+            -float("nan"),
+            2.0,
+            -2.0,
+        ]
+    )
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    a, b = a.flatten().repeat(4).reshape(32, 32), b.flatten().repeat(4).reshape(32, 32)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    baseline = ttnn.where(ttnn.eqz(input_b), 0.0, ttnn.multiply(input_a, ttnn.reciprocal(input_b)))
+    expected, actual = ttnn.to_torch(baseline), ttnn.to_torch(ttnn.div_no_nan(input_a, input_b))
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    non_nan = ~torch.isnan(expected)
+    assert torch.equal(actual[non_nan], expected[non_nan])
+    assert torch.equal(torch.signbit(actual[non_nan]), torch.signbit(expected[non_nan]))
 
 
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])

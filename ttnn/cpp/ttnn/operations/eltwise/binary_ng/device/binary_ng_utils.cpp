@@ -166,6 +166,7 @@ OpConfig::OpConfig(
                 binary_op = FpuBinaryOp::MUL;
             }
             break;
+        case BinaryOpType::DIV_NO_NAN: binary_op = SfpuBinaryOp::DIV_NO_NAN; break;
         case BinaryOpType::DIV_FLOOR: binary_op = SfpuBinaryOp::DIV_FLOOR; break;
         case BinaryOpType::DIV_TRUNC: binary_op = SfpuBinaryOp::DIV_TRUNC; break;
         case BinaryOpType::REMAINDER: binary_op = SfpuBinaryOp::REMAINDER; break;
@@ -461,6 +462,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             } else {
                 return {"div_binary_tile_init();", "div_binary_tile"};
             }
+        case DIV_NO_NAN: return {"div_binary_tile_init();", "div_no_nan_binary_tile"};
         case DIV_FLOOR: return {"div_int32_floor_tile_init();", "div_int32_floor_tile"};
         case DIV_TRUNC: return {"div_int32_trunc_tile_init();", "div_int32_trunc_tile"};
         case REMAINDER:

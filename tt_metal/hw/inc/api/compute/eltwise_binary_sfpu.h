@@ -64,6 +64,21 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
+#ifndef ARCH_QUASAR
+// Internal FP32 div_no_nan entry point. Uses the reciprocal constants from div_binary_tile_init.
+ALWI void div_no_nan_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        true,
+        calculate_sfpu_binary_div_no_nan,
+        (8 /* ITERATIONS */),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+#endif
+
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
