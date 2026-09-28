@@ -22,7 +22,48 @@ constexpr uint32_t mcast_end_x = get_compile_time_arg_val(5);
 constexpr uint32_t mcast_end_y = get_compile_time_arg_val(6);
 constexpr uint32_t num_active_cores = get_compile_time_arg_val(7);
 constexpr uint32_t block_size = get_compile_time_arg_val(8);
-constexpr auto input_args = TensorAccessorArgs<9>();
+constexpr uint32_t physical_tiles_w = get_compile_time_arg_val(9);
+constexpr uint32_t logical_tiles_h = get_compile_time_arg_val(10);
+constexpr uint32_t logical_tiles_w = get_compile_time_arg_val(11);
+constexpr uint32_t logical_last_tile_h = get_compile_time_arg_val(12);
+constexpr uint32_t logical_last_tile_w = get_compile_time_arg_val(13);
+constexpr auto input_args = TensorAccessorArgs<14>();
+
+template <typename AddrGen>
+void read_and_mask_tiles(
+    const AddrGen& input_addr_gen, const uint32_t start_tile_id, const uint32_t num_tiles, const uint32_t tile_bytes) {
+    read_tiles_by_row</* UseBarrier = */ false>(
+        cb_input, input_addr_gen, start_tile_id, num_tiles, tile_bytes, block_size);
+    noc_async_read_barrier();
+
+    // The Frobenius domain is the logical 2-D rectangle. Neutralize both partial edge lanes and complete physical
+    // tiles introduced by over-alignment before either the square reduction or the normalized output pass.
+    for (uint32_t tile_offset = 0; tile_offset < num_tiles; ++tile_offset) {
+        const uint32_t tile_id = start_tile_id + tile_offset;
+        const uint32_t tile_row = tile_id / physical_tiles_w;
+        const uint32_t tile_col = tile_id % physical_tiles_w;
+
+        if (tile_row >= logical_tiles_h || tile_col >= logical_tiles_w) {
+            fill_reserved_tiles_with_zero(cb_input, tile_offset, 1U, tile_bytes);
+            continue;
+        }
+
+        const bool is_last_logical_row = tile_row == logical_tiles_h - 1U;
+        const bool is_last_logical_col = tile_col == logical_tiles_w - 1U;
+        if (is_last_logical_row || is_last_logical_col) {
+            const uint32_t l1_addr = get_write_ptr(cb_input) + tile_offset * tile_bytes;
+            if (is_last_logical_row && is_last_logical_col) {
+                fill_pad_tile<uint16_t, logical_last_tile_w, logical_last_tile_h>(l1_addr, 0U);
+            } else if (is_last_logical_row) {
+                fill_pad_tile<uint16_t, tt::constants::TILE_WIDTH, logical_last_tile_h>(l1_addr, 0U);
+            } else {
+                fill_pad_tile<uint16_t, logical_last_tile_w, tt::constants::TILE_HEIGHT>(l1_addr, 0U);
+            }
+        }
+    }
+
+    cb_push_back(cb_input, block_size);
+}
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -69,7 +110,7 @@ void kernel_main() {
     {
         for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx += block_size) {
             const uint32_t current = std::min(block_size, num_tiles - tile_idx);
-            read_tiles_by_row(cb_input, input_addr_gen, start_tile_id + tile_idx, current, tile_bytes, block_size);
+            read_and_mask_tiles(input_addr_gen, start_tile_id + tile_idx, current, tile_bytes);
         }
     }
 
@@ -150,7 +191,7 @@ void kernel_main() {
     {
         for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx += block_size) {
             const uint32_t current = std::min(block_size, num_tiles - tile_idx);
-            read_tiles_by_row(cb_input, input_addr_gen, start_tile_id + tile_idx, current, tile_bytes, block_size);
+            read_and_mask_tiles(input_addr_gen, start_tile_id + tile_idx, current, tile_bytes);
         }
     }
 }
