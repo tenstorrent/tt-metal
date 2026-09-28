@@ -222,21 +222,18 @@ def allocate_kv_cache(
     geometry = PrefillGeometry(max_seq_len, num_users)
 
     def allocate_one():
-        # This still stages on the host, and at an auto-sized count that is the binding limit. For
-        # bfloat8_b, ttnn.zeros fills a std::vector<float> of shape.volume() and converts
+        # Allocate on the device, then zero it in place. ttnn.zeros would stage the whole cache on
+        # the host first: for bfloat8_b it fills a std::vector<float> of shape.volume() and converts
         # (ttnn/cpp/ttnn/operations/creation/creation.cpp), so the host pays 4 B/element for what the
-        # device holds at 1.0625: 52.5 GiB to place a 14.0 GiB buffer at 1,681 slots of 8K. Measuring
-        # ttnn.zeros without a device gives exactly 2.00 B/element at bfloat16 and 4.00 at float32,
-        # so the vector is the whole cost. It does not vary with capacity either, because slots x
-        # capacity is what DRAM fixes. Replacing this with ttnn.empty plus an in-place ttnn.fill
-        # keeps it on the device; that needs a Galaxy to verify against the NdShard config first.
-        return ttnn.zeros(
-            geometry.cache_shape,
-            dtype=cache_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=memory_config,
-        )
+        # device holds at 1.0625 -- 52.5 GiB to place a 14.0 GiB buffer at 1,681 slots of 8K, and it
+        # does not shrink as capacity rises, because slots x capacity is what DRAM fixes. The host,
+        # not DRAM, would cap every auto-sized deployment. ttnn.empty costs no host bytes and the
+        # fill writes through the existing buffer, so nothing is staged and nothing is copied.
+        cache = ttnn.empty(geometry.cache_shape, cache_dtype, ttnn.TILE_LAYOUT, mesh_device, memory_config)
+        # ttnn.empty is uninitialised and callers are promised zeros: tests read a fresh cache, and
+        # attention admits any row below the populated end, so leftover bytes would read as KV.
+        ttnn.fill(cache, 0.0, output_tensor=cache)
+        return cache
 
     allocated = []
     try:
