@@ -18,33 +18,44 @@ namespace ckernel {
 namespace sfpu {
 
 // Computes the reciprocal of a floating point value x.
+//
+// y = approx_recip(x) is a ~7-bit estimate. With e = 1 - x*y, two Newton-Raphson steps y1 = y*(1+e),
+// y2 = y1*(1+e^2) compose to y2 = y*(1 + e + e^2 + e^3); the bracket is evaluated as
+// s = 1 + t with t = e + e^2 + e^3 (relative error ~e^4 ~ 2^-28), then y = y*s. This is the
+// cubic correction of the full-tile _calculate_reciprocal_fast_24b_5c_ kernel below, in sfpi
+// form: no predicate and no programmable constant (1.0 is the hardware constant vConst1), so it
+// inlines into a caller's v_if without SFPPUSHC/SFPPOPC and packs into TTREPLAY.
+//
+// The last step is deliberately y*(1+t), not the fused t*y + y of the 24b_5c kernel: SFPMAD flushes
+// a subnormal *product* to zero, and for |x| > ~2^118 the correction t*y is below 2^-126, so the
+// fused form silently returns the raw 7-bit estimate there (measured: 2/2^125 came back as
+// 0x017F0000 instead of 0x01800000). Every product in this form is O(1)*O(1) or O(1)*O(e).
+//
+// Special inputs (measured on Blackhole with 2*recip(x) through Rdiv, fp32 dest; identical to the
+// predicated form on every lane listed):
+//  - approx_recip gives +inf for x = +0, -inf for x = -0 and for negative subnormals, +inf for positive
+//    subnormals (flushed), and +0 for x = +-inf, for +-NaN and for |x| >= 2^126 (the sign is lost there).
+//  - x = +-0 or +-inf: x*y is NaN, so e and t are NaN. SFPSWAP VEC_MIN_MAX routes a NaN operand to
+//    the max side, so min(t, 1.0) = 1.0, s = 2.0 and y = 2*y, which is y itself for
+//    y in {+-0, +-inf}. The same routing is what the 24b_5c kernel relies on.
+//  - |x| >= 2^126: y = +0, e = 1, t = 3 -> min -> 1, s = 2, y = +0.
+//  - NaN: approx_recip gives +0; e = NaN -> s = 2 -> y = +0.
 template <int max_iter = 2>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat x) {
-    // sfpi::approx_recip(x) will return ±0 for x = ±inf or x ≥ ±2**126, and ±inf for x = ±0.
     sfpi::vFloat y = sfpi::approx_recip(x);
 
-    // Optionally improve the approximation using Newton-Raphson.
-    if constexpr (max_iter > 0) {
-        // Normally, t = 2.0 - x * y, but we negate this (and negate again using y = y * -t later).
-        // On Blackhole, when x=0 and y=infinity (and vice versa), t=+NaN regardless of the operand signs.
-        // Negating the meaning of t makes it easier to detect NaN using a trivial sign check t>=0.
-        // Equivalently, we could use v_if (t >= 2.0) instead, but SFPI doesn't support SFPLE/SFPGT at the moment.
-        sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0;
-
-        if constexpr (max_iter > 1) {
-            sfpi::vFloat y1 = y * -t - 0.0f;
-            // If t=NaN, then t>=0.  This check consumes the SFPNOP slot of the preceding SFPMAD.
-            v_if(t < 0) {
-                t = x * y1 - sfpi::vConstFloatPrgm0;
-                y = y1 * -t - 0.0f;
-            }
-            v_endif;
-        } else {
-            // If t=NaN, then t>=0.  This check cannot be hidden in a SFPNOP slot as it depends on the result of the
-            // preceding SFPMAD.
-            v_if(t < 0) { y = y * -t - 0.0f; }
-            v_endif;
-        }
+    if constexpr (max_iter >= 2) {
+        sfpi::vFloat e = -x * y + 1.0f;  // SFPMAD with NEGATE_VA against vConst1
+        sfpi::vFloat t = e * e + e;
+        t = t * e + e;                     // e + e^2 + e^3
+        t = sfpi::min(t, 1.0f);            // NaN (x = +-0, +-inf) -> 1.0
+        const sfpi::vFloat s = t + 1.0f;   // 1 + e + e^2 + e^3; 2.0 for the special lanes
+        y = y * s;                         // no subnormal product: s is O(1)
+    } else if constexpr (max_iter == 1) {
+        sfpi::vFloat e = -x * y + 1.0f;
+        e = sfpi::min(e, 1.0f);            // NaN (x = +-0, +-inf) -> 1.0
+        const sfpi::vFloat s = e + 1.0f;   // 1 + e; 2.0 for the special lanes
+        y = y * s;
     }
 
     return y;
@@ -368,12 +379,11 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2>(in);
 }
 
+// sfpu_reciprocal_iter reads no programmable constant, so there is nothing to initialise.
+// Kept as a no-op so the ~25 callers that pair it with sfpu_reciprocal_iter / sfpu_reciprocal keep
+// compiling; vConstFloatPrgm0 is no longer owned by the reciprocal and callers may program it.
 template <bool APPROXIMATE = false>
-sfpi_inline void sfpu_reciprocal_init() {
-    if constexpr (!APPROXIMATE) {
-        sfpi::vConstFloatPrgm0 = 2.0f;
-    }
-}
+sfpi_inline void sfpu_reciprocal_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
@@ -390,8 +400,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void recip_init() {
     // Full-tile reciprocal owns the shared LOADMACRO/Misc configuration and, for precise FP32,
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
-    // Scalar/first-column sfpu_reciprocal_iter callers only need generic unary SFPU init plus
-    // sfpu_reciprocal_init; they must not pay for or clobber state with this full-tile setup.
+    // Scalar/first-column sfpu_reciprocal_iter callers only need generic unary SFPU init; they
+    // must not pay for or clobber state with this full-tile setup.
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + reciprocal's ADDR_MOD_6 + counter
     // reset), then the op-specific reciprocal setup below -- one self-contained init, matching exp_init.
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
@@ -400,7 +410,6 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
     if constexpr (APPROXIMATION_MODE) {
         _init_reciprocal_fast_7b_();
     } else if constexpr (is_fp32_dest_acc_en) {
