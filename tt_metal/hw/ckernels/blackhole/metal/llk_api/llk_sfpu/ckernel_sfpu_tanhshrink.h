@@ -21,8 +21,24 @@ namespace ckernel::sfpu {
 // return x - tanh(x). bf16 needs only ~2 result ULP there, so it uses a local degree-3
 // tanh polynomial (cheaper than the shared deg-6 _sfpu_tanh_polynomial_); fp32 keeps the
 // sigmoid-based accurate tanh (deg-3 would be ~1700 fp32 ULP).
+// bf16 coefficients: Q (small-|x| fit of (x - tanh(x))/x^3 on [0,1]) and P (tanh(|x|) fit on [1,3.3]).
+// Named because tanhshrink_init parks Q0, Q1 and P0 in vConstFloatPrgm0/1/2 for the bf16 loop.
+constexpr float TANHSHRINK_BF16_Q0 = 3.3329936862e-01f;
+constexpr float TANHSHRINK_BF16_Q1 = -1.3223160803e-01f;
+constexpr float TANHSHRINK_BF16_Q2 = 4.8076551408e-02f;
+constexpr float TANHSHRINK_BF16_Q3 = -1.0762925260e-02f;
+constexpr float TANHSHRINK_BF16_P0 = 6.1829000893e-02f;
+constexpr float TANHSHRINK_BF16_P1 = 1.0561303143e+00f;
+constexpr float TANHSHRINK_BF16_P2 = -4.0859283753e-01f;
+constexpr float TANHSHRINK_BF16_P3 = 5.3348409333e-02f;
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
+    // Loop-invariant constants loaded once and kept in LRegs (sfpi 7.83.0 never hoists a literal out of a
+    // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row). bf16: Q0/Q1/P0 are in
+    // Prgm0/1/2 from tanhshrink_init and q2, q3, p1 here. fp32: the row already fills all eight LRegs, so
+    // nothing is hoisted here; its exp reads log2(e) and -ln2_hi from Prgm1/2 instead (see the init).
+    HoistedIf<!is_fp32_dest_acc_en> q2 = TANHSHRINK_BF16_Q2, q3 = TANHSHRINK_BF16_Q3, p1 = TANHSHRINK_BF16_P1;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -44,8 +60,7 @@ inline void calculate_tanhshrink() {
                 -2.5107525289e-03f,
                 4.2079269770e-04f);
         } else {
-            Q = PolynomialEvaluator::eval(
-                u, 3.3329936862e-01f, -1.3223160803e-01f, 4.8076551408e-02f, -1.0762925260e-02f);
+            Q = PolynomialEvaluator::eval(u, sfpi::vConstFloatPrgm0, sfpi::vConstFloatPrgm1, q2, q3);
         }
         sfpi::vFloat result = x * u * Q;  // default = small path
 
@@ -58,7 +73,8 @@ inline void calculate_tanhshrink() {
                 // +/-inf stay exact and the exp argument is bounded to [-18, -2].
                 sfpi::vFloat axc = ax;
                 axc = sfpi::min(axc, 9.0f);
-                sfpi::vFloat e = _sfpu_exp_fp32_accurate_unsafe_(-2.f * axc);
+                sfpi::vFloat e = _sfpu_exp_fp32_accurate_<true>(
+                    -2.f * axc, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2, EXP_FP32_P0, EXP_FP32_P1);
                 sfpi::vFloat sig = sfpu_reciprocal_iter<2>(1.0f + e);  // sigmoid(2|x|)
                 sfpi::vFloat tanh_ax = 2.f * sig - 1.0f;               // tanh(|x|)
                 result = sfpi::copysgn(ax - tanh_ax, x);
@@ -66,8 +82,8 @@ inline void calculate_tanhshrink() {
                 // tanh(|x|) via a degree-3 minimax fit on [1,3.3].
                 // The poly crosses 1.0 monotonically near x~3.12 and stays >1 beyond, so the
                 // clamp to 1.0 holds the saturation tail exactly (including +/-inf).
-                sfpi::vFloat p = PolynomialEvaluator::eval(
-                    ax, 6.1829000893e-02f, 1.0561303143e+00f, -4.0859283753e-01f, 5.3348409333e-02f);
+                sfpi::vFloat p =
+                    PolynomialEvaluator::eval(ax, sfpi::vConstFloatPrgm2, p1, TANHSHRINK_BF16_P2, TANHSHRINK_BF16_P3);
                 p = sfpi::min(p, 1.0f);
                 sfpi::vFloat tanhx = sfpi::copysgn(p, x);  // tanh(-x) = -tanh(x)
                 result = x - tanhx;
@@ -87,11 +103,18 @@ inline void calculate_tanhshrink() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // The bf16 large-|x| path uses only local literal polynomials, so it needs no init.
     if constexpr (is_fp32_dest_acc_en) {
-        // The fp32 large-|x| path only needs the reciprocal Newton constants; the accurate
-        // exp it uses is pure arithmetic (no LUT / programmable constants).
+        // Prgm0 = 2.0f for the reciprocal's Newton step; Prgm1/2 = log2(e), -ln2_hi for the accurate exp
+        // (the row has no LReg to spare for them).
         sfpu_reciprocal_init<false>();
+        sfpi::vConstFloatPrgm1 = EXP_FP32_LOG2E;
+        sfpi::vConstFloatPrgm2 = EXP_FP32_NEG_LN2_HI;
+    } else {
+        // The bf16 path runs no reciprocal, so all three registers hold polynomial coefficients:
+        // Q0, Q1 of the small-|x| fit and P0 of the tanh fit (the rest live in LRegs, see the loop).
+        sfpi::vConstFloatPrgm0 = TANHSHRINK_BF16_Q0;
+        sfpi::vConstFloatPrgm1 = TANHSHRINK_BF16_Q1;
+        sfpi::vConstFloatPrgm2 = TANHSHRINK_BF16_P0;
     }
 }
 
