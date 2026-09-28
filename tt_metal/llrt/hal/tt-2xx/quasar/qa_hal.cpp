@@ -304,12 +304,14 @@ public:
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/internal/tt-2xx/quasar/noc");
-        auto quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
+        const char *quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
         // TODO: Use UMD supplied variant instead of env var
         // defaults to Quasar if no variant is set
         if (quasar_variant != nullptr && std::string(quasar_variant) == "horizon") {
+            log_info(LogMetal, "Using variant: Horizon");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
         } else {
+            log_info(LogMetal, "Using variant: Quasar");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
