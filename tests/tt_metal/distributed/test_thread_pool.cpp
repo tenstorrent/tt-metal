@@ -3,6 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <vector>
+
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -50,6 +57,109 @@ TEST(ThreadPoolTest, Exception) {
     auto exception_fn = []() { TT_THROW("Failed"); };
     thread_pool->enqueue(exception_fn);
     EXPECT_THROW(thread_pool->wait(), std::exception);
+}
+
+std::shared_ptr<ThreadPool> create_pool_per_device() {
+    return create_device_bound_thread_pool(
+        DEFAULT_CONTEXT_ID, MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices());
+}
+
+std::vector<uint32_t> one_call_per_device(uint32_t calls_per_device) {
+    uint32_t num_devices = MetalContext::instance(DEFAULT_CONTEXT_ID).get_cluster().number_of_user_devices();
+    std::vector<uint32_t> device_ids;
+    for (uint32_t round = 0; round < calls_per_device; round++) {
+        for (uint32_t device = 0; device < num_devices; device++) {
+            device_ids.push_back(device);
+        }
+    }
+    return device_ids;
+}
+
+// Every call runs exactly once, including when several calls map to the same device, and across many
+// back-to-back fan-outs whose tasks may still be in flight on the workers when the next one starts.
+TEST(ThreadPoolTest, ParallelForRunsEachCallOnce) {
+    auto thread_pool = create_pool_per_device();
+    for (uint32_t calls_per_device : {1u, 3u}) {
+        auto device_ids = one_call_per_device(calls_per_device);
+        std::vector<std::atomic<uint32_t>> runs(device_ids.size());
+        constexpr uint32_t NUM_FAN_OUTS = 10000;
+        for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
+            thread_pool->parallel_for(device_ids, [&runs](size_t call) { runs[call]++; });
+        }
+        for (const auto& count : runs) {
+            EXPECT_EQ(count.load(), NUM_FAN_OUTS);
+        }
+    }
+}
+
+// A call that takes long enough for the workers to wake up runs on them, not only on the caller.
+TEST(ThreadPoolTest, ParallelForUsesWorkers) {
+    auto thread_pool = create_pool_per_device();
+    auto device_ids = one_call_per_device(1);
+    std::vector<std::thread::id> ran_on(device_ids.size());
+    thread_pool->parallel_for(device_ids, [&ran_on](size_t call) {
+        ran_on[call] = std::this_thread::get_id();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    });
+    auto on_caller = std::count(ran_on.begin(), ran_on.end(), std::this_thread::get_id());
+    EXPECT_LT(on_caller, static_cast<int64_t>(ran_on.size()));
+}
+
+TEST(ThreadPoolTest, ParallelForException) {
+    auto thread_pool = create_pool_per_device();
+    auto device_ids = one_call_per_device(2);
+    std::atomic<uint32_t> runs = 0;
+    EXPECT_THROW(
+        thread_pool->parallel_for(
+            device_ids,
+            [&runs](size_t call) {
+                runs++;
+                if (call == 1) {
+                    TT_THROW("Failed");
+                }
+            }),
+        std::exception);
+    // The other calls still ran, and the pool is usable afterwards.
+    EXPECT_EQ(runs.load(), device_ids.size());
+    thread_pool->parallel_for(device_ids, [](size_t) {});
+}
+
+TEST(ThreadPoolTest, ParallelForEmpty) {
+    auto thread_pool = create_pool_per_device();
+    thread_pool->parallel_for({}, [](size_t) { FAIL(); });
+}
+
+// parallel_for waits only for its own calls, and tasks from enqueue() are still joined by wait().
+TEST(ThreadPoolTest, ParallelForWithEnqueue) {
+    auto thread_pool = create_pool_per_device();
+    auto device_ids = one_call_per_device(1);
+    std::atomic<uint32_t> enqueued_runs = 0, parallel_runs = 0;
+    for (uint32_t iter = 0; iter < 1000; iter++) {
+        thread_pool->enqueue([&enqueued_runs] { enqueued_runs++; }, iter % device_ids.size());
+        thread_pool->parallel_for(device_ids, [&parallel_runs](size_t) { parallel_runs++; });
+        EXPECT_EQ(parallel_runs.load(), (iter + 1) * device_ids.size());
+    }
+    thread_pool->wait();
+    EXPECT_EQ(enqueued_runs.load(), 1000u);
+}
+
+// Destroying the pool right after a fan-out, while workers may still hold the job, is safe.
+TEST(ThreadPoolTest, ParallelForThenDestroy) {
+    auto device_ids = one_call_per_device(1);
+    for (uint32_t iter = 0; iter < 50; iter++) {
+        auto thread_pool = create_pool_per_device();
+        std::atomic<uint32_t> runs = 0;
+        thread_pool->parallel_for(device_ids, [&runs](size_t) { runs++; });
+        EXPECT_EQ(runs.load(), device_ids.size());
+    }
+}
+
+TEST(ThreadPoolTest, ParallelForPassThrough) {
+    auto thread_pool = create_passthrough_thread_pool(DEFAULT_CONTEXT_ID);
+    std::vector<uint32_t> device_ids = {0, 0, 0};
+    std::vector<size_t> calls;
+    thread_pool->parallel_for(device_ids, [&calls](size_t call) { calls.push_back(call); });
+    EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
 }
 
 }  // namespace
