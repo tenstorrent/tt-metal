@@ -30,7 +30,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
              {"BH", a.batch_heads},
              {"K", a.key_dim},
              {"V", a.value_dim}},
-        .hw_config = ttnn::create_reader_datamovement_config(actual_start.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     ProgramSpec spec{
         .name = "kda_chronological_selections",

@@ -113,8 +113,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 73_753_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        # mean of 3 scheduled wh_n150 runs 2026-09-19..09-21 (78.01M..78.29M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
-        "wormhole": 78_107_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 77_800_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,  # Measured: ~77.7–77.9 ms
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {

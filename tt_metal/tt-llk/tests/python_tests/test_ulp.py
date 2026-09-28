@@ -31,6 +31,7 @@ from helpers.ulp import (
     UNMEASURABLE,
     _value_order_index,
     flushes_subnormals,
+    has_ulp_gate,
     local_step,
     nonfinite_disagreement_summary,
     nonfinite_mismatches,
@@ -1185,3 +1186,51 @@ def test_the_sweep_metric_matches_local_step_at_the_top_of_the_range(dtype):
     swept = float(local_ulp(np.array([largest]), fmt)[0])
     assert math.isfinite(swept)
     assert swept == pytest.approx(local_step(largest, dtype))
+
+
+# ── Integers are not ULP territory ──────────────────────────────────────────
+#
+# A step count says "how many representable values apart". For an integer format that is
+# always the arithmetic difference, the values are exact, and the only sensible verdict is
+# bit equality -- so ULP is meaningless there, not merely weaker, and every entry point
+# must refuse rather than compute something plausible.
+
+#: The torch dtypes an integer format lands in, including the containers the float bit
+#: arithmetic borrows: ``torch.int16`` is how a bfloat16's bits are read.
+TORCH_INT_DTYPES = (
+    torch.int8,
+    torch.uint8,
+    torch.int16,
+    torch.int32,
+    torch.int64,
+    torch.bool,
+)
+
+
+@pytest.mark.parametrize(
+    "fmt", [f for f in DataFormat if f.is_integer()], ids=lambda f: f.name
+)
+def test_no_integer_format_is_ulp_gateable(fmt):
+    assert not has_ulp_gate(fmt) and fmt not in ULP_FORMATS
+    with _refuses("no per-element ULP"):
+        ulp_dtype(fmt)
+
+
+@pytest.mark.parametrize("dtype", TORCH_INT_DTYPES, ids=str)
+def test_the_metric_refuses_every_integer_tensor_dtype(dtype):
+    """Every entry point, not just the distance: either of the other two could regress to
+    inventing a plausible integer step or flush policy. Including the bit containers --
+    reading a bfloat16 through ``torch.int16`` must not make an int16 *tensor*
+    measurable."""
+    values = torch.ones(4, dtype=dtype)
+    with _refuses("unsupported dtype"):
+        ulp_distance(values, values.clone())
+    with _refuses("unsupported dtype"):
+        flushes_subnormals(dtype)
+    with _refuses("unsupported dtype"):
+        local_step(1.0, dtype)
+    # `local_step` guards separately from `flushes_subnormals`, so an explicit override
+    # must not route around the refusal.
+    with _refuses("unsupported dtype"):
+        local_step(1.0, dtype, flush_subnormals=True)
+    assert dtype not in _ULP_DTYPES  # keyed on the float dtypes only

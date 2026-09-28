@@ -154,12 +154,12 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision and left
     // every other CB at Default; the named equivalent is an UnpackToDest entry for the input DFB.
-    ComputeUnpackModes unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (args.preserve_fp32_precision) {
         unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
     } else if (args.fp32_dest_acc_en && act_df == tt::DataFormat::Float32) {
@@ -192,24 +192,27 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
              {"per_core_block_dim", num_tile_per_core},
              {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
              {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
-        // Quasar (Gen2) rejects a ComputeGen1Config; emit the Gen2 equivalent there (no bfp_pack_precision_mode
-        // on Gen2 — MXFP replaces BFP). WH/BH keep the byte-identical legacy Gen1 config.
+        // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
+        // byte-identical legacy config, with the BFP pack knob in config_1xx.
         .hw_config = [&]() -> ComputeHardwareConfig {
             if (device->arch() == tt::ARCH::QUASAR) {
-                return ComputeGen2Config{
+                return ComputeHardwareConfig{
                     .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                     .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
                     .enable_32_bit_dest = args.fp32_dest_acc_en,
                     .unpack_modes = std::move(unpack_modes),
                 };
             }
-            return ComputeGen1Config{
+            return ComputeHardwareConfig{
                 .fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .sfpu_precision_mode = tt::tt_metal::Precision::Precise,  // legacy math_approx_mode = false
-                .bfp_pack_precision_mode =
-                    args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise : tt::tt_metal::Precision::Approximate,
                 .enable_32_bit_dest = args.fp32_dest_acc_en,
                 .unpack_modes = std::move(unpack_modes),
+                .config_1xx =
+                    ComputeHardwareConfig::Compute1XXConfig{
+                        .bfp_pack_precision_mode = args.bfp8_pack_precise ? tt::tt_metal::Precision::Precise
+                                                                          : tt::tt_metal::Precision::Approximate,
+                    },
             };
         }(),
     };

@@ -487,7 +487,7 @@ void kernel_main() {
                     ckl::input(
                         dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{
                     1 + (g << 1), 0u},
-                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<ex2pe_per_tile_output>{});
         }
         // End Normalization Factor Calculation

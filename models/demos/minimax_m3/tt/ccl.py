@@ -126,6 +126,17 @@ class CCLManager:
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
 
+    def release_scratch_buffers(self) -> None:
+        """Free every persistent ring-gather / high_bw-gather scratch buffer and forget it; each is lazily
+        re-created at its next use. The buffers are keyed by shape, and the cache-read ones are sized by the
+        KV-cache capacity, so a resident model that re-targets its capacity (TtPrefillRuntime.
+        reconfigure_capacity) would otherwise keep ~0.7 GB/chip of dead scratch per distinct capacity at 1M.
+        Safe between prefill calls: gathered tensors alias these buffers only inside one layer's attention."""
+        for cache in (self._ring_gather_buffers, self._high_bw_gather_buffers):
+            for t in cache.values():
+                ttnn.deallocate(t)
+            cache.clear()
+
     def get_ring_gather_buffer(self, key, n_kv, seq, head_dim, dtype):
         """Persistent ring-gather scratch for ``ring_joint`` SDPA — allocated ONCE and reused across every
         layer/chunk (replaces the per-call ``from_torch(zeros)`` that churned host + DRAM on every dense
