@@ -495,6 +495,9 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
+    # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
   model: qwen3.6-27b
   model_family: Qwen
@@ -513,6 +516,9 @@
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 3600 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_4k"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    # Reference accuracy: top-1/top-5 vs the committed HF .refpt (the other legs are TT-vs-TT).
+    # Same model load + prefill trace capture as traced_128, so it gets the same ceiling.
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/text_demo.py -k "accuracy_512"
   model: qwen3.6-35b-a3b
   model_family: Qwen
   skus:
@@ -1513,14 +1519,12 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    fail=0
     pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v" || fail=1
+      -k "resolution_480p and t2v" || exit $?
     pytest --timeout 3500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
-      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || fail=1
+      -k "(4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p) or (2x2sp0tp1nl2_linear_is_fsdp1 and resolution_480p)" || exit $?
     pytest --timeout 1700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || fail=1
-    exit $fail
+      -k "wh_4x8_sp1tp0 and resolution_720p and t2v" || exit $?
   model: wan-2.2-t2v
   model_family: Wan
   skus:
@@ -1724,6 +1728,9 @@
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    # Cover the served shape (1080p / ~6s / 25fps); 153 because 150 fails (num_frames-1) % 8 == 0.
+    # FPS arithmetic is guarded on CPU by models/tt_dit/tests/models/ltx/test_fps_conditioning_ltx.py.
+    export NUM_FRAMES=153 FPS=25
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 2100 models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py::test_pipeline_distilled -k "4x8sp1tp0nl2_ring_is_fsdp0" || exit $?
     # Run in the worker's ML environment after pytest has closed the TT devices.

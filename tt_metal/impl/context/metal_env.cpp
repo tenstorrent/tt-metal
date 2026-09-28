@@ -16,7 +16,6 @@
 #include "metal_context.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
 #include "profiler_state_manager.hpp"
@@ -645,7 +644,7 @@ uint32_t MetalEnv::get_l1_size() const {
 }
 uint32_t MetalEnv::get_dram_alignment() const { return impl_->get_hal().get_alignment(HalMemType::DRAM); }
 uint32_t MetalEnv::get_l1_alignment() const { return impl_->get_hal().get_alignment(HalMemType::L1); }
-uint32_t MetalEnv::get_arch_num_circular_buffers() const { return impl_->get_hal().get_arch_num_circular_buffers(); }
+uint32_t MetalEnv::get_num_dataflow_buffers() const { return impl_->get_hal().get_num_dataflow_buffers(); }
 uint32_t MetalEnv::get_max_worker_l1_unreserved_size() const {
     size_t l1_end = impl_->get_hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
                     impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
@@ -776,11 +775,6 @@ std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_me
         context_guard.release();
     }
     return result;
-}
-
-SubDevice MetalEnv::create_sub_device(ttsl::Span<const CoreRangeSet> cores) {
-    // Use SubDevice constructor marked as internal
-    return SubDevice(SubDeviceImpl(&MetalEnvAccessor(*this).impl(), cores));
 }
 
 }  // namespace tt::tt_metal

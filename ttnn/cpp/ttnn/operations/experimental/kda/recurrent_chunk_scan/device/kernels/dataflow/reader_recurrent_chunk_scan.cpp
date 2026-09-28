@@ -135,7 +135,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
         const uint32_t start = words[0];
         if constexpr (has_actual_end) {
-            const auto end = TensorAccessor(tensor::actual_end);
+            const auto end = TensorAccessor(*tensor::get_token_if_present<"actual_end">());
             noc.async_read(end, chronology, sizeof(uint32_t), {.page_id = 0}, {});
             noc.async_read_barrier();
             topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
