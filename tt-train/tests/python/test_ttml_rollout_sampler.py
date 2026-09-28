@@ -149,7 +149,7 @@ def _reuse_open_device(monkeypatch):
     monkeypatch.setattr(Qwen3GRPOCompleter, "setup_device", _qwen3_reuse_setup_device)
 
 
-def _to_capitals_chat_prompt(tokenizer, user_text: str) -> str:
+def _to_capitals_chat_prompt(tokenizer, user_text: str, **template_kwargs) -> str:
     return tokenizer.apply_chat_template(
         [
             {"role": "system", "content": CAPITALS_SYSTEM_PROMPT},
@@ -157,6 +157,7 @@ def _to_capitals_chat_prompt(tokenizer, user_text: str) -> str:
         ],
         tokenize=False,
         add_generation_prompt=True,
+        **template_kwargs,
     )
 
 
@@ -308,7 +309,7 @@ def test_qwen3_rollout_sampler_capital_of_france():
     sampler = _build_qwen3_sampler(completer, max_tokens=max_tokens)
 
     tokenizer = completer._ctx._tokenizer
-    prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is")
+    prompt_str = _to_capitals_chat_prompt(tokenizer, "The capital of France is", enable_thinking=False)
     prompt_ids = tokenizer.encode(prompt_str)
 
     batch = sampler.generate([prompt_ids])
