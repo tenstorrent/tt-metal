@@ -9,11 +9,11 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,32 +26,45 @@ struct ScanWorkDistribution {
     std::vector<tt::tt_metal::CoreCoord> cores;
     std::vector<uint32_t> head;
     std::vector<uint32_t> value_block;
+    uint32_t value_blocks = 1;
     uint32_t value_tiles_per_core = 1;
     tt::tt_metal::CoreRangeSet core_set;
 };
 
-ScanWorkDistribution distribute_scan(
-    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles, bool summary) {
-    const uint32_t num_cores = grid.x * grid.y;
-    TT_FATAL(batch_heads <= num_cores, "KDA recurrent scan heads {} exceed compute cores {}", batch_heads, num_cores);
+ScanWorkDistribution distribute_scan(tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles) {
+    TT_FATAL(
+        batch_heads <= grid.x * grid.y,
+        "KDA recurrent scan heads {} exceed compute cores {}",
+        batch_heads,
+        grid.x * grid.y);
+    // State columns evolve independently in both modes, so each head's value columns are split across as many
+    // cores as fit; per-column math is identical for any split. A head's blocks share one grid row so value
+    // block 0 can multicast the value-independent inputs to the rest.
     uint32_t value_blocks = 1;
-    if (!summary) {
-        for (uint32_t candidate = value_tiles; candidate >= 1; --candidate) {
-            if (value_tiles % candidate == 0 && batch_heads * candidate <= num_cores) {
-                value_blocks = candidate;
-                break;
-            }
+    for (uint32_t candidate = std::min<uint32_t>(value_tiles, grid.x); candidate > 1; --candidate) {
+        if (value_tiles % candidate == 0 && batch_heads <= (grid.x / candidate) * grid.y) {
+            value_blocks = candidate;
+            break;
         }
     }
+    const uint32_t heads_per_row = grid.x / value_blocks;
     ScanWorkDistribution result;
+    result.value_blocks = value_blocks;
     result.value_tiles_per_core = value_tiles / value_blocks;
-    for (uint32_t index = 0; index < batch_heads * value_blocks; ++index) {
-        const tt::tt_metal::CoreCoord core{index % grid.x, index / grid.x};
-        result.cores.push_back(core);
-        result.head.push_back(index / value_blocks);
-        result.value_block.push_back(index % value_blocks);
+    std::vector<tt::tt_metal::CoreRange> rows;
+    for (uint32_t row = 0; row * heads_per_row < batch_heads; ++row) {
+        const uint32_t row_heads = std::min(heads_per_row, batch_heads - row * heads_per_row);
+        rows.emplace_back(tt::tt_metal::CoreCoord{0, row}, tt::tt_metal::CoreCoord{row_heads * value_blocks - 1, row});
     }
-    result.core_set = tt::tt_metal::num_cores_to_corerangeset(batch_heads * value_blocks, grid, /*row_wise=*/true);
+    for (uint32_t head = 0; head < batch_heads; ++head) {
+        for (uint32_t block = 0; block < value_blocks; ++block) {
+            result.cores.push_back({(head % heads_per_row) * value_blocks + block, head / heads_per_row});
+            result.head.push_back(head);
+            result.value_block.push_back(block);
+        }
+    }
+    // Merged ranges keep dispatch to one multicast when the rows fill the same columns.
+    result.core_set = tt::tt_metal::CoreRangeSet(rows).merge_ranges();
     return result;
 }
 
@@ -77,9 +90,12 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
-    const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full, summary);
+    const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full);
     const auto& cores = distribution.core_set;
     const uint32_t Vt = distribution.value_tiles_per_core;
+    const uint32_t value_blocks = distribution.value_blocks;
+    // A head's value blocks share every V-independent chunk input: value block 0 reads it once and multicasts it.
+    const bool mcast_shared = value_blocks > 1;
     const uint32_t cc = Ct * Ct;
     const uint32_t ck = Ct * Kt;
     const uint32_t cv = Ct * Vt;
@@ -113,6 +129,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
 
+    const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
+    const tt::tt_metal::experimental::SemaphoreSpecName valid_semaphore_name{"valid"};
     const tt::tt_metal::experimental::TensorParamName v_beta_tensor_name{"v_beta"};
     const tt::tt_metal::experimental::TensorParamName kd_tensor_name{"kd"};
     const tt::tt_metal::experimental::TensorParamName q_decay_tensor_name{"q_decay"};
@@ -204,10 +222,15 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"Vt", Vt},
              {"Vt_full", Vt_full},
              {"summary", static_cast<uint32_t>(summary)},
-             {"groups_per_head", attrs.groups_per_head}},
-        .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
+             {"groups_per_head", attrs.groups_per_head},
+             {"mcast_shared", static_cast<uint32_t>(mcast_shared)}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"head", "value_block", "num_chunks", "peer_x0", "peer_y0", "peer_x1", "peer_y1", "receivers"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    reader.semaphore_bindings.push_back(tt::tt_metal::experimental::SemaphoreBinding{ready_semaphore_name, "ready"});
+    reader.semaphore_bindings.push_back(tt::tt_metal::experimental::SemaphoreBinding{valid_semaphore_name, "valid"});
     if (!summary) {
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{q_decay_tensor_name, "q_decay"});
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{intra_tensor_name, "intra"});
@@ -339,10 +362,33 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
         const uint32_t group = head % attrs.groups_per_head;
+        // The sender (value block 0) addresses its siblings' row segment; receivers address the sender. The
+        // reader runs on NoC 0, so the segment starts at its lowest coordinate.
+        uint32_t peer_x0 = 0;
+        uint32_t peer_y0 = 0;
+        uint32_t peer_x1 = 0;
+        uint32_t peer_y1 = 0;
+        if (mcast_shared) {
+            const uint32_t sender_index = index - value_block;
+            const auto first = device.worker_core_from_logical_core(
+                distribution.cores[value_block == 0 ? sender_index + 1 : sender_index]);
+            const auto last = device.worker_core_from_logical_core(distribution.cores[sender_index + value_blocks - 1]);
+            peer_x0 = first.x;
+            peer_y0 = first.y;
+            peer_x1 = last.x;
+            peer_y1 = last.y;
+        }
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+            {{"head", head},
+             {"value_block", value_block},
+             {"num_chunks", NC},
+             {"peer_x0", peer_x0},
+             {"peer_y0", peer_y0},
+             {"peer_x1", peer_x1},
+             {"peer_y1", peer_y1},
+             {"receivers", value_blocks - 1}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
@@ -387,6 +433,11 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = summary ? "summarize_chunk_recurrence" : "recurrent_chunk_scan",
         .dataflow_buffers = std::move(dfbs),
+        .semaphores =
+            {
+                tt::tt_metal::experimental::SemaphoreSpec{.unique_id = ready_semaphore_name, .target_nodes = cores},
+                tt::tt_metal::experimental::SemaphoreSpec{.unique_id = valid_semaphore_name, .target_nodes = cores},
+            },
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
             .name = "main",

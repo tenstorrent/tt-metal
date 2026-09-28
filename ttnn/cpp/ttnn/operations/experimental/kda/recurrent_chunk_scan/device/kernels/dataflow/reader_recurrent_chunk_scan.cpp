@@ -13,24 +13,11 @@
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-
-template <typename Accessor>
-FORCE_INLINE void read_and_publish_contiguous_tiles(
-    const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t base, uint32_t count) {
-    buffer.reserve_back(count);
-    const uint32_t entry_size = buffer.get_entry_size();
-    uint32_t tile = 0;
-    for (const auto& page : accessor.pages(base, base + count)) {
-        noc.async_read(accessor, buffer, entry_size, {.page_id = page.page_id()}, {.offset_bytes = tile * entry_size});
-        ++tile;
-    }
-    noc.async_read_barrier();
-    // push_back publishes this DFB to compute. Complete its reads first; delaying publication to coalesce across
-    // buffers would prevent compute from overlapping the next buffer's NOC reads.
-    buffer.push_back(count);
-}
 
 template <uint32_t Vt, uint32_t VtFull, typename Accessor>
 FORCE_INLINE void read_and_publish_value_slice(
@@ -95,18 +82,101 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
     buffer.push_back(tile_count);
 }
 
+// Chunk inputs that do not depend on the value columns are identical for every value block of a head.
+// With mcast_shared, value block 0 reads them from DRAM once and multicasts them into its siblings' buffers.
+// The slot addresses match on every core because every block makes the same reserve/push sequence on
+// identically specified buffers. Handshake: receivers reserve their slots, reset valid and raise ready; the
+// sender stages its reads, waits for every receiver, multicasts the data, flushes, then multicasts the valid
+// flag before publishing its own copy.
+struct SharedInput {
+    DataflowBuffer* buffer;
+    uint32_t tiles;
+    uint32_t slot;
+};
+
+template <typename Accessor>
+FORCE_INLINE uint32_t
+stage_contiguous_tiles(const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t base, uint32_t count) {
+    buffer.reserve_back(count);
+    const uint32_t entry_size = buffer.get_entry_size();
+    uint32_t tile = 0;
+    for (const auto& page : accessor.pages(base, base + count)) {
+        noc.async_read(accessor, buffer, entry_size, {.page_id = page.page_id()}, {.offset_bytes = tile * entry_size});
+        ++tile;
+    }
+    return buffer.get_write_ptr();
+}
+
+template <uint32_t N, typename ReadySem, typename ValidSem>
+FORCE_INLINE void multicast_shared(
+    Noc& noc,
+    SharedInput (&inputs)[N],
+    ReadySem& ready,
+    ValidSem& valid,
+    uint32_t x0,
+    uint32_t y0,
+    uint32_t x1,
+    uint32_t y1,
+    uint32_t receivers) {
+    noc.async_read_barrier();
+    ready.wait(receivers);
+    ready.set(0);
+    MulticastEndpoint destination;
+    for (auto& input : inputs) {
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(input.slot),
+            destination,
+            input.tiles * input.buffer->get_entry_size(),
+            receivers,
+            {},
+            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = input.slot},
+            /*linked=*/true);
+    }
+    // The flag multicast issues from a different command buffer than the data, so only this flush orders the data
+    // before the flag. It also proves the source slots were read before this core's compute may pop them.
+    noc.async_writes_flushed();
+    valid.set_multicast(noc, x0, y0, x1, y1, receivers);
+    for (auto& input : inputs) {
+        input.buffer->push_back(input.tiles);
+    }
+}
+
+template <uint32_t N, typename ReadySem, typename ValidSem>
+FORCE_INLINE void receive_shared(
+    Noc& noc, SharedInput (&inputs)[N], ReadySem& ready, ValidSem& valid, uint32_t sender_x, uint32_t sender_y) {
+    for (auto& input : inputs) {
+        input.buffer->reserve_back(input.tiles);
+    }
+    // Reset valid before raising ready: a fast sender may multicast VALID right after the increment.
+    valid.set(0);
+    ready.up(noc, sender_x, sender_y, 1);
+    valid.wait(1);
+    for (auto& input : inputs) {
+        input.buffer->push_back(input.tiles);
+    }
+}
+
 template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
     uint32_t Vt_full,
+    uint32_t mcast_shared,
     uint32_t summary,
     uint32_t groups_per_head,
     uint32_t has_actual_end,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
-TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
+TT_KERNEL void reader(
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t num_chunks,
+    uint32_t peer_x0,
+    uint32_t peer_y0,
+    uint32_t peer_x1,
+    uint32_t peer_y1,
+    uint32_t receivers) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
     const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
@@ -124,6 +194,14 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
+    Semaphore ready(sem::ready);
+    Semaphore valid(sem::valid);
+    if constexpr (mcast_shared) {
+        if (value_block == 0) {
+            // set_multicast sources its payload from this local word; preset it to VALID once.
+            valid.set(1);
+        }
+    }
 
     kda_chronology::Topology topology{};
     {
@@ -196,30 +274,47 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
                     value_block);
             }
         }
-        if constexpr (summary) {
-            read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-            read_and_publish_value_slice<Vt, Vt_full>(
-                v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
-            read_and_publish_contiguous_tiles(
-                t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-            read_and_publish_contiguous_tiles(
-                k_decay_transposed_accessor, k_decay_transposed, noc, head_chunk * key_chunk_tiles, key_chunk_tiles);
-            read_and_publish_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
+        read_and_publish_value_slice<Vt, Vt_full>(
+            v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
+        // Value-independent inputs, in the order compute consumes them.
+        const auto for_each_shared_input = [&](auto&& input) {
+            input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
+            input(t_inv_accessor, t_inv, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            if constexpr (!summary) {
+                input(TensorAccessor(tensor::q_decay), q_decay, head_chunk * chunk_key_tiles, chunk_key_tiles);
+                input(TensorAccessor(tensor::intra), intra, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            }
+            input(k_decay_transposed_accessor, k_decay_transposed, head_chunk * key_chunk_tiles, key_chunk_tiles);
+            input(final_decay_accessor, final_decay, head_chunk * Kt, Kt);
+        };
+        if constexpr (!mcast_shared) {
+            // Publish each buffer once its reads land so compute overlaps the next buffer's reads.
+            for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                stage_contiguous_tiles(accessor, buffer, noc, base, tiles);
+                noc.async_read_barrier();
+                buffer.push_back(tiles);
+            });
         } else {
-            read_and_publish_value_slice<Vt, Vt_full>(
-                v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
-            read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-            const auto q_decay_accessor = TensorAccessor(tensor::q_decay);
-            const auto intra_accessor = TensorAccessor(tensor::intra);
-            read_and_publish_contiguous_tiles(
-                q_decay_accessor, q_decay, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
-            read_and_publish_contiguous_tiles(
-                intra_accessor, intra, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-            read_and_publish_contiguous_tiles(
-                k_decay_transposed_accessor, k_decay_transposed, noc, head_chunk * key_chunk_tiles, key_chunk_tiles);
-            read_and_publish_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
-            read_and_publish_contiguous_tiles(
-                t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            SharedInput inputs[summary ? 4 : 6];
+            uint32_t count = 0;
+            for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                const uint32_t slot = value_block == 0 ? stage_contiguous_tiles(accessor, buffer, noc, base, tiles) : 0;
+                inputs[count++] = {&buffer, tiles, slot};
+            });
+            if (value_block == 0) {
+                multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+            } else {
+                receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
+            }
+        }
+    }
+    if constexpr (mcast_shared) {
+        // Retire the multicast writes and ready increments before exit; dispatch re-initializes both semaphores on
+        // every launch.
+        if (value_block == 0) {
+            noc.async_write_barrier();
+        } else {
+            noc.async_atomic_barrier();
         }
     }
 }
