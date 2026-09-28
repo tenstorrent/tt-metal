@@ -134,7 +134,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
   <div>
     <div class="eyebrow">MiniMax-M3 pipeline prefill · Blackhole galaxies · AgentX 1M replay</div>
     <h1>M3 AgentX Prefill Lab</h1>
-    <p class="sub">Replays the full AgentX corpus (393 Claude Code sessions, 98,827 requests, up to 990k context) the way AIPerf's <span class="mono">inferencex-agentx-mvp</span> scenario does, against a per-op roofline of the M3 prefill pipeline calibrated to the #57827 hardware runs. Goodput is useful tok/s (tokens an infinite prefix cache would still have to prefill) at p90 TTFT under the SLO.</p>
+    <p class="sub">Replays the full AgentX corpus (393 Claude Code sessions, 98,827 requests, up to 990k context) the way AIPerf's <span class="mono">inferencex-agentx-mvp</span> scenario does, against a per-op roofline of the M3 prefill pipeline calibrated to the hardware runs tracked in tt-metal issue #57827. Goodput is useful tok/s (tokens an infinite prefix cache would still have to prefill) at p90 TTFT under the SLO. New here? Start with the <a href="#method">Method</a> tab: it defines every term and explains every assumption.</p>
   </div>
   <div class="small muted mono" id="dataStamp"></div>
 </header>
@@ -291,35 +291,228 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
 </section>
 
 <!-- ============================== METHOD ============================== -->
+<!-- ============================== METHOD ============================== -->
 <section id="tab-method" hidden>
   <div class="panel prose">
-    <h2>Traffic replay</h2>
+    <div class="eyebrow">Read this first if you are new to the page</div>
+    <h2>What this page is</h2>
+    <p>A planning tool for the MiniMax-M3 <b>prefill</b> service on Tenstorrent Blackhole galaxies. It asks which implementation features and which hyperparameters give the most overall system throughput on realistic agentic traffic, rather than on one benchmark cell. It combines three things:</p>
     <ul>
-      <li><b>Corpus.</b> <span class="mono">semianalysisai/cc-traces-weka-062126</span>, full variant (contexts up to 990k). Each request is a chain of 64-token block hashes; hashes are prefix-chained, so a block id is a node of the session's prefix tree.</li>
-      <li><b>Lanes.</b> Concurrency N creates N lanes. A lane replays one tree (main agent chain + sub-agents). Its start t* is uniform over the session; every stream active at t* is primed with its last turn before t* (a real prefill, <span class="mono">max_tokens=1</span>), and measurement starts once all primers finish. A drained tree recycles to the next session from turn 0 with a fresh cache-bust marker.</li>
-      <li><b>Timing.</b> Next request = previous end + recorded end-to-start delay, uncapped (main-agent gaps: median 4.9 s, mean 395 s). The only cap is AIPerf's 10 s system-idle cap. Sub-agents spawn when the parent turn returns (or at issue on the overlap path) and the join turn fires when the last child ends. Request end = prefill done + <span class="mono">out / decode tok/s</span>.</li>
-      <li><b>Window.</b> 1800 s profiling; goodput counts requests whose prefill finishes inside it.</li>
+      <li><b>Real traffic.</b> The public AgentX corpus of Claude Code sessions, replayed request by request the way the SemiAnalysis InferenceX AgentX benchmark replays it.</li>
+      <li><b>A cost model</b> of the M3 prefill pipeline: a per-op roofline whose efficiencies are fitted to hardware measurements (section "Cost model").</li>
+      <li><b>A KV-cache model</b> that tracks which prefixes are resident, evicts them, and charges re-prefill when a prefix was lost (section "KV cache").</li>
     </ul>
-    <h2>KV residency</h2>
+    <p>The <b>Explore</b> tab runs the same simulator in your browser for any configuration you choose. <b>Roadmap</b> shows a precomputed study that ranks features. <b>Model &amp; calibration</b> shows how well the cost model reproduces measured runs.</p>
+    <p class="muted small">On this page: <a href="#method" data-goto="m-context">Context</a> · <a href="#method" data-goto="m-metric">Metric</a> · <a href="#method" data-goto="m-glossary">Glossary</a> · <a href="#method" data-goto="m-traffic">Traffic replay</a> · <a href="#method" data-goto="m-cost">Cost model</a> · <a href="#method" data-goto="m-kernels">"Today's" vs "roofline" kernels</a> · <a href="#method" data-goto="m-kv">KV cache</a> · <a href="#method" data-goto="m-pipe">Pipeline &amp; scheduling</a> · <a href="#method" data-goto="m-features">Features</a> · <a href="#method" data-goto="m-study">How the study works</a> · <a href="#method" data-goto="m-read">Reading the Explore tab</a> · <a href="#method" data-goto="m-limits">Assumptions &amp; limits</a> · <a href="#method" data-goto="m-repro">Reproduce</a></p>
+
+    <h2 id="m-context">Context: the system being modelled</h2>
     <ul>
-      <li><b>Static slots</b> (today): one 1M slot per stream, LRU over idle slots, hit = shared prefix with the stream's previous request, floored to a chunk multiple unless resume is unaligned. Slots are what the memory holds: 20 at 4 galaxies with bf16 index_k replicated ×4.</li>
-      <li><b>Pool</b>: lanes (fixed 1M or arena-allocated at request size) + a content-addressed paged pool with exact LRU over prefix-tree pieces (equivalent to 64-token pages). Copy-in of the hit and copy-out of the new tokens are DRAM-bound per stage and overlapped with a 25% contention charge. Optional host-DRAM tier: device evictions demote to host, host hits are fetched over PCIe before admission, and write-backs share the link.</li>
-      <li><b>Paging</b> = pool without lanes or copies (ideal paged kernels). <b>Infinite</b> = everything stays resident.</li>
-      <li><b>Useful tokens</b> = tokens an infinite prefix cache would prefill. Re-prefill = tokens lost to eviction, alignment or unmaterialised history.</li>
+      <li><b>Model.</b> MiniMax-M3: 60 layers.
+        <ul>
+          <li>Layers 0-2 are dense: full-attention GQA plus a dense SwiGLU MLP.</li>
+          <li>Layers 3-59 are MoE with MSA sparse attention: 128 experts, top-4, plus 1 shared expert; the indexer selects 16 blocks of 128 keys per query.</li>
+          <li>Dimensions: hidden 6144, 64 query heads, 4 KV heads, head dim 128, max context 1,048,576 tokens.</li>
+        </ul>
+      </li>
+      <li><b>Hardware.</b> A galaxy is 32 Blackhole chips, each with 32 GiB GDDR6 at 512 GB/s. Prefill runs as a <b>pipeline</b>: the 60 layers are split over S stages, and each stage is a sub-mesh [SP, TP]. [2,4] means 8 chips: the sequence is split 2 ways (SP), heads and hidden are split 4 ways (TP), and MoE experts are spread over the stage. The measured deployment is 4 galaxies = 16 stages of [2,4].</li>
+      <li><b>How it works today:</b>
+        <ul>
+          <li><b>Static slots.</b> The KV cache is a set of fixed 1M-token slots, one per conversation. Resuming a conversation reuses its own slot's prefix and nothing else.</li>
+          <li><b>Fixed chunk, one request per chunk.</b> Each chunk (5120 or 2048 tokens) carries one request, and the tail is padded. The chunk size is fixed because the KV cache is laid out block-cyclically over the SP axis with a period of chunk/SP.</li>
+          <li><b>Chunk-aligned resume.</b> A resumed request must start at a chunk multiple; cached tokens past it are recomputed.</li>
+          <li><b>Whole-lane dense scan.</b> The dense layers' ring-joint attention walks the whole slot capacity on every chunk.</li>
+        </ul>
+      </li>
+      <li><b>Measured performance</b> is tracked in tenstorrent/tt-metal issue #57827. The runs used here (Sep 27 2026, 4 galaxies, 16×[2,4], bf4 experts, bf16 index cache):
+        <ul>
+          <li><b>A:</b> chunk 5120, even layer split.</li>
+          <li><b>B:</b> chunk 5120, split 1,1,1,5,5,5,5,5,4,…</li>
+          <li><b>C:</b> chunk 2048, same split as B.</li>
+        </ul>
+        Each run measures a (new tokens × cached tokens) matrix, loaded and idle. The preset <span class="mono">today-C</span> is run C.</li>
+      <li><b>Features under consideration</b> (defined in "Features" below): batching several requests per chunk; slot lanes plus a paged KV pool; variable chunk size with an all-to-all KV write; plus a few more the study adds (host-DRAM tier, index-cache layout, async stage handoff, bounded dense gather, and others).</li>
     </ul>
-    <h2>Pipeline</h2>
+
+    <h2 id="m-metric">The metric: goodput</h2>
+    <p><b>Goodput = useful tokens per second, at the highest load where p90 TTFT stays at or below the SLO (default 10 s).</b> Why each part:</p>
     <ul>
-      <li>Stages process chunks FIFO; a chunk's time per stage is the sum of its layers plus overhead; the blocking send keeps a stage busy after compute; the hop latency delays arrival at the next stage. The in-flight chunk limit is 2S+4.</li>
-      <li>Fixed layout: one request per chunk, padded to the chunk (routed MoE ops use actual tokens). Variable layout: segments padded to 32·SP tokens plus an all-to-all KV write per layer. Batching packs several requests up to the budget; attention runs per request (sequential) or once per chunk (fused), with a core-wave quantization factor.</li>
-      <li>Memory per stage: weights (bf4 experts, bf8 attention, bf16 shared/dense MLP, embedding on stage 0, LM head on the last), a reserve per chip and activation buffers; KV capacity is the minimum over stages.</li>
+      <li><b>Useful tokens, not processed tokens.</b> A request's useful tokens are the ones an ideal system with an infinite prefix cache would still prefill: its input minus the longest prefix already seen earlier in the same session. Tokens recomputed because a cached prefix was evicted, because resume had to be chunk-aligned, or because they are padding count as processed but not useful. Processed throughput rewards a thrashing cache. In one configuration the pipeline processes 210k tok/s while only 50k tok/s of it is useful.</li>
+      <li><b>Only prefill work counts.</b> Useful tokens exclude cached tokens and decode. For a fixed traffic mix, useful tok/s is proportional to requests served per second.</li>
+      <li><b>At an SLO, not at peak.</b> In a closed-loop replay, throughput first rises with concurrency and then collapses. More live sessions stop fitting in the KV cache, evictions turn into re-prefill, TTFT grows to hundreds of seconds, and idle KV then gets evicted even faster (the "cache cliff"). The SLO picks an operating point a real deployment could run at.</li>
+      <li><b>The SLO is loose on purpose</b> (p90 ≤ 10 s; today's single-request TTFT is about 1-2 s) because throughput is the priority. p90 is used rather than the median because p90 sees the queueing blow-up earlier. The collapse is sharp, so the best SLO-free throughput is almost identical to goodput (see the sensitivity table), and the ranking does not depend on the exact SLO. You can change the SLO on the Explore tab.</li>
+      <li><b>Interpolation.</b> Goodput is linearly interpolated between the last passing and the first failing concurrency, so it does not jump with the grid spacing.</li>
     </ul>
-    <h2>Not modelled</h2>
+
+    <h2 id="m-glossary">Glossary</h2>
     <ul>
-      <li>Decode-side capacity and KV migration to decode; decode is a fixed per-request rate.</li>
-      <li>Fragmentation in the lane arena; copy kernels are assumed to be page-list gathers at 50% DRAM efficiency.</li>
-      <li>Host PCIe bandwidth and host DRAM size are assumptions (1 TB and 64 GB/s per galaxy by default); see the sensitivity table.</li>
+      <li><b>Concurrency / lanes (C).</b> The number of simultaneous simulated agent users. Each lane replays one session: the main agent plus the sub-agents it spawns, so one lane can have several requests in flight.</li>
+      <li><b>TTFT.</b> Time from when a request becomes ready (its predecessor finished and its recorded think time elapsed) to when its prefill finishes on the last pipeline stage. It includes queueing and any host-tier fetch.</li>
+      <li><b>Hit rate.</b> Cached tokens / input tokens, token-weighted. The ∞-cache hit rate is the ceiling (98.3% on the whole corpus).</li>
+      <li><b>Re-prefill.</b> New tokens that were not needed with an infinite cache: evicted prefixes, alignment loss, and history from before the replay's start point that was never materialised.</li>
+      <li><b>Padding.</b> Tokens computed only to fill a fixed-size chunk.</li>
+      <li><b>∞ cache.</b> The same configuration with an unbounded KV cache. It separates cache losses from compute limits.</li>
+      <li><b>Stage, mesh, SP/TP, split, replicas.</b> See "Context". The <b>split</b> is how many layers each stage holds; "auto" balances the stages for a representative mix of cached lengths. <b>Replicas</b> divides the galaxies into independent pipelines, each with its own cache; sessions stick to one replica.</li>
+      <li><b>Scenario labels.</b> "Today's kernels" = op-efficiency 0 (k0); "roofline kernels" = op-efficiency 1 (k1). See the section on kernels.</li>
+      <li><b>Tiers.</b> P0 / P1 / P2 = priority from the study; the rule is in "How the study works".</li>
+      <li><b>Scope</b> (S / M / L). A rough single-engineer estimate: S ≈ up to 2 weeks, M ≈ 2-4 weeks, L ≈ 4-8 weeks. These are not validated with the code owners.</li>
     </ul>
-    <p class="muted small">Source: <span class="mono">models/demos/minimax_m3/traffic_sim/</span> (README.md, sim_core.js). Same core runs here in a Web Worker and in node for the study.</p>
+
+    <h2 id="m-traffic">Traffic replay</h2>
+    <p>The corpus is <span class="mono">semianalysisai/cc-traces-weka-062126</span>, full variant: 393 Claude Code sessions, 98,827 requests (56,798 main-agent turns and 42,029 sub-agent requests), 21.6B input tokens, inputs up to 990k tokens. Each request lists its input as a chain of 64-token block hashes. Equal hashes mean identical content, so the prefix a request shares with earlier requests is known exactly. The replay follows the rules of AIPerf's <span class="mono">inferencex-agentx-mvp</span> scenario, read from its source:</p>
+    <ul>
+      <li><b>Start point.</b> Each lane starts its session at a random instant t* anywhere in the session.</li>
+      <li><b>Primers and warmup.</b> Every conversation active at t* first re-sends its last request before t* as a primer: a full prefill with max_tokens=1. That warms the cache the way the benchmark does. Measurement starts when all primers are done.</li>
+      <li><b>Think time.</b> Each next request waits for its predecessor to end, then for the recorded gap: <span class="mono">max(0, t<sub>k</sub> − t<sub>k−1</sub> − api_time<sub>k−1</sub>)</span>. The gaps are <b>not capped</b>, as AgentX requires. Main-agent gaps have a median of 4.9 s but a mean of 395 s (p99 54 min), because humans think and tools run. The only cap is AIPerf's rule that if the whole system is idle, the next request fires within 10 s.</li>
+      <li><b>Sub-agents.</b> A sub-agent starts when the main-agent turn that spawned it returns. The main agent's next dependent turn fires as soon as the last sub-agent in its group finishes.</li>
+      <li><b>End of a request.</b> Prefill finishes, then decode runs for the recorded output length at a fixed decode speed (default 60 tok/s). The output's KV is not reused: the benchmark sends synthetic assistant text in the next turn, which is prefilled like any other new text.</li>
+      <li><b>Recycle.</b> When a session's whole tree is finished, the lane moves to the next session in the corpus and starts at turn 0 with a fresh cache-bust marker, so different lanes never share cache.</li>
+      <li><b>Window.</b> 1800 s of profiling (the AgentX default). Goodput counts requests whose prefill ends inside the window.</li>
+    </ul>
+    <p><b>Consequence.</b> Because the gaps are long, an AgentX lane is idle most of the time. Filling the prefill pipeline takes hundreds to thousands of lanes. Their combined KV then exceeds what the galaxies can hold, and <b>KV capacity rather than compute becomes the limit</b>. This is the main finding of the study.</p>
+
+    <h2 id="m-cost">Cost model and its calibration</h2>
+    <p><b>Per-op roofline.</b> Every layer is broken into the ops the implementation runs.</p>
+    <ul>
+      <li><b>MoE/MSA layer:</b> two norm all-gathers, QKV projection, index branch, all-gather of the cached K/V and index keys over SP, indexer, sparse attention, output projection + reduce-scatter, shared expert, router, dispatch, experts, combine, MoE reduce, misc.</li>
+      <li><b>Dense layer:</b> ring-joint attention plus the dense MLP and its collectives.</li>
+    </ul>
+    <p>For every op the model computes its FLOPs, DRAM bytes and ethernet bytes for the given mesh, chunk, request lengths and cache depth. From these it takes the time the op would need at peak hardware rates, its "roofline": 608 TFLOP/s LoFi / 304 HiFi2 per chip, 512 GB/s DRAM, 100 GB/s bidirectional ethernet per mesh axis.</p>
+    <p><b>Step 1: per-op efficiency from profiles.</b> Profiles of one prefill chunk (5120 tokens attending a 51,200-token cache) give each op's measured time on [2,4], [8,4] and [4,2] stages. Each op's efficiency is <span class="mono">roofline / (measured − fixed latency)</span>. Examples at [2,4]: <span class="mono">experts_mm</span> runs at 28% of its roofline and <span class="mono">sparse_sdpa</span> at 4% (Model tab). Other chunk sizes and cache depths are predicted by scaling each op's roofline at that fixed efficiency. [4,4] has no profile and uses the geometric midpoint of [2,4] and [8,4].</p>
+    <p><b>Step 2: pipeline-level fit.</b> The profiles come from a single-stage harness with small cache capacity, so they miss a few things the real 16-stage pipeline shows. A small number of extra parameters is fitted to 7,840 per-stage, per-chunk-position timings of runs A/B/C:</p>
+    <ul>
+      <li><b>MoE multiplier ≈ 1.03:</b> MoE layers run about 3% slower in the pipeline. The pipeline uses the 2D fabric, where one dispatch fast path is disabled.</li>
+      <li><b>Dense attention = compute part + capacity-scan part</b>, whichever is larger. Compute runs at 30% efficiency. The scan walks the whole slot capacity every chunk at 1.4% efficiency, about 100 ms per 1M-token slot per dense layer per chunk. The profiles cannot separate the two because their capacity was only 56k.</li>
+      <li><b>Handoff between stages.</b>
+        <ul>
+          <li><b>Blocking send</b> (about 18 ms per chunk at 5120, 7.5 ms at 2048): the stage stays busy after computing. Fitted as the measured loaded chunk period minus the slowest modelled stage.</li>
+          <li><b>Hop latency</b> (about 16 ms / 14 ms): delays the chunk's arrival at the next stage. Fitted as idle TTFT minus the sum of stage times.</li>
+        </ul>
+      </li>
+      <li><b>Embedding cost</b> about 1.5 ms per chunk on stage 0.</li>
+      <li><b>Two structural facts:</b>
+        <ul>
+          <li><b>Padding is cheaper in the MoE.</b> Routing, dispatch, experts and combine only process a chunk's real tokens, so a 640-token request in a 5120 chunk costs 18% less than a full chunk.</li>
+          <li><b>Today's expert kernel costs weight read + compute</b>, not the larger of the two.</li>
+        </ul>
+      </li>
+    </ul>
+    <p><b>Check.</b> Replaying all 105 cells of the #57827 matrices with the fitted model gives <span id="methodErr">a few percent median error</span> on loaded throughput and idle TTFT (Model tab, full table). Anything far outside the measured range is extrapolation: batched chunks above 5120 tokens, meshes without a profile, stage counts other than 16.</p>
+
+    <h2 id="m-kernels">"Today's kernels" vs "roofline kernels" (the op-efficiency knob)</h2>
+    <ul>
+      <li><b>Op efficiency 0 (k0, "today's kernels").</b> Every op keeps its measured efficiency from the calibration. For configurations that have been run, it reproduces measured performance. For configurations that have not (batching, a paged pool, other meshes), it projects how <i>today's</i> kernels would perform.</li>
+      <li><b>Op efficiency 1 (k1, "roofline kernels").</b> Every op runs at a realistic target, not raw peak: 70% of peak for matmul-type ops and 80% for DRAM- or link-bound ops. Latency floors drop from 0.04 to 0.02 ms per collective and from 0.01 to 0.005 ms per op. The expert kernel overlaps its weight reads with compute. The pipeline MoE multiplier becomes 1.0, stage overhead 0.3 ms and embedding 0.3 ms. The dense capacity scan runs at link rate. It is an optimistic bound for "kernels get fixed", not a forecast.</li>
+      <li><b>In between.</b> Each op's efficiency is interpolated geometrically, so 0.5 is a middle case.</li>
+      <li><b>Not affected by the knob:</b> the blocking stage handoff and hop latency (that is the separate "async handoff" feature), expert-load imbalance (fixed at 1.2×), KV memory sizes, and the traffic.</li>
+    </ul>
+
+    <h2 id="m-kv">KV cache</h2>
+    <ul>
+      <li><b>KV size.</b> Per token per layer: K and V cost 1088 B (bf8). The index-key cache costs 128 values × 2 B (bf16) and is today stored on all 4 TP columns, so 1024 B. Total 2112 B per token per layer, about 127 KB per token over 60 layers, about 133 GB for one 1M-token context. Four galaxies hold about 21.5M tokens of KV after weights and reserves, which is <b>20 static 1M slots</b>.</li>
+      <li><b>Static slots</b> (today). A conversation owns one 1M slot while it is resident. A new conversation takes a free slot or evicts the least recently used idle one. A hit is the prefix shared with that conversation's previous request, rounded down to a chunk multiple unless "unaligned resume" is on. Slots are never shared across conversations.</li>
+      <li><b>Slot lanes + paged pool.</b> A few <b>lanes</b> per stage are the contiguous KV buffers the attention kernels run on (fixed 1M each, or sized per request in an arena). All other memory is a <b>paged pool</b>: content-addressed pages shared by every conversation that has the same prefix, evicted by exact least-recently-used order. Before a request runs, its cached prefix is copied from the pool into its lane; afterwards the new tokens are copied back. The copies are DRAM-bound, overlapped with compute, and charged 25% for bandwidth contention.
+        <ul>
+          <li><b>Lane scope.</b> A lane is held per stage only while that stage works on the request (the per-stage scope). Today's slot_id is global, so a slot is held on every stage for the whole request.</li>
+          <li><b>How eviction is tracked.</b> Each session's prefix tree is compressed into pieces. Every request touches whole pieces, so LRU over pieces is exactly LRU over 64-token pages.</li>
+        </ul>
+      </li>
+      <li><b>Host-DRAM KV tier = offloading KV to the host servers' RAM.</b>
+        <ul>
+          <li><b>Mechanism.</b> When the device pool evicts a page, it is written to host RAM instead of being dropped. A later hit on it is copied back over PCIe into the request's lane while the request waits in the queue. Host RAM evicts least-recently-used too. Write-backs and fetches share the PCIe link.</li>
+          <li><b>Defaults:</b> 1 TB of host RAM and 64 GB/s of PCIe per galaxy. Both are assumptions, not measured galaxy-host specs.</li>
+          <li><b>AgentX cap.</b> The methodology caps host DRAM at 3 TB per system, except for a few standard rack systems, and a configuration may use only the share of host DRAM proportional to its accelerator allocation. A compliant submission may therefore have less than the default (4 TB at 4 galaxies). The sensitivity table shows 0.5 and 2 TB per galaxy.</li>
+        </ul>
+      </li>
+      <li><b>Full paging (ideal).</b> Kernels read paged KV directly: no lanes, no copies.</li>
+      <li><b>Infinite cache.</b> Nothing is ever evicted.</li>
+    </ul>
+
+    <h2 id="m-pipe">Pipeline and scheduling</h2>
+    <ul>
+      <li><b>Stages and chunks.</b> Stages process chunks in order. A chunk's time on a stage is the sum of its layers' costs plus overhead; then the blocking send runs; then the hop latency applies before the next stage can start it. At most 2S+4 chunks are in flight.</li>
+      <li><b>Fixed layout</b> (today). One request per chunk, padded to the chunk size.</li>
+      <li><b>Variable layout.</b> Chunks of any size. Each request's segment is padded only to 32·SP tokens, and each layer pays an all-to-all that writes the new K/V rows to the SP rank that owns them. Resume is block-granular.</li>
+      <li><b>Batching.</b> Several requests share a chunk, up to the token budget. Projections and MoE run on the whole batch; that is where the gain comes from, since expert weights are read once for more tokens.
+        <ul>
+          <li><b>Sequential attention</b> runs once per request.</li>
+          <li><b>Fused attention</b> runs once per chunk.</li>
+          <li>Both include a penalty for short segments that leave some of the 110 cores idle.</li>
+        </ul>
+        With fixed layout, batching packs whole chunks.</li>
+      <li><b>Queue order.</b> First-come-first-served, or shortest-first with 30 s aging.</li>
+      <li><b>Memory per stage.</b> Weights (bf4 experts, bf8 attention, bf16 shared expert and dense MLP; embedding on the first stage, LM head on the last) + a reserve per chip (default 3 GB) + activation buffers for the largest chunk. The remainder is KV. A replica's KV capacity is the minimum over its stages, because every token needs KV in every layer.</li>
+    </ul>
+
+    <h2 id="m-features">Features in the study</h2>
+    <ul>
+      <li><b>Slot lanes + paged pool:</b> replaces static slots (see KV cache): 4 fixed 1M lanes per stage.</li>
+      <li><b>Variable-size lanes (arena):</b> lanes allocated at the request's actual length from a contiguous arena (2-8M tokens) instead of 1M each.</li>
+      <li><b>Host-DRAM KV tier:</b> see KV cache. It requires the pool.</li>
+      <li><b>Bounded dense gather:</b> the dense layers' ring-joint attention scans only the valid prefix <span class="mono">[0, kv_len)</span> instead of the whole lane capacity. The MSA layers already do this. Request-sized lanes (arena) remove the same cost, so the two are substitutes.</li>
+      <li><b>index_k stored once:</b> the index-key cache is kept on one TP column instead of all four, and gathered when needed. This cuts KV size from 2112 to 1344 B per token per layer.</li>
+      <li><b>index_k bf8:</b> the index-key cache in bf8 instead of bf16. It is the runner's default dtype, but the measured runs used bf16, and it needs an accuracy check.</li>
+      <li><b>Variable chunk / flexible SP layout:</b> see Pipeline. It also makes resume block-granular.</li>
+      <li><b>Unaligned resume:</b> resume at any 32-token boundary within fixed layout. In review as PR #57636. Variable layout subsumes it.</li>
+      <li><b>Multi-request batching:</b> see Pipeline; 16k-token budget in the roadmap, 4k-32k in the grid.</li>
+      <li><b>Fused multi-user attention:</b> one attention kernel over all requests in a chunk.</li>
+      <li><b>Async stage handoff:</b> the send to the next stage overlaps with computing the next chunk. Removes the blocking send; the transfer then runs at link rate.</li>
+      <li><b>MSA SP-local indexer:</b> each SP rank scores its local index keys, a small top-k merge follows, and only the selected K/V blocks are fetched. Removes the all-gather of the whole cached prefix.</li>
+      <li><b>Shortest-first scheduling:</b> queue order by new tokens, with 30 s aging.</li>
+    </ul>
+
+    <h2 id="m-study">How the study works (Roadmap tab)</h2>
+    <ul>
+      <li><b>Four scenarios:</b> {4 galaxies, 8 galaxies} × {today's kernels, roofline kernels}.
+        <ul>
+          <li><b>Baseline, 4 galaxies:</b> 16×[2,4], auto split, chunk 2048, static 1M slots. This is run C's shape.</li>
+          <li><b>Baseline, 8 galaxies:</b> 32×[2,4], same settings.</li>
+        </ul>
+      </li>
+      <li><b>Concurrency sweep.</b> Each configuration is simulated at C = 8 to 4096 (28 points), stopping early once it is past the cache cliff, and summarised as goodput.</li>
+      <li><b>Greedy roadmap.</b> From the baseline, try every remaining feature, keep the one with the largest goodput, repeat. The order is a suggested build order; each gain is measured in the context of the features before it.</li>
+      <li><b>Leave-one-out.</b> Start from all features on, remove one at a time. It shows what each feature is still worth at the end.</li>
+      <li><b>Priority tier.</b> For each feature, take the larger of its greedy gain and its leave-one-out loss in every scenario, then the maximum over scenarios. P0 ≥ 1.25×, P1 ≥ 1.07×, else P2.</li>
+      <li><b>Grid.</b> On the features that helped, search topology (stage count × mesh × replicas), batching budget or chunk size, and lanes or arena size. The top result per scenario becomes the <span class="mono">best-*</span> preset.</li>
+      <li><b>Sensitivity.</b> The best configuration re-run with:
+        <ul>
+          <li>other seeds (about ±5% noise);</li>
+          <li>0.5 or 2 TB host RAM per galaxy;</li>
+          <li>16 or 256 GB/s PCIe per galaxy;</li>
+          <li>decode at 30 or 120 tok/s;</li>
+          <li>a 6 GB reserve per chip;</li>
+          <li>a TP=4-only mesh.</li>
+        </ul>
+        Faster decode raises prefill goodput because requests finish sooner, fewer lanes carry the same load, and less KV is live.</li>
+      <li><b>[4,2] stages</b> (TP=2) win the grids by 1-10%. The current KV cache assumes one KV head per chip (TP=4), so they need a KV-head sharding change.</li>
+    </ul>
+
+    <h2 id="m-read">Reading the Explore tab</h2>
+    <ul>
+      <li><b>Loading.</b> On load, the charts show the precomputed baseline (<span class="mono">today-C</span>). <b>Run sweep</b> simulates your configuration at every concurrency in the grid, in your browser, in about 5-30 s. It also runs the same configuration with an infinite cache, unless you untick that option.</li>
+      <li><b>Tiles.</b> Goodput; goodput with an infinite cache; TTFT p50/p90 and hit rate at the goodput point; and the peak useful throughput regardless of TTFT.</li>
+      <li><b>Charts</b> share a log concurrency axis:
+        <ul>
+          <li>useful tok/s;</li>
+          <li>p90 TTFT on a log scale, with the SLO line;</li>
+          <li>hit rate.</li>
+        </ul>
+        "Pin as comparison" keeps a run as a third line.</li>
+      <li><b>Where processed tokens go.</b> At the goodput point, splits the pipeline's processed tokens into useful, re-prefill and padding.</li>
+      <li><b>Plan.</b> Updates without simulating. It shows chips, KV capacity, slots or pool and lane sizes, KV bytes per token, and the modelled time of one chunk (at 140k cached) on each stage. Orange bars are stages holding a dense layer; the outlined bar is the bottleneck. The ceiling line is that chunk's tokens divided by the bottleneck time plus the send.</li>
+    </ul>
+
+    <h2 id="m-limits">Assumptions and limits</h2>
+    <ul>
+      <li><b>Host tier.</b> Host RAM size, PCIe bandwidth and the ideal page DMA are assumptions. Host RAM size matters a lot for the result; PCIe bandwidth hardly does.</li>
+      <li><b>Pool copies.</b> Assumed to be page-list gather kernels at 50% DRAM efficiency. Arena fragmentation is not modelled.</li>
+      <li><b>Decode.</b> A fixed per-request speed. Decode-side capacity and KV migration to decode are not modelled.</li>
+      <li><b>Extrapolation.</b> Batched chunks above 5120 tokens, meshes without a profile, and stage counts other than 16 are extrapolated. [4,2] stage costs come from a single-stage profile.</li>
+      <li><b>Memory figures are approximate.</b> The 3 GB per-chip reserve and the activation-buffer estimate are approximations.</li>
+      <li><b>Scope estimates are rough</b> and not checked with the code owners.</li>
+    </ul>
+
+    <h2 id="m-repro">Reproduce</h2>
+    <p>Code: tenstorrent/tt-metal branch <span class="mono">philei/m3-traffic-sim</span>, directory <span class="mono">models/demos/minimax_m3/traffic_sim/</span>. The README explains the files and the commands. The simulator is one file, <span class="mono">sim_core.js</span>, used unchanged by this page (in a Web Worker) and by node for the study (<span class="mono">study.js</span>, about 5 minutes on 36 threads). Traffic preprocessing is <span class="mono">prep_traffic.py</span>; calibration data collection is <span class="mono">collect_calib.py</span>; the calibration report is <span class="mono">validate.js</span>. Built Sep 28 2026.</p>
   </div>
 </section>
 </div>
@@ -354,6 +547,10 @@ function showTab(t) {
   document.querySelectorAll('nav.tabs a').forEach((a) => a.setAttribute('aria-current', a.dataset.tab === t ? 'page' : 'false'));
 }
 window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-goto]'); if (!a) return;
+  e.preventDefault(); showTab('method'); const t = document.getElementById(a.dataset.goto); if (t) t.scrollIntoView({ block: 'start' });
+});
 showTab(location.hash.slice(1));
 
 // ---------------------------------------------------------------- traffic + workers
@@ -648,7 +845,8 @@ function renderRoadmap() {
   const top = STUDY.features.map((f) => [f, tierOf(f.key)]).filter(([, t]) => t.tier === 'P0').map(([f]) => f.key);
   $('roadHead').innerHTML = `<h2>What moves goodput on AgentX</h2>
   <p>Goodput = useful tok/s with p90 TTFT ≤ ${STUDY.slo} s. Baseline → best configuration found: <b>4 galaxies</b> ${fmtK(g0.greedy[0].goodput)} → <b>${fmtK(g0.grid[0].goodput)}</b> with today's kernels, ${fmtK(g1.grid[0].goodput)} with roofline kernels; <b>8 galaxies</b> ${fmtK(h0.greedy[0].goodput)} → <b>${fmtK(h0.grid[0].goodput)}</b> today, ${fmtK(h1.grid[0].goodput)} with roofline kernels.</p>
-  <p>P0 features: ${top.map((k) => `<span class="pill p0">${esc(k)}</span>`).join(' ')}. The ordering, gains and scope are below; hover the orange ticks for the infinite-cache ceiling of each step.</p>`;
+  <p>P0 features: ${top.map((k) => `<span class="pill p0">${esc(k)}</span>`).join(' ')}. The ordering, gains and scope are below; hover the orange ticks for the infinite-cache ceiling of each step.</p>
+  <p>On AgentX traffic, KV-cache capacity limits throughput more than compute: even the best configurations reach only about a third to two thirds of their own infinite-cache goodput. The features that add effective KV capacity therefore come first: the paged pool, the host-DRAM tier and the index-cache layout. "Today's kernels" / "roofline kernels", greedy vs leave-one-out, tiers and scope are defined in the <a href="#method">Method</a> tab.</p>`;
 }
 
 // ---------------------------------------------------------------- model tab
@@ -662,6 +860,7 @@ function renderModel() {
     rows.push(`<tr><td>${run}</td><td class="n">${c.toLocaleString()}</td><td class="n">${n.toLocaleString()}</td><td class="n">${fmtK(mT)}</td><td class="n">${fmtK(xT)}</td><td class="n" ${cls(e1)}>${e1 == null ? '–' : (100 * e1).toFixed(0) + '%'}</td><td class="n">${mI}</td><td class="n">${xI == null ? '–' : Math.round(xI)}</td><td class="n" ${cls(e2)}>${e2 == null ? '–' : (100 * e2).toFixed(0) + '%'}</td></tr>`);
   }
   errs.sort((a, b) => a - b);
+  $('methodErr').textContent = `|error| ${(100 * errs[Math.floor(errs.length / 2)]).toFixed(1)}% median and ${(100 * errs[Math.floor(0.9 * errs.length)]).toFixed(1)}% p90`;
   $('valSummary').innerHTML = `Replaying the ${VALID.length} matrix cells of runs A (chunk 5120, even split), B (5120, split 1,1,1,5x5,4x8) and C (2048, same split): |error| median <b>${(100 * errs[Math.floor(errs.length / 2)]).toFixed(1)}%</b>, p90 <b>${(100 * errs[Math.floor(0.9 * errs.length)]).toFixed(1)}%</b>, max ${(100 * errs[errs.length - 1]).toFixed(1)}% over loaded new tok/s and idle TTFT.`;
   $('valTable').innerHTML = `<table><thead><tr><th>run</th><th class="n">cached</th><th class="n">new</th><th class="n">loaded tok/s model</th><th class="n">measured</th><th class="n">err</th><th class="n">idle TTFT ms model</th><th class="n">measured</th><th class="n">err</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   const eff = CAL.effs['2x4'];
