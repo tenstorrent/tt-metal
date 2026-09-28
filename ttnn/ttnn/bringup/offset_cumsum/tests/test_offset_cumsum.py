@@ -54,7 +54,7 @@ def test_offset_cumsum(mesh_device, device_params, case):
     hists[torch.rand(rows, cols, E, generator=g) < 0.125] = 0
     if c["local_experts_only"]:  # a device's masked_bincount counts only the experts of its dispatch group
         assert c["cluster_axis"] == 0, "local_experts_only assumes the dispatch groups are the mesh columns"
-        grp = torch.arange(E) // epc
+        grp = torch.arange(E) // (epc * rows)  # column col holds experts col*rows*epc .. (ExpertMapping col-major)
         for col in range(cols):
             hists[:, col, grp != col] = 0
 

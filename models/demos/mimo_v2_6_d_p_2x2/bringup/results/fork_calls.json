@@ -1,0 +1,3706 @@
+{
+ "device": {
+  "device_params": {
+   "fabric_config": "FabricConfig.FABRIC_2D",
+   "l1_small_size": 24576
+  },
+  "fabric_config": "FABRIC_2D"
+ },
+ "calls": [
+  {
+   "sig": "f34d0b9d1f",
+   "count": 2,
+   "op": "ttnn.bringup.chunked_scaled_dot_product_attention",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      16,
+      5120,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      880,
+      1,
+      64,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      880,
+      1,
+      64,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      880
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    51200
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": false,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=512, k_chunk_size=128, exp_approx_mode=true, max_cores_per_head_batch=16)",
+    "scale": 0.07216878235340118
+   }
+  },
+  {
+   "sig": "3f5a6dfceb",
+   "count": 5,
+   "op": "ttnn.bringup.combine",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      42976,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      42976,
+      3
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      256
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      256
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "dispatch_group_size": 2,
+    "experts_per_chip": 64,
+    "init_zeros": true,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "num_experts_per_tok": 8,
+    "num_links": 1,
+    "seq_len_per_chip": 2560,
+    "topology": "Topology.Linear",
+    "use_fp8_combine": false
+   }
+  },
+  {
+   "sig": "6920429db4",
+   "count": 5,
+   "op": "ttnn.bringup.dispatch",
+   "args": [],
+   "kwargs": {
+    "cluster_axis": 0,
+    "dispatch_group_size": 2,
+    "expert_dispatch_table_tensor": {
+     "tensor": true,
+     "shape": [
+      1,
+      257
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "expert_offsets_tensor": {
+     "tensor": true,
+     "shape": [
+      1,
+      256
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "experts_per_chip": 64,
+    "fp8_output": false,
+    "indices_tensor": {
+     "tensor": true,
+     "shape": [
+      1,
+      2560,
+      8
+     ],
+     "dtype": "UINT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "input_tensor": {
+     "tensor": true,
+     "shape": [
+      1,
+      2560,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "max_dispatch_buffer_token_size": 42976,
+    "metadata_len": 3,
+    "num_experts_per_tok": 8,
+    "num_links": 1,
+    "num_routed_experts": 256,
+    "num_workers_per_sender": 2,
+    "subdevice_id": null,
+    "topology": "Topology.Linear"
+   }
+  },
+  {
+   "sig": "5ac677f17a",
+   "count": 5,
+   "op": "ttnn.bringup.offset_cumsum",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      256
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "experts_per_chip": 64,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "num_links": 1
+   }
+  },
+  {
+   "sig": "ab56dee4d6",
+   "count": 11,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      5120,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-06,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "residual_input_tensor": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      5120,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "residual_sum_memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "return_residual_sum": true,
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "fdbf629524",
+   "count": 1,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      5120,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-06,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "4caa547c27",
+   "count": 4,
+   "op": "ttnn.bringup.scaled_dot_product_attention",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      16,
+      5248,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      5248,
+      192
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      5248,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "attention_sink": {
+     "tensor": true,
+     "shape": [
+      1,
+      16,
+      1,
+      1
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": false,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "is_causal": true,
+    "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10, sub_core_grids=std::nullopt, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=false, max_cores_per_head_batch=16)",
+    "scale": 0.0625,
+    "sliding_window_size": 128
+   }
+  },
+  {
+   "sig": "86afb6a289",
+   "count": 5,
+   "op": "ttnn.bringup.unified_routed_expert_moe",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      42976,
+      4096
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      256
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      256
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      64
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ],
+    [
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       4096,
+       2048
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ],
+    [
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       2048,
+       4096
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {
+    "activation": "RoutedExpertActivation.Silu",
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": true,
+     "dst_full_sync_en": false
+    },
+    "high_precision": true,
+    "max_dispatched_tokens_per_expert": 8192
+   }
+  }
+ ]
+}
