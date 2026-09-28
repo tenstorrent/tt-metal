@@ -24,6 +24,11 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
+# Per-GDN-layer flags a B=1 scratch prefill rewrites on the layer object (reset_state_inplace / capture_state) although no
+# durable batched row changes; an INTERMEDIATE chunked spec prefill restores them (prefill_for_spec(final=False)).
+_GDN_SPEC_FLAGS = ("_conv_taps_stale", "_conv_win_stale", "_hist_packed_valid")
+_MISSING = object()
+
 
 @dataclass
 class _MaskedBucketBufs:
@@ -1138,7 +1143,9 @@ class Qwen36Model:
         for t in (tok_tt, cos, sin, pt_full, pt_chunk, out):
             ttnn.deallocate(t)
 
-    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0, device_copy=None):
+    def prefill_for_spec(
+        self, token_ids, page_table, actual_len, on_chunk, slot=0, device_copy=None, start=0, final=True
+    ):
         """Chunked prompt prefill for speculative decode; hands each chunk's hidden to ``on_chunk``.
 
         Uses the same 2048-token chunking as the demo. Prefilling the whole prompt as one masked
@@ -1164,9 +1171,20 @@ class Qwen36Model:
         Both leave a bit-identical slot row (tests/test_spec_join_exact.py). Neither rebuilds the fused
         PLAIN decode conv's packed history (conv_hist_packed): the spec loop never reads it and the
         rebuild is ~3000 blocking device reads per join; it stays INVALID so a later plain use rebuilds.
+
+        Scheduler-driven chunked prefill (the DFlash class under QWEN36_DFLASH_CHUNKED_PREFILL=1; tt/chunked_prefill.py
+        orders the calls): ``start`` > 0 RESUMES a prompt whose tokens [0, start) are already in the paged KV and whose
+        GDN state is in the bound B=1 scratch (no reset; ``start`` a multiple of the chunk size). ``final=False`` is an
+        INTERMEDIATE chunk (``actual_len`` a chunk multiple): the state stays in the scratch, no slot row is written, no
+        logits are produced (returns None) and the per-layer GDN flags the scratch prefill touches
+        (_conv_taps_stale / _conv_win_stale / _hist_packed_valid) are restored to what they were before the call, so an
+        intermediate chunk is a no-op on everything a speculative step or a later begin() reads. The defaults
+        (start=0, final=True) run exactly the unchunked code.
         """
         assert self.use_tp, "prefill_for_spec is the TP path (use_tp_path)"
         assert 0 <= slot < self.args.max_batch_size, f"slot {slot} out of range [0,{self.args.max_batch_size})"
+        start = int(start)
+        final = bool(final)
         if self.args.max_batch_size > 1:
             dev_copy = self._spec_slot_device_copy() if device_copy is None else bool(device_copy)
             _timing = os.environ.get("QWEN36_PREFILL_TIMING", "0") == "1"
@@ -1178,14 +1196,19 @@ class Qwen36Model:
             # (the serving loop's ring verify never does: it leaves both mirrors' flags alone).
             for dn in dn_layers:
                 dn.sync_conv_taps()
+            flags = None if final else [tuple(getattr(dn, f, _MISSING) for f in _GDN_SPEC_FLAGS) for dn in dn_layers]
             _t0 = time.perf_counter() if _timing else 0.0
             prev = self._bind_gdn_prefill_scratch()
             try:
-                logits = self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
+                logits = self._prefill_for_spec_b1(
+                    token_ids, page_table, actual_len, on_chunk, start=start, want_logits=final
+                )
                 if _timing:
                     ttnn.synchronize_device(self.device)
                 _t1 = time.perf_counter() if _timing else 0.0
-                if dev_copy:
+                if not final:
+                    pass  # intermediate chunk: the partial's state stays in the scratch (parked by the caller if needed)
+                elif dev_copy:
                     # Row `slot` of the saved batched buffers <- the still-bound B=1 scratch, on device.
                     self._write_gdn_slot_from_scratch(slot, prev)
                 else:
@@ -1196,6 +1219,20 @@ class Qwen36Model:
                     conv_snap = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_layers]
             finally:
                 self._unbind_gdn_prefill_scratch(prev)
+            if not final:
+                for dn, saved in zip(dn_layers, flags):
+                    for f, v in zip(_GDN_SPEC_FLAGS, saved):
+                        if v is _MISSING:
+                            if hasattr(dn, f):
+                                delattr(dn, f)
+                        else:
+                            setattr(dn, f, v)
+                if _timing:
+                    logger.info(
+                        f"[SPEC_PREFILL_TIMING] slot={slot} T={int(actual_len)} start={start} intermediate "
+                        f"prefill={1e3 * (_t1 - _t0):.1f} ms"
+                    )
+                return None
             if dev_copy:
                 for dn in dn_layers:
                     # Row `slot` of the taps is fresh and the other rows were current before the bind, so the taps
@@ -1214,13 +1251,32 @@ class Qwen36Model:
                     f"total={1e3 * (_t2 - _t0):.1f} ms prefill={1e3 * (_t1 - _t0):.1f} slot_write={1e3 * (_t2 - _t1):.1f}"
                 )
             return logits
+        if start or not final:
+            raise RuntimeError(
+                f"prefill_for_spec: a chunked resume (start={start}, final={final}) needs the batched B=1 scratch "
+                f"(max_batch_size={self.args.max_batch_size})"
+            )
         return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
 
-    def _prefill_for_spec_b1(self, token_ids, page_table, actual_len, on_chunk):
-        """prefill_for_spec's body: one B=1 prompt into whatever GDN state is currently bound."""
+    def _prefill_for_spec_b1(self, token_ids, page_table, actual_len, on_chunk, start=0, want_logits=True):
+        """prefill_for_spec's body: one B=1 prompt into whatever GDN state is currently bound.
+
+        ``start`` > 0 resumes at chunk ``start // chunk_size`` over the carried state (no GDN reset; a remainder shorter
+        than a chunk runs through the masked bucket at chunk_start=start, never the chunk_start=0 short path, which
+        resets). ``want_logits=False`` (an intermediate chunk, ending on a chunk boundary) hands EVERY chunk's hidden to
+        ``on_chunk`` and returns None. The defaults run exactly the unchunked loop."""
         chunk_size = self._chunked_chunk_size or 2048
         num_full = actual_len // chunk_size
         tail_real = actual_len - num_full * chunk_size
+        start = int(start)
+        if start or not want_logits:
+            if start % chunk_size != 0 or not 0 <= start < actual_len:
+                raise ValueError(
+                    f"prefill_for_spec resume start {start} is not a multiple of {chunk_size} below {actual_len}"
+                )
+            if not want_logits and tail_real != 0:
+                raise ValueError(f"an intermediate spec prefill chunk must end on a chunk boundary: {actual_len}")
+        first_chunk = start // chunk_size
         self._build_request_rope(token_ids[:, :actual_len], None)
 
         if num_full == 0:
@@ -1231,9 +1287,10 @@ class Qwen36Model:
             ttnn.deallocate(hidden)
             return logits
 
-        self._reset_gdn_state_for_new_sequence()
+        if first_chunk == 0:
+            self._reset_gdn_state_for_new_sequence()
         last_hidden = None
-        for c in range(num_full):
+        for c in range(first_chunk, num_full):
             cs = c * chunk_size
             if last_hidden is not None:
                 ttnn.deallocate(last_hidden)
@@ -1241,11 +1298,13 @@ class Qwen36Model:
                 token_ids[:, cs : cs + chunk_size], chunk_size, cs, page_table, chunk_size, flex_sdpa=True
             )
             ttnn.synchronize_device(self.device)
-            # Not the last chunk, or there is a tail after it: the base hidden is consumed here.
-            if c < num_full - 1 or tail_real > 0:
+            # Not the last chunk, or there is a tail after it, or no logits are wanted (an intermediate chunk): the
+            # base hidden is consumed here.
+            if c < num_full - 1 or tail_real > 0 or not want_logits:
                 on_chunk(last_hidden, cs, chunk_size)
         if tail_real > 0:
-            ttnn.deallocate(last_hidden)
+            if last_hidden is not None:  # None only for a tail-only resume (start == num_full * chunk_size)
+                ttnn.deallocate(last_hidden)
             cs = num_full * chunk_size
             logits, hidden = self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True
@@ -1253,6 +1312,9 @@ class Qwen36Model:
             on_chunk(hidden, cs, tail_real)
             ttnn.deallocate(hidden)
             return logits
+        if not want_logits:
+            ttnn.deallocate(last_hidden)
+            return None
         # Exact multiple of chunk_size: the last chunk supplies both the logits and the last hidden.
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
         on_chunk(last_hidden, (num_full - 1) * chunk_size, chunk_size)
@@ -2827,6 +2889,17 @@ class Qwen36Model:
             dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
+    def _check_plain_trace_allowed(self, site):
+        """Tripwire of the DFlash chunked-prefill profile (QWEN36_DFLASH_CHUNKED_PREFILL=1): once the speculative traces
+        are captured, replaying a PLAIN trace (decode / chunk-prefill / bucket) hangs the device (memory
+        qwen36-dflash2-vllm-serving). The DFlash class arms ``_forbid_plain_traces`` at the end of its spec capture under
+        the knob; every plain replay site calls this first and raises instead of hanging. Never armed otherwise."""
+        if getattr(self, "_forbid_plain_traces", False):
+            raise RuntimeError(
+                f"plain trace replay ({site}) after the speculative traces were captured: this hangs the device; "
+                "the DFlash chunked prefill must stay on the eager prefill_for_spec path"
+            )
+
     def _chunked_prefill_planner(self):
         """The scratch-ownership planner of scheduler-driven chunked prefill (tt/chunked_prefill.py), one per model."""
         planner = getattr(self, "_cp_planner", None)
@@ -3208,6 +3281,7 @@ class Qwen36Model:
                 ttnn.copy_host_to_device_tensor(cpt_host, self._bucket_page_table_buf)
 
                 # chunk_start=0 and cos/sin for [0, bucket) are baked in; no per-replay DMA needed.
+                self._check_plain_trace_allowed("prefill_traced_bucket_batched")
                 ttnn.execute_trace(self.device, self._bucket_trace_id, cq_id=0, blocking=False)
                 # Sync before reading this user's state/logit: the trace writes hidden/rec_state/
                 # conv_states in place and the next replay would overwrite them.
@@ -4405,6 +4479,7 @@ class Qwen36Model:
                 f"[PREFILL_DEBUG] bucket={bucket} actual_len={actual_len} chunk_start={chunk_start} "
                 f"fill_pt={fill_pt[0].tolist()} sdpa_pt[:6]={pt[0, :6].tolist()} pad_block={self._pad_kv_block}"
             )
+        self._check_plain_trace_allowed("_replay_prefill_bucket_trace_tp")
         ttnn.execute_trace(self.device, tr.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.device)
         refs.clear()
@@ -4679,6 +4754,7 @@ class Qwen36Model:
                 token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
             )
 
+            self._check_plain_trace_allowed("prefill_traced_chunked")
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
 
         ttnn.synchronize_device(self.device)
@@ -4870,6 +4946,7 @@ class Qwen36Model:
                 token_ids[:, cs : cs + chunk_size], vision_tokens, self._vis_row_offset_for(token_ids, cs)
             )
 
+            self._check_plain_trace_allowed("_prefill_traced_chunked_tp")
             ttnn.execute_trace(self.device, self._chunked_trace_id, cq_id=0, blocking=False)
             # PD producer seam: mirror-copy this chunk's K/V to the export pool + pump the claim-gated sends. Its
             # copies are enqueued BEFORE the next chunk's DMAs/replay, so the in-order CQ runs them between the two.
