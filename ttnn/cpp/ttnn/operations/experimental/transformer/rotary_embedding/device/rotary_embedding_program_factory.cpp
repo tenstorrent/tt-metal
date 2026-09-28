@@ -5,6 +5,8 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -888,6 +890,197 @@ ProgramDescriptor create_multi_tile_descriptor(
     return desc;
 }
 
+// L1 budget for the per-core resident cos/sin table (plus the pre-negated first-half sin tiles).
+constexpr uint32_t kPrefillCosSinCacheBytes = 96 * 1024;
+constexpr uint32_t kPrefillBlockTiles = 8;
+
+bool use_prefill_cached_path(
+    const RotaryEmbeddingParams& operation_attributes, const RotaryEmbeddingInputs& tensor_args) {
+    const auto& input = tensor_args.input;
+    if (operation_attributes.token_idx.has_value() || input.is_sharded() ||
+        operation_attributes.output_mem_config.is_sharded()) {
+        return false;
+    }
+    const uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
+    const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t cos_sin_tile_size =
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_args.cos.dtype()));
+    const uint32_t cache_bytes = (2 * Ht * Wt + Ht * (Wt / 2)) * cos_sin_tile_size;
+    return cache_bytes <= kPrefillCosSinCacheBytes;
+}
+
+// Interleaved prefill (Wt >= 2): cos/sin read once per core and kept resident, the input row read once
+// (the rotated half is indexed from the same tiles), block-batched NoC reads/writes, and a single pack per
+// output tile.
+ProgramDescriptor create_prefill_cached_descriptor(
+    const RotaryEmbeddingParams& operation_attributes,
+    const RotaryEmbeddingInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    ProgramDescriptor desc;
+
+    const auto& input = tensor_args.input;
+    const auto& cos = tensor_args.cos;
+    const auto& sin = tensor_args.sin;
+    auto& output = tensor_return_value;
+
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    const tt::DataFormat cos_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
+    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
+    const tt::DataFormat sin_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
+    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
+    const tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    const uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+
+    const uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
+    const uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t half_Wt = Wt / 2;
+    const uint32_t HtWt = Ht * Wt;
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
+
+    const auto work = compute_rotary_work_split(input, output, Wt);
+
+    const uint32_t rows_per_block = std::max<uint32_t>(1, kPrefillBlockTiles / Wt);
+    const uint32_t block_tiles = rows_per_block * Wt;
+    const uint32_t dst_capacity = fp32_dest_acc_en ? 4 : 8;
+    uint32_t dst_block = std::min(Wt, dst_capacity);
+    while (Wt % dst_block != 0) {
+        --dst_block;
+    }
+
+    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
+    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
+    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
+    constexpr uint8_t scalar_cb_index = tt::CBIndex::c_4;
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
+    constexpr uint8_t neg_sin_cb_index = tt::CBIndex::c_24;
+
+    auto add_cb = [&](uint8_t index, uint32_t num_tiles, tt::DataFormat format, uint32_t tile_size) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_tiles * tile_size,
+            .core_ranges = work.all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = index,
+                .data_format = format,
+                .page_size = tile_size,
+            }}},
+        });
+    };
+    add_cb(input_cb_index, 2 * block_tiles, input_cb_data_format, input_single_tile_size);
+    add_cb(cos_cb_index, HtWt, cos_cb_data_format, cos_single_tile_size);
+    add_cb(sin_cb_index, HtWt, sin_cb_data_format, sin_single_tile_size);
+    add_cb(scalar_cb_index, 1, scalar_cb_data_format, scalar_single_tile_size);
+    add_cb(neg_sin_cb_index, Ht * half_Wt, sin_cb_data_format, sin_single_tile_size);
+    add_cb(output_cb_index, 2 * block_tiles, output_cb_data_format, output_single_tile_size);
+
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* dst_buffer = output.buffer();
+
+    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)cos_cb_index,
+        (std::uint32_t)sin_cb_index,
+        (std::uint32_t)scalar_cb_index,
+        (std::uint32_t)bfloat16_scalar,
+        (std::uint32_t)Wt,
+        (std::uint32_t)HtWt,
+        (std::uint32_t)rows_per_block,
+    };
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, block_tiles};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+        "reader_rotary_embedding_prefill_interleaved.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = work.all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+        "writer_rotary_embedding_prefill_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = work.all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    auto make_compute = [&](const CoreRangeSet& cores, uint32_t num_rows) {
+        KernelDescriptor k;
+        k.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
+            "rotary_embedding_prefill.cpp";
+        k.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        k.core_ranges = cores;
+        k.compile_time_args = {
+            (std::uint32_t)input_cb_index,
+            (std::uint32_t)cos_cb_index,
+            (std::uint32_t)sin_cb_index,
+            (std::uint32_t)scalar_cb_index,
+            (std::uint32_t)neg_sin_cb_index,
+            (std::uint32_t)output_cb_index,
+            num_rows,
+            Wt,
+            half_Wt,
+            Ht,
+            dst_block};
+        k.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+        };
+        return k;
+    };
+    KernelDescriptor compute_desc_g1 = make_compute(work.core_group_1, work.num_rows_per_core_group_1);
+    std::optional<KernelDescriptor> compute_desc_g2;
+    if (!work.core_group_2.ranges().empty()) {
+        compute_desc_g2 = make_compute(work.core_group_2, work.num_rows_per_core_group_2);
+    }
+
+    const uint32_t g1_numcores = work.core_group_1.num_cores();
+    const auto& cores = grid_to_cores(work.num_cores, work.num_cores_x, work.num_cores_y, work.row_major);
+    reader_desc.runtime_args.reserve(work.num_cores);
+    writer_desc.runtime_args.reserve(work.num_cores);
+    for (uint32_t i = 0, num_tiles_written = 0; i < work.num_cores; ++i) {
+        const CoreCoord& core = cores.at(i);
+        const bool in_g1 = i < g1_numcores;
+        const uint32_t num_rows_per_core = in_g1 ? work.num_rows_per_core_group_1 : work.num_rows_per_core_group_2;
+        const uint32_t start_row_id = num_tiles_written / Wt % Ht;
+        reader_desc.emplace_runtime_args(
+            core,
+            {src_buffer,
+             cos_buffer,
+             sin_buffer,
+             num_rows_per_core,
+             num_tiles_written,
+             start_row_id,
+             num_tiles_written % HtWt});
+        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written, 0u, Wt, 0u});
+        (in_g1 ? compute_desc_g1 : *compute_desc_g2).emplace_runtime_args(core, {start_row_id});
+        num_tiles_written += num_rows_per_core * Wt;
+    }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_g1));
+    if (compute_desc_g2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_g2));
+    }
+    return desc;
+}
+
 }  // namespace
 
 ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
@@ -896,6 +1089,9 @@ ProgramDescriptor RotaryEmbeddingProgramFactory::create_descriptor(
     Tensor& tensor_return_value) {
     if (tensor_args.input.padded_shape()[-1] / TILE_WIDTH == 1) {
         return create_single_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    }
+    if (use_prefill_cached_path(operation_attributes, tensor_args)) {
+        return create_prefill_cached_descriptor(operation_attributes, tensor_args, tensor_return_value);
     }
     return create_multi_tile_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
