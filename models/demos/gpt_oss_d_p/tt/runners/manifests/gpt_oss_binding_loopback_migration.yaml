@@ -32,4 +32,3 @@ global_env:
   HF_MODEL: "/data/jmalone/.cache/huggingface/hub/models--openai--gpt-oss-120b/gpt-oss-120b"
   PREFILL_TTNN_CACHE: "/data/jmalone/gpt_oss_tt_cache/"
   GPT_OSS_WEIGHTS_FROM_CACHE: "1"
-  PREFILL_ENABLE_LAYER_ACK: "1"

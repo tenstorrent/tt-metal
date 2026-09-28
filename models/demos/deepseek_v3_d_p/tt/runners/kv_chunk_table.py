@@ -26,10 +26,10 @@ from models.demos.common.prefill.runners.migration import (
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
-    create_kv_chunk_address_table_kimi,
+    create_kv_chunk_address_table_block_cyclic,
     merged_num_layers,
+    populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
-    populate_kv_chunk_address_table_kimi,
 )
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
@@ -92,10 +92,13 @@ def build_and_serialize_kv_chunk_table(
     path,
     index_kv_cache=None,
     dflash_caches=None,
+    dflash_spec=None,
+    dflash_first_layer=0,
     tp_axis=1,
     first_layer_idx=0,
     num_my_layers=None,
     stage_layouts=None,
+    layer_rows=None,
     index_layer_ids=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
@@ -114,6 +117,13 @@ def build_and_serialize_kv_chunk_table(
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
     side table. None (dense models) → the usual single-config table over the KVPE cache alone.
 
+    ``dflash_spec`` (DFlash drafter under pipeline parallelism): the same drafter configs as
+    ``dflash_caches`` below, but described without a local tensor — ``{num_kv_heads, head_dim,
+    num_layers, k_stage_layout, v_stage_layout}``. Use it when the rank building the table is not the
+    rank that owns the drafter caches (the KV tail), which is every multi-rank run. Geometry comes from
+    the drafter checkpoint config (loaded on every rank), the two stage layouts from
+    ``allgather_kv_stage_layout``. Mutually exclusive with ``dflash_caches``.
+
     ``dflash_caches`` (DFlash drafter only): ``(k_cache, v_cache)`` for the drafter's context-KV, which
     also joins the merged table — ``2 * num_kv_heads`` further configs, named by
     :func:`dflash_config_name`, because the table key is (layer, position, slot) with no head axis. The
@@ -121,12 +131,24 @@ def build_and_serialize_kv_chunk_table(
     ``num_kv_heads`` from ``shape[1] * tp`` (dim 1 is this chip's TP head slice), head_dim from
     ``shape[-1]``. Passing these turns even a DENSE model's table into a merged one.
 
+    ``dflash_first_layer``: where the drafter's layers sit on the table's GLOBAL layer axis (the
+    verifier's layer count, since the drafter runs after every verifier layer). Layer ids mean the same
+    thing in every config here — config 1 is widened the same way below — so the drafter's 6 layers are
+    published as ``dflash_first_layer ..  +5`` rather than as their own 0..5.
+
     ``first_layer_idx`` / ``num_my_layers`` / ``stage_layouts`` (pipeline-parallel only): this rank owns
     layers [first_layer_idx, first_layer_idx + num_my_layers); ``stage_layouts`` holds ONE all-gathered
     per-stage layout per block-cyclic cache (config order), so rank 0 builds one table spanning every
-    stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests)."""
+    stage while the collectives ran on all ranks. Leave it None to gather inline (single-rank / tests).
+
+    KV DEDUP is derived, not passed. A sparse/DSA model (``index_kv_cache`` given) always stripes its
+    block-cyclic caches across SP*TP, so its table addresses each (row, col) device individually instead
+    of one group per SP row; a dense model never does. Deriving it here is what keeps the table's
+    addressing and the caches' allocation from disagreeing — a mismatch makes EVERY address wrong, with
+    no error. ``tp_axis`` names the TP mesh axis in either case — it is the dflash head-count geometry
+    and is not itself the dedup switch."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
-        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+        f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
@@ -140,7 +162,10 @@ def build_and_serialize_kv_chunk_table(
         all_caches.append(("index", index_kv_cache))
     if dflash_caches is not None:
         all_caches.append(("dflash", dflash_caches))
-    if index_kv_cache is not None or dflash_caches is not None:
+    if dflash_spec is not None:
+        assert dflash_caches is None, "pass the drafter either as local tensors or as a staged spec, not both"
+        all_caches.append(("dflash_staged", dflash_spec))
+    if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None:
         return _build_and_serialize_merged_kv_chunk_table(
             mesh_device=mesh_device,
             caches=all_caches,
@@ -154,13 +179,14 @@ def build_and_serialize_kv_chunk_table(
             path=path,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
+            dflash_first_layer=dflash_first_layer,
         )
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
     stage_layout = stage_layouts[0] if stage_layouts else None
 
     def _builder(*, config, chunk_size_bytes, num_users):
-        return create_kv_chunk_address_table_kimi(
+        return create_kv_chunk_address_table_block_cyclic(
             config=config,
             mesh_device=mesh_device,
             mesh_shape=mesh_shape,
@@ -172,6 +198,7 @@ def build_and_serialize_kv_chunk_table(
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layout=stage_layout,
+            layer_rows=layer_rows,
         )
 
     return serialize_kv_chunk_table(
@@ -199,6 +226,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     chunk_size_global=None,
     stage_layouts=None,
     index_layer_ids=None,
+    dflash_first_layer=0,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
@@ -223,12 +251,34 @@ def _build_and_serialize_merged_kv_chunk_table(
     dflash_kv_heads = 0
     n_block_cyclic = 0
     index_config_name = None
+    # Drafter-only, pipeline-parallel path: config name -> its all-gathered stage layout, and the
+    # geometry that replaces the tensor a non-owning rank does not have. Empty on the single-stage path.
+    dflash_stage_of = {}
+    dflash_staged = None
     for kind, payload in caches:
-        if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_kimi
+        if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_block_cyclic
             if kind == "index":
                 index_config_name = str(n_block_cyclic)
             entries.append((str(n_block_cyclic), payload, None))
             n_block_cyclic += 1
+        elif kind == "dflash_staged":
+            # Pipeline-parallel drafter: rank 0 builds the table but owns no drafter tensor, so the
+            # entries are described entirely by gathered metadata + the drafter config every rank loads.
+            # Geometry needs no all-gather (DFlashDrafterConfig is checkpoint-wide); only the addresses do.
+            dflash_kv_heads = payload["num_kv_heads"]
+            if payload["head_dim"] % _TILE_DIM != 0:
+                # Guard the division below: integer division would silently undersize every chunk and
+                # point the whole drafter half of the table at the wrong bytes.
+                raise ValueError(f"drafter head_dim {payload['head_dim']} must be a multiple of {_TILE_DIM} (tiled)")
+            dflash_staged = {
+                "num_layers": payload["num_layers"],
+                "chunk_size_bytes": (payload["head_dim"] // _TILE_DIM) * _BFP8_TILE_BYTES,
+            }
+            for k_or_v, layout in (("k", payload["k_stage_layout"]), ("v", payload["v_stage_layout"])):
+                for h in range(dflash_kv_heads):
+                    name = dflash_config_name(k_or_v, h)
+                    entries.append((name, None, h))
+                    dflash_stage_of[name] = layout
         elif kind == "dflash":
             k_cache, v_cache = payload
             # Distinct allocations, else every V config aliases K's addresses (a same-address table
@@ -248,6 +298,7 @@ def _build_and_serialize_merged_kv_chunk_table(
             raise ValueError(f"unknown KV table cache kind: {kind!r} (expected 'kvpe', 'index', or 'dflash')")
 
     block_cyclic = [(name, cache) for name, cache, head_idx in entries if head_idx is None]
+    kv_dedup = index_config_name is not None
     if stage_layouts is None:
         stage_layouts = [
             allgather_kv_stage_layout(
@@ -273,10 +324,21 @@ def _build_and_serialize_merged_kv_chunk_table(
 
     def _table_config(cache, stage_layout):
         cfg = disagg.KvChunkAddressTableConfig()
+        if cache is None:
+            # Staged drafter config: no local tensor to size from. The drafter is not layer-partitioned,
+            # so its depth is the drafter's own rather than a sum over stages, and its chunk size follows
+            # from head_dim (the cache is always bfp8/TILE -- allocate_dflash_kv_cache). The axis is
+            # published from 0 so a global layer id indexes it directly; only the tail rows are filled.
+            cfg.num_layers = dflash_first_layer + dflash_staged["num_layers"]
+            cfg.max_sequence_length = seq_len
+            cfg.num_slots = num_users
+            cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+            cfg.chunk_size_bytes = dflash_staged["chunk_size_bytes"]
+            return cfg
         if stage_layout is None:
-            # Drafter cache: single-stage, so its layer count comes off the cache itself (the 6 draft
-            # layers, user-major shape[0] // num_users).
-            cfg.num_layers = _num_layers_from_cache(cache, num_users)
+            # Drafter cache: single-stage, so its depth comes off the cache itself (the 6 draft layers,
+            # user-major shape[0] // num_users), then offset onto the global axis as above.
+            cfg.num_layers = dflash_first_layer + _num_layers_from_cache(cache, num_users)
         else:
             # Match a layout to its cache by DRAM base, so a runtime returning its stages out of config
             # order is caught here instead of silently addressing one cache with the other's layout.
@@ -321,7 +383,9 @@ def _build_and_serialize_merged_kv_chunk_table(
     for name, cache, head_idx in entries:
         cfg, config_id = configs[name], table.config_id_of(name)
         if head_idx is None:  # MLA/kimi block-cyclic model cache
-            populate_kv_chunk_address_table_kimi(
+            # Every block-cyclic cache shares the dedup layout, so all such configs resolve to the same
+            # device groups (add_device_group dedups, so they are registered once and shared).
+            populate_kv_chunk_address_table_block_cyclic(
                 lookup_table=table,
                 config=cfg,
                 mesh_device=mesh_device,
@@ -334,6 +398,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 config_id=config_id,
                 stage_layout=layout_of[name],
                 layer_rows=index_layer_ids if name == index_config_name else None,
+                tp_axis=tp_axis if kv_dedup else None,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(
@@ -351,6 +416,10 @@ def _build_and_serialize_merged_kv_chunk_table(
                 num_users=num_users,
                 config_id=config_id,
                 chunk_size_global=chunk_size_global,
+                # None on the single-stage path (addresses come from `cache`); the gathered layout of
+                # the owning rank under pipeline parallelism, where `cache` is None.
+                stage_layout=dflash_stage_of.get(name),
+                first_layer=dflash_first_layer,
             )
 
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)

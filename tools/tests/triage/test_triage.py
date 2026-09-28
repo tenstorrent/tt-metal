@@ -25,13 +25,19 @@ sys.path.insert(0, triage_home)
 
 
 import triage
-from triage import run_script, FAILURE_CHECKS, ScriptArguments
+from triage import CheckType, run_script, ScriptArguments
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
 
 
 triage.progress_disabled = True  # Disable progress bars for tests
+
+
+def logged_errors() -> list[str]:
+    """The failed checks reported so far, formatted the way triage prints them."""
+    return [check.formatted_message for check in triage.CHECKS if check.type is CheckType.ERROR]
+
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
@@ -390,10 +396,8 @@ class TestTriage:
     def test_check_noc_status(self):
         self.run_triage_script("check_noc_status.py", assert_failure_checks=False)
 
-        global FAILURE_CHECKS
-
         # Some mismatches may occur on unused cores.
-        non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
+        non_state_failures = [failure for failure in logged_errors() if "Mismatched state" not in failure]
         assert (
             len(non_state_failures) == 0
         ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
@@ -632,9 +636,8 @@ class TestTriage:
         assert_failure_checks: bool = True,
     ):
         global triage_home
-        global FAILURE_CHECKS
 
-        FAILURE_CHECKS.clear()
+        triage.CHECKS.clear()
         result = run_script(
             script_path=os.path.join(triage_home, script_name),
             args=args,
@@ -644,9 +647,8 @@ class TestTriage:
         )
 
         if assert_failure_checks:
-            assert (
-                len(FAILURE_CHECKS) == 0
-            ), f"{script_name} failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+            failures = logged_errors()
+            assert len(failures) == 0, f"{script_name} failed with {len(failures)} failures: {failures}"
 
         return result
 
@@ -669,16 +671,16 @@ class TestMeshSocketTriage:
 
     def test_dump_mesh_sockets(self):
         global triage_home
-        global FAILURE_CHECKS
 
-        FAILURE_CHECKS.clear()
+        triage.CHECKS.clear()
         result = run_script(
             script_path=os.path.join(triage_home, "dump_mesh_sockets.py"),
             context=self.exalens_context,
             argv=[],
             return_result=True,
         )
-        assert not FAILURE_CHECKS, f"dump_mesh_sockets.py failed with: {FAILURE_CHECKS}"
+        failures = logged_errors()
+        assert not failures, f"dump_mesh_sockets.py failed with: {failures}"
         assert result is not None, "Expected socket rows while MeshSockets are wedged"
 
         rows = [check.result for check in result]

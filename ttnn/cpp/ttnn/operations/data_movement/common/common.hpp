@@ -30,6 +30,37 @@ ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
 
+// True when a MemoryConfig is genuinely ND-sharded: ND_SHARDED, or an nd_shard_spec with no 2D
+// shard_spec. Reshape stages these through an interleaved intermediate rather than the 2D paths.
+bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config);
+
+// True when two configs describe the same physical layout, ignoring how they were built.
+// MemoryConfig::operator== is provenance-sensitive: on mixed creation paths it compares both the 2D
+// shard_spec and the nd_shard_spec, so a tensor whose ND spec normalized to 2D (both specs
+// populated) never compares equal to an explicit 2D-sharded config with the same resolved
+// shard_spec, and a no-op gate keyed on operator== reshards into a byte-identical layout. Only that
+// mixed 2D case is relaxed; a genuinely ND config is still compared by operator== alone.
+bool is_functionally_same_memory_config(
+    const tt::tt_metal::MemoryConfig& config_a, const tt::tt_metal::MemoryConfig& config_b);
+
+// Drop a normalized config's nd_shard_spec, keeping the equivalent 2D shard_spec. A config built
+// from an NdShardSpec that TensorSpec normalized to 2D keeps both specs, and buffer creation always
+// prefers the nd spec, so a shape-changing op must drop the one sized for the old shape or
+// allocation aborts on its rank. Only fires when both specs are present; the allocation flags are
+// carried over by hand because the 3-arg MemoryConfig ctor does not.
+tt::tt_metal::MemoryConfig drop_normalized_nd_shard_spec(const tt::tt_metal::MemoryConfig& mem_config);
+
+// Re-derive an ND shard spec for a reshaped output when the ND config was inherited from the input.
+// The input's per-core shard was sized for the input shape, so reusing it over-pads a differently
+// shaped output; instead keep the grid/orientation/strategy and split the output into the same
+// number of shards per dim, adapting rank via squeeze/unsqueeze if the reshape changes rank. Tiled
+// inner dims are tile-aligned and clamped to the padded dim.
+tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(
+    const tt::tt_metal::MemoryConfig& src_cfg,
+    const ttnn::Shape& src_padded_shape,
+    const ttnn::Shape& out_padded_shape,
+    bool is_tiled);
+
 // Estimate NOC transfer cycles for a batch of transactions.
 // Returns {bw_cycles, latency_cycles} — BW is the steady-state transfer time,
 // latency is the per-transaction pipeline startup cost. Callers can model
@@ -59,14 +90,21 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
 // One set of buffers, sized for a single block width.
 //
-// The `_multi_core_block[_interleaved]` tilize factories split work into blocks and hand cores one
-// of two block widths (the full width, and a narrower cliff-row width). A block's width fixes the
-// size of the buffers that carry it, and that size is a *correctness* property rather than a
-// performance one: the reader fills a whole block through one raw linear write starting at
-// `get_write_ptr()`, and `cb_push_back` requires the producer to write contiguously -- it only
-// wraps when the write pointer lands exactly on `fifo_limit` ("producer always writes into
-// contiguous memory, it cannot wrap"). A buffer whose size is not an exact multiple of the block
-// pushed into it therefore overruns into its neighbour rather than wrapping.
+// The `_multi_core_block[_interleaved]` tilize and untilize factories split work into blocks and
+// hand cores one of two block widths (the full width, and a narrower cliff-row width). A block's
+// width fixes the size of the buffers that carry it, and that size is a *correctness* property
+// rather than a performance one, because one endpoint of the block buffer walks a whole block as
+// raw contiguous L1 rather than page by page:
+//
+//   * tilize: the reader fills a whole block through one raw linear write starting at
+//     `get_write_ptr()`, and `cb_push_back` requires the producer to write contiguously -- it only
+//     wraps when the write pointer lands exactly on `fifo_limit` ("producer always writes into
+//     contiguous memory, it cannot wrap").
+//   * untilize: the writer takes `get_read_ptr()` once per block and walks the block's rows
+//     forward from it, so the consumer likewise reads a contiguous run and cannot wrap mid-block.
+//
+// Either way, a buffer whose size is not an exact multiple of the block pushed into it overruns
+// into its neighbour instead of wrapping.
 //
 // So each block width gets its own set of buffers, with its own indices, sized for that width,
 // rather than one set of indices re-used at different sizes on disjoint cores (issue #51305). The
@@ -77,10 +115,15 @@ uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 // apply the *same* index and sizing rules -- a private copy can drift and reintroduce the
 // corruption the split prevents.
 struct BlockBufferSet {
-    uint8_t staging_index = 0;  // per-row DRAM-alignment staging buffer (reader-private scratchpad)
-    uint8_t input_index = 0;    // row-major block the reader fills and compute tilizes
-    uint8_t output_index = 0;   // tilized block compute produces and the writer drains
-    uint32_t block_tiles = 0;   // block width in tiles -- the page count of input/output
+    // Per-row DRAM-alignment staging buffer (a reader-private scratchpad). Only the tilize
+    // direction needs it: there the *reader* touches DRAM and must fix up alignment before the
+    // block lands in L1. Untilize reads whole tile pages in and writes sticks out, so it has no
+    // staging buffer and leaves this unset -- `push_buffer_set` then emits only input and output.
+    std::optional<uint8_t> staging_index;
+    uint8_t input_index = 0;   // row-major block the reader fills and compute tilizes (untilize: the
+                               // tilized block the reader fills and compute untilizes)
+    uint8_t output_index = 0;  // block compute produces and the writer drains
+    uint32_t block_tiles = 0;  // block width in tiles -- the page count of input/output
     tt::tt_metal::CoreRangeSet core_ranges;
 
     bool empty() const { return core_ranges.empty(); }
@@ -88,9 +131,11 @@ struct BlockBufferSet {
 
 // The block work split plus the two buffer sets derived from it.
 //
-// Shared so both `_multi_core_block[_interleaved]` tilize factories apply one set of index and
-// sizing rules. A private copy per factory drifts, and a CB-index or sizing change landing in only
-// one of them silently reintroduces the overrun BlockBufferSet exists to prevent.
+// Shared so every `_multi_core_block[_interleaved]` factory -- tilize, tilize_with_val_padding,
+// untilize and untilize_with_unpadding -- applies one set of index and sizing rules. A private copy
+// per factory drifts, and a CB-index or sizing change landing in only some of them silently
+// reintroduces the overrun BlockBufferSet exists to prevent. What legitimately differs between the
+// callers is passed in, not forked: see BlockDirection and BlockCoreOrder.
 //
 // Tile sizes are passed in rather than derived from a Tile: the factories compute them differently
 // (`Tile::get_tile_size`, which folds in runtime L1 alignment, versus the constexpr
@@ -111,7 +156,41 @@ struct BlockPlan {
     uint32_t num_dm_pairs() const { return (full.empty() ? 0u : 1u) + (cliffrow.empty() ? 0u : 1u); }
 };
 
+// Which way the block factory runs. This selects the two things that genuinely differ between the
+// directions, both of which are correctness-relevant:
+//
+//   * Staging. Only the tilize direction's reader touches DRAM row by row and has to fix up
+//     alignment before the block lands in L1, so only it gets a staging buffer -- and only it has
+//     to reserve room for one when computing the block-size limit. Untilize reads whole tile pages
+//     in and writes sticks out, so its sets leave `staging_index` unset.
+//   * Which shape drives the split. Tilize splits over the *output* (tiled) shape, untilize over
+//     the *input* (tiled) shape. For plain untilize the two are the same, but for
+//     untilize_with_unpadding the output is smaller, and splitting over it would under-count the
+//     tiles that actually have to be read.
+enum class BlockDirection : uint8_t {
+    Tilize,
+    Untilize,
+};
+
+// The order the work split hands cores out in. A factory's runtime-arg loop must walk its cores in
+// the SAME order the split assigned them, or a core's args land on another core's buffer set. The
+// two orders are not interchangeable, so each factory passes the one its loop already uses:
+//
+//   ColumnMajor - `corerange_to_cores(grid)`, i.e. the CoreRangeSet work-split overload. Pair with
+//                 a loop over `corerange_to_cores(available_grid)`.
+//   RowMajor    - the CoreCoord work-split overload, which walks (x, y) across the full grid. Pair
+//                 with a loop over `grid_to_cores(ncores, x, y, /*row_wise=*/true)`.
+//
+// RowMajor cannot be combined with `sub_core_grids`, since the CoreCoord overload has no way to
+// honour a restricted grid.
+enum class BlockCoreOrder : uint8_t {
+    ColumnMajor,
+    RowMajor,
+};
+
 BlockPlan make_block_plan(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     uint32_t input_single_tile_size,
@@ -125,13 +204,12 @@ BlockPlan make_block_plan(
 // a downstream size check only catches that when the widths happen to differ numerically.
 const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_metal::CoreCoord& core);
 
-// Union of two core ranges, either of which may be empty.
-tt::tt_metal::CoreRangeSet union_of(const tt::tt_metal::CoreRangeSet& a, const tt::tt_metal::CoreRangeSet& b);
-
-// Append the three CBDescriptors for one buffer set: staging, input, output.
+// Append the CBDescriptors for one buffer set: input, output, and -- only if the set declares a
+// `staging_index` -- the staging buffer ahead of them. `dram_alignment` and `tile_height` size the
+// staging buffer and are unused by a set without one.
 //
-// `tile` is the only factory-specific piece -- a factory that supports non-default tile shapes
-// passes its TileDescriptor so the input/output buffers carry it; one that is fixed to the
+// `tile` is the only other factory-specific piece -- a factory that supports non-default tile
+// shapes passes its TileDescriptor so the input/output buffers carry it; one that is fixed to the
 // standard tile leaves it unset.
 void push_buffer_set(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -160,7 +238,9 @@ bool is_enough_space(
     uint32_t reserved_l1_bytes_per_core = 0);
 
 // Per-core L1 footprint that `output_memory_config` will require for a tensor of
-// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1.
+// `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1. Mirrors what the L1
+// allocator will actually take for the buffer (see the definition), so that a routing decision
+// made on this reservation is never more permissive than the program factory it predicts.
 //
 // If the TensorSpec cannot be constructed (unsupported dtype/layout combination) and
 // `require_constructible` is false, this falls back to reserving nothing -- the pre-existing
@@ -175,6 +255,14 @@ uint32_t get_pending_l1_output_reservation(
     DataType output_dtype,
     Layout output_layout,
     bool require_constructible = false);
+
+// The dtype the untilize family (untilize, untilize_with_unpadding and the codegen untilize) emits
+// for `input_dtype`: block floats cannot exist in ROW_MAJOR, so a BFLOAT8_B input is written out as
+// BFLOAT16. The device operations' compute_output_specs and the composites' L1 accounting (output
+// tile size, pending L1 output reservation) must all agree on this, so they all go through here.
+constexpr DataType untilize_output_dtype(DataType input_dtype) {
+    return input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
+}
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);

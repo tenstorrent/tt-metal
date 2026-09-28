@@ -67,9 +67,7 @@ TEST_F(UnitMeshFixture, Metadata_CB_Tensor_Clash_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
-        ".*\\[ASAN ERROR\\] Metadata Overflow.*");
+    EXPECT_DEATH(LaunchProgram(this->device(), std::move(program)), ".*\\[ASAN ERROR\\] Metadata Overflow.*");
 }
 
 // Directly exercises the emule-only static KERNEL_CONFIG-window check
@@ -153,9 +151,7 @@ TEST_F(UnitMeshFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
     std::vector<uint32_t> args(n_args, 0u);
     SetRuntimeArgs(program, kernel, logical_core, args);
 
-    EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
-        ".*\\[ASAN ERROR\\] Metadata Overflow.*");
+    EXPECT_DEATH(LaunchProgram(this->device(), std::move(program)), ".*\\[ASAN ERROR\\] Metadata Overflow.*");
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
@@ -193,7 +189,7 @@ TEST_F(UnitMeshFixture, Metadata_CB_Tensor_NoViolation) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Must NOT abort.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

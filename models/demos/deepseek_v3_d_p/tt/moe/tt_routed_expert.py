@@ -17,26 +17,53 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
+
+def _fused_compute_config(config):
+    """The caller's config with the three flags moe_fused_swiglu forbids cleared.
+
+    The fused kernel drives packer L1 accumulation itself (per K-block, with an explicit
+    packer drain), needs all eight DEST tiles, and its bf16 row-major tilize path requires
+    half sync -- so it rejects packer_l1_acc, fp32_dest_acc_en and dst_full_sync_en outright.
+    unified_routed_expert_moe accepts them, and the shared model config sets packer_l1_acc.
+    Fidelity and approx mode are the caller's call and carry over untouched.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=config.math_fidelity,
+        math_approx_mode=config.math_approx_mode,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
 # Model configs are torch-only and so name their activation as a string; this is the one place
-# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+# that maps those names onto the kernel enum. Keys are the TT activation name, not the HF
+# ``hidden_act``: DeepSeek-V4's ``hidden_act`` is "silu", with the clamp on ``swiglu_limit``.
 ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "silu": ttnn.RoutedExpertActivation.Silu,
     "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
     "situ": ttnn.RoutedExpertActivation.SituGlu,
+    "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
 
-# Activations whose fused kernel path carries the bias branch (gate/up bias before the
-# activation, down bias after the down matmul). SiLU has no bias branch.
+# Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
+# DeepSeek-V4's experts are bias-free, not because the kernel lacks a bias branch.
 _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SwiGluOai,
     ttnn.RoutedExpertActivation.SituGlu,
+)
+
+# Activations moe_fused_swiglu implements; its own validation rejects the rest. ClampedSiluGlu is
+# absent (only unified_routed_expert_moe has it), so a hybrid split cannot hand it to the fused op.
+_FUSED_OP_ACTIVATIONS = (
+    ttnn.RoutedExpertActivation.Silu,
+    ttnn.RoutedExpertActivation.SituGlu,
+    ttnn.RoutedExpertActivation.SwiGluOai,
 )
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -300,6 +327,7 @@ class TtRoutedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         *,
         activation: "ttnn.RoutedExpertActivation",
+        hybrid_token_threshold: Optional[int] = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -334,6 +362,7 @@ class TtRoutedExpert(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
+        self._is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
@@ -349,31 +378,51 @@ class TtRoutedExpert(LightweightModule):
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
         # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
-        # avoids silently running the wrong activation when a caller forgets to set it.
+        # swigluoai activation, .SituGlu for Kimi K3's SiTU-GLU, or .ClampedSiluGlu for
+        # DeepSeek-V4's clamped SiLU-GLU. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
                 "TtRoutedExpert requires an explicit `activation` "
-                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai, .SituGlu or .ClampedSiluGlu)"
             )
         self.activation = activation
+        # Hybrid routed-expert dispatch. None keeps the single-op path. An int T splits the
+        # experts by load across BOTH ops in one forward: counts <= T go to moe_fused_swiglu,
+        # counts > T to unified_routed_expert_moe. Each op reads the SAME device-resident
+        # counts vector and drops the experts outside its band, so the split costs no extra
+        # tensor, no eltwise mask and no host sync. Measured crossover is per model -- compare the
+        # two ops' perf gates at the shape -- so the caller supplies the number.
+        if hybrid_token_threshold is not None:
+            if not self._is_blackhole:
+                raise NotImplementedError("hybrid_token_threshold requires the Blackhole fused path")
+            if hybrid_token_threshold < 0:
+                raise ValueError(f"hybrid_token_threshold must be >= 0, got {hybrid_token_threshold}")
+            # The fused op validates its activation on device, so an unsupported one reaches the
+            # caller as a TT_FATAL mid-forward instead of a rejected configuration.
+            if activation not in _FUSED_OP_ACTIVATIONS:
+                raise NotImplementedError(
+                    f"hybrid_token_threshold cannot be combined with {activation}: moe_fused_swiglu "
+                    "implements Silu and SituGlu only. Leave the threshold as None to keep every "
+                    "expert on the composite."
+                )
+        self.hybrid_token_threshold = hybrid_token_threshold
 
         # Every non-SiLU activation lives in the fused Blackhole kernel only; the Wormhole
         # fallback in forward() calls routed_expert_ffn, which has no activation parameter and
         # always computes SiLU. Reject here rather than silently returning SiLU output.
-        if activation != ttnn.RoutedExpertActivation.Silu and not is_blackhole():
+        if activation != ttnn.RoutedExpertActivation.Silu and not self._is_blackhole:
             raise NotImplementedError(
                 f"TtRoutedExpert {activation} is only supported on the Blackhole fused path; "
                 "the fallback path computes SiLU"
             )
 
-        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
-        # activation (the kernel adds gate/up bias before the activation and down bias
-        # after the down matmul). Converted + distributed like the weights below.
+        # Optional per-expert projection biases (gpt-oss). Converted + distributed like the
+        # weights below.
         if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
             raise ValueError(
-                "TtRoutedExpert expert biases require a fused binary activation "
-                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+                "TtRoutedExpert expert biases are enabled only for "
+                f"RoutedExpertActivation.SwiGluOai and .SituGlu, not {activation}."
             )
 
         total_experts = self.num_devices * experts_per_chip
@@ -543,9 +592,10 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
-        if is_blackhole():
+        if self._is_blackhole:
             # Fused path. The composite op selects its strategy from the input
             # layout: a ROW_MAJOR bf16 buffer is consumed directly (x tilized and
             # bf8-packed internally, fresh output); a TILE buffer takes the
@@ -555,23 +605,83 @@ class TtRoutedExpert(LightweightModule):
             if dispatched_buffer.layout == ttnn.TILE_LAYOUT and dispatched_buffer.dtype != self.activations_dtype:
                 logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
                 dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-            signpost(header="UnifiedRoutedExpertMoe")
-            expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
-                dispatched_buffer,
-                expert_region_offsets,
-                expert_token_counts,
-                self.global_expert_idx_table,
-                self.gate_projs,
-                self.up_projs,
-                self.down_projs,
-                max_dispatched_tokens_per_expert=self.max_tokens,
-                compute_kernel_config=self.compute_kernel_config,
-                activation=self.activation,
-                gate_biases=self.gate_biases,
-                up_biases=self.up_biases,
-                down_biases=self.down_biases,
-            )
-            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            threshold = self.hybrid_token_threshold
+            # A count can never exceed the expert's own region, so a threshold at or above
+            # max_tokens leaves the composite an empty band: it would launch, read the counts
+            # and skip every expert. Drop that dispatch and let the fused op own the layer.
+            fused_only = threshold is not None and threshold >= self.max_tokens
+
+            # The composite runs FIRST in a hybrid because it ALLOCATES the shared output the
+            # fused half then writes its own expert regions into. Both ops skip every expert
+            # outside their band, and both already skip count 0, so the two bands tile the
+            # experts exactly once with no double-write and no gap.
+            # On a TILE buffer the composite writes IN PLACE and hands x straight back, so its
+            # output IS x. In a hybrid that makes the fused band's output alias its own
+            # activations, which moe_fused_swiglu rejects outright. Give the composite a copy to
+            # consume, so the shared output is a distinct buffer and x stays pristine for the fused
+            # read rather than depending on the two bands' regions never overlapping. ROW_MAJOR x
+            # already gets a fresh output from the op, and a composite-only forward has no second
+            # reader, so neither pays for the copy.
+            composite_input = dispatched_buffer
+            if threshold is not None and not fused_only and dispatched_buffer.layout == ttnn.TILE_LAYOUT:
+                composite_input = ttnn.clone(dispatched_buffer)
+
+            expert_outputs = None
+            if not fused_only:
+                ttnn.tracy_message("`TT_SIGNPOST: UnifiedRoutedExpertMoe`")
+                expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+                    composite_input,
+                    expert_region_offsets,
+                    expert_token_counts,
+                    self.global_expert_idx_table,
+                    self.gate_projs,
+                    self.up_projs,
+                    self.down_projs,
+                    max_dispatched_tokens_per_expert=self.max_tokens,
+                    compute_kernel_config=self.compute_kernel_config,
+                    activation=self.activation,
+                    gate_biases=self.gate_biases,
+                    up_biases=self.up_biases,
+                    down_biases=self.down_biases,
+                    min_active_tokens=0 if threshold is None else threshold + 1,
+                )
+            else:
+                # Nobody allocated for us. Match what the composite hands back: one shared
+                # bf8 TILE buffer, each expert writing only its own region, the rest left
+                # untouched (downstream combine reads only the written rows).
+                expert_outputs = ttnn.empty(
+                    dispatched_buffer.shape,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            if threshold is not None:
+                ttnn.tracy_message("`TT_SIGNPOST: MoeFusedSwiGlu`")
+                ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
+                    dispatched_buffer,
+                    self.gate_projs,
+                    self.up_projs,
+                    self.down_projs,
+                    expert_token_counts,
+                    self.global_expert_idx_table,
+                    input_m_tiles=self.max_tokens // ttnn.TILE_SIZE,
+                    # The grid the composite fixes, read from the op rather than restated: the
+                    # two halves of a hybrid forward must block identically or the measured
+                    # crossover between them stops applying.
+                    core_grid=ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID,
+                    compute_kernel_config=_fused_compute_config(self.compute_kernel_config),
+                    activation=self.activation,
+                    output=expert_outputs,
+                    expert_region_offsets=expert_region_offsets,
+                    read_x_at_offset=True,
+                    max_active_tokens=threshold,
+                    gate_biases=self.gate_biases,
+                    up_biases=self.up_biases,
+                    down_biases=self.down_biases,
+                )
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
         if self.gate_biases is not None:
@@ -590,7 +700,7 @@ class TtRoutedExpert(LightweightModule):
             dispatched_buffer = ttnn.to_layout(dispatched_buffer, ttnn.TILE_LAYOUT, dtype=self.activations_dtype)
         expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
+            ttnn.tracy_message(f"`TT_SIGNPOST: Expert {local_expert+1}/{self.experts_per_chip}`")
 
             tokens = ttnn.experimental.deepseek_prefill.extract(
                 dispatched_buffer,
@@ -600,7 +710,8 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
                 tokens,
@@ -610,7 +721,8 @@ class TtRoutedExpert(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 output=None,
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
             expert_outputs = ttnn.experimental.deepseek_prefill.insert(
                 expert_outputs,
@@ -621,5 +733,6 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
             )
 
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs

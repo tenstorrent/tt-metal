@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "debug_tools_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -28,7 +29,6 @@ protected:
     bool is_quasar{false};
     uint32_t l1_unreserved_base{0};
     std::shared_ptr<distributed::MeshDevice> mesh_device;
-    IDevice* device{nullptr};
     uint32_t num_dms_{0};
 
     void SetUp() override {
@@ -38,7 +38,6 @@ protected:
         }
         MeshWatcherFixture::SetUp();
         mesh_device = devices_[0];
-        device = mesh_device->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
         is_quasar = arch_ == tt::ARCH::QUASAR;
         // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only land on DM2..DM7.
@@ -46,7 +45,7 @@ protected:
             constexpr uint32_t kQuasarReservedDmCores = 2;
             num_dms_ -= kQuasarReservedDmCores;
         }
-        l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     }
     // Common test data
     const std::vector<uint32_t> default_rtas{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD, 0xEEEEEEEE};
@@ -63,7 +62,7 @@ protected:
         const uint32_t total_size = (2 + expected_rtas.size() + expected_crtas.size()) * sizeof(uint32_t);
         std::vector<uint32_t> read_result;
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_size, read_result);
+        slow_dispatch::ReadFromL1(*mesh_device, core, l1_unreserved_base, total_size, read_result);
 
         // Validate counts
         EXPECT_EQ(read_result[0], expected_rtas.size());
@@ -136,8 +135,8 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         // Zero-init the L1 scratch space on all cores (both DM and compute regions)
         std::vector<uint32_t> zero_init(4, 0);  // 2 words for DM + 2 words for TRISC0
         for (const auto& core : core_range) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, compute_scratch_addr, zero_init);
+            slow_dispatch::WriteToL1(*mesh_device, core, l1_unreserved_base, zero_init);
+            slow_dispatch::WriteToL1(*mesh_device, core, compute_scratch_addr, zero_init);
         }
 
         const experimental::KernelSpecName DM_KERNEL_NAME{"zero_arg_dm"};
@@ -149,7 +148,13 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             .num_threads = 1,
             .compile_time_args = {{"l1_scratch_addr", l1_unreserved_base}},
             .hw_config =
-                experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
+                experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0,
+                            .noc = NOC::NOC_0,
+                        },
+                },
         };
         experimental::KernelSpec compute_spec{
             .unique_id = COMPUTE_KERNEL_NAME,
@@ -178,13 +183,13 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         for (const auto& core : core_range) {
             // DM: verify rta_count = 0, crta_count = 0
             read_result.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_read_size, read_result);
+            slow_dispatch::ReadFromL1(*mesh_device, core, l1_unreserved_base, total_read_size, read_result);
             EXPECT_EQ(read_result[0], 0);  // rta_count
             EXPECT_EQ(read_result[1], 0);  // crta_count
 
             // TRISC0: verify rta_count = 0, crta_count = 0
             read_result.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core, compute_scratch_addr, total_read_size, read_result);
+            slow_dispatch::ReadFromL1(*mesh_device, core, compute_scratch_addr, total_read_size, read_result);
             EXPECT_EQ(read_result[0], 0);  // rta_count
             EXPECT_EQ(read_result[1], 0);  // crta_count
         }
@@ -241,11 +246,11 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     // Zero-init the L1 scratch space on all cores before running
     std::vector<uint32_t> zero_init(total_word_count, 0);
     for (const auto& core : core_range1) {
-        tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+        slow_dispatch::WriteToL1(*mesh_device, core, l1_unreserved_base, zero_init);
     }
     if (!is_quasar) {
         for (const auto& core : core_range2) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+            slow_dispatch::WriteToL1(*mesh_device, core, l1_unreserved_base, zero_init);
         }
     }
 
@@ -259,12 +264,18 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     std::vector<uint32_t> rtas_range2 = {0x1000, 0x1001, 0x1002, 0x1003, 0x1004};
 
     // Build a Metal 2.0 KernelSpec that works on both gen1 (single BRISC) and gen2 (all Quasar user DMs).
-    // Provide both gen1 and gen2 configs so the runtime selects the one matching the current arch.
+    // Pick the DM config for the current arch: Quasar needs no 1xx pins; WH/BH pins them in config_1xx.
     experimental::DataMovementHardwareConfig dm_cfg;
     if (is_quasar) {
-        dm_cfg = experimental::DataMovementGen2Config{};
+        dm_cfg = experimental::DataMovementHardwareConfig{};
     } else {
-        dm_cfg = experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        dm_cfg = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::NOC_0,
+                },
+        };
     }
 
     experimental::KernelSpec dm_spec{
@@ -335,11 +346,11 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Zero-init again before second run
     for (const auto& core : core_range1) {
-        tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+        slow_dispatch::WriteToL1(*mesh_device, core, l1_unreserved_base, zero_init);
     }
     if (!is_quasar) {
         for (const auto& core : core_range2) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+            slow_dispatch::WriteToL1(*mesh_device, core, l1_unreserved_base, zero_init);
         }
     }
 
@@ -403,23 +414,24 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         .advanced_options = adv_opts,
     };
     if (params.processor_class == HalProcessorClassType::DM) {
-        // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
+        // Configure the KernelSpec per arch so it runs on either.
         if (is_quasar) {
             kspec.num_threads = num_dms_;
             kspec.compile_time_args = {{"dm_id", 0}};
-            kspec.hw_config = experimental::DataMovementGen2Config{};
+            kspec.hw_config = experimental::DataMovementHardwareConfig{};
         } else {
             kspec.num_threads = 1;
-            kspec.hw_config =
-                experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+            kspec.hw_config = experimental::DataMovementHardwareConfig{
+                .config_1xx =
+                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = NOC::NOC_0,
+                    },
+            };
         }
     } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
         kspec.num_threads = 1;  // On Quasar, only 1 NEO Cluster; gen1 has a single compute group.
-        if (is_quasar) {
-            kspec.hw_config = experimental::ComputeGen2Config{};
-        } else {
-            kspec.hw_config = experimental::ComputeGen1Config{};
-        }
+        kspec.hw_config = experimental::ComputeHardwareConfig{};
     } else {
         TT_THROW("Unsupported processor class");
     }
@@ -477,7 +489,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         .compiler_options =
             {.defines = {{"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}}},
         .compile_time_args = {{"num_dms", num_dms_}, {"l1_sync_addr", l1_unreserved_base}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
         .advanced_options =
             experimental::KernelAdvancedOptions{
                 .num_runtime_varargs = default_rtas.size(),
@@ -508,7 +520,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
 
     // Zero out sync counter before launch
     std::vector<uint32_t> zero_sync = {0, 0};
-    tt::tt_metal::detail::WriteToDeviceL1(device, core_range.start_coord, l1_unreserved_base, zero_sync);
+    slow_dispatch::WriteToL1(*mesh_device, core_range.start_coord, l1_unreserved_base, zero_sync);
 
     RunProgram(mesh_device, workload);
 

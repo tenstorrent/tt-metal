@@ -8,6 +8,7 @@
 #include "llk_pack_untilize_api.h"  // legacy CB-id API + unified llk_pack_untilize_*_impl cores
 #include "data_format_derive.h"
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE -- LLKOperand (id-free, compile-time NTTP) overloads

@@ -27,6 +27,7 @@ from cluster_health_schema import SCHEMA_ID, TEST_TYPES, validate_record
 from report_adapters import reason_for, status_for
 from report_backfill import Leftover, discover_leftovers, filter_leftovers, leftover_key, parse_window_date
 from analyze_host_health_results import parse_diag_report
+from summarize_physical_artifact import as_pass_pct, summarize_physical_artifact
 from resolve_host_ring_order import (
     parse_textproto,
     read_descriptor_text,
@@ -37,8 +38,23 @@ STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
 # setgid + sticky + owner/group rwx. mkdir is umask-masked (often 0755), so the
 # first writer of the day would otherwise lock out the store's group. Sticky
 # keeps non-owner writers from unlinking each other's records; as usual, the
-# directory owner can still unlink any entry. No other-write.
+# directory owner can still unlink any entry. No other-write unless the store
+# root is already other-writable (then date dirs follow that and stay sticky).
 STORE_DIR_MODE = 0o3770
+STORE_DIR_MODE_WORLD = 0o1777
+STORE_OTHER_WRITE = 0o002
+
+
+def date_dir_mode_for_root(root_mode: int) -> int:
+    """Match a world-writable store root with a sticky world-writable date dir.
+
+    Mixed human / automation / log-shipper UIDs are often not in one shared
+    group, so a group-only ``03770`` date dir locks out later writers when the
+    typed store root is already ``0777``.
+    """
+    if root_mode & STORE_OTHER_WRITE:
+        return STORE_DIR_MODE_WORLD
+    return STORE_DIR_MODE
 
 
 def dumps_compact(obj: dict[str, Any]) -> str:
@@ -434,6 +450,7 @@ class RecordRequest:
     ts: str | None
     incomplete: bool = False
     incomplete_reason: str = ""
+    pass_pct: float | None = None
 
 
 def _cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
@@ -458,10 +475,52 @@ def _cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def apply_physical_inference(
+    request: RecordRequest,
+    *,
+    pass_pct_override: float | None = None,
+    infer_hosts: bool = False,
+    infer_code: bool = False,
+) -> RecordRequest:
+    """Fill physical ``pass_pct`` (and optional hosts/code) from artifact logs."""
+    if request.test_type != "physical" or request.incomplete:
+        if pass_pct_override is not None:
+            request.pass_pct = pass_pct_override
+        return request
+
+    summary = summarize_physical_artifact(request.artifact_dir)
+    if pass_pct_override is not None:
+        request.pass_pct = pass_pct_override
+    elif summary.pass_pct is not None:
+        request.pass_pct = summary.pass_pct
+
+    if infer_code and request.analyzer_code is None and summary.analyzer_code is not None:
+        request.analyzer_code = summary.analyzer_code
+
+    if infer_hosts and not parse_hosts(request.hosts) and summary.hosts:
+        _warn(f"inferred hosts from artifact: {summary.hosts}")
+        request.hosts = summary.hosts
+    return request
+
+
+def resolve_pass_pct_override(raw: Any) -> float | None:
+    """Validate an explicit ``--pass-pct`` value, or return None when omitted.
+
+    Raises ValueError when the option was supplied but is not a finite number
+    in [0, 100]. Callers must not treat that case as “infer from artifact.”
+    """
+    if raw is None:
+        return None
+    rate = as_pass_pct(raw)
+    if rate is None:
+        raise ValueError("pass_pct: must be a finite number in [0, 100]")
+    return rate
+
+
 def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
-    return RecordRequest(
+    request = RecordRequest(
         test_type=args.test_type,
-        hosts=args.hosts,
+        hosts=args.hosts or "",
         analyzer_code=args.analyzer_code,
         artifact_dir=args.artifact_dir,
         duration_s=args.duration_s,
@@ -469,6 +528,12 @@ def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
         incomplete=bool(getattr(args, "incomplete", False)),
         incomplete_reason=getattr(args, "incomplete_reason", "") or "",
         **_cli_overlay(args),
+    )
+    return apply_physical_inference(
+        request,
+        pass_pct_override=resolve_pass_pct_override(getattr(args, "pass_pct", None)),
+        infer_hosts=not parse_hosts(request.hosts),
+        infer_code=args.analyzer_code is None,
     )
 
 
@@ -518,6 +583,11 @@ def build_record(args: RecordRequest) -> dict[str, Any]:
     if args.duration_s is not None:
         record["duration_s"] = args.duration_s
 
+    if args.test_type == "physical":
+        rate = as_pass_pct(args.pass_pct)
+        if rate is not None:
+            record["pass_pct"] = rate
+
     labels = parse_labels(args.label)
     if status != "passed" and "failure_reason" not in labels:
         if incomplete:
@@ -564,11 +634,16 @@ def _existing_or_conflict(
 def _ensure_date_dir(root: Path, date_name: str) -> int:
     """Open today's directory securely and return a caller-owned descriptor.
 
-    Only the date directory gets STORE_DIR_MODE. It is the one directory this
+    Only the date directory gets a shared mode. It is the one directory this
     tool owns per day, so a mistyped --store-root cannot loosen an unrelated
     tree. ``mkdir`` cannot do this itself: its mode applies to the leaf only
     and is masked by umask, which is how the first writer of the day used to
     leave a 0755 directory owned by their uid.
+
+    Mode follows the store root: group-only roots get ``03770``; world-writable
+    roots get sticky ``01777``. An existing date dir that is already
+    other-writable is never tightened back to group-only (wrappers may have
+    opened it for Alloy / mixed UIDs).
 
     Descriptor-relative operations prevent a shared-root writer from replacing
     the date path with a symlink or swapping it while a record is published.
@@ -578,9 +653,11 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_fd = os.open(root, directory_flags)
     try:
-        root_gid = os.fstat(root_fd).st_gid
+        root_stat = os.fstat(root_fd)
+        root_gid = root_stat.st_gid
+        desired_mode = date_dir_mode_for_root(root_stat.st_mode)
         try:
-            os.mkdir(date_name, mode=STORE_DIR_MODE, dir_fd=root_fd)
+            os.mkdir(date_name, mode=desired_mode, dir_fd=root_fd)
         except FileExistsError:
             pass
         date_dir_fd = os.open(date_name, directory_flags, dir_fd=root_fd)
@@ -588,13 +665,18 @@ def _ensure_date_dir(root: Path, date_name: str) -> int:
         os.close(root_fd)
 
     try:
+        current_mode = os.fstat(date_dir_fd).st_mode
+        # Never undo a world-writable date dir created by wrappers or an earlier
+        # world-writable root; only repair toward desired_mode.
+        mode = STORE_DIR_MODE_WORLD if current_mode & STORE_OTHER_WRITE else desired_mode
         try:
-            os.fchown(date_dir_fd, -1, root_gid)
-        except OSError:
-            if os.fstat(date_dir_fd).st_gid != root_gid:
-                _warn(f"date directory group does not match store root group ({root_gid})")
-        try:
-            os.fchmod(date_dir_fd, STORE_DIR_MODE)
+            if mode == STORE_DIR_MODE:
+                try:
+                    os.fchown(date_dir_fd, -1, root_gid)
+                except OSError:
+                    if os.fstat(date_dir_fd).st_gid != root_gid:
+                        _warn(f"date directory group does not match store root group ({root_gid})")
+            os.fchmod(date_dir_fd, mode)
         except OSError:
             pass
         return date_dir_fd
@@ -609,10 +691,10 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     Uses an exclusive link (no-clobber). If dest already exists, identical
     content is treated as success; different content is left in place and the
     stdout-only record is returned. On I/O failure, warns and returns the
-    stdout-only record (no record_id). The date directory is chmod'd to
-    STORE_DIR_MODE (setgid + sticky + group write) so a shared store stays
-    writable for the store root's group; record files themselves follow the
-    caller's umask.
+    stdout-only record (no record_id). The date directory mode follows the
+    store root (``03770`` group-only, or sticky ``01777`` when the root is
+    other-writable) so mixed UIDs can share a world-writable store; record
+    files themselves follow the caller's umask.
     """
     record_id = compute_record_id(
         record["test_type"],
@@ -701,7 +783,7 @@ def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> RecordRe
     overlay["label"] = labels
     overlay["source"] = args.source or "backfill"
     overlay["trigger_kind"] = args.trigger_kind or "backfill"
-    return RecordRequest(
+    request = RecordRequest(
         test_type=leftover.test_type,
         hosts=leftover.hosts,
         analyzer_code=leftover.analyzer_code,
@@ -712,6 +794,17 @@ def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> RecordRe
         incomplete_reason=leftover.incomplete_reason,
         **overlay,
     )
+    request = apply_physical_inference(request, infer_hosts=False, infer_code=False)
+    if (
+        request.test_type == "physical"
+        and not request.incomplete
+        and request.pass_pct is None
+        and leftover.source.is_file()
+    ):
+        from_wrapper = summarize_physical_artifact(leftover.source)
+        if from_wrapper.pass_pct is not None:
+            request.pass_pct = from_wrapper.pass_pct
+    return request
 
 
 def run_backfill(args: argparse.Namespace) -> int:
@@ -859,6 +952,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Print JSON only; never write")
     parser.add_argument("--duration-s", dest="duration_s", type=float)
     parser.add_argument("--ts", help="RFC3339 UTC timestamp (default: now)")
+    parser.add_argument(
+        "--pass-pct",
+        dest="pass_pct",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--topology", default=None, help=argparse.SUPPRESS)
     return parser
 
@@ -878,11 +978,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.test_type or args.hosts or args.artifact_dir:
             parser.error("--from-artifact-dir cannot be combined with --test-type / --hosts / --artifact-dir")
         return run_backfill(args)
-    if not args.test_type or not args.hosts or not args.artifact_dir:
-        parser.error(
-            "--test-type, --hosts, and --artifact-dir are required "
-            "(or pass --from-artifact-dir / --from-diag-report)"
-        )
+    if not args.test_type or not args.artifact_dir:
+        parser.error("--test-type and --artifact-dir are required (or pass --from-artifact-dir / --from-diag-report)")
+    if args.pass_pct is not None and args.test_type != "physical":
+        parser.error("--pass-pct is only valid with --test-type physical")
+    if args.pass_pct is not None:
+        try:
+            resolve_pass_pct_override(args.pass_pct)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if not args.hosts and args.test_type != "physical":
+        parser.error("--hosts is required (physical can infer hosts from --artifact-dir)")
     try:
         record = build_record(record_request_from_cli(args))
     except ValueError as exc:

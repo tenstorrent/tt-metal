@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <variant>
 
 #include "unified_routed_expert_ffn_program_factory.hpp"
@@ -51,6 +52,8 @@ ttnn::Tensor unified_routed_expert_moe(
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu,
     const std::vector<ttnn::Tensor>& gate_biases = {},
     const std::vector<ttnn::Tensor>& up_biases = {},
-    const std::vector<ttnn::Tensor>& down_biases = {});
+    const std::vector<ttnn::Tensor>& down_biases = {},
+    uint32_t min_active_tokens = 0,
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
 
 }  // namespace ttnn::prim

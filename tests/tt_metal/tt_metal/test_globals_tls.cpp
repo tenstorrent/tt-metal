@@ -43,7 +43,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
-    const uint32_t dram_channel = this->device().dram_channel_from_virtual_core(core);
+    constexpr uint32_t dram_channel = 0;
 
     // Initialize L1 signal so hart FIRST_USER_DM (2) can proceed first; the simple_tls_check
     // kernel chains the signal forward (signal_addr := hartid + 1) so hartids 2..7 run in order.
@@ -75,7 +75,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                 {
                     .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
 
@@ -120,7 +120,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     params.kernel_run_args = {kra1, kra2, kra3};
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> dram_data;
     slow_dispatch::ReadFromDRAMChannel(this->device(), dram_channel, dram_address, TOTAL_RESULT_BYTES, dram_data);
@@ -309,7 +309,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
             {
                 .runtime_arg_names = {"signal_address", "l1_result_addr"},
             },
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -333,7 +333,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     }};
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> l1_data;
     slow_dispatch::ReadFromL1(this->device(), core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);

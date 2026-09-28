@@ -422,36 +422,23 @@ inline void _llk_math_face_compressed_mm_(
         std::uint32_t idx3 = (meta >> (3 * meta_stride_bits)) & meta_index_mask;
         std::uint32_t idx4 = (meta >> (4 * meta_stride_bits)) & meta_index_mask;
 
-        std::uint32_t data0 = l1_table[idx0];
-        std::uint32_t data1 = l2_table[idx0];
-        std::uint32_t data2 = l1_table[idx1];
-        std::uint32_t data3 = l2_table[idx1];
-        std::uint32_t data4 = l1_table[idx2];
-        std::uint32_t data5 = l2_table[idx2];
-        std::uint32_t data6 = l1_table[idx3];
-        std::uint32_t data7 = l2_table[idx3];
-        std::uint32_t data8 = l1_table[idx4];
-        std::uint32_t data9 = l2_table[idx4];
-
-        ckernel::instrn_buffer[0] = data0;
-        ckernel::instrn_buffer[0] = data1;
-        ckernel::instrn_buffer[0] = data2;
-        ckernel::instrn_buffer[0] = data3;
-        ckernel::instrn_buffer[0] = data4;
-        ckernel::instrn_buffer[0] = data5;
-        ckernel::instrn_buffer[0] = data6;
-        ckernel::instrn_buffer[0] = data7;
-        ckernel::instrn_buffer[0] = data8;
-        ckernel::instrn_buffer[0] = data9;
+        TT_INSN(l1_table[idx0]);
+        TT_INSN(l2_table[idx0]);
+        TT_INSN(l1_table[idx1]);
+        TT_INSN(l2_table[idx1]);
+        TT_INSN(l1_table[idx2]);
+        TT_INSN(l2_table[idx2]);
+        TT_INSN(l1_table[idx3]);
+        TT_INSN(l2_table[idx3]);
+        TT_INSN(l1_table[idx4]);
+        TT_INSN(l2_table[idx4]);
     }
     std::uint32_t meta = meta_ptr[full_iters];
     for (std::uint32_t i = 0; i < rem_iters; ++i)
     {
         std::uint32_t idx0        = meta & meta_index_mask;
-        std::uint32_t data0       = l1_table[idx0];
-        std::uint32_t data1       = l2_table[idx0];
-        ckernel::instrn_buffer[0] = data0;
-        ckernel::instrn_buffer[0] = data1;
+        TT_INSN(l1_table[idx0]);
+        TT_INSN(l2_table[idx0]);
         meta >>= meta_stride_bits;
     }
 
@@ -460,7 +447,7 @@ inline void _llk_math_face_compressed_mm_(
         // Merge each face's split partial into its accumulation.
         constexpr std::int16_t partial = _llk_math_face_compressed_mm_split_acc_partial_rows_;
 
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD); // wait for both operands
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD); // wait for both operands
         // Move both partials into SrcB, face 0 at row 0 and face 1 at row 8.
         // ADDR_MOD_0 advances dest by one face between the two, and ADDR_MOD_2 resets it afterwards.
         TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, partial);

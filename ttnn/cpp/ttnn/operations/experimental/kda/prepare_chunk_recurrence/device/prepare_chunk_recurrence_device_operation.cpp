@@ -3,10 +3,13 @@
 
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
+#include <array>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -121,6 +124,26 @@ PrepareChunkRecurrenceOperation::tensor_return_value_t PrepareChunkRecurrenceOpe
     return outputs;
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<PrepareChunkRecurrenceOperation::tensor_return_value_t>
+PrepareChunkRecurrenceOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    constexpr double chunk = tt::constants::TILE_HEIGHT;
+    constexpr double inverse_flops = chunk * (chunk - 1.0) * (chunk + 1.0) / 3.0;
+    const double instances = static_cast<double>(attrs.num_heads) * attrs.num_chunks;
+    const double key_dim = attrs.key_dim;
+    const double value_dim = attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_matrix_flops = instances * (4.0 * chunk * chunk * key_dim + inverse_flops),
+        .fpu_multiply_ops = instances * (10.0 * chunk * key_dim + chunk * value_dim),
+        .fpu_add_ops = instances * (2.0 * chunk + (chunk - 1.0) * key_dim + chunk * key_dim + chunk * chunk),
+        .fpu_reduction_ops = instances * 2.0 * chunk * (key_dim - 1.0),
+    };
+    const std::array<const Tensor*, 5> inputs = {&in.q, &in.k, &in.v, &in.g, &in.beta};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
 std::vector<Tensor> prepare_chunk_recurrence(
     const Tensor& q,
     const Tensor& k,
@@ -130,7 +153,17 @@ std::vector<Tensor> prepare_chunk_recurrence(
     uint32_t num_heads,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    uint32_t output_bf16_mask) {
+    uint32_t output_bf16_mask,
+    const std::optional<Tensor>& actual_start,
+    const std::optional<Tensor>& actual_end,
+    uint32_t sequence_parallel_axis) {
+    TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
+    if (actual_start) {
+        kda_factory_detail::check_actual_start(q, *actual_start, "prepare_chunk_recurrence");
+    }
+    if (actual_end) {
+        kda_factory_detail::check_actual_start(q, *actual_end, "prepare_chunk_recurrence");
+    }
     const auto& q_shape = q.logical_shape();
     const auto& v_shape = v.logical_shape();
     TT_FATAL(
@@ -148,6 +181,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const uint32_t value_dim = v_shape[2] / num_heads;
     return ttnn::device_operation::launch<PrepareChunkRecurrenceOperation>(
         PrepareChunkRecurrenceParams{
+            .sequence_parallel_axis = sequence_parallel_axis,
             .num_heads = num_heads,
             .num_chunks = num_chunks,
             .key_dim = key_dim,
@@ -155,7 +189,8 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .output_bf16_mask = output_bf16_mask,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
-        PrepareChunkRecurrenceInputs{.q = q, .k = k, .v = v, .g = g, .beta = beta});
+        PrepareChunkRecurrenceInputs{
+            .q = q, .k = k, .v = v, .g = g, .beta = beta, .actual_start = actual_start, .actual_end = actual_end});
 }
 
 }  // namespace ttnn::experimental::prim

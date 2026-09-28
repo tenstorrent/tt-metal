@@ -26,6 +26,7 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include "mesh_device.hpp"
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -48,8 +49,15 @@ SubDeviceManagerTracker::SubDeviceManagerTracker(
 
 SubDeviceManagerTracker::~SubDeviceManagerTracker() {
     active_sub_device_manager_ = nullptr;
-    for (auto sub_device_manager = sub_device_managers_.begin(); sub_device_manager != sub_device_managers_.end();) {
-        this->remove_sub_device_manager((sub_device_manager++)->first);
+    for (auto it = sub_device_managers_.begin(); it != sub_device_managers_.end();) {
+        if (it->second.get() == default_sub_device_manager_) {
+            ++it;
+        } else {
+            this->remove_sub_device_manager((it++)->first);
+        }
+    }
+    if (default_sub_device_manager_ != nullptr) {
+        this->remove_sub_device_manager(default_sub_device_manager_->id());
     }
     default_sub_device_manager_ = nullptr;
 }
@@ -70,8 +78,8 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         const auto sub_device_id = SubDeviceId{i};
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
         workers_per_sub_device.push_back(
-            sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() +
-            sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
+            sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).num_cores() +
+            sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
     }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
@@ -113,9 +121,10 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     this->reset_sub_device_state(sub_device_manager->second);
     const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
     default_allocator->reset_allocator_size(BufferType::L1);
-    // Shrink the global allocator size to make room for sub-device allocators
-    auto local_l1_size = sub_device_manager->second->local_l1_size();
-    default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    // Reserve the full bottom-up span through the shifted sub-device regions:
+    // persistent arena occupancy followed by sub-device-local L1.
+    const auto bottom_reservation_size = sub_device_manager->second->global_l1_bottom_reservation_size();
+    default_allocator->shrink_allocator_size(BufferType::L1, bottom_reservation_size, /*bottom_up=*/true);
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 
@@ -143,6 +152,11 @@ SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const
 
 SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
     return default_sub_device_manager_;
+}
+
+SubDeviceManager* SubDeviceManagerTracker::find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const {
+    auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
+    return sub_device_manager == sub_device_managers_.end() ? nullptr : sub_device_manager->second.get();
 }
 
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
@@ -184,8 +198,10 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
         const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
         if (allocator) {
             // Having an allocator means there are Tensix cores in this sub-device
-            const auto& cores =
-                this->get_active_sub_device_manager()->sub_device(sub_device_id).cores(HalProgrammableCoreType::TENSIX);
+            const auto& cores = this->get_active_sub_device_manager()
+                                    ->sub_device(sub_device_id)
+                                    .impl()
+                                    ->cores(HalProgrammableCoreType::TENSIX);
             auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, cores.ranges()[0].start_coord)[0];
             found_addr = allocator->get_lowest_occupied_l1_address(bank_id);
             if (found_addr.has_value()) {

@@ -24,6 +24,7 @@ def profile_realtime_program(
     *,
     collect_all=False,
     record_timeout_seconds=DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS,
+    record_settle_seconds=RT_PROFILER_RECORD_SETTLE_SECONDS,
 ) -> tuple:
     """Run measured device work and return (result, rt_record or rt_records)."""
     import ttnn
@@ -68,7 +69,7 @@ def profile_realtime_program(
             if count != last_count:
                 last_count = count
                 last_change = time.monotonic()
-            elif count and (time.monotonic() - last_change) >= RT_PROFILER_RECORD_SETTLE_SECONDS:
+            elif count and (time.monotonic() - last_change) >= record_settle_seconds:
                 # collect_all: records have stopped arriving for the settle window.
                 break
             time.sleep(0.01)

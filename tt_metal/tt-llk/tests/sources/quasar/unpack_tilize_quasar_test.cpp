@@ -48,23 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                const bool int32_dest = static_cast<DataFormat>(formats.unpack_A_src) == DataFormat::Int32;
-                if (int32_dest)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-                }
-                else
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-                }
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-            }
         }
         else
         {
@@ -157,7 +140,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_block_(y * y_stride_external /*l1_face_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
+                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
+                        _llk_unpack_tilize_block_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dest_tile_idx*/);
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
                     {
@@ -175,7 +159,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
-                        _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(y * y_stride_external /*l1_tile_idx*/);
+                        _llk_unpack_tilize_set_src_offset_<UNPACKER_ENGINE_SEL>(tensor_shape, y * y_stride_external);
+                        _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
                     }
                 }
             }

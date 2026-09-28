@@ -3077,8 +3077,9 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warm
     Two regimes, both of which must simply produce the right answer:
       - shallower_cb_plan: enough headroom for the single-buffered codegen plan but not the
         double-buffered one, so the program factory must degrade the tier it picks.
-      - no_cb_plan_fits: not even the single-buffered codegen plan fits, so the program factory
-        must build the native-equivalent program instead of failing.
+      - no_cb_plan_fits: not even the single-buffered codegen plan fits, so ttnn.untilize's routing
+        (codegen_cb_plan_fits_live_l1) must send the call to the native untilize op instead of
+        dispatching a codegen program that has no CB plan.
 
     This asserts only on the result, never on which implementation served it.
 
@@ -3157,3 +3158,322 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warm
         assert_equal(input_torch_tensor, ttnn.to_torch(output))
     finally:
         ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize(
+    "dtype, tile_aligned, output_in_l1",
+    [(ttnn.bfloat8_b, True, False), (ttnn.bfloat8_b, True, True), (ttnn.bfloat16, False, False)],
+    ids=["bfloat8_b_tile_aligned", "bfloat8_b_tile_aligned_l1_output", "bfloat16_unpadding"],
+)
+def test_untilize_codegen_native_tier_routes_to_native(device, expect_error, dtype, tile_aligned, output_in_l1):
+    """The codegen op's Native tier (no codegen CB plan fits live L1) is served by the native
+    untilize op through ttnn.untilize's routing, not by the codegen op reaching into another
+    device-op's program factories.
+
+    All cases are in the codegen gate's static scope (supported_by_codegen is true), and all pin
+    a resident L1 buffer so that not even the single-buffered codegen CB plan fits the L1 that is
+    free right now. The routed call must then produce the right answer via native, and the forced
+    codegen entry (which by design never falls back) must fail loudly on the same L1 state.
+
+      - bfloat8_b_tile_aligned: the codegen plan is sized by two bf16 OUTPUT tiles per Wt
+        (planning tile = max(in, out) = 2048 B) while the native op's row-fits-in-L1 check
+        (enough_space_height) sizes one bf8_b INPUT tile plus one bf16 OUTPUT tile per Wt
+        (1088 + 2048 B). A headroom window between the two makes codegen land on Native while
+        native selects its ordinary multicore factory. Before the Native tier was lifted into
+        ttnn.untilize, this configuration threw ("native fallback selected a program factory
+        without descriptor support") because that factory is Metal 2.0 and no longer exposes
+        create_descriptor.
+      - bfloat8_b_tile_aligned_l1_output: same window, with the (bf16) output interleaved in L1,
+        so both the codegen gate and native's check must reserve the pending output by its
+        OUTPUT dtype; sizing that reservation by the bf8_b input under-reserves it by half.
+      - bfloat16_unpadding: the non-tile-aligned (with-unpadding) codegen path, routed to the
+        native untilize_with_unpadding op.
+
+    Every tile row is given to a different core (total tile rows == compute grid area) so the
+    codegen planner sizes its CBs by the whole tile row (Wt), like the two native checks do.
+    """
+    torch.manual_seed(42)
+
+    BF16_TILE_BYTES = 2048
+    BF8_TILE_BYTES = 1088
+    info = ttnn._ttnn.reports.get_device_info(device)
+    grid = device.compute_with_storage_grid_size()
+    total_tile_rows = grid.x * grid.y
+
+    if tile_aligned:
+        wt = 128
+        # Native's enough_space_height threshold (one input tile + one output tile per Wt) ..
+        # codegen's single-buffer plan (two planning tiles = max(in, out) = bf16 out tile per Wt).
+        low_bound = wt * (BF8_TILE_BYTES + BF16_TILE_BYTES)
+        single_buffer_bytes = 2 * wt * BF16_TILE_BYTES
+        headroom_target = (low_bound + single_buffer_bytes) // 2
+        expected_headroom = (low_bound, single_buffer_bytes)
+        input_torch_tensor = torch.randn([1, total_tile_rows, 32, 32 * wt], dtype=torch.bfloat16)
+    else:
+        wt = 192  # inside the gate's wide-chunk threshold: 2 * 192 * 2048 <= 800_000
+        single_buffer_bytes = 2 * wt * BF16_TILE_BYTES
+        headroom_target = 512 * 1024
+        expected_headroom = (0, single_buffer_bytes)
+        # Non-tile-aligned logical width (padded width stays 32 * wt).
+        input_torch_tensor = torch.randn([1, total_tile_rows, 32, 32 * wt - 1], dtype=torch.bfloat16)
+
+    output_memory_config = ttnn.L1_MEMORY_CONFIG if output_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+    if output_in_l1:
+        # Both the codegen gate and native's check reserve the output's per-core footprint out of
+        # the free L1 before deciding, so shift the window up by exactly that reservation: the
+        # busiest bank's share of the row-major (bf16) output pages.
+        out_row_bytes = 32 * wt * 2  # one row-major page: a bf16 row of the padded width
+        out_pages = total_tile_rows * 32
+        pending_out_bytes = -(-out_pages // info.l1_num_banks) * out_row_bytes
+        headroom_target += pending_out_bytes
+        expected_headroom = (expected_headroom[0] + pending_out_bytes, expected_headroom[1] + pending_out_bytes)
+
+    if info.cb_limit <= headroom_target:
+        pytest.skip(f"needs more than {headroom_target} B of CB space, device offers {info.cb_limit} B")
+    tiles_per_bank = (info.cb_limit - headroom_target) // BF16_TILE_BYTES
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # bfloat8_b rounds the values; the golden is what native produces for the same input, which
+    # is exact against codegen/native alike since untilize only relayouts values.
+    golden = ttnn.to_torch(_force_native(input_ttnn_tensor))
+
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        low, high = expected_headroom
+        assert (
+            low <= actual_headroom < high
+        ), f"resident L1 buffer left {actual_headroom} B above the CB base; this case needs it in [{low}, {high})"
+
+        # The forced codegen entry skips the live-L1 gate on purpose; with no codegen CB plan fitting
+        # it must fail in the codegen program factory rather than quietly serve native.
+        with expect_error(RuntimeError, "no codegen CB plan fits"):
+            _force_codegen(input_ttnn_tensor, memory_config=output_memory_config)
+
+        output = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config)
+        assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(golden, ttnn.to_torch(output))
+    finally:
+        ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize("side", ["plan_fits_by_zero_slack", "plan_misses_by_one_granule"])
+def test_untilize_codegen_gate_agrees_with_factory_at_cb_plan_boundary(device, expect_error, side):
+    """ttnn.untilize's live-L1 gate (codegen_cb_plan_fits_live_l1) and the codegen program factory
+    must agree at the tightest boundary the allocator can produce.
+
+    The gate predicts the L1 the factory will see by subtracting the pending output's per-core
+    reservation (get_pending_l1_output_reservation) from the L1 free before the output is
+    allocated; the factory then plans against the L1 free after that allocation. Were the
+    reservation smaller than what the allocator actually takes -- e.g. pages rounded to the L1
+    alignment while the L1 free lists round every allocation up to the DRAM alignment -- a case
+    inside that gap would pass the gate and then fail in the factory with "no codegen CB plan
+    fits" instead of being routed to native. The reservation mirrors the allocator's rounding, so
+    the gate is never more permissive than the factory; this pins that at zero slack.
+
+    A ROW_MAJOR resident with 64 B pages (one allocation granule on every architecture) sets the
+    L1 free so that, after the bf16 output's own footprint, the codegen budget is exactly the
+    single-buffered plan (plan_fits_by_zero_slack) or one granule short of it
+    (plan_misses_by_one_granule). The forced codegen entry skips the gate, so it shows what the
+    factory does on its own: it must build in the first case and fail loudly in the second, and
+    the routed call must be correct in both.
+    """
+    torch.manual_seed(42)
+
+    BF16_TILE_BYTES = 2048
+    GRANULE = 64  # a multiple of the L1 free lists' allocation alignment (32 B on WH, 64 B on BH)
+    info = ttnn._ttnn.reports.get_device_info(device)
+    grid = device.compute_with_storage_grid_size()
+    total_tile_rows = grid.x * grid.y
+
+    # One tile row per core, so the codegen planner sizes its CBs by the whole row (Wt).
+    wt = 128
+    single_buffer_bytes = 2 * wt * BF16_TILE_BYTES
+    # The output's per-core footprint: the busiest bank's share of its row-major bf16 pages, each a
+    # multiple of 64 B, so it is exactly what the allocator takes for it.
+    out_row_bytes = 32 * wt * 2
+    out_pages = total_tile_rows * 32
+    pending_out_bytes = -(-out_pages // info.l1_num_banks) * out_row_bytes
+
+    # Resident pages are 64 B, so the achievable headroom is quantized at GRANULE; flooring the
+    # page count leaves the codegen budget in [target, target + GRANULE).
+    budget_target = single_buffer_bytes if side == "plan_fits_by_zero_slack" else single_buffer_bytes - GRANULE
+    headroom_target = pending_out_bytes + budget_target
+    if info.cb_limit <= headroom_target:
+        pytest.skip(f"needs more than {headroom_target} B of CB space, device offers {info.cb_limit} B")
+    resident_pages_per_bank = (info.cb_limit - headroom_target) // GRANULE
+    if resident_pages_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    input_torch_tensor = torch.randn([1, total_tile_rows, 32, 32 * wt], dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # bf16 ROW_MAJOR rows of 32 elements are 64 B pages; resident_pages_per_bank * l1_num_banks of
+    # them put exactly resident_pages_per_bank pages on every bank.
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([resident_pages_per_bank * info.l1_num_banks, 32]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        codegen_budget = actual_headroom - pending_out_bytes
+        assert budget_target <= codegen_budget < budget_target + GRANULE, (
+            f"resident L1 buffer left a codegen budget of {codegen_budget} B; this case needs it in "
+            f"[{budget_target}, {budget_target + GRANULE})"
+        )
+
+        if side == "plan_fits_by_zero_slack":
+            forced = _force_codegen(input_ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+            assert_equal(input_torch_tensor, ttnn.to_torch(forced))
+            ttnn.deallocate(forced)
+        else:
+            with expect_error(RuntimeError, "no codegen CB plan fits"):
+                _force_codegen(input_ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        output = ttnn.untilize(input_ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(input_torch_tensor, ttnn.to_torch(output))
+    finally:
+        ttnn.deallocate(resident)
+
+
+def test_untilize_with_unpadding_bfloat8_b_l1_output_sizes_row_check_by_output_dtype(device):
+    """ttnn::untilize_with_unpadding's row-fits-in-L1 check (enough_space_height) must size the
+    output CB estimate and the pending L1 output reservation by the OUTPUT dtype, which is bf16 for
+    a bf8_b input -- the same accounting ttnn::untilize applies, now shared through
+    untilize_output_dtype so the two composites cannot drift.
+
+    Sized by the input dtype instead, the check under-estimated the row factory's output CB (1088 B
+    rather than 2048 B per tile) and reserved nothing for the output: a bf8_b ROW_MAJOR TensorSpec
+    cannot be constructed ("Only TILE layout is supported for BFLOAT8_B dtype"), which the
+    reservation helper treats as nothing to reserve. A headroom window between the two thresholds
+    therefore made the check select the row factory (UntilizeWithUnpaddingMultiCoreInterleaved),
+    whose input+output CBs then clashed with the freshly allocated L1 output ("Statically allocated
+    circular buffers ... clash with L1 buffers"); sized correctly, the same window selects the
+    block factory.
+
+    bf8_b with a non-tile-aligned logical shape is outside the codegen gate's static scope, so this
+    is the plain native route (ttnn.untilize -> untilize_native -> untilize_with_unpadding). A
+    single tile row of 32 tiles keeps the pending output small next to the per-tile
+    under-estimate and stays under the wide-row heuristic (num_tiles_per_row > 32) that would
+    otherwise pick the block factory regardless of the check.
+    """
+    torch.manual_seed(42)
+
+    BF16_TILE_BYTES = 2048
+    BF8_TILE_BYTES = 1088
+    BF16_BYTES = 2
+    L1_PAGE_ALIGNMENT = 16
+    GRANULE = 64
+    info = ttnn._ttnn.reports.get_device_info(device)
+
+    wt = 32
+    logical_width = 32 * wt - 1  # non-tile-aligned, so the native route goes through untilize_with_unpadding
+    out_pages = 32  # one tile row of row-major output rows
+    pages_on_fullest_bank = -(-out_pages // info.l1_num_banks)
+
+    def pending_bytes(row_bytes):
+        aligned_row = -(-row_bytes // L1_PAGE_ALIGNMENT) * L1_PAGE_ALIGNMENT
+        return -(-(pages_on_fullest_bank * aligned_row) // GRANULE) * GRANULE
+
+    # The row factory's CBs are one input tile plus one output tile per Wt; the check selects it
+    # when the L1 free after the pending output exceeds them.
+    correct_threshold = pending_bytes(logical_width * BF16_BYTES) + wt * (BF8_TILE_BYTES + BF16_TILE_BYTES)
+    # Input-dtype-sized: no reservation (unconstructible bf8_b ROW_MAJOR spec) and two 1088 B tiles per Wt.
+    input_dtype_sized_threshold = wt * (BF8_TILE_BYTES + BF8_TILE_BYTES)
+    assert input_dtype_sized_threshold < correct_threshold, "this shape does not separate the two checks"
+
+    headroom_target = (input_dtype_sized_threshold + correct_threshold) // 2
+    expected_headroom = (input_dtype_sized_threshold, correct_threshold)
+    if info.cb_limit <= headroom_target:
+        pytest.skip(f"needs more than {headroom_target} B of CB space, device offers {info.cb_limit} B")
+    tiles_per_bank = (info.cb_limit - headroom_target) // BF16_TILE_BYTES
+    if tiles_per_bank <= 0:
+        pytest.skip("device L1 is too small to leave a meaningful headroom window")
+
+    input_torch_tensor = torch.randn([1, 1, 32, logical_width], dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    # bfloat8_b rounds the values; untilize only relayouts them, so the host read-back is the golden.
+    golden = ttnn.to_torch(input_ttnn_tensor)
+
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        actual_headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        low, high = expected_headroom
+        assert (
+            low <= actual_headroom < high
+        ), f"resident L1 buffer left {actual_headroom} B above the CB base; this case needs it in [{low}, {high})"
+
+        output = ttnn.untilize(input_ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert list(output.shape) == [1, 1, 32, logical_width]
+        assert_equal(golden, ttnn.to_torch(output))
+    finally:
+        ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [
+        (1, 1, 32, 7328),
+        (1, 1, 128, 7328),
+        (1, 1, 64, 8192),
+        (1, 1, 96, 7392),
+        (1, 1, 160, 6304),
+        (2, 1, 64, 7328),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_untilize_block_per_node_cb_size(device, tensor_shape, dtype):
+    torch.manual_seed(42)
+    dram_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    keep_alive = []
+    entries = None
+    for i in range(2):
+        torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        tt_tiled = ttnn.from_torch(
+            torch_input,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=dram_cfg,
+            device=device,
+        )
+
+        tt_rm = ttnn.untilize(tt_tiled, use_multicore=True)
+        keep_alive += [tt_tiled, tt_rm]
+
+        assert tt_rm.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert_equal(torch_input, ttnn.to_torch(tt_rm))
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "untilize must reuse the cached program on a cache hit"
+
+    device.disable_and_clear_program_cache()

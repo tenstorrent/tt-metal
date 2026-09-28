@@ -33,7 +33,7 @@ class PrefillSequenceRunner:
         self.run_chunk_body = run_chunk_body
         self.release_transient = release_transient
 
-    def run(self, prepared: PreparedPrefill) -> InvocationResult:
+    def run(self, prepared: PreparedPrefill, *, count_tokens: bool = True) -> InvocationResult:
         """Execute the request's planned chunks as one eager prefill sequence."""
 
         request = prepared.request
@@ -54,7 +54,7 @@ class PrefillSequenceRunner:
         try:
             if request.uses_chunked_prefill:
                 kpt = self.postprocessor.make_device_kpt(
-                    prepared.sampling_params,
+                    self.postprocessor.prepared_sampling(prepared),
                     self.postprocessor.sampling_output_rows(prepared),
                     force_topk=prepared.sampling_path == "topk",
                 )
@@ -71,7 +71,7 @@ class PrefillSequenceRunner:
                 retain_owned(owned, position_inputs)
                 if not kpt_prepared:
                     kpt = self.postprocessor.make_device_kpt(
-                        prepared.sampling_params,
+                        self.postprocessor.prepared_sampling(prepared),
                         self.postprocessor.sampling_output_rows(prepared),
                         force_topk=prepared.sampling_path == "topk",
                     )
@@ -108,6 +108,7 @@ class PrefillSequenceRunner:
                 final_position_inputs,
                 sampled_output=sampled_output,
                 owned=owned,
+                count_tokens=count_tokens,
             )
         except BaseException as primary:
             failures = self.release_transient(tuple(owned))

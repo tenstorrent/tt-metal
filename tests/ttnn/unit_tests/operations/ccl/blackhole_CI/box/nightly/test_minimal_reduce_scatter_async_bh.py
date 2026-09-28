@@ -189,6 +189,7 @@ def run_reduce_scatter_impl(
             tt_reduce_scatter_output_trace_list = []
             for i in range(num_iters):
                 run_op(i)
+            warmed_cache_entries = bh_1d_mesh_device.num_program_cache_entries()
             logger.info(f"Done compiling Op")
 
             # Capture the trace
@@ -199,12 +200,17 @@ def run_reduce_scatter_impl(
             ttnn.end_trace_capture(bh_1d_mesh_device, trace_id, cq_id=0)
             logger.info(f"Done capturing trace")
 
+            # Rebind the cached program after capture; replay must retain each captured buffer/semaphore.
+            eager_output = run_op(0)
+            assert bh_1d_mesh_device.num_program_cache_entries() == warmed_cache_entries
+
             # Execute trace
             ttnn.execute_trace(bh_1d_mesh_device, trace_id, cq_id=0, blocking=False)
             logger.info(f"Done executing trace")
 
             # Synchronize the devices
             ttnn.synchronize_device(bh_1d_mesh_device, sub_device_ids=sub_device_stall_group)
+            del eager_output
             for tt_tensor in tt_reduce_scatter_output_trace_list:
                 tt_rs_out = ttnn.from_device(tt_tensor)
                 tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(bh_1d_mesh_device, dim=dim))
@@ -269,6 +275,10 @@ def run_reduce_scatter_impl(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        # Zero-page worker regression: scattering on dim 1 gives 2 workers 1 page, so one owns nothing.
+        # That worker's only fabric send is the batch-ready increment, which deadlocked on the mux
+        # path until the ring writer flushed it (confirmed with tt-triage on an 8-device, 2-link ring).
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -283,6 +293,7 @@ def run_reduce_scatter_impl(
         "composite_rs_test_two",
         "composite_rs_test_three",
         "composite_rs_test_four",
+        "zero_page_worker",
     ],
 )
 @pytest.mark.parametrize(
@@ -385,6 +396,8 @@ def test_reduce_scatter_async_4dev_ring(
         # composite_reduce_scatter when the input-side alignment check is insufficient and only the
         # dispatch-side (per-device output) check fires.
         (4, [1, 1, 32, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        # Same zero-page split on the line topology, whose writer never had the staging deadlock.
+        (4, [4, 4, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -399,6 +412,7 @@ def test_reduce_scatter_async_4dev_ring(
         "composite_rs_test_two",
         # "composite_rs_test_three",
         "composite_rs_test_four",
+        "zero_page_worker",
     ],
 )
 @pytest.mark.parametrize(

@@ -128,8 +128,13 @@ void kernel_main() {
                     qkv_x = 0;
                     qkv_y++;
                 }
-                qkv_noc_x = get_vararg(qkv_x);
-                qkv_noc_y = get_vararg(num_x + qkv_y);
+                // After the last tile of the last input core qkv_y == num_y: the coordinate
+                // tables have no entry for it and the coordinates are never used again, so skip
+                // the read (the watcher flags it as a runtime-arg out-of-bounds access).
+                if (qkv_y < num_y) {
+                    qkv_noc_x = get_vararg(qkv_x);
+                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                }
                 qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                 num_tiles_read_cur_core = 0;
             }
@@ -187,8 +192,13 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = get_vararg(qkv_x);
-                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                    // After the last tile of the last input core qkv_y == num_y: the coordinate
+                    // tables have no entry for it and the coordinates are never used again, so skip
+                    // the read (the watcher flags it as a runtime-arg out-of-bounds access).
+                    if (qkv_y < num_y) {
+                        qkv_noc_x = get_vararg(qkv_x);
+                        qkv_noc_y = get_vararg(num_x + qkv_y);
+                    }
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }
@@ -247,8 +257,13 @@ void kernel_main() {
                         qkv_x = 0;
                         qkv_y++;
                     }
-                    qkv_noc_x = get_vararg(qkv_x);
-                    qkv_noc_y = get_vararg(num_x + qkv_y);
+                    // After the last tile of the last input core qkv_y == num_y: the coordinate
+                    // tables have no entry for it and the coordinates are never used again, so skip
+                    // the read (the watcher flags it as a runtime-arg out-of-bounds access).
+                    if (qkv_y < num_y) {
+                        qkv_noc_x = get_vararg(qkv_x);
+                        qkv_noc_y = get_vararg(num_x + qkv_y);
+                    }
                     qkv_read_addr = q_start_addr + in_tile_offset_by_batch;
                     num_tiles_read_cur_core = 0;
                 }

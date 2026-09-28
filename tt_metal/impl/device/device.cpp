@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <map>
 #include <optional>
@@ -96,7 +97,8 @@ Device::Device(
 }
 
 void Device::initialize_smc_dispatch_telemetry_control() {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    // Versim has no firmware, so there is no SMC telemetry buffer to publish.
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
     auto* tt_device = [&]() -> tt::umd::TTDevice* {
@@ -120,11 +122,18 @@ void Device::initialize_smc_dispatch_telemetry_control() {
         context_->dispatch_mem_map().get_device_command_queue_addr(
             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
+    const CoreCoord compute_grid = this->compute_with_storage_grid_size();
+    const size_t worker_core_count = compute_grid.x * compute_grid.y;
+    TT_FATAL(
+        worker_core_count <= std::numeric_limits<uint16_t>::max(),
+        "Compute grid has {} worker cores, which exceeds the uint16_t SMC num_worker_cores field",
+        worker_core_count);
+    smc_dispatch_telemetry_control_.num_worker_cores = static_cast<uint16_t>(worker_core_count);
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
 
 void Device::invalidate_smc_dispatch_telemetry_control() {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -147,7 +156,7 @@ void Device::invalidate_smc_dispatch_telemetry_control() {
 
 void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
     uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords) {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -176,7 +185,7 @@ void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
 }
 
 void Device::set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled) {
-    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled() || context_->rtoptions().get_simulator_enabled()) {
         return;
     }
 
@@ -464,6 +473,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(*env_).impl(),
                 this->id(),
                 virtual_core,
                 msg.view(),
@@ -540,6 +550,7 @@ void Device::configure_fabric() {
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(*env_).impl(),
                 this->id(),
                 physical_core,
                 msg,
@@ -772,6 +783,11 @@ CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord& logica
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
 
+CoreCoord Device::physical_eth_core_from_logical_core(const CoreCoord& logical_core) const {
+    const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
+    return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
+}
+
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++) {
@@ -801,6 +817,13 @@ CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coor
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return this->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
+}
+
+CoreCoord Device::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
+    const auto& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
+    tt::umd::CoreCoord coord{{virtual_coord.x, virtual_coord.y}, tt::CoreType::TENSIX, tt::CoordSystem::TRANSLATED};
+    auto logical = soc_desc.translate_coord_to(coord, tt::CoordSystem::LOGICAL);
+    return CoreCoord{logical.x, logical.y};
 }
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
@@ -1113,59 +1136,20 @@ void Device::unregister_program(detail::ProgramImpl* program) {
 uint64_t Device::get_total_cb_allocated() const {
     std::lock_guard<std::mutex> lock(active_programs_mutex_);
 
-    // For PHYSICAL CB tracking accounting for address reuse:
-    // Collect L1 regions per core and merge overlapping addresses
-    // This handles cached/traced programs that share the same physical L1 addresses on the same core
-
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> device_regions_per_core;
-
+    // Merge identical core ranges before expanding their address unions to individual cores.
+    // Nonidentical overlapping ranges are still merged per core, preserving physical address reuse.
+    std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_range;
     for (const auto* program : active_programs_) {
-        size_t num_devices = program->get_num_cb_devices();
-
-        // Get L1 regions per core for this program on this device
-        auto program_regions = program->get_cb_l1_regions_per_core(this->id(), num_devices);
-
-        // Merge into device-wide map
-        for (const auto& [core, regions] : program_regions) {
-            auto& core_regions = device_regions_per_core[core];
-            core_regions.insert(core_regions.end(), regions.begin(), regions.end());
-        }
+        program->merge_cb_l1_regions_by_core_range(regions_per_range);
     }
+    const auto device_regions_per_core = detail::ProgramImpl::expand_cb_l1_regions_per_core(regions_per_range);
 
-    // Merge overlapping regions per core to get actual physical usage
     uint64_t total_physical = 0;
-
-    for (auto& [core, regions] : device_regions_per_core) {
-        if (regions.empty()) {
-            continue;
-        }
-
-        // Sort by start address
-        std::sort(regions.begin(), regions.end());
-
-        // Merge overlapping ranges
-        std::vector<std::pair<uint64_t, uint64_t>> merged;
-        merged.push_back(regions[0]);
-
-        for (size_t i = 1; i < regions.size(); i++) {
-            auto& last = merged.back();
-            const auto& current = regions[i];
-
-            if (current.first <= last.second) {
-                // Overlapping - merge
-                last.second = std::max(last.second, current.second);
-            } else {
-                // Non-overlapping - add new region
-                merged.push_back(current);
-            }
-        }
-
-        // Sum merged regions for this core
-        for (const auto& [start, end] : merged) {
+    for (const auto& [core, regions] : device_regions_per_core) {
+        for (const auto& [start, end] : regions) {
             total_physical += (end - start);
         }
     }
-
     return total_physical;
 }
 

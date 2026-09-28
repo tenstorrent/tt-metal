@@ -24,4 +24,5 @@
       timeout: 30
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
+  budget_type: integration
   category: ops_docs_check
