@@ -17,10 +17,22 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
+
+#include <cmath>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+ExpRingJointSDPADeviceOperation::program_factory_t ExpRingJointSDPADeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    if (args.precision && *args.precision != ttnn::transformer::SDPAPrecision::FAST) {
+        return ExpRingJointSDPARecipeMeshWorkloadFactory{};
+    }
+    return ExpRingJointSDPAMeshWorkloadFactory{};
+}
 
 void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
@@ -46,14 +58,50 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.dtype();
-    for (const auto& tensor : sdpa_input_tensors) {
+    if (args.precision) {
+        // Named recipes: BF16 Q; K/V (primary, joint, gathered) share the recipe's KV storage type.
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        const auto kv_dtype = tensor_args.input_k.dtype();
+        recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, kv_dtype));
         TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
+            input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE, "Named exp ring recipes require Blackhole");
+        TT_FATAL(dtype == DataType::BFLOAT16, "Named exp ring recipes require BF16 Q, got {}", dtype);
+        TT_FATAL(
+            kv_dtype == DataType::BFLOAT16 || kv_dtype == DataType::BFLOAT8_B || kv_dtype == DataType::BFLOAT4_B,
+            "Named exp ring recipes require BF16, BFP8 or BFP4 KV, got {}",
+            kv_dtype);
+        TT_FATAL(
+            tensor_args.input_v.dtype() == kv_dtype && tensor_args.gathered_k.dtype() == kv_dtype &&
+                tensor_args.gathered_v.dtype() == kv_dtype,
+            "Named exp ring recipe K/V and persistent buffers must share one KV type");
+        if (has_joint) {
+            TT_FATAL(
+                tensor_args.joint_q->dtype() == dtype && tensor_args.joint_k->dtype() == kv_dtype &&
+                    tensor_args.joint_v->dtype() == kv_dtype,
+                "Named exp ring recipe joint types must match their primary Q/K/V types");
+        }
+        // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is
+        // checked when the program is built.
+        const uint32_t head_dim = input_tensor_q.logical_shape()[3];
+        recipes::validate_recipe_geometry(
+            recipes::RecipeOp::ExpRing,
+            recipes::resolve_precision_policy(recipes::select_recipe(*args.precision, kv_dtype)),
+            args.get_q_chunk_size(),
+            args.get_k_chunk_size(),
+            head_dim);
+        TT_FATAL(
+            !args.scale || *args.scale == 1.0f / std::sqrt(static_cast<float>(head_dim)),
+            "Named exp ring recipes require the default 1/sqrt(head_dim) scale");
+    } else {
+        // Validate all tensors have the same dtype
+        for (const auto& tensor : sdpa_input_tensors) {
+            TT_FATAL(
+                tensor.dtype() == dtype,
+                "All tensors must have the same dtype. Expected {}, got {}",
+                dtype,
+                tensor.dtype());
+        }
     }
 
     // Get shapes
@@ -332,7 +380,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         total_segments);
 
     // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
-    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_builder.cpp
     // (L1-bound).
     constexpr uint32_t kMaxPasses = 3;
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
@@ -477,7 +525,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
-    const std::optional<ttnn::Tensor>& logical_n_tensor) {
+    const std::optional<ttnn::Tensor>& logical_n_tensor,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -514,6 +563,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         cluster_axis,
         num_workers_per_link,
         num_buffers_per_channel);
+    operation_attributes.precision = precision;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
