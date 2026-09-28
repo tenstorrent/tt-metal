@@ -221,6 +221,34 @@ def test_roll_height_sharded_tile_aligned(device, shape, ncores, sh, sw, shifts,
     run_roll(device, torch.randn(shape, dtype=torch.bfloat16), ttnn.TILE_LAYOUT, mem_config, shifts, dims)
 
 
+# ─── HEIGHT_SHARDED with tile or shard padding (interleaved round trip) ──────
+
+
+@pytest.mark.parametrize(
+    "shape,layout,shifts,dims",
+    [
+        ([1, 40, 64], ttnn.TILE_LAYOUT, [32], [1]),  # tile-aligned shift took the native path
+        ([1, 40, 64], ttnn.TILE_LAYOUT, [8], [1]),
+        ([1, 40, 64], ttnn.ROW_MAJOR_LAYOUT, [8], [1]),
+        ([1, 64, 48], ttnn.TILE_LAYOUT, [32], [2]),  # padded width
+    ],
+    ids=["tile_h_aligned_shift", "tile_h_unaligned_shift", "row_major_h", "tile_w_aligned_shift"],
+)
+def test_roll_height_sharded_padded(device, shape, layout, shifts, dims):
+    # Regression: padding was rolled into real rows, or the op hit a TT_FATAL.
+    torch.manual_seed(4)
+    mem_config = _explicit_height_shard(device, 2, 32, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+    )
+
+    ttnn_output = ttnn.roll(ttnn_input, shifts, dims)
+
+    assert ttnn_output.memory_config() == ttnn_input.memory_config()
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch.roll(torch_input, shifts, dims))
+
+
 # ─── HEIGHT_SHARDED + TILE, non-tile-aligned (sharded untilize→roll→tilize) ──
 
 
