@@ -166,6 +166,8 @@ struct AccumulatorHalf {
 // When each core processes exactly 1 Q chunk, this state carries across ring iterations.
 struct RingAccumulatorState {
     AccumulatorHalf prev, cur;
+    // K chunks the last single-Q-chunk sdpa_ring_v2 call accumulated (0: it left no state in prev).
+    uint32_t last_call_k_chunks = 0;
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
@@ -3019,6 +3021,7 @@ void sdpa_ring_v2(
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;
+            acc_state.last_call_k_chunks = KV_chunks_processed;
         } else if (!is_last_ring_iter) {
             // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
             // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
