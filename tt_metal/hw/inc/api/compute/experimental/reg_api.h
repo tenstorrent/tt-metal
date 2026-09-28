@@ -19,6 +19,7 @@ namespace ckernel {
  *
  * Use this and tile_regs_release_math_clear() for EVERY section in the kernel;
  * do not mix with ordinary acquire/release. Commit and wait are unchanged.
+ * Keep DST writes between acquire and commit; commit drains previous writes.
  * Unpack-to-DST operations must wait for MATH's ready signal (as copy_tile does).
  * Independent unpacker/SFPU DST writers are not supported. This invalidates rows,
  * not their contents: initialise complete rows before SFPU reads or partial writes.

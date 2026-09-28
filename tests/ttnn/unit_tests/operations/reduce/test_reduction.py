@@ -176,11 +176,14 @@ def test_std_var_hw_compact_partial_width(device, enabled_program_cache, dtype, 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
-    "shape", [(2, 3, 33, 143), (1, 1, 32, 10529)], ids=["batch_partial_height", "wide_partial_width"]
+    "shape",
+    [(2, 3, 33, 143), (1, 1, 32, 10529), (1, 32, 33, 1), (2, 3, 33, 15), (1, 32, 33, 16), (1, 3, 512, 31)],
+    ids=["batch_partial_height", "wide_partial_width", "scalar_w1", "scalar_w15", "scalar_w16", "scalar_w31_replay"],
 )
 def test_std_var_hw_compact_repeated_dst_reuse(device, enabled_program_cache, dtype, shape):
     # Repeated MATH/PACK hand-offs on Blackhole exposed a race between PACK's ZEROACC and
     # SFPU stores into the other DST half, intermittently zeroing compact records.
+    # Widths below one tile use the scalar writer, but the same DST hand-off must be safe.
     torch.manual_seed(31)
     values = torch.randn(shape)
     columns = torch.arange(shape[-1])

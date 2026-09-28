@@ -117,13 +117,14 @@ inline void _llk_math_dest_section_done_()
 /**
  * @brief Clear the acquired DST section from MATH instead of clearing it on PACK release.
  *
- * The caller must acquire the section first and use PACK release without clearing throughout the kernel.
+ * Call immediately after acquiring the section, before any DST writes, and use PACK release without clearing throughout the kernel.
+ * DST writes must stay between acquire and commit; commit drains them before the next acquisition.
  * Unpack-to-DST must wait for MATH's ready signal; there must be no independent DST writer.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_clear_dest_section_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU, p_stall::MATH | p_stall::WAIT_SFPU);
+    // Startup or the preceding commit has already drained this thread's DST writes.
     if constexpr (Dst == DstSync::SyncFull)
     {
         TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
