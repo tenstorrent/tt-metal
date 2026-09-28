@@ -93,12 +93,30 @@ HYPOT_MIN_OPERAND = 2.0**-62
 HYPOT_MAX_OPERAND = 2.0**62
 
 
-def _finite_positions_agree(golden, result, desc):
-    """Non-finite results must land in the same places as the golden's."""
-    mismatch = torch.isfinite(golden) != torch.isfinite(result)
-    assert not mismatch.any(), (
-        f"{desc}: {int(mismatch.sum())} elements disagree on finiteness " "outside the documented saturation cases"
+def _assert_nonfinite_match(golden, result, desc):
+    """Non-finite results must match the golden, including the sign of inf.
+
+    A finiteness-only check would let -inf regress to +inf and still pass the
+    finite-only accuracy checks that follow. Matching NaNs compare equal.
+    """
+    golden_finite = torch.isfinite(golden)
+    result_finite = torch.isfinite(result)
+    position_mismatch = golden_finite != result_finite
+    assert not position_mismatch.any(), (
+        f"{desc}: {int(position_mismatch.sum())} elements disagree on finiteness "
+        "outside the documented saturation cases"
     )
+
+    nonfinite = ~golden_finite
+    if not nonfinite.any():
+        return
+    golden_nf, result_nf = golden[nonfinite], result[nonfinite]
+    value_mismatch = (torch.isnan(golden_nf) != torch.isnan(result_nf)) | (
+        torch.isinf(golden_nf) & (torch.signbit(golden_nf) != torch.signbit(result_nf))
+    )
+    assert (
+        not value_mismatch.any()
+    ), f"{desc}: {int(value_mismatch.sum())} non-finite elements differ from the golden, including the sign of inf"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +161,7 @@ def test_ldexp(device, ttnn_op):
         (golden.abs() == MAX_BF16) & torch.isinf(result) & (torch.signbit(golden) == torch.signbit(result))
     )
     result = torch.where(overflow_to_inf, golden, result)
-    _finite_positions_agree(golden, result, ttnn_op.__name__)
+    _assert_nonfinite_match(golden, result, ttnn_op.__name__)
 
     finite = torch.isfinite(golden)
     underflow = finite & (golden.abs() < UNDERFLOW_BAND)
@@ -207,7 +225,7 @@ def test_logaddexp_ops(device, ttnn_op, low, high, ulp_threshold, small_atol):
     input_a, input_b = pairwise_from_values(values)
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
 
-    _finite_positions_agree(golden, result, ttnn_op.__name__)
+    _assert_nonfinite_match(golden, result, ttnn_op.__name__)
     large = golden.abs() >= 1.0
     assert large.any() and (~large).any(), "expected both the ULP and the cancellation band to be non-empty"
 
@@ -237,7 +255,7 @@ def test_squared_difference(device, ttnn_op):
     input_a, input_b = pairwise_from_values(values)
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
 
-    _finite_positions_agree(golden, result, ttnn_op.__name__)
+    _assert_nonfinite_match(golden, result, ttnn_op.__name__)
     finite = torch.isfinite(golden)
     underflow = finite & (golden.abs() < UNDERFLOW_BAND)
     assert underflow.any(), "expected the underflow band to be non-empty for this sweep"
@@ -278,7 +296,7 @@ def test_xlogy(device):
     )
     golden, result = run_binary(device, ttnn.xlogy, input_a, input_b)
 
-    _finite_positions_agree(golden, result, "xlogy")
+    _assert_nonfinite_match(golden, result, "xlogy")
     near_one = (input_b >= XLOGY_NEAR_ONE_LOW) & (input_b <= XLOGY_NEAR_ONE_HIGH)
     assert near_one.any(), "expected log's zero crossing to be covered by this sweep"
 
@@ -330,7 +348,7 @@ def test_hypot_outside_square_range(device):
     expected = torch.sqrt(squares[0] + squares[1]).to(torch.bfloat16)
 
     assert (expected == 0).any() and torch.isinf(expected).any(), "expected both boundaries in this sweep"
-    _finite_positions_agree(expected, result, "hypot")
+    _assert_nonfinite_match(expected, result, "hypot")
     assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
@@ -354,7 +372,7 @@ def test_bias_gelu(device, ttnn_op):
     input_a, input_b = pairwise_from_values(values)
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
 
-    _finite_positions_agree(golden, result, ttnn_op.__name__)
+    _assert_nonfinite_match(golden, result, ttnn_op.__name__)
     assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=0.05)
 
 
@@ -395,7 +413,7 @@ def test_prelu(device):
     golden = ttnn.get_golden_function(ttnn.prelu)(input_a, weight)
     result = ttnn.to_torch(ttnn.prelu(to_tt_tensor(input_a, device), to_tt_tensor(weight, device)))
 
-    _finite_positions_agree(golden, result, "prelu")
+    _assert_nonfinite_match(golden, result, "prelu")
     underflow = golden.abs() < UNDERFLOW_BAND
     assert underflow.any(), "expected the product's underflow band to be non-empty for this sweep"
 
