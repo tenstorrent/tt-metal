@@ -278,37 +278,20 @@ TEST(MatmulAutoConfig, SubblockShape) {
     EXPECT_EQ(chosen->blocking.out_subblock_w, 8u);
 }
 
-// 1D in0-mcast splits a wide output block into subblock-wide blocks (not into 1-tile ones)
-TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
+// 2D maximizes in0_block_w * out_block_h * out_block_w (#57884 heuristic 1): with the whole per-core block as one
+// output block, K goes as deep as L1 allows, keeping two K blocks
+TEST(MatmulAutoConfig, TwoDDeepestFittingK) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    auto p = make_problem(1, 1, 32, 2560, 262144);
-    auto chosen = choose_candidate(p, hw);
-    ASSERT_TRUE(chosen.has_value());
-    EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast1DIn0));
-    EXPECT_EQ(chosen->blocking.per_core_N, 128u);
-    EXPECT_EQ(chosen->blocking.out_block_w, 8u);
-    p = make_problem(1, 1, 32, 4544, 11 * 32 * 64);  // per_core_N = 11 has no divisor in 2..8
-    chosen = choose_candidate(p, hw);
-    ASSERT_TRUE(chosen.has_value());
-    EXPECT_EQ(chosen->blocking.out_block_w, chosen->blocking.per_core_N);
-}
-
-// Large 2D output blocks may use K blocks up to 16 deep; small ones stay at 8
-TEST(MatmulAutoConfig, LargeBlockKDepth) {
-    // Llama-70B TP8 w1 prefill (bf16 x bfp4, LoFi), with the L1 budget the device reported
-    auto p = make_problem(1, 1, 2048, 8192, 3584, tt::DataFormat::Bfp4_b);
-    p.math_fidelity = MathFidelity::LoFi;
-    auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), 1377056);
-    auto chosen = choose_candidate(p, hw);
+    auto p = make_problem(1, 1, 1024, 8192, 1024);  // per core 4x4, Kt 256
+    const auto chosen = choose_candidate(p, hw);
     ASSERT_TRUE(chosen.has_value());
     EXPECT_EQ(static_cast<int>(chosen->family), static_cast<int>(Family::Mcast2D));
-    EXPECT_GT(chosen->blocking.out_block_h * chosen->blocking.out_block_w, LARGE_BLOCK_TILES);
-    EXPECT_EQ(chosen->blocking.in0_block_w, 16u);
-    p = make_problem(1, 1, 256, 4096, 1024, tt::DataFormat::Bfp8_b);  // 1x4 blocks
-    hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
-    chosen = choose_candidate(p, hw);
-    ASSERT_TRUE(chosen.has_value());
-    EXPECT_LE(chosen->blocking.in0_block_w, MAX_IN0_BLOCK_W);
+    const auto& b = chosen->blocking;
+    EXPECT_EQ(b.out_block_h * b.out_block_w, 16u);
+    EXPECT_EQ(b.in0_block_w, 32u);  // 64 would need 2 MiB of input CBs
+    auto deeper = b;
+    deeper.in0_block_w = 64;
+    EXPECT_GT(circular_buffer_bytes(p, hw, Family::Mcast2D, deeper), hw.l1_cb_budget);
 }
 
 // When keeping the full multicast extent only fits with single-tile K steps, 1D shrinks it instead
@@ -605,7 +588,7 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
         for (const auto& c : candidates(p, hw)) {
             const auto& b = c.blocking;
             fmt::print(
-                "  {} {:7s} cores={:3d} pc={}x{} k={} blk={}x{} sb={}x{}\n",
+                "  {} {:7s} cores={:3d} pc={}x{} k={} blk={}x{} sb={}x{} est={:.0f}\n",
                 chosen && chosen->family == c.family ? '*' : ' ',
                 names[static_cast<int>(c.family)],
                 c.cores,
@@ -615,7 +598,8 @@ TEST(MatmulAutoConfig, DISABLED_PrintSelections) {
                 b.out_block_h,
                 b.out_block_w,
                 b.out_subblock_h,
-                b.out_subblock_w);
+                b.out_subblock_w,
+                estimated_cycles(p, hw, c.family, b));
         }
     }
 }
