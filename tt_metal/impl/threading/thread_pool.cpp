@@ -173,8 +173,8 @@ public:
 
     bool finished() const { return pending_.load(std::memory_order_acquire) == 0; }
 
-    void done() {
-        if (pending_.fetch_sub(1, std::memory_order_seq_cst) == 1 &&
+    void done(int64_t n = 1) {
+        if (pending_.fetch_sub(n, std::memory_order_seq_cst) == n &&
             waiter_parked_.exchange(0, std::memory_order_seq_cst) != 0) {
             futex_wake_one(waiter_parked_);
         }
@@ -274,7 +274,9 @@ public:
     NumaAwareExecutor(NumaAwareExecutor&&) = delete;
     NumaAwareExecutor& operator=(NumaAwareExecutor&&) = delete;
 
-    ~NumaAwareExecutor() { stop(); }
+    // Drops a job offered after the worker stopped: while the pool stops its executors one by one, a worker
+    // still running a job can hand it to one that has already stopped.
+    ~NumaAwareExecutor();
 
     // Joins the worker. The owning pool waits for all tasks first, and stops every executor before destroying
     // any, because a parallel_for job on one worker can wake the others.
@@ -355,30 +357,34 @@ public:
 
     const std::vector<NumaAwareExecutor*>& participants() const { return participants_; }
 
-    // Takes one reference for the caller and one for each participant.
-    void start() { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
+    // Takes one reference for the caller and one for the first participant, which the caller offers the job to.
+    // Each participant offers it to the ones it wakes, taking a reference for each.
+    void start() { refs_.store(2, std::memory_order_relaxed); }
 
-    // Worker: wakes the participants below this one that still have calls to run, runs this worker's calls, and
-    // drops the worker's reference. A job that has finished may point at executors being stopped, so it is only
-    // dropped.
+    // Worker: hands the job to the participants below this one that still have calls to run, runs this worker's
+    // calls, and drops the worker's reference. A job that has finished may point at executors being stopped, so it
+    // is only dropped.
     void run_participant(NumaAwareExecutor* executor) {
         if (!remaining_.finished()) {
             const size_t position =
                 std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
             for_each_child(position, [this](size_t child) { wake_subtree(child); });
+            int64_t ran = 0;
             for (size_t call = 0; call < executor_of_call_.size(); call++) {
-                if (executor_of_call_[call] == executor) {
-                    run(call);
+                if (executor_of_call_[call] == executor && run(call)) {
+                    ran++;
                 }
             }
+            completed(ran);
         }
         release();
     }
 
-    // Runs `call` unless another thread has claimed it.
-    void run(size_t call) {
+    // Runs `call` unless another thread has claimed it, and returns whether it did. The caller reports the calls
+    // it ran with completed(), once, so that threads do not contend on the count for every call.
+    bool run(size_t call) {
         if (claims_[call].claimed.exchange(true, std::memory_order_acq_rel)) {
-            return;
+            return false;
         }
         try {
             fn_(call);
@@ -388,7 +394,13 @@ public:
                 exception_ = std::current_exception();
             }
         }
-        remaining_.done();
+        return true;
+    }
+
+    void completed(int64_t calls) {
+        if (calls > 0) {
+            remaining_.done(calls);
+        }
     }
 
     // Caller: waits for every call, returns the first exception, and drops the caller's reference.
@@ -415,12 +427,14 @@ private:
         }
     }
 
-    // Wakes the participant at `position` if the caller has not already claimed all of its calls, and otherwise
-    // wakes its children in its place.
+    // Offers the job to the participant at `position` and wakes it if the caller has not already claimed all of
+    // its calls, and otherwise does the same for its children in its place.
     void wake_subtree(size_t position) {
         for (size_t call = 0; call < executor_of_call_.size(); call++) {
             if (executor_of_call_[call] == participants_[position] &&
                 !claims_[call].claimed.load(std::memory_order_relaxed)) {
+                refs_.fetch_add(1, std::memory_order_relaxed);
+                participants_[position]->offer(this);
                 participants_[position]->wake();
                 return;
             }
@@ -450,6 +464,10 @@ inline void NumaAwareExecutor::stop() {
     shutdown_.store(true, std::memory_order_seq_cst);
     wake();
     worker.join();
+}
+
+inline NumaAwareExecutor::~NumaAwareExecutor() {
+    stop();
     if (auto* job = job_.exchange(nullptr, std::memory_order_acquire)) {
         job->release();
     }
@@ -553,23 +571,30 @@ public:
         if (device_ids.empty()) {
             return;
         }
+        // Waking a worker for a single call can only cost time.
+        if (device_ids.size() == 1) {
+            fn(0);
+            return;
+        }
         auto* job = new ParallelJob(fn, device_ids.size());
         for (size_t call = 0; call < device_ids.size(); call++) {
             job->assign(call, workers_[phys_device_to_thread_id_.at(device_ids[call])].get());
         }
         job->start();
         const auto& participants = job->participants();
-        // Wake the first participant as soon as it has the job; it wakes the others as it starts.
+        // The first participant hands the job on to the others as it starts, so that the caller touches one
+        // worker's state rather than every worker's.
         participants[0]->offer(job);
         participants[0]->wake();
-        for (size_t position = 1; position < participants.size(); position++) {
-            participants[position]->offer(job);
-        }
         // The workers are woken first to last, so take calls from the back. The caller runs every call no worker
         // has claimed, so the job finishes even if some workers are never woken.
+        int64_t ran = 0;
         for (size_t call = device_ids.size(); call-- > 0;) {
-            job->run(call);
+            if (job->run(call)) {
+                ran++;
+            }
         }
+        job->completed(ran);
         if (auto exception = job->finish()) {
             std::rethrow_exception(exception);
         }
