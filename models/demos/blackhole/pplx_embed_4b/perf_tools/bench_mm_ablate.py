@@ -5,7 +5,8 @@
 # variant's output is compared with the full variant's (PCC ~0 shows the patch compiled in).
 # Usage: bench_mm_ablate.py <preset> [batch]   presets: ff13 (bs8 / bs16 fused SwiGLU, bs32 plain FF1), ff13plain
 #        (the packed w13 shape without the SwiGLU epilogue), qkv, ff2, wo
-#        ABL_ONLY="full|no reads" picks variants; MM_BLOCKS=M,K,N,sh,sw overrides the preset's blocks.
+#        ABL_ONLY="full|no reads" picks variants; MM_BLOCKS=M,K,N,sh,sw overrides the preset's blocks; MM_IN0=L1|DRAM
+#        overrides the in0 placement.
 import os
 import statistics
 import subprocess
@@ -29,7 +30,8 @@ VARIANTS = {k: v for k, v in VARIANTS.items() if not os.getenv("ABL_ONLY") or k 
 
 
 def preset(name, B):
-    """(M, K, N, blocks, fuse_swiglu, weight layout, out placement) as the model runs it at ISL 512."""
+    """(M, K, N, blocks, fuse_swiglu, weight layout, out placement[, in0 placement = L1]) as the model runs it at ISL
+    512 (capture_qkv_call.py with CAP_N=<N> prints the model's calls)."""
     M = B * 512
     if name == "ff13fused":  # the fused SwiGLU kernel at any batch (bs32 runs unfused in the model)
         return M, 2560, 19456, (8, 8, 8, 1, 8), True, "interleaved", "DRAM"
@@ -49,10 +51,10 @@ def preset(name, B):
             "sharded",
             "L1" if B <= 16 else "DRAM",
         )
-    if name == "ff2":
-        return M, 9728, 2560, (16, 8, 8, 1, 8) if B == 8 else (8, 8, 8, 1, 8), False, "sharded", "L1"
-    if name == "wo":
-        return M, 4096, 2560, (16, 8, 8, 1, 8) if B == 8 else (8, 8, 8, 1, 8), False, "sharded", "L1"
+    if name == "ff2":  # in0 = the fused SwiGLU output, in DRAM
+        return M, 9728, 2560, (16, 8, 8, 1, 8) if B == 8 else (8, 8, 8, 1, 8), False, "sharded", "L1", "DRAM"
+    if name == "wo":  # in0 = the concat-free SDPA output, in DRAM
+        return M, 4096, 2560, (16, 8, 8, 1, 8) if B == 8 else (8, 8, 8, 1, 8), False, "sharded", "L1", "DRAM"
     raise ValueError(name)
 
 
@@ -78,7 +80,8 @@ def child(name, B, out_path):
 
     import ttnn
 
-    M, K, N, blocks, swiglu, wlayout, outp = preset(name, B)
+    M, K, N, blocks, swiglu, wlayout, outp, *rest = preset(name, B)
+    in0p = os.getenv("MM_IN0") or (rest[0] if rest else "L1")
     if os.getenv("MM_BLOCKS"):
         blocks = tuple(int(v) for v in os.getenv("MM_BLOCKS").split(","))
     torch.manual_seed(0)
@@ -116,7 +119,7 @@ def child(name, B, out_path):
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=D,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if in0p == "L1" else ttnn.DRAM_MEMORY_CONFIG,
         )
         out_mc = ttnn.L1_MEMORY_CONFIG if outp == "L1" else ttnn.DRAM_MEMORY_CONFIG
         kw = dict(compute_kernel_config=ckc, config=cfg, memory_config=out_mc, dtype=ttnn.bfloat8_b)
@@ -152,10 +155,11 @@ def main():
 
     name = sys.argv[1]
     B = int(sys.argv[2]) if len(sys.argv) > 2 else 16
-    M, K, N, blocks, swiglu, wlayout, outp = preset(name, B)
+    M, K, N, blocks, swiglu, wlayout, outp, *rest = preset(name, B)
+    in0p = os.getenv("MM_IN0") or (rest[0] if rest else "L1")
     flop = 2 * M * K * N
     print(f"RES {name} B{B}: M={M} K={K} N={N} blocks={os.getenv('MM_BLOCKS') or blocks} swiglu={swiglu} "
-          f"weights={wlayout} out={outp}", flush=True)  # fmt: skip
+          f"weights={wlayout} in0={in0p} out={outp}", flush=True)  # fmt: skip
     orig = open(HDR).read()
     ref = None
     try:
