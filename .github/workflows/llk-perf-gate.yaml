@@ -1,6 +1,9 @@
 name: "LLK perf gate"
 
 on:
+  push:
+    branches:
+      - "perf-trial/nonsol-revert-square"
   pull_request:
     types: [labeled, synchronize]
   schedule:
@@ -169,13 +172,13 @@ jobs:
   nightly-measure:
     name: "Nightly: measure the suite (non speed-of-light)"
     if: >-
-      github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch'
-      && inputs.baseline_run_id == '' && inputs.perf_run_id == '')
+      github.event_name == 'push'
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: all
+      ref: 4e1c4c84850a11029e3fb8096b7fd4c66529fb00
       speed-of-light: false
-      upload-to-warehouse: true
+      upload-to-warehouse: false
       pipeline: nightly
     secrets: inherit
 
@@ -183,8 +186,7 @@ jobs:
     name: "Nightly gate ${{ matrix.arch }} (non speed-of-light)"
     needs: nightly-measure
     if: >-
-      always() && (github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == ''))
+      always() && github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
