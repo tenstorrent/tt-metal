@@ -142,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::PRODUCER,
             }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer kernel (writes interleaved output to DRAM). Both layout variants present the same binding
@@ -159,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (is_tile) {
         writer.source =
@@ -191,15 +191,15 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     // Optional compute kernel for data-format conversion.
     if (convert_df) {
         // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
-        // Metal 2.0 Gen1 compute defaults match those field for field (HiFi4; math_approx_mode
+        // Metal 2.0 ComputeHardwareConfig defaults match those field for field (HiFi4; math_approx_mode
         // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
-        // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
+        // false; dst_full_sync_en false = double_buffer_dest true), so an all-default config
         // reproduces the legacy settings exactly.
-        ComputeHardwareConfig compute_hw = ComputeGen1Config{};
+        ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};
         if (input.device()->arch() == tt::ARCH::QUASAR) {
-            // The Gen1 config sets no fields, so the Gen2 config copies none.
-            // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-            compute_hw = ComputeGen2Config{};
+            // The WH/BH config sets no fields, so the Quasar config copies none.
+            // TODO(#52269): Quasar unpack_modes are copied from WH/BH and not yet optimized for Quasar.
+            compute_hw = ComputeHardwareConfig{};
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,

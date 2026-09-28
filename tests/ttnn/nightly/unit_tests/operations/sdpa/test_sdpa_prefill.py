@@ -12,14 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole, is_slow_dispatch
-
-
-def fa_rand(*shape):
-    normal_1 = torch.randn(shape)
-    normal_2 = torch.randn(shape) * 10
-    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
-    return normal_1 + normal_2 * bernoulli
+from models.common.utility_functions import is_slow_dispatch
 
 
 def is_watcher_enabled():
@@ -1064,9 +1057,6 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
         run_test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, dummy_tensors)
 
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.perf.device_perf_utils import run_device_perf_detailed
-
 from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
 
 
@@ -1181,14 +1171,9 @@ def test_combine():
 @pytest.mark.skip()
 def test_sdpa_benchmark_detailed():
     command = "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_benchmark"
-    cols = ["ATTRIBUTES", "INPUT_0_W", "INPUT_0_Z", "INPUT_0_Y", "INPUT_0_X", "DEVICE KERNEL DURATION [ns]"]
-    op_name = "ScaledDotProductAttention"
-    warmup_iters = 0  # 5 iterations per device
-    step_name = "SDPA"
     subdir = "sdpa"
 
     run_device_profiler(command, subdir)
-    # r = post_process_ops_log(subdir, cols, sum_vals=False)
     filename = get_latest_ops_log_filename(subdir)
     import pandas as pd
 
@@ -1343,7 +1328,7 @@ def test_sdpa_benchmark(device):
                             exp_approx_mode=True,
                         )
                         try:
-                            tt_back = ttnn.transformer.scaled_dot_product_attention(
+                            _tt_back = ttnn.transformer.scaled_dot_product_attention(
                                 tt_Q,
                                 tt_K,
                                 tt_V,

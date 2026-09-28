@@ -70,7 +70,7 @@ class GoldenCheck:
             logger.info(f"{operation}")
 
         passed = True
-        for pack_node in operation.math.pack_nodes:
+        for pack_node in operation.pack_nodes:
             if not isinstance(pack_node, PackNode):
                 continue
             if not self._check_output(pack_node.output):
@@ -98,7 +98,7 @@ class GoldenCheck:
         """
         sources = []
         seen = set()
-        for node in operation.math.math_nodes:
+        for node in operation.math_nodes:
             if not hasattr(node, "src_a"):
                 continue
             for src in (node.src_a, node.src_b):
@@ -109,7 +109,7 @@ class GoldenCheck:
         max_input_rtol = max((s.acc_rtol for s in sources), default=0.0)
         max_input_atol = max((s.acc_atol for s in sources), default=0.0)
 
-        for pack in operation.math.pack_nodes:
+        for pack in operation.pack_nodes:
             if not isinstance(pack, PackNode):
                 continue
             output = pack.output

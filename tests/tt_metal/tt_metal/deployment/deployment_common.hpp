@@ -11,7 +11,7 @@
 
 #define TEST_PARAM(type, var, initial, envvar) \
     type var = (initial);                      \
-    get_env((envvar), &var)
+    get_env((envvar), &(var))
 
 struct l1_allocator {
     uint32_t start;
@@ -113,10 +113,7 @@ private:
     int signum;
 
 public:
-    SignalGuard(int sig, sighandler_t handler) {
-        signum = sig;
-        prev = signal(sig, handler);
-    }
+    SignalGuard(int sig, sighandler_t handler) : prev(signal(sig, handler)), signum(sig) {}
     ~SignalGuard() { signal(signum, prev); }
 };
 

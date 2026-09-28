@@ -12,9 +12,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"              // exposes ttnn::MemoryConfig alias used in member/signature declarations
 #include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in override_runtime_arguments()
+#include "ttnn/metal_v2_artifacts.hpp"
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -39,14 +39,16 @@ struct NlpCreateHeadsDeviceOperation {
         std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
+    // Both factories are Metal 2.0 spec factories on CustomProgramSpecFactoryConcept: the framework builds
+    // and caches the Program from the returned ProgramSpec, and re-applies the ProgramRunArgs returned by
+    // override_runtime_arguments on every program-cache hit.
     struct Interleaved {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            tt::tt_metal::Program& program,
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
@@ -54,13 +56,12 @@ struct NlpCreateHeadsDeviceOperation {
     };
 
     struct Sharded {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            tt::tt_metal::Program& program,
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,

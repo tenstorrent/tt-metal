@@ -45,6 +45,8 @@ class GLM52Adapter(MLAPrefillAdapter):
     l1_small_size = 1216
     routing_use_l1_small_for_semaphores = True
 
+    supports_mtp = True
+
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
         (dims + the DSA ``index_*`` attrs + the ``indexer_types`` full/shared reuse map the sparse path
@@ -72,6 +74,7 @@ class GLM52Adapter(MLAPrefillAdapter):
         The engine owns both, exactly like the dense KVPE cache."""
         import ttnn
         from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
+        from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
             MlaKvCacheFormat,
             init_kvpe_cache,
@@ -81,6 +84,10 @@ class GLM52Adapter(MLAPrefillAdapter):
         # KV dedup: seq_len/(sp*tp) rows per device instead of seq_len/sp. Both caches must use the same
         # tp_axis as the write op and the migration table.
         kv_tp_axis = params.tp_axis
+        mtp_levels = params.mtp_levels if params.is_last_rank else 0
+        if params.mtp_levels:
+            enable_mtp_indexer_slot(hf_config)
+
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
             hf_config=hf_config,
@@ -88,12 +95,14 @@ class GLM52Adapter(MLAPrefillAdapter):
             seq_len=params.max_seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
-            num_kvpe_cache_layers=params.num_layers,
+            num_kvpe_cache_layers=params.num_layers + mtp_levels,
             num_users=params.num_users,
             tp_axis=kv_tp_axis,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
-        num_index_layers = full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers) - first_full
+        num_index_layers = (
+            full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers + mtp_levels) - first_full
+        )
         index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=hf_config.index_head_dim,
             mesh_device=mesh_device,

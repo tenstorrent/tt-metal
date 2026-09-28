@@ -332,7 +332,6 @@ template <uint32_t tile_bytes>
 void fill_neginf_tile(uint32_t cb_id, uint32_t tile_id) {
     constexpr uint32_t num_exponents = tt::constants::FACE_HEIGHT * (tt::constants::TILE_HW / tt::constants::FACE_HW);
     constexpr uint32_t bfp4_size = num_exponents + tt::constants::TILE_HW / 2;
-    constexpr uint32_t bfp8_size = num_exponents + tt::constants::TILE_HW;
     constexpr uint32_t bf16_size = tt::constants::TILE_HW * 2;
 
     CircularBuffer cb(cb_id);
@@ -910,8 +909,6 @@ void generate_causal_sliding_window_mask(
 
     int zero_tile_idx = -1;
     int inf_tile_idx = -1;
-    int triu_diag_tile_idx = -1;
-    int tril_diag_tile_idx = -1;
 
     int32_t min_window_start, max_window_start, min_window_end, max_window_end;
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {
