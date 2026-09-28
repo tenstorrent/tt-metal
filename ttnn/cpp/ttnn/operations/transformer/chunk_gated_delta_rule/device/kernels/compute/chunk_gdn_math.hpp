@@ -734,10 +734,12 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_p1");
         // ---- P1: v_beta, k_beta ----
+        // No wait on the outputs here: v_beta goes to the writer, k_beta is waited for by its first consumer
+        // (pp_negn); the pops are ordered after this thread's unpacks by the CB protocol. Every block below follows
+        // the same rule -- a WAIT right after a producing block drains the unpack->math->pack pipeline (~0.2-0.3 us
+        // on a one-tile block), so it is placed only where the next block reads the result.
         bcast_cols_mul(cb.v, cb.beta, cb.vbeta, ct, Vt);
-        WAIT(cb.vbeta, cv);
         bcast_cols_mul(Kk, cb.beta, cb.kbeta, ct, Kt);
-        WAIT(cb.kbeta, ck);
         POP(cb.beta, Ct);
         POP(cb.v, cv);
     }
@@ -747,9 +749,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // ---- P2: decay = tril@g, decay_exp, decayfac = exp(g_sum - decay), dl = exp(g_sum): one DST pass;
         // then decay_row ----
         decay_all(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
-        WAIT(cb.decay, Ct);
-        WAIT(cb.decay_exp, Ct);
-        WAIT(cb.decayfac, Ct + 1);
+        WAIT(cb.decay, Ct);  // decay_exp / decayfac are waited for at pp_kd / pp_kdec
         POP(cb.g, Ct);
         transpose_col(cb.decay, cb.scr1, ct);  // decay_row in scr1
         WAIT(cb.scr1, Ct);
@@ -773,6 +773,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // 32x32/full-matrix Horner whose deep power series loses fp32 precision on harder chunks.
         // negN = -(strictly_lower(kk * L_mask)) = -A_strict, kept in cb.scr3: one DST pass per tile (kk from the
         // matmul, L_mask and the (I - 1) mask applied on the SFPU) instead of four packed blocks.
+        WAIT(cb.kbeta, ck);
         negn_fused(cb.kbeta, Kk, cb.lmask, cb.eye, cb.scr3, ct, Kt);
         WAIT(cb.scr3, cc);
     }
@@ -856,8 +857,8 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // operand is handed off NEGATED so the scan forms v_beta + nkd@S as one DST accumulation
         // (nkd @ S, then I @ v_beta accumulated onto it): the negation is an exact SFPU sign flip of
         // the broadcast product before it is packed.
-        bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output)
-        WAIT(cb.w, ck);
+        WAIT(cb.decay_exp, Ct);
+        bcast_cols_mul_neg(cb.kbeta, cb.decay_exp, cb.w, ct, Kt);  // nkd -> cb.w (output, no wait)
         POP(cb.kbeta, ck);
     }
     // cb.vbeta (v_beta) and cb.Tinv (T_inv) remain pushed for the writer; NOT popped here.
@@ -866,18 +867,17 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         GDN_ZONE("pp_intra");
         // ---- intra = (q@k^T) * L_mask ; q_decay = q*decay_exp ; k_dec_t ----
         intra_fused(Q, Kk, cb.lmask, cb.intra, ct, Kt);  // intra = (q @ k^T) * L_mask, one DST pass per tile
-        WAIT(cb.intra, cc);
         POP(cb.lmask, cc);
     }
     {
         GDN_ZONE("pp_qdecay");
         bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, ct, Kt);
-        WAIT(cb.qdecay, ck);
         POP(Q, ck);
     }
     // decay_exp kept alive: reused at the scan to recompute dl = exp(g_sum).
     {
         GDN_ZONE("pp_kdec");
+        WAIT(cb.decayfac, Ct + 1);
         bcast_cols_mul(Kk, cb.decayfac, cb.scr1, ct, Kt);  // k * exp(decay_last-decay)
         WAIT(cb.scr1, ck);
         POP(Kk, ck);
@@ -907,7 +907,6 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // broadcast down the identity -> one tile with dl on the diagonal. The scan decays the state as
         // the matmul (dl*I) @ S_tile so the update S <- dl*S + k_dec_t@v_new accumulates in one DST pass.
         dl_tile(cb.eye, cb.decayfac, Ct, cb.dl);
-        WAIT(cb.dl, 1);
         POP(cb.decayfac, Ct + 1);
         POP(cb.decay_exp, Ct);
     }
