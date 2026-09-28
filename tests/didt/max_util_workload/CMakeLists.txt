@@ -1,4 +1,5 @@
 add_executable(unit_tests_didt_max_util test_max_util_workload.cpp)
+tt_reuse_precompile_headers(unit_tests_didt_max_util metal_test_pch)
 
 target_link_libraries(
     unit_tests_didt_max_util

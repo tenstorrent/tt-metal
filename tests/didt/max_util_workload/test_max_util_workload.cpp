@@ -11,9 +11,12 @@
 //      An optional BRISC kernel synchronizes TRISC launch across worker cores.
 //   No CB dependencies between DRAM streaming and compute.
 
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <optional>
+#include <string_view>
 
 #include <fmt/core.h>
 #include <gtest/gtest.h>
@@ -109,9 +112,18 @@ struct MaxUtilConfig {
 static uint32_t tile_size_bytes(DataFormat fmt, uint32_t h = 32, uint32_t w = 32) {
     if (fmt == DataFormat::Float16_b) {
         return uint32_t(w * h * 2);  // two bytes per float16_b element
-    } else {
-        throw std::invalid_argument("Invalid data format");
     }
+    throw std::invalid_argument("Invalid data format");
+}
+
+static std::optional<int> parse_env_int(const char* text) {
+    const std::string_view value(text);
+    int parsed = 0;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc{} || end != value.data() + value.size()) {
+        return std::nullopt;
+    }
+    return parsed;
 }
 
 static std::vector<uint32_t> rng_bfp16(
@@ -130,12 +142,9 @@ static std::vector<uint32_t> rng_bfp16(
 static uint32_t get_fpu_utilization_pct() {
     const char* env = std::getenv("MAX_UTIL_FPU_UTILIZATION_PCT");
     if (env != nullptr) {
-        try {
-            int val = std::stoi(env);
-            if (val >= 1 && val <= 92) {
-                return static_cast<uint32_t>(val);
-            }
-        } catch (...) {
+        const auto val = parse_env_int(env);
+        if (val.has_value() && *val >= 1 && *val <= 92) {
+            return static_cast<uint32_t>(*val);
         }
         log_warning(
             LogTest, "MAX_UTIL_FPU_UTILIZATION_PCT='{}' is not an integer in [1, 92] – using default of 92", env);
@@ -148,12 +157,9 @@ static uint32_t get_fpu_utilization_pct() {
 static uint32_t get_dram_utilization_pct() {
     const char* env = std::getenv("MAX_UTIL_DRAM_UTILIZATION_PCT");
     if (env != nullptr) {
-        try {
-            int val = std::stoi(env);
-            if (val >= 1 && val <= 100) {
-                return static_cast<uint32_t>(val);
-            }
-        } catch (...) {
+        const auto val = parse_env_int(env);
+        if (val.has_value() && *val >= 1 && *val <= 100) {
+            return static_cast<uint32_t>(*val);
         }
         log_warning(
             LogTest, "MAX_UTIL_DRAM_UTILIZATION_PCT='{}' is not an integer in [1, 100] – using default of 100", env);
@@ -167,12 +173,9 @@ static uint32_t get_dram_page_size_bytes() {
     constexpr uint32_t default_page_size = 1024;
     const char* env = std::getenv("MAX_UTIL_DRAM_PAGE_SIZE_BYTES");
     if (env != nullptr) {
-        try {
-            int val = std::stoi(env);
-            if (val >= 512 && val <= 16384 && (val & (val - 1)) == 0) {
-                return static_cast<uint32_t>(val);
-            }
-        } catch (...) {
+        const auto val = parse_env_int(env);
+        if (val.has_value() && *val >= 512 && *val <= 16384 && (*val & (*val - 1)) == 0) {
+            return static_cast<uint32_t>(*val);
         }
         log_warning(
             LogTest,
@@ -308,6 +311,7 @@ static std::vector<std::pair<CoreCoord, uint32_t>> assign_eth_cores_to_banks(IDe
     right_cores.resize(std::min<size_t>(right_cores.size(), 4));
 
     std::vector<std::pair<CoreCoord, uint32_t>> assignments;
+    assignments.reserve(left_cores.size() + right_cores.size());
     for (size_t i = 0; i < left_cores.size(); ++i) {
         assignments.emplace_back(left_cores[i], static_cast<uint32_t>(i));
     }
@@ -347,7 +351,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
         return nullptr;
     }
 
-    auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance().hal();
     cfg.eth_l1_staging_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t eth_l1_size = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
@@ -595,12 +599,9 @@ static uint32_t get_duty_cycle_pct() {
         env = std::getenv("MAX_UTIL_DUTY_CYCLE");
     }
     if (env != nullptr) {
-        try {
-            int val = std::stoi(env);
-            if (kDutyCycleToSlowLoopsMap.count(static_cast<uint32_t>(val))) {
-                return static_cast<uint32_t>(val);
-            }
-        } catch (...) {
+        const auto val = parse_env_int(env);
+        if (val.has_value() && *val >= 0 && kDutyCycleToSlowLoopsMap.contains(static_cast<uint32_t>(*val))) {
+            return static_cast<uint32_t>(*val);
         }
         log_warning(
             LogTest,
@@ -1142,12 +1143,9 @@ static bool run_all_devices(
 static uint32_t get_num_iterations() {
     const char* env = std::getenv("MAX_UTIL_NUM_ITERATIONS");
     if (env != nullptr) {
-        try {
-            int val = std::stoi(env);
-            if (val > 0) {
-                return static_cast<uint32_t>(val);
-            }
-        } catch (...) {
+        const auto val = parse_env_int(env);
+        if (val.has_value() && *val > 0) {
+            return static_cast<uint32_t>(*val);
         }
         log_warning(LogTest, "MAX_UTIL_NUM_ITERATIONS='{}' is not a positive integer – using default of 1", env);
     }
@@ -1158,12 +1156,9 @@ static uint32_t get_num_iterations() {
 static uint32_t get_num_wl_loops() {
     const char* env = std::getenv("MAX_UTIL_NUM_WL_LOOPS");
     if (env != nullptr) {
-        try {
-            int val = std::stoi(env);
-            if (val > 0) {
-                return static_cast<uint32_t>(val);
-            }
-        } catch (...) {
+        const auto val = parse_env_int(env);
+        if (val.has_value() && *val > 0) {
+            return static_cast<uint32_t>(*val);
         }
         log_warning(LogTest, "MAX_UTIL_NUM_WL_LOOPS='{}' is not a positive integer – using default of 1000", env);
     }

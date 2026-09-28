@@ -390,9 +390,8 @@ ALWI void max_util_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buff
     // compute loop
     for (uint32_t i = 0; i < num_loops; i++) {
         _llk_packer_wait_for_math_done_();
-        for (uint32_t j = 0; j < num_tiles; j++) {
-            ckernel::ckernel_template::run();
-        }
+        // The configured MOP already packs all num_tiles tiles in one run.
+        ckernel::ckernel_template::run();
         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
 }
