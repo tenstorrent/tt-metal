@@ -626,15 +626,15 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
-        // fp32 DEST keeps the scores in fp32 and the max in bf16; without it both are bf16
-        if constexpr (DST_ACCUM_MODE) {
+        // The fp32 streaming kernel keeps the scores in fp32 and the max in bf16; elsewhere both share a format
+        if constexpr (sdpa_fp32_accumulator()) {
             reconfig_data_format_srca(in0_cb, prev_cb);
         }
         sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
-        if constexpr (DST_ACCUM_MODE) {
+        if constexpr (sdpa_fp32_accumulator()) {
             reconfig_data_format_srca(prev_cb, in0_cb);
         }
     }
