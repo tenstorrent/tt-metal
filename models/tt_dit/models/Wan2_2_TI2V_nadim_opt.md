@@ -248,15 +248,41 @@ builds, so start at 20000-30000 rather than 100000. **Wall-clock under Tracy is 
 independently matching an estimate derived from Teja's own swept `best_us` times invocation
 counts, which is good evidence that axis is exhausted. `WanDupUp3D` is now ~0.07s.
 
-**Denoise (~91% of the run)** is genuinely compute-bound, unlike the VAE:
+**Denoise (~91% of the run)** is genuinely compute-bound, unlike the VAE. Host-profiler
+estimate (pre-sweep, kept for the record): ring SDPA ~28 %, MMRS (ff2) ~27 %, AGMM ~17 %,
+AdaLN chunk ~13 % (host-dominated), norms ~11 %.
 
-| callsite | ~share |
-|---|---|
-| `ring_joint_sdpa @ attention_wan.py:457` | ~28% |
-| `MMRS (ff2) @ linear.py:697` | ~27% |
-| `AGMM @ linear.py:437` | ~17% |
-| `chunk @ transformer_wan.py:209` | ~13% (host-dominated) |
-| norms | ~11% |
+**Tracy device ranking (2026-09-28, sprint 5; section 7.8 has the capture).** 6-block model,
+720p, bf16 default, `DEVICE KERNEL DURATION` mean over 32 devices; "per bp" = per block per
+CFG pass; full-model column = x60 (x30 for once-per-block ops) + fixed:
+
+| op (input shapes) | call site | per bp | kernel us | share | full model ms/step |
+|---|---|---|---|---|---|
+| `RingJointSDPA` 6 x 2336 x 128 | self-attention (`attention_wan.py`) | 1 | 1,168 | 29.1 % | 70.1 |
+| `AllGatherMinimalMatmulAsync` N=768 | `attn1.to_out` (+addcmul), `attn2.to_q`, `attn2.to_out` | 3 | 265 | 19.8 % | 47.6 |
+| `AllGatherMinimalMatmulAsync` N=3584 | `ffn.ff1` (+gelu) | 1 | 433 | 10.8 % | 26.0 |
+| `MinimalMatmulStridedReduceScatter` | `ffn.ff2` (+RS +addcmul) | 1 | 390 | 9.7 % | 23.4 |
+| `AllGatherMinimalMatmulAsync` N=2304 | `attn1.to_qkv` | 1 | 300 | 7.5 % | 18.0 |
+| `DitFusedDistributedRmsnorm`, bf16 weight | `norm_q`/`norm_k` (self, RoPE), `norm_q` (cross), `norm2` | 4 | 56 | 5.6 % | 13.5 |
+| `DitFusedDistributedRmsnorm`, fp32 weight | `norm1`, `norm3` (+ `norm_out` x2/step) | 2 | 84 | 4.5 % | 10.2 |
+| `TilizeWithValPadding` `[1,1,1,768]` fp32 | re-tiling 4 of 6 AdaLN chunks (+7/step) | 2 per block | 58 | 3.8 % | 7.4 |
+| `MinimalMatmul` 512x3072x1536 | `attn2.to_kv` | 1 | 54 | 1.4 % | 3.3 |
+| `SDPAOperation` 2336 x 512 | cross-attention | 1 | 50 | 1.2 % | 3.0 |
+| heads split/merge (`NlpCreateHeads`, `NLPConcatHeads`) | both attentions | 4 | 11-22 | 2.4 % | 4.4 |
+| `AllGatherAsync` fp32 2336x768 | `norm_out` gather (fixed) | 2/step | 278 | 1.2 % | 0.6 |
+| `BinaryNg` 16x512x512 | cross-attention residual add | 1 | 25 | 0.6 % | 1.5 |
+| AdaLN rest (`Untilize`, 6 `Slice`, 2 `Typecast`, 2 `BinaryNg` `1+x`) | `prepare_modulation` | ~11 per block | 1-13 | 1.0 % | 1.3 |
+| timestep MLP, `proj_out`, lerp, RS | fixed per step | — | 30-260 | 1.1 % | 0.6 |
+
+Sum **~235 ms kernel per full step vs 259.5 ms `execute_trace`**: ~25 ms/step (~10 %) of
+inter-program gaps over ~1840 launches, ~13 us each. Corrections to the estimate above: ff2
+is 10 %, not 27 %; the three **N=768 AGMM projections are 20 %** and run at ~41 TFLOP/s per
+chip against 110-130 for qkv/ff1/ff2 (the all-gather of the 2336x3072 activation is the same
+for every AGMM and 768 output columns cannot hide it); the AdaLN chunk's device cost is a
+**tile/row-major round trip** (`ttnn.chunk` untilizes the `[1,1,6,768]` table+temb, and every
+chunk that feeds a tile-layout consumer is re-tiled at 58 us per 3 KB tensor), not host time.
+Ring SDPA moves 134 GFLOP in 1.17 ms (~115 TFLOP/s per chip, 35 % of HiFi2 peak) and is the
+best-utilised op in the step.
 
 A full read of the denoise path found **no ROW_MAJOR<->TILE padding pathology anywhere in it**,
 so there is no second `WanDupUp3D` to find. Remaining wins are incremental.
@@ -494,14 +520,26 @@ All verified by reading the code; none implemented.
    | 2 | same | drains took **321 s and 230 s** each (32 chips, most behind ethernet); the host pushes one Tracy zone per device marker, 1.2 G zones, pytest RSS 504 GB -> **OOM-killed** (host has 566 GB). |
    | 3 | 8 steps, no drains, `TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1` | 0 marker drops, all 8 traced steps ran (264.3 ms wall, 259.5 ms `execute_trace`: production numbers, so the traced path is not distorted under Tracy); then **32 min in the end-of-run device read + C++ post-process** (`TT_METAL_PROFILER_CPP_POST_PROCESS`, on by default in `-r`) until the job was stopped for host memory pressure before any CSV was written. |
 
-   Budget **programs, not steps**: a 720p step is ~1650 programs, and the eager compile run
-   plus the trace capture (2 steps each) already cost ~6600, so attempt 3 held ~20k programs
-   x 120 cores x 5 RISCs x 32 chips of markers on the host. The tooling is ready for a
-   capture under ~10k programs: `WAN5B_GAP_BLOCKS=n` truncates the transformer to n blocks
-   (every block is the same op stream at the same shapes, so per-op numbers scale to 30
+   Budget **programs, not steps**: a 720p step is ~1840 programs (Tracy count, 30 blocks), and
+   the eager compile run plus the trace capture (2 steps each) already cost ~7400, so attempt
+   3 held ~20k programs x 120 cores x 5 RISCs x 32 chips of markers on the host. The tooling
+   for a capture under ~10k programs: `WAN5B_GAP_BLOCKS=n` truncates the transformer to n
+   blocks (every block is the same op stream at the same shapes, so per-op numbers scale to 30
    exactly), `WAN5B_GAP_PROFILER_DRAIN` is there but is not a fix (see the drain times), and
    `tracy_summarize_ops.py --traced-only` ranks by `OP CODE` and by input shapes/dtypes, which
-   is what separates the three AGMM call sites without a Python stack. Suggested command:
+   is what separates the three AGMM call sites without a Python stack.
+
+   *Attempt 4 succeeded (2026-09-28)* with the command below: 6 blocks, 4 traced steps, 0
+   dropped markers, 404 programs per replay per device, **48.15 ms kernel per replay (min
+   47.7, max 48.5 over 32 chips)** against 50.6 ms `execute_trace` / 56.6 ms wall, peak host
+   RSS **246 GB** for this reduced capture (the full model would need ~1.2 TB; do not try).
+   Two wrapper quirks: it prints `No profiling data could be captured` when the capture tool
+   takes more than 15 s to save the `.tracy` (it did, 1.2 GB), while the file is in fact
+   written -- run `python -m tracy --process-logs-only -r -o <dir>` afterwards (23 min: 37 GB
+   host-side CSV export, the join, then it copies the 44 GB device log into `reports/`); and
+   the report's shape columns are `padded[logical]` strings, which the summariser now keeps
+   verbatim. The ranking is in section 6; artefacts in `/mnt/tt-data/nkira/profiler/blocks6/`.
+   Command:
 
    ```bash
    free -g   # need a few hundred GB free
@@ -511,18 +549,38 @@ All verified by reading the code; none implemented.
    python models/tt_dit/tests/models/wan2_2/tracy_summarize_ops.py <reports>/ops_perf_results_<ts>.csv --steps 4 --traced-only
    ```
 
-9. **Remove the once-per-step modulation programs (sprint-5 lead, not built).** After item 2
-   the traced step still launches ~330 tiny programs for the 30 blocks' modulation (per block:
-   `table + temb`, six `slice`s from `ttnn.chunk`, two `typecast`s, two `1 + x`), and item 2
-   measured ~21 us of device time per such program, i.e. ~6-7 ms/step (~2.5 %) still on the
-   table. The modulation depends only on the timestep, and the whole schedule is known before
-   the loop, so it could be computed once per generation. The obstacle is feeding 180 small
-   tensors per step into the captured trace: ttnn has no zero-copy view into a bigger buffer, so
-   a stacked `[30, 6, D/tp]` modulation still needs a `slice` per block per tensor, and per-step
-   uploads of 180 tensors are 180 host writes (fine on the 2cq input queue but not free). Cheaper
-   partial steps: chunk `temb` once per step and pre-split the 30 tables at load time (11 -> 8
-   ops per block, ~2 ms/step, not bit-exact if the `+1` is folded into the table rows). A kernel
-   that takes a row offset into a stacked modulation tensor would remove all of it.
+9. **Remove the once-per-step modulation cost (sprint-5 lead, Tracy-sized, not built).** After
+   item 2 the traced step still runs the 30 blocks' modulation once, and Tracy (section 6) says
+   what it costs and why: `ttnn.chunk` on the tile-layout `[1,1,6,768]` fp32 `table + temb`
+   **untilizes** it (13 us), slices six `[1,768]` rows in row-major (1 us each), and the four
+   chunks that feed tile-layout consumers (`1 + scale`, `1 + c_scale`, the two bf16 gate
+   typecasts) are **re-tiled by `TilizeWithValPadding` at 58 us per 3 KB tensor**; only the
+   two `shift` chunks stay row-major into the norm's bias. Per full step: 120 tilizes = 7.0 ms,
+   plus ~1.3 ms for the rest, plus ~11 launches x 30 blocks of gaps -- **~8-12 ms/step, 3-5 %**,
+   and more at 480p. Fix without new kernels: chunk the timestep projection *before* the
+   `unflatten`, i.e. slice the `[1,1,1,6*768]` tile tensor at 768-column boundaries (tile
+   aligned, no layout change), once per step; pre-split each block's table into six
+   `[1,1,1,768]` tile constants at load time; per block do six tile-aligned adds, the two gate
+   adds with `dtype=bfloat16` so the typecast disappears. Bit-exact for shift/scale/gates if
+   `1 + x` stays a separate op (6 + 2 adds per block, all ~4 us); folding the `+1` into the
+   table rows saves the last two but changes fp32 rounding. The per-token (I2V) arm already
+   chunks on the feature axis and needs only the pre-split tables.
+
+   The longer-range version -- compute all 40 steps' modulation once per generation and feed it
+   to the trace -- still needs a zero-copy view or a row-offset argument on the norm kernel
+   (180 tensors per step otherwise), and is now worth only the ~2 ms of adds the fix above
+   leaves.
+
+11. **Small-N AGMM projections as fused matmul + reduce-scatter (sprint-5 lead from Tracy).**
+    `attn1.to_out`, `attn2.to_q` and `attn2.to_out` are 2336 x 3072 x 768 per device and cost
+    265 us each -- ~41 TFLOP/s per chip, a third of what qkv (110), ff1 (119) and ff2 (132)
+    reach -- because each all-gathers the same 2336 x 3072 activation over the TP ring and 768
+    output columns cannot hide that behind compute. Together they are 20 % of the step
+    (47.6 ms). All three outputs are D-fractured on TP, which is what `ff2`'s
+    `MinimalMatmulStridedReduceScatter` produces from an un-gathered K-fractured input, so the
+    experiment is a micro-benchmark of that op at (2336, K=768 per device, N=3072 -> 768
+    scattered) against the AGMM at the same shape. 100 us saved per call is 18 ms/step (7 %).
+    `to_out` also carries the fused addcmul, which the MMRS op already supports for ff2.
 
 10. **Same-hour controls are cheap and worth it.** The hoist's 3-run mean beat the recorded
     sprint-4 mean by 2.3 %, and a single control run of the sprint-4 file in the same hour

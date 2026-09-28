@@ -62,7 +62,8 @@ def _signature(df: pd.DataFrame, max_inputs: int) -> pd.Series:
             vals = [row[c] for c in dims]
             if all(pd.isna(v) for v in vals):
                 continue
-            shape = "x".join(str(int(v)) if pd.notna(v) else "?" for v in vals)
+            # values come as "padded[logical]" strings (e.g. "2336[2336]", "1[1]"); keep them verbatim
+            shape = "x".join(str(v).strip() if pd.notna(v) else "?" for v in vals)
             dt = str(row[dtype_col]).replace("DataType.", "").lower() if dtype_col and pd.notna(row[dtype_col]) else ""
             parts.append(f"in{i}={shape}{(':' + dt) if dt else ''}")
         return " ".join(parts)
