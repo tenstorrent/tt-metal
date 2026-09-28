@@ -525,5 +525,84 @@
       "bs8_opt_out": 102.3
     },
     "stsb_spearman_bs16": 0.8144
+  },
+  "bs32_qkv_chunks_bs16_prealloc_20260928": {
+    "qkv_mm_us_standalone_model_weights": {
+      "M8192_N6144_L1out": 561.4,
+      "M16384_N3072_L1out": 676.5,
+      "M16384_N6144_DRAMout": 1155.7
+    },
+    "bs32_l1_at_qkv_call_lowest_buffer": {
+      "before": 777216,
+      "with_prealloc": 1149312
+    },
+    "bs32_ff2_out_dram_instead_cold": {
+      "off": 366.1,
+      "on": 371.2
+    },
+    "bs32_chunked_sustained_run_3_alternating_rounds_chip0": {
+      "default_before": {
+        "cold": [
+          367.7,
+          369.2,
+          370.4
+        ],
+        "sustained": [
+          429.7,
+          434.6,
+          435.7
+        ],
+        "aiclk_mhz": 1079
+      },
+      "chunked": {
+        "cold": [
+          361.0,
+          361.6,
+          364.1
+        ],
+        "sustained": [
+          428.8,
+          431.0,
+          431.4
+        ],
+        "aiclk_mhz": 1068
+      }
+    },
+    "bs16_prealloc_sum1_l1_sustained_run_3_alternating_rounds_chip1": {
+      "default_before": {
+        "cold": [
+          186.0,
+          186.0,
+          186.1
+        ],
+        "sustained": [
+          226.9,
+          229.2,
+          228.3
+        ]
+      },
+      "prealloc_sum1_l1": {
+        "cold": [
+          185.2,
+          185.2,
+          185.2
+        ],
+        "sustained": [
+          226.2,
+          227.4,
+          227.3
+        ]
+      }
+    },
+    "defaults_confirmed_best_of_10": {
+      "bs32": 359.1,
+      "bs32_opt_out": 369.0,
+      "bs16": 185.3,
+      "bs16_opt_out": 185.9
+    },
+    "stsb_spearman": {
+      "bs16": 0.8144,
+      "bs32": 0.8146
+    }
   }
 }

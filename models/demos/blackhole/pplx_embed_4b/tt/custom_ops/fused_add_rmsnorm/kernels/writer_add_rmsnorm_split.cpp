@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Row-split add+RMSNorm writer: writes the sum slice, exchanges this core's partial mean-square with the
 // other cores of its row (NoC write into slot k of their CB 8 + semaphore increment), then writes the
-// normalised slice.
+// normalised slice. The normalised output can be split by rows over two tensors: tile-rows [0, split_row) go to
+// the first, [split_row, rows) to the second at row - split_row (split_row = 0xFFFFFFFF: one tensor).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -20,11 +21,15 @@ void kernel_main() {
     constexpr uint32_t Wc = get_compile_time_arg_val(1);
     constexpr uint32_t R = get_compile_time_arg_val(2);
     constexpr uint32_t SEM_ID = get_compile_time_arg_val(3);
+    const uint32_t split_row = get_arg_val<uint32_t>(6 + 2 * R);
+    const uint32_t out2_addr = get_arg_val<uint32_t>(7 + 2 * R);
     constexpr auto s_args = TensorAccessorArgs<4>();
     constexpr auto o_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+    constexpr auto o2_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr uint32_t cb_sum = 16, cb_out = 17, cb_part = 7, cb_parts = 8;
     const auto ss = TensorAccessor(s_args, sum_addr);
     const auto so = TensorAccessor(o_args, out_addr);
+    const auto so2 = TensorAccessor(o2_args, out2_addr);
     const uint32_t ts = get_tile_size(cb_sum), to = get_tile_size(cb_out), tp = get_tile_size(cb_part);
     Noc noc;
     CircularBuffer cs(cb_sum), co(cb_out), cp(cb_part), cparts(cb_parts);
@@ -35,7 +40,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l1);
 
     for (uint32_t w = 0; w < n_waves; ++w) {
-        const uint32_t base = (row0 + w * row_stride) * Wt + k * Wc;
+        const uint32_t row = row0 + w * row_stride;
+        const uint32_t base = row * Wt + k * Wc;
 
         // 1. residual sum slice
         cs.wait_front(Wc);
@@ -65,8 +71,15 @@ void kernel_main() {
 
         // 3. normalised slice
         co.wait_front(Wc);
-        for (uint32_t j = 0; j < Wc; ++j) {
-            noc.async_write(co, so, to, {.offset_bytes = j * to}, {.page_id = base + j});
+        if (row < split_row) {
+            for (uint32_t j = 0; j < Wc; ++j) {
+                noc.async_write(co, so, to, {.offset_bytes = j * to}, {.page_id = base + j});
+            }
+        } else {
+            const uint32_t base2 = (row - split_row) * Wt + k * Wc;
+            for (uint32_t j = 0; j < Wc; ++j) {
+                noc.async_write(co, so2, to, {.offset_bytes = j * to}, {.page_id = base2 + j});
+            }
         }
         noc.async_write_barrier();
         cs.pop_front(Wc);

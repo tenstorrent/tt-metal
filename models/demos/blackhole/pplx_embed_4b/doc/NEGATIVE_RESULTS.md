@@ -1132,3 +1132,13 @@ default 8,8,8 blocks. The unfused QKV output in L1 (446 KiB) fits in neither gap
 v3 heads compute, sustained_run.sh, 3 alternating rounds, chip 0: cold / sustained 189.2 / 222.0, 189.3 / 223.4, 189.4 /
 223.3 → 186.0 / 219.3, 186.1 / 221.1, 186.0 / 220.6 ms (−1.7 / −1.2%): the QKV output's L1 gain outweighs the sum's.
 Landed as the bs16 default (POSITIVE_RESULTS).
+
+**bs32 in two half-batch chunks (landed, POSITIVE_RESULTS).** Splitting N instead (two `[2560, 3072]` weights, half the
+KV groups each, no input split) makes each chunk slower than half the call: 676.5 µs per chunk at M=16384 (N=96 tiles
+over 10 cores: N blocks of 8 + 2) against 1155.7 for the full call, +197 µs per layer. Splitting M keeps each chunk the
+bs16 matmul (561.4 µs). At bs32 the norm output (363 KiB per core) sat at 777,216 B, low for the same reason as at bs16
+(allocated while FF2's output, in L1, held the top slot), leaving ~182 KiB below it; moving FF2's output to DRAM would
+fix the layout but costs +5.1 ms cold (366.1 → 371.2). Preallocating the norm output before FF2
+(`QWEN_FUSED_ADD_NORM_PREALLOC=1`) puts it at the top (lowest buffer at the QKV call 1,149,312 B) with FF2's output in L1, neutral on its own
+(367.1 vs 367.4 ms); at bs16 it lets the post-attention sum back into L1 beside the QKV output (−0.8 / −1.1 ms cold /
+sustained). Chunked bs32: 369.1 / 433.3 → 362.2 / 430.4 ms cold / sustained, STS-B 0.8146.
