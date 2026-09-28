@@ -27,12 +27,7 @@ class GptOss120BConfig:
     # which adds gate/up bias on a pack-and-reload pass it already needed while the composite pays
     # a full extra broadcast pass. Measuring this bias-free would send the low counts to the
     # slower op.
-    # Not enabled: the gpt-oss MoE builds TtRoutedExpert directly and forwards no threshold, so
-    # nothing reads this. Both op-side blockers are gone -- moe_fused_swiglu carries SwiGluOai and
-    # the per-expert bias, and TtRoutedExpert no longer refuses a threshold on biased experts.
-    # Kept under _MEASURED so it is not re-derived; rename it back to
-    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 384
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 384
     INTERMEDIATE_SIZE = 2880  # Dense FFN hidden dimension (same as MoE)
     HEAD_DIM = 64
 

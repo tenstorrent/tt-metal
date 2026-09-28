@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.gpt_oss_d_p.tt.moe.router import TtGptOssRouter
 from models.demos.gpt_oss_d_p.tt.moe.tt_gpt_oss_moe import TtGptOssMoE
@@ -128,6 +129,7 @@ class MLP:
             weight_cache_path=ep_dir,
             layer_idx=layer_idx,
             use_expert_bias=True,  # #49619 merged: biased unified_routed_expert_moe kernel is live
+            routed_expert_hybrid_token_threshold=GptOss120BConfig.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD,
         )
         self.ep_num_links = ccl_manager.num_links
 

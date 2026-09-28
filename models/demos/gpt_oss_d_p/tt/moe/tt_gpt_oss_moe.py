@@ -59,6 +59,7 @@ class TtGptOssMoE(LightweightModule):
         weight_cache_path=None,
         layer_idx: int = 0,
         use_expert_bias: bool = False,
+        routed_expert_hybrid_token_threshold=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -151,6 +152,7 @@ class TtGptOssMoE(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            hybrid_token_threshold=routed_expert_hybrid_token_threshold,
         )
         self.reduce_module = TtReduceModule(
             mesh_device=mesh_device,

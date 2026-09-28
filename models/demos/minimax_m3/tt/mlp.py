@@ -125,6 +125,7 @@ class MLP:
                 "single-device / non-EP expert backends were removed in the prefill cleanup."
             )
 
+        from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 
         from .moe.tt_minimax_moe import TtMiniMaxMoE
@@ -201,6 +202,7 @@ class MLP:
             # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
             route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
             reduce_scatter_fn=moe_reduce_scatter,
+            routed_expert_hybrid_token_threshold=MiniMaxM3Config.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD,
         )
         self.ep_num_links = ccl_manager.num_links
 

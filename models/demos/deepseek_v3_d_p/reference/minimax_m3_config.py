@@ -25,12 +25,7 @@ class MiniMaxM3Config:
     # its tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over
     # that sawtooth (+0.03% against a per-count oracle, worst cell +6.8% at 576). Measured under
     # SwiGluOai, the activation these experts actually run.
-    # Not enabled: the M3 MoE builds TtRoutedExpert directly and forwards no threshold, so nothing
-    # reads this. Nothing on the op side blocks it any more -- moe_fused_swiglu carries SwiGluOai,
-    # and M3's only bias is the router's e_score_correction_bias, not an expert-FFN bias, so there
-    # is none to lose. Kept under _MEASURED so it is not re-derived; rename it back to
-    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 128
     SHARED_INTERMEDIATE_SIZE = 3072  # Always-on shared expert
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
