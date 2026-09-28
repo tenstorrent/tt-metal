@@ -247,7 +247,9 @@ a:focus-visible{outline:2px solid var(--agent);outline-offset:2px}
       <div class="step-head"><h3>Components and swaps (C.*, S.*)</h3><span class="who agent">agent</span></div>
       <p>One component at a time (a norm, attention, the router, the experts). A test agent reviews the generated test,
         the runner freezes it, and an implement agent writes the device module. Then a swap test runs the whole block
-        with steps 1 to n on the device and the rest on the CPU, so an error shows up in the step that caused it.</p></div></li>
+        with steps 1 to n on the device and the rest on the CPU, so an error shows up in the step that caused it. A
+        step TTNN has no op for can be deferred to the op code generator (see below); it stays on the CPU and the run
+        goes on.</p></div></li>
     <li><span class="num">6</span><div>
       <div class="step-head"><h3>Assemble and ladder (M.1, L.*)</h3><span class="who agent">agent</span><span class="who mech">script</span></div>
       <p>An agent builds one device model whose hidden state stays on the device from the embedding to the final norm.
@@ -289,7 +291,8 @@ a:focus-visible{outline:2px solid var(--agent);outline-offset:2px}
         <li>special-cased the test input or read the golden inside the model;</li>
         <li>hid CPU work in a device module;</li>
         <li>swallowed an error instead of fixing it;</li>
-        <li>faked an interface to get past a check.</li>
+        <li>faked an interface to get past a check;</li>
+        <li>deferred a step to op-gen on thin evidence, when a TTNN op, a composition or a fork would do.</li>
       </ul>
       <p>It also republishes both dashboards (a standard page and a teletext page) after every gate.</p>
     </div>
@@ -359,6 +362,42 @@ a:focus-visible{outline:2px solid var(--agent);outline-offset:2px}
         <tr><td><code>rms_norm_ttnn</code></td><td>An AI-generated faster norm with a C++ host, an optional fused residual add, fp32 accumulation honoured</td><td>MiMo</td></tr>
       </tbody>
     </table>
+  </div>
+</section>
+
+<section class="stack">
+  <h2>Steps TTNN cannot do yet</h2>
+  <div class="two">
+    <div class="stack">
+      <p>Sometimes a step has no proper TTNN op at all, not just a hard bug: for example the key pooling of GLM-5.3's
+        indexer. Stopping the whole run for that wastes the rest of it. So the implement agent may defer the step
+        instead. It writes an op request for the op code generator (op-gen, <code>tt_metal/third_party/tt_ops_code_gen</code>)
+        in <code>&lt;bringup&gt;/op_requests/&lt;op&gt;/</code>, and the step stays on the CPU reference.</p>
+      <p>A request holds the evidence (what the agent searched, what it tried and how each attempt failed, why no fork
+        fits), the per-device shapes and dtypes the model calls it with, the tolerance of the frozen component test, the
+        op-gen prompt, a small feature spec, and the step's math as a standalone torch function. A checker rejects a
+        request with thin evidence, and a rejected request counts as a failed attempt. The plan can also tag a step
+        <code>OPGEN</code> up front.</p>
+      <p>The task then shows as DEFERRED. Everything after it runs as usual. The device model calls the step through a
+        CPU bridge that moves its inputs to the host and its output back; those transfers do not count against the
+        no-host-work rule, and the ladder and the profile record the bridge's steps and host time. The dashboard
+        says which results include CPU steps.</p>
+    </div>
+    <div class="stack">
+      <p>The owner decides what happens to a request. The overseer reports each new one in a line and reviews its
+        evidence like a gate commit.</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Who</th><th>What</th></tr></thead>
+          <tbody>
+            <tr><td>Owner</td><td>Approves the request (<code>approve op-request &lt;op&gt;</code>). Any edit voids the approval.</td></tr>
+            <tr><td>Overseer</td><td><code>op-export &lt;op&gt;</code> writes the prompt and the golden suite into the op-gen tree and prints the next steps: commit, push, launch.</td></tr>
+            <tr><td>Owner</td><td>Pushes and launches op-gen. The framework never does either.</td></tr>
+            <tr><td>Overseer</td><td><code>op-ready &lt;op&gt; --from &lt;generated op&gt;</code> brings the op in as <code>ttnn.bringup.&lt;op&gt;</code>, puts the task back to TODO with the op named in its brief, and resets everything after it. <code>resume</code> redoes them.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </section>
 
