@@ -276,10 +276,11 @@ expression reads as neither set nor clear.
 ### L13 — a replay record/expand `Count` is never captured, so the ISA's buffer-occupancy checks cannot run
 `VisitCallExpr` records only `arg0` (`f.arg0 = srcText(CE->getArg(0)...)`), so a
 `lltt::record(Index, Count)` / `lltt::replay(Index, Count)` reaches the fact base with its
-start INDEX but no COUNT. Two checks the ISA `REPLAY.md` model would allow are therefore NOT
-performed by `mop-replay`: a `Count` field of **0 means 64** (`range(Instruction.Count or 64)`),
-and the expander indexes `(Index + i) % 32`, so an `Index + Count` past `REPLAY_BUF_SIZE`
-silently wraps over another user's slots. The same one-argument limit hides `set_end_ops(a, b)`'s
+start INDEX but no COUNT. Two buffer-occupancy checks are therefore NOT performed by
+`mop-replay`: a `Count` field of **0 issues a full-length replay, not nothing** — 64 on BH, 32 on
+WH (the WH `REPLAY.md` model's `range(Instruction.Count or 64)` does not match the WH hardware,
+which also does not honour a `Count` above 32) — and the expander indexes `(Index + i) % 32`, so
+an `Index + Count` past `REPLAY_BUF_SIZE` silently wraps over another user's slots. The same one-argument limit hides `set_end_ops(a, b)`'s
 SECOND word, so a Src flip installed as `END_OP1` draws no `MOP_SLOTTED_SRC_FLIP`.
 - **Risk:** CAP-REDUCTION — a zero/oversized replay length and an END_OP1 flip are invisible.
 - **Live today:** unclear whether any is a live defect, but the shape is present and the LLK
