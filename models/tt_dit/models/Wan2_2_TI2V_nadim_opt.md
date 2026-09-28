@@ -307,6 +307,12 @@ best-utilised op in the step.
 A full read of the denoise path found **no ROW_MAJOR<->TILE padding pathology anywhere in it**,
 so there is no second `WanDupUp3D` to find. Remaining wins are incremental.
 
+**Sprint 6, after fix 1 (2026-09-28, same capture recipe, `s6_f1_blocks6`):** 45.86 ms kernel
+and 328 programs per 6-block replay per device (was 48.15 ms / 404); the `TilizeWithValPadding`
+and `UntilizeWithUnpadding` rows are gone and every matmul / SDPA / norm row is unchanged
+(section 7.9 has the per-row comparison). Scaled to 30 blocks: ~223 ms kernel and ~1460
+programs per step against the ~248 ms production `execute_trace` (255 -> 245 ms/step wall).
+
 **Program count matters more than this table suggests (sprint 5).** Removing ~330 tiny
 modulation programs per step (section 7.2) saved 6.9 ms of a 261 ms step, i.e. ~21 us per
 program of pure launch cost inside the trace. At 480p (121 ms/step) the same removal was worth
@@ -630,7 +636,15 @@ All verified by reading the code; none implemented.
 
    Above the 8-12 ms/step booked: the removed kernels (120 tilizes x 58 us = 7 ms, untilizes,
    slices, typecasts ~1.3 ms) plus ~11 launches x 30 blocks x ~13 us ~ 4 ms account for it.
-   Tracy (6-block capture, `s6_f1_blocks6`): see the table in section 6 once processed.
+   Tracy (6-block capture `/mnt/tt-data/nkira/profiler/s6_f1_blocks6/reports/2026_09_28_21_15_41/`,
+   4 traced steps, 0 drops, `--steps 6 --traced-only`): **45.86 ms kernel and 328 programs per
+   replay per device** (sprint 5: 48.15 ms, 404), i.e. -2.3 ms kernel and -76 programs per
+   6-block replay, x5 for the 30 blocks = ~11.5 ms kernel per step plus the launch gaps of 380
+   programs -- consistent with the 10.3 ms/step measured end to end (the capture's
+   `execute_trace` went 50.6 -> 48.4 ms). `TilizeWithValPadding` and `UntilizeWithUnpadding` no
+   longer appear; the split is 6 `Slice` per step at 1.7 us each and the modulation adds are in
+   the `BinaryNg` row (65 calls per replay, 6.8 us mean, 0.44 ms). Every other row is unchanged
+   to within 0.5 us (N=768 AGMM 264.2 us, SDPA 1165 us, ff1 433 us, ff2 389 us, qkv 300 us).
 
 12. **The two-row expansion slices a misaligned tile row inside the traced step (sprint-6 lead,
     not built).** `_expand_two_row` cuts row 1 of the `[1,1,2,W]` embedder output with
@@ -651,6 +665,39 @@ All verified by reading the code; none implemented.
     experiment is a micro-benchmark of that op at (2336, K=768 per device, N=3072 -> 768
     scattered) against the AGMM at the same shape. 100 us saved per call is 18 ms/step (7 %).
     `to_out` also carries the fused addcmul, which the MMRS op already supports for ff2.
+
+    *Measured and dropped (2026-09-28, sprint 6).* `sweep_mm_block_sizes.py` gained
+    `mmrs_attn` / `mmrs_attn_noadd` use cases (attention compute config, `math_approx_mode=True`,
+    addcmul optional) and the `(M, 768, 3072)` rows; swept at M=2336 on the 4x8 Galaxy
+    (`bh_4x8_sp1_tp0`, 2 links, ~350 L1-feasible combos each, kernel JIT cache on
+    `/mnt/tt-data/nkira/tt-metal-cache`), with the AGMM `to_out` row re-run in the same session
+    as the control:
+
+    | form | best blocking | kernel us | vs AGMM control |
+    |---|---|---|---|
+    | AGMM `to_out` + addcmul (today) | 12x9, (8, 6, 3, (4, 1)) | **228.8** (229.2 on 2026-09-22) | -- |
+    | MMRS + addcmul (`attn1.to_out` candidate) | 12x8, `FusedMMRSConfig(6, 3, 12, 2, 2)` | 225.1 | -3.7 us (-1.6 %) |
+    | MMRS, no addcmul (`attn2.to_q` / `to_out` candidate) | 12x8, `FusedMMRSConfig(6, 3, 10, 2, 2)` | 210.7 | -18 us (-8 %) |
+
+    Under the bar set beforehand (> 50 us per call). Scaled by the sweep-to-production ratio
+    (229 -> 265 us for the AGMM), the whole switch would be worth ~2.5 ms/step (~1 %) for a
+    PCC change and a second weight layout. **The measured reason:** the strided reduce-scatter
+    moves the same 2336 x 3072 bf16 partial sums (10.8 MB per device per call) that the
+    all-gather moves, and both land at ~41 GB/s effective over the TP ring's 2 links -- the
+    three N=768 projections are **fabric-bound, not fill-bound**; ff1 (N=3584) hides the same
+    gather behind 5x the FLOPs. Halving the bytes is the lever that follows: bf8 activations on
+    the gather input of these three projections (the `all_bf8_lofi` preset intends exactly
+    that, but `QuantConfig.activation_dtype` is never applied by `_apply_linear_config`; see
+    `~/nkira/Wan2_2_TI2V_5B_sprint7_levers.md`). That is a precision change and belongs with the
+    preset, not the bf16 default; at bandwidth-bound 265 us per call it is worth up to ~130 us
+    x 180 calls = ~23 ms/step (9 %) under the preset, PCC-gated.
+
+    Kept in the tree, default off: `WanPipelineConfig.small_n_projection = "agmm" | "mmrs"`
+    (plumbed like `sdpa_chunk_size_overrides` down to `WanAttention`), the row-parallel
+    `forward_fused_addcmul` without addcmul, a `_smallN-mmrs` weight-cache subfolder suffix,
+    and the two swept blockings registered under `ttnn.CoreCoord(12, 10)` in
+    `_register_5b_matmul_tables`. Not gated end to end (PCC / perf) since it is not enabled;
+    the sweep is the only measurement.
 
 10. **Same-hour controls are cheap and worth it.** The hoist's 3-run mean beat the recorded
     sprint-4 mean by 2.3 %, and a single control run of the sprint-4 file in the same hour
