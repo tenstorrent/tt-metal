@@ -66,16 +66,6 @@ constexpr uint64_t guard_offset(uint32_t core, uint32_t slot) {
     return kGuardArrayOffset + (static_cast<uint64_t>(core) * kMaxRingSlots + slot) * sizeof(uint64_t);
 }
 
-// One word per peer, a whole line each: a gated sender raises it to say "release credits
-// now". This is what replaces a wall-clock hold -- the sender knows when it is starving.
-constexpr uint64_t kDemandStride = 64;
-constexpr uint64_t kDemandArrayOffset = kGuardArrayOffset + kGuardArrayBytes;
-constexpr uint64_t kDemandArrayBytes = static_cast<uint64_t>(kMaxCreditPeers) * kDemandStride;
-
-constexpr uint64_t demand_offset(uint32_t peer) {
-    return kDemandArrayOffset + static_cast<uint64_t>(peer) * kDemandStride;
-}
-
 // Arenas interleaved per core (TX = D2H FIFO, RX = H2D ring) so a run pins a PREFIX:
 // pinned_bytes_for(cores) covers only cores in use. Both are overlaid by RingAlias.
 constexpr uint64_t kArenaBytes = 1536ull * 1024ull;  // one Tensix L1
@@ -84,7 +74,7 @@ constexpr uint64_t kArenaStride = kArenaBytes * kArenasPerCore;
 
 // 2 MiB-aligned so the block below it can be resized without shifting every arena -- the
 // guard array was added under it and the arenas did not move.
-constexpr uint64_t kArenaArrayOffset = align_up(kDemandArrayOffset + kDemandArrayBytes, kAlign2M);
+constexpr uint64_t kArenaArrayOffset = align_up(kGuardArrayOffset + kGuardArrayBytes, kAlign2M);
 
 constexpr uint64_t tx_arena_offset(uint32_t core) {
     return kArenaArrayOffset + static_cast<uint64_t>(core) * kArenaStride;
@@ -114,9 +104,9 @@ constexpr uint64_t pinned_bytes_for(uint32_t cores) {
 // The header. Two parties disagreeing on geometry compute different offsets for one core
 // and each reads bytes that are legitimately idle, so the constants are published.
 constexpr uint64_t kRegionMagic = 0x543648'4F535456ull;  // "T6HOSTV"
-// 10 added the demand array under the guards: a v9 peer never raises demand, so a v10
-// receiver holds credits it would have released and the pair runs at the deadline.
-constexpr uint32_t kRegionVersion = 10;
+// 9 doubled kMaxRingSlots, which restrides the guard array: a v8 peer arms the guard for
+// one slot where a v9 reader polls another, so frames would publish into the wrong slot.
+constexpr uint32_t kRegionVersion = 9;
 
 struct RegionHeader {
     uint64_t magic;
