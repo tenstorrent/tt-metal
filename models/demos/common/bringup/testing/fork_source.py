@@ -12,6 +12,7 @@ replaces), and the names to swap while they run:
     tests:                                  # pytest paths, optionally with a -k filter (mixed files)
       - {path: tests/ttnn/unit_tests/operations/fused/test_rms_norm.py}
       - {path: tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py, k: "RMSN", why: "RMS cases only"}
+      - {path: ..., unskip: "unfeasible on the given hardware"}   # drop collection-time skips with this reason
 
     python -m models.demos.common.bringup.testing.fork_source --fork rms_norm_ttnn --record   # baseline
     python -m models.demos.common.bringup.testing.fork_source --fork rms_norm_ttnn            # check vs baseline
@@ -25,6 +26,10 @@ regression.
 The swap is a pytest plugin (``-p models.demos.common.bringup.testing.fork_source``, env ``BRINGUP_FORK_SWAP``: a
 JSON dict): each original attribute (``ttnn.<...>``) is replaced by the fork's object for the session, so tests and the
 Python wrappers they call reach the fork without being edited. Enum types can be swapped the same way.
+
+An entry's ``unskip`` (env ``BRINGUP_FORK_UNSKIP``) removes the collection-time skip marks whose reason contains that
+text, in both runs. Use it only where a conftest's hardware table is known to be too conservative for this box (the
+manifest's ``why:`` says why the cases run here); a real hardware limit then shows as a failure in both runs.
 """
 
 from __future__ import annotations
@@ -38,11 +43,13 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[5]
 FORKS = REPO / "ttnn" / "ttnn" / "bringup"
 ENV = "BRINGUP_FORK_SWAP"
+UNSKIP_ENV = "BRINGUP_FORK_UNSKIP"
 _SAVED: list[tuple[object, str, object]] = []
 
 
@@ -88,6 +95,20 @@ def pytest_configure(config):
         print(f"FORK_SWAP: {len(swap)} name(s) point at the fork: {sorted(swap)}")
 
 
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    """Drop skip marks whose reason contains BRINGUP_FORK_UNSKIP (after every conftest has added its own)."""
+    text = os.environ.get(UNSKIP_ENV)
+    if not text:
+        return
+    n = 0
+    for item in items:
+        keep = [m for m in item.own_markers if not (m.name == "skip" and text in str(m.kwargs.get("reason", "")))]
+        n += len(item.own_markers) - len(keep)
+        item.own_markers = keep
+    print(f"FORK_UNSKIP: removed {n} skip mark(s) with reason containing {text!r}")
+
+
 def pytest_unconfigure(config):
     while _SAVED:
         parent, name, value = _SAVED.pop()
@@ -127,8 +148,11 @@ def run(m: dict, swap: bool, tag: str, scratch: Path, only: list[int] | None = N
             continue
         xml = scratch / f"{tag}_{i}.xml"
         cmd = ["scripts/run_safe_pytest.sh", "--run-all", "--no-precompile", t["path"], f"--junitxml={xml}"]
-        if swap:
-            cmd += ["-p", "models.demos.common.bringup.testing.fork_source"]
+        # the plugin swaps only when ENV is set; it is loaded in both runs so an entry's unskip applies to both
+        cmd += ["-p", "models.demos.common.bringup.testing.fork_source"]
+        env.pop(UNSKIP_ENV, None)
+        if t.get("unskip"):
+            env[UNSKIP_ENV] = t["unskip"]
         if t.get("k"):
             cmd += ["-k", t["k"]]
         subprocess.run(cmd, cwd=REPO, env=env)
