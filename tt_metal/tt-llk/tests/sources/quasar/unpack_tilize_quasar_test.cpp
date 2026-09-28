@@ -48,23 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_zero_dest_dvalid_handshake_for_unpack();
             }
-
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                const bool int32_dest = static_cast<DataFormat>(formats.unpack_A_src) == DataFormat::Int32;
-                if (int32_dest)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-                }
-                else
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-                }
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-            }
         }
         else
         {

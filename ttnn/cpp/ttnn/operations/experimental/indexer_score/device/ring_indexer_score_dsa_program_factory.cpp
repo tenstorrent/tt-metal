@@ -420,12 +420,21 @@ ProgramDescriptor build_ring_program_descriptor(
     const bool has_slot_meta = tensors.has_cache_slot_metadata();
     const uint32_t local_slot_pages_ct = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
                                          (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
-    reader_ct.push_back(has_slot_meta ? 1u : 0u);
+    // No presence flag: metadata mode is one flag, selected above. The slot index goes in
+    // UNCONDITIONALLY -- the kernel decides from the common arg's VALUE (0 = no slot to select), and a 0
+    // here would alias slot 0 (q's address, never 0) and read as "slot supplied".
     reader_ct.push_back(indexer_common::reader::SlotMetadata);
     reader_ct.push_back(has_slot_meta ? local_slot_pages_ct : 0u);
     reader_ct.push_back(has_slot_meta ? cb_meta_slot : 0u);
     reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k_local.logical_shape()[0]) : 0u);
     tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
+    const bool has_valid_end = tensors.has_valid_end_metadata();
+    // No presence flag: metadata mode is selected once, above. The slot index is pushed UNCONDITIONALLY
+    // -- the kernel decides from the common arg's VALUE (0 = uncapped), so a 0 here would alias slot 0
+    // (q's address, never 0) and read as "bound supplied".
+    reader_ct.push_back(static_cast<uint32_t>(indexer_common::reader::ValidEnd));
+    tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
@@ -561,6 +570,13 @@ ProgramDescriptor build_ring_program_descriptor(
     }
     reader_common.push_back(args.index_cache_num_layers);
     reader_common.push_back(args.index_cache_layer_idx);
+    // ValidEnd: pushed unconditionally to hold the enum position, 0 when uncapped. Bound as a buffer so
+    // the descriptor refreshes its address on every dispatch -- a stale one would clamp kv_len to garbage.
+    if (has_valid_end) {
+        reader_common.push_back(tensors.valid_end_tensor->buffer());
+    } else {
+        reader_common.push_back(0u);
+    }
     reader_common.append(shard_order);
     reader_common.append(fused_rt);
     append_multicast_axes(reader_common, phys);

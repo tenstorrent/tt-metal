@@ -17,15 +17,22 @@ namespace tt {
  *
  * @param a The numerator.
  * @param b The denominator. Must be non-zero.
- * @return The result of ceiling division (a + b - 1) / b.
+ * @return The result of ceiling division.
  *
  * @note If b is zero, this results in undefined behavior.
  */
 template <typename A, typename B>
 constexpr auto div_up(A a, B b) noexcept -> std::common_type_t<A, B> {
     using T = std::common_type_t<A, B>;
-    assert(b != 0 && "Divide by zero error in div_up");
-    return static_cast<T>((static_cast<T>(a) + static_cast<T>(b) - 1) / static_cast<T>(b));
+    const T numerator = static_cast<T>(a);
+    const T denominator = static_cast<T>(b);
+    assert(denominator != 0 && "Divide by zero error in div_up");
+    const T quotient = numerator / denominator;
+    const T remainder = numerator % denominator;
+    if constexpr (std::is_signed_v<T>) {
+        return quotient + static_cast<T>(remainder != 0 && (remainder > 0) == (denominator > 0));
+    }
+    return quotient + static_cast<T>(remainder != 0);
 }
 
 /**

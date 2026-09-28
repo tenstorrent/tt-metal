@@ -78,7 +78,7 @@ static void run_intra_tensix_dfb_program(
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -362,7 +362,7 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1S_2_0) {
 // Metal 2.0 intra + remapper coexistence
 TEST_F(UnitMeshFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
+        GTEST_SKIP() << "M2 path is Quasar-only";
     }
 
     constexpr uint32_t entry_size = 1024;

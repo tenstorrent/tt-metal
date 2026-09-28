@@ -62,7 +62,7 @@ public:
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
-    uint32_t get_max_cbs() const { return max_cbs_; };
+    uint32_t get_max_dfbs() const { return max_dfbs_; };
     const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
@@ -82,7 +82,7 @@ private:
     const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
 
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint32_t max_cbs_{};
+    uint32_t max_dfbs_{};
 
     // Paths
     std::string root_;

@@ -1479,13 +1479,11 @@ inline void append_canonical_all(std::string& out, const Types&... args) {
 template <typename T>
 inline void append_canonical(std::string& out, const T& object) {
     out.push_back('\x1f');  // unit separator: disambiguates adjacent leaves/fields
-    if constexpr (std::numeric_limits<T>::is_integer) {
+    if constexpr (std::numeric_limits<T>::is_integer || std::is_floating_point_v<T>) {
         append_bytes(out, &object, sizeof(object));
     } else if constexpr (std::is_enum_v<T>) {
         const auto v = static_cast<std::underlying_type_t<T>>(object);
         append_bytes(out, &v, sizeof(v));
-    } else if constexpr (std::is_floating_point_v<T>) {
-        append_bytes(out, &object, sizeof(object));
     } else if constexpr (std::is_same_v<T, std::string>) {
         const std::uint64_t n = object.size();
         append_bytes(out, &n, sizeof(n));

@@ -35,18 +35,18 @@ inline constexpr uint32_t REMOTE_DFB_SLOT_RELAY_ID_MASK = 0xFFu;
 inline constexpr uint32_t PREFETCHER_PIPE_SLOT_CREDIT_LANES_SHIFT = 16;
 inline constexpr uint32_t PREFETCHER_PIPE_SLOT_CREDIT_LANES_MASK = 0xFFu;
 
-inline constexpr uint32_t pack_prefetcher_pipe_slot_relay_word(uint32_t relay_dfb_id, uint32_t num_credit_lanes) {
+constexpr uint32_t pack_prefetcher_pipe_slot_relay_word(uint32_t relay_dfb_id, uint32_t num_credit_lanes) {
     // P == 1 encodes as 0 so a single-lane slot is bit-identical to one without the field.
     return (relay_dfb_id & REMOTE_DFB_SLOT_RELAY_ID_MASK) |
            ((num_credit_lanes > 1 ? num_credit_lanes & PREFETCHER_PIPE_SLOT_CREDIT_LANES_MASK : 0u)
             << PREFETCHER_PIPE_SLOT_CREDIT_LANES_SHIFT);
 }
 
-inline constexpr uint32_t prefetcher_pipe_slot_relay_id(uint32_t relay_word) {
+constexpr uint32_t prefetcher_pipe_slot_relay_id(uint32_t relay_word) {
     return relay_word & REMOTE_DFB_SLOT_RELAY_ID_MASK;
 }
 
-inline constexpr uint32_t prefetcher_pipe_slot_credit_lanes(uint32_t relay_word) {
+constexpr uint32_t prefetcher_pipe_slot_credit_lanes(uint32_t relay_word) {
     const uint32_t lanes =
         (relay_word >> PREFETCHER_PIPE_SLOT_CREDIT_LANES_SHIFT) & PREFETCHER_PIPE_SLOT_CREDIT_LANES_MASK;
     return lanes == 0 ? 1u : lanes;
@@ -55,6 +55,6 @@ inline constexpr uint32_t prefetcher_pipe_slot_credit_lanes(uint32_t relay_word)
 // Leading word of a dense remote-DFB region: num_slots, then dense slots.
 inline constexpr uint32_t REMOTE_DFB_REGION_HEADER_WORDS = 1;
 
-inline constexpr uint32_t remote_dfb_config_region_words(uint32_t num_slots) {
+constexpr uint32_t remote_dfb_config_region_words(uint32_t num_slots) {
     return REMOTE_DFB_REGION_HEADER_WORDS + num_slots * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
 }
