@@ -52,7 +52,7 @@ import traceback
 import utils
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks, RunChecks, BLOCK_TYPES
-from triage import ScriptConfig, TTTriageError, run_script
+from triage import ScriptConfig, TTTriageError, run_script, risc_display_name
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.device import Device
@@ -119,8 +119,7 @@ def describe_risc(risc_location: RiscLocation) -> str:
     The NEO is named only where there is one, since on Quasar the same risc name appears once per
     NEO and the name alone does not say which core is meant.
     """
-    neo = f" (NEO {risc_location.neo_id})" if risc_location.neo_id is not None else ""
-    return f"{risc_location.risc_name}{neo} on {risc_location.location.to_user_str()}"
+    return f"{risc_display_name(risc_location)} on {risc_location.location.to_user_str()}"
 
 
 def find_risc_debug(location: OnChipCoordinate, risc_name: str | None, neo_id: int | None) -> RiscDebug:

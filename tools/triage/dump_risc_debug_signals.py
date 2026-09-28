@@ -22,7 +22,7 @@ import os
 import subprocess
 
 import utils
-from triage import ScriptConfig, log_warning, run_script, log_check_location
+from triage import ScriptConfig, log_warning, run_script, log_check_location, risc_display_name
 from triage_session import get_triage_session
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from run_checks import run as get_run_checks
@@ -71,7 +71,7 @@ def get_firmware_text_address(
 
 
 def collect_debug_bus_signals(
-    location: OnChipCoordinate, failed_riscs: list[str], dispatcher_data: DispatcherData, elfs_cache: ElfsCache
+    location: OnChipCoordinate, failed_riscs: list[RiscLocation], dispatcher_data: DispatcherData, elfs_cache: ElfsCache
 ) -> dict | None:
     """Collect debug bus signals for a block with known broken RISC cores."""
     noc_block = location.device.get_block(location)
@@ -82,8 +82,7 @@ def collect_debug_bus_signals(
 
     # We are using first 16 bytes of the firmware text section to collect debug bus signals
     # Use the first failed risc to get the firmware text address
-    risc_for_address = failed_riscs[0]
-    l1_address = get_firmware_text_address(RiscLocation(location, None, risc_for_address), dispatcher_data, elfs_cache)
+    l1_address = get_firmware_text_address(failed_riscs[0], dispatcher_data, elfs_cache)
 
     # Since we are rewriting the firmware text, we need to read the original data to restore it later
     original_data = read_words_from_device(location, l1_address, word_count=4)
@@ -97,7 +96,7 @@ def collect_debug_bus_signals(
             debug_bus_data[group_name] = f"0x{group_sample.raw_data:032x}"
 
         return {
-            "failed_riscs": failed_riscs,
+            "failed_riscs": [risc_display_name(risc) for risc in failed_riscs],
             "debug_bus_signal_groups": debug_bus_data,
         }
     except TimeoutDeviceRegisterError:
@@ -125,7 +124,7 @@ def run(args, context: Context):
         if not broken_cores:
             return None
 
-        failed_riscs = [bc.risc_name for bc in broken_cores]
+        failed_riscs = list(broken_cores)
         result = collect_debug_bus_signals(location, failed_riscs, dispatcher_data, elfs_cache)
         if result is None:
             return None

@@ -27,7 +27,15 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.device import Device
 
 from run_checks import run as get_run_checks, RunChecks
-from triage import ScriptConfig, run_script, triage_field, collection_serializer, ScriptPriority, log_warning_risc
+from triage import (
+    ScriptConfig,
+    run_script,
+    triage_field,
+    collection_serializer,
+    ScriptPriority,
+    log_warning_risc,
+    risc_display_name,
+)
 from triage_session import get_triage_session, is_affected_by_cont_bug
 from ttexalens.hardware.risc_debug import RiscDebug, RiscLocation
 
@@ -37,11 +45,6 @@ script_config = ScriptConfig(
 )
 
 _USER_VIEW = False
-
-
-def risc_display_name(risc_location: RiscLocation) -> str:
-    neo = f" (NEO {risc_location.neo_id})" if risc_location.neo_id is not None else ""
-    return f"{risc_location.risc_name}{neo}"
 
 
 def group_broken_cores_by_risc_name(broken_cores: set[RiscLocation]) -> dict[str, set[OnChipCoordinate]]:

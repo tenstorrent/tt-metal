@@ -728,6 +728,12 @@ def log_check_location(location: OnChipCoordinate, success: bool, message: str) 
         log_entry(CheckEntry(message=message, type=CheckType.ERROR, device=location.device, location=location))
 
 
+def risc_display_name(risc_location: RiscLocation) -> str:
+    """Name a core for output: "trisc0", or "trisc0 (NEO 2)" where the name repeats per NEO."""
+    neo = f" (NEO {risc_location.neo_id})" if risc_location.neo_id is not None else ""
+    return f"{risc_location.risc_name}{neo}"
+
+
 def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
     if not success:
         log_entry(
