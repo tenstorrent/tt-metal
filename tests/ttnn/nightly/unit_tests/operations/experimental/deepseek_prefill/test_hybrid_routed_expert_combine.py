@@ -80,7 +80,7 @@ def _mesh_params():
     params = []
     for mesh, fabric_cfg in _MESHES.items():
         topo = "ring" if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y else f"mesh-{mesh[0]}x{mesh[1]}"
-        for threshold_id in ("t0", "tmedian", "tmedian-hot"):
+        for threshold_id in ("t0", "tmedian", "tmedian-hot", "tmax"):
             params.append(
                 pytest.param(
                     mesh,
@@ -192,7 +192,13 @@ def _build_case(mesh_device, device_params, threshold_id):
         hot = idx_table[0, :, experts_per_chip - 1].tolist()
         logger.info(f"hot experts (last local slot per chip): {hot}, counts {[int(counts[e]) for e in hot]}")
     if threshold_id == "t0":
+        # Every expert above the threshold: one pass, and combine sees each expert released as the
+        # unified half finishes it.
         threshold = 0
+    elif threshold_id == "tmax":
+        # Every expert below it: the unified pass walks all eight slots with no work, and nothing is
+        # released until the fused pass reaches it. The bound on what the overlap can hide.
+        threshold = int(counts.max().item())
     else:
         threshold = max(1, int(counts[counts > 0].median().item()))
     assert threshold < max_dispatched_tokens_per_expert
