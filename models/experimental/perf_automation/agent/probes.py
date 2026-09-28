@@ -866,6 +866,19 @@ def _reap_process_group(pgid) -> list:
     return victims
 
 
+def _kill_signature(root_pid: int) -> str:
+    """Who is killing what, for the record. Reads /proc, so it is best-effort and never raises."""
+
+    def _cmd(pid):
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as fh:
+                return (fh.read().replace(b"\0", b" ").decode(errors="ignore").strip() or "?")[:70]
+        except OSError:
+            return "?"
+
+    return "pid %d (%s) killing pid %d (%s)" % (os.getpid(), _cmd(os.getpid()), root_pid, _cmd(root_pid))
+
+
 def _kill_tree(root_pid: int, extra=()) -> None:
     """SIGKILL root_pid, every descendant still traceable from it, and every process group involved.
 
@@ -880,6 +893,14 @@ def _kill_tree(root_pid: int, extra=()) -> None:
     the process-group kill and the device-holder reclaim. A second optimize attempt then started
     alongside the first, and two runs driving one board took its ARC cores down.
     """
+    # A SIGKILL CANNOT BE REPORTED BY ITS VICTIM. It has no handler, leaves no traceback, and the
+    # dying process's output simply stops mid-line -- so a killed step is indistinguishable from a
+    # broken one downstream, and the agent is told to fix code that was never the problem. Two days
+    # of a Qwen-Image-Edit bring-up went that way: five captures died with rc=-9, no traceback and no
+    # watchdog line, and nothing anywhere recorded that the tool itself had done it. The killer is
+    # the only party that CAN say so, so it says so here -- once, at the single point every
+    # tool-initiated kill passes through, rather than at each call site.
+    print("  [kill] SIGKILL: %s" % _kill_signature(root_pid), file=sys.stderr, flush=True)
     import signal
 
     # NEVER OURSELVES. The walk could only ever reach our descendants, so this was safe by

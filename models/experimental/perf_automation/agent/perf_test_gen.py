@@ -688,6 +688,44 @@ _ERR_NOISE = re.compile(
 _STAGE_MARKER = "TRACE_STAGE"
 
 
+def signal_note(rc) -> str:
+    """ "terminated by SIGKILL (rc=-9)" for a killed step, "" for any ordinary exit.
+
+    THE SECOND CHANNEL. A step reports through two: its OUTPUT and its EXIT STATUS. A signal death
+    says nothing in the first -- SIGKILL has no handler, so there is no traceback and the output
+    simply stops mid-line -- and everything downstream reads the output. So `rc = -9` was routed to
+    the same branch as `rc = 1`, and "the tool killed this step" arrived as "some unspecified invalid
+    result", pointing the agent at code that was never the problem.
+
+    Python already hands the caller the whole fact: a negative returncode IS the signal. It was only
+    ever compared against 0, 124 and None, so anything else fell through."""
+    try:
+        n = int(rc)
+    except (TypeError, ValueError):
+        return ""
+    if n >= 0:
+        return ""
+    try:
+        import signal as _sig
+
+        name = _sig.Signals(-n).name
+    except (ValueError, AttributeError):
+        name = "signal %d" % -n
+    return "terminated by %s (rc=%d)" % (name, n)
+
+
+def killed_verdict(rc, out):
+    """("invalid", "terminated by SIGKILL ...") for a signal death, else None.
+
+    Lead with the signal: the output cannot mention it, and "you were killed" and "your code is
+    wrong" call for opposite responses from whoever reads this. One helper, so both the traced and
+    the eager path report a kill the same way."""
+    note = signal_note(rc)
+    if not note:
+        return None
+    return "invalid", "%s -- the step was killed, not failed. %s" % (note, _extract_error(out) or "")
+
+
 def _extract_error(out: str) -> str:
     """Surface the REAL failure from a pytest run so the correction feedback is actionable. Anchor on
     pytest's own error lines ('E   ...', 'ERROR collecting', assertion/exception summaries) and DROP the
@@ -949,6 +987,9 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
             return "ok_marker", ""
         if rc1 == 124 or "WEDGE" in out1:
             return "invalid", "WEDGE: " + (_extract_error(out1) or "device hung capturing the module's forward")
+        _killed = killed_verdict(rc1, out1)
+        if _killed:
+            return _killed
         return "invalid", (
             _extract_error(out1)
             or "module perf test produced no TRACE_PER_TOKEN_MS (trace required; eager only via TT_PERF_TRACE=0)"
@@ -956,6 +997,9 @@ def validate_generated_perf_test(out_path: Path, task: str, component: bool = Fa
     rc1, out1 = _run_perf_node(node_abs, {}, timeout_s=vt)
     if rc1 is None:
         return "skip", out1
+    _killed = killed_verdict(rc1, out1)
+    if _killed:
+        return _killed
     low = out1.lower()
     if any(s in low for s in _DEVICE_UNAVAILABLE):
         return "skip", "device/ttnn unavailable during generation-time validation"
