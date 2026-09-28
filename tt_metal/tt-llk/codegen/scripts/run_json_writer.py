@@ -71,8 +71,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3603,8 +3605,31 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
             agent=None,
         )
     )
-    stopped = None
-    for command in plan["commands"]:
+    # Leaves on different cards run concurrently, one lane per architecture. A
+    # lane stays sequential because its leaves share a builder, a card and a
+    # node-local workspace. Running every leaf in turn
+    # meant the wormhole metal build only started once the blackhole one had
+    # executed, though the two build on different hosts. Every mutation of the
+    # shared record, and every run.json write, happens under one lock, and the
+    # leaves are kept in plan order so the record does not depend on timing.
+    lock = threading.Lock()
+    halted = threading.Event()
+    stop_reasons: list[str] = []
+    order = {c["leaf"]["requirement_id"]: i for i, c in enumerate(plan["commands"])}
+
+    def publish(message: str | None = None) -> None:
+        record["leaves"].sort(key=lambda e: order[e["requirement_id"]])
+        with _run_json_transaction(log_dir) as run:
+            run["functional_execution"] = record
+            if message:
+                run["current_step_message"] = message
+
+    def halt(reason: str) -> None:
+        with lock:
+            stop_reasons.append(reason)
+        halted.set()
+
+    def run_leaf(command: dict[str, Any]) -> None:
         leaf = command["leaf"]
         evidence_log = (
             log_dir / f"functional-{plan['attempt_id']}-{leaf['requirement_id']}.log"
@@ -3619,19 +3644,16 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
         try:
             if _functional_execution_plan(log_dir, worktree) != plan:
                 raise ValueError("functional identity changed before next leaf")
-            record["leaves"].append(entry)
-            with _run_json_transaction(log_dir) as run:
-                run["functional_execution"] = record
-                run["current_step_message"] = (
-                    f"Verifying sealed leaf {leaf['requirement_id']}"
-                )
+            with lock:
+                record["leaves"].append(entry)
+                publish(f"Verifying sealed leaf {leaf['requirement_id']}")
             argv = command["argv"] + (
                 ["--timeout", str(args.timeout)] if leaf["backend"] == "silicon" else []
             )
             with evidence_log.open("w") as output:
-                entry["invocation_started"] = True
-                with _run_json_transaction(log_dir) as run:
-                    run["functional_execution"] = record
+                with lock:
+                    entry["invocation_started"] = True
+                    publish()
                 proc = subprocess.run(
                     argv,
                     cwd=worktree / "tt_metal/tt-llk",
@@ -3639,7 +3661,6 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
                     stdout=output,
                     stderr=subprocess.STDOUT,
                 )
-            entry["returncode"] = proc.returncode
             marker_lines = re.findall(
                 r"^HW_TEST_RESULT .*$", evidence_log.read_text(), re.MULTILINE
             )
@@ -3650,15 +3671,18 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
                 for line in marker_lines
             ]
             marker = markers[-1] if markers else {}
-            entry["queue_job_id"] = (
-                marker.get("job") if marker.get("job") != "-" else None
-            )
-            entry["failure_stage"] = marker.get("failure_stage")
-            entry["summary"] = marker.get("summary")
+            job_id = marker.get("job") if marker.get("job") != "-" else None
+            with lock:
+                entry.update(
+                    returncode=proc.returncode,
+                    queue_job_id=job_id,
+                    failure_stage=marker.get("failure_stage"),
+                    summary=marker.get("summary"),
+                )
             receipt = _load_verification_result(Path(command["result"]))
             if leaf["backend"] == "silicon" and (
                 len(markers) != 1
-                or receipt["job_id"] != entry["queue_job_id"]
+                or receipt["job_id"] != job_id
                 or marker.get("arch") != leaf["architecture"]
             ):
                 raise ValueError("executor receipt does not match its dispatched job")
@@ -3683,23 +3707,49 @@ def cmd_execute_functional(args: argparse.Namespace) -> int:
                 raise ValueError(
                     "executor receipt does not match sealed candidate/leaf"
                 )
-            entry.update(status="recorded", result_id=receipt["result_id"])
+            with lock:
+                entry.update(status="recorded", result_id=receipt["result_id"])
             if proc.returncode and receipt["classification"] == "success":
                 raise ValueError("executor failed despite a success-shaped receipt")
             if receipt["classification"] in {"infra_error", "timed_out"}:
-                stopped = "executor infrastructure failure: " + ", ".join(
-                    receipt["reason_codes"]
+                halt(
+                    "executor infrastructure failure: "
+                    + ", ".join(receipt["reason_codes"])
                 )
-                break
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            stopped = str(exc)
-            entry.update(status="unresolved", error=stopped)
-            if entry not in record["leaves"]:
-                record["leaves"].append(entry)
-            break
+            with lock:
+                entry.update(status="unresolved", error=str(exc))
+                if entry not in record["leaves"]:
+                    record["leaves"].append(entry)
+            halt(str(exc))
         finally:
-            with _run_json_transaction(log_dir) as run:
-                run["functional_execution"] = record
+            with lock:
+                publish()
+
+    def run_lane(commands: list[dict[str, Any]]) -> None:
+        # A halt stops each lane before its next leaf. A leaf already running
+        # in another lane finishes, since its queue job cannot be withdrawn.
+        for command in commands:
+            if halted.is_set():
+                return
+            try:
+                run_leaf(command)
+            except BaseException:
+                # Anything run_leaf does not classify must still stop the other
+                # lanes before it propagates, as it stopped the old serial loop.
+                halted.set()
+                raise
+
+    # Lanes are per architecture, host leaves included, so each arch keeps the
+    # serial stop semantics: a failure there leaves that arch's remaining leaves
+    # deterministically unstarted rather than racing them.
+    lanes: dict[str, list[dict[str, Any]]] = {}
+    for command in plan["commands"]:
+        lanes.setdefault(command["leaf"]["architecture"], []).append(command)
+    with ThreadPoolExecutor(max_workers=len(lanes) or 1) as pool:
+        for future in [pool.submit(run_lane, lane) for lane in lanes.values()]:
+            future.result()
+    stopped = "; ".join(stop_reasons) or None
     try:
         if _functional_execution_plan(log_dir, worktree) != plan:
             raise ValueError("functional identity changed after execution")

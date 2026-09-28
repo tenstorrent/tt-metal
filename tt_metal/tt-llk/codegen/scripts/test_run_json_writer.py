@@ -6320,7 +6320,7 @@ def test_sealed_functional_old_dispatch_interface_falls_back_before_any_leaf(
     assert seen == [["sealed-dispatch-fixture", "--help"]]
 
 
-def test_sealed_functional_all_architectures_execute_in_manifest_order(
+def test_sealed_functional_all_architectures_execute_and_record_in_manifest_order(
     tmp_path, monkeypatch
 ):
     requirements = [
@@ -6338,10 +6338,16 @@ def test_sealed_functional_all_architectures_execute_in_manifest_order(
     calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest)
     assert writer.cmd_execute_functional(args) == 0
     submitted = _submitted(calls)
-    assert [argv[argv.index("--requirement-id") + 1] for argv in submitted] == [
-        r["requirement_id"] for r in requirements
-    ]
+    # Architectures run concurrently, so submission order across them is not
+    # defined; each leaf must still be submitted exactly once.
+    assert sorted(argv[argv.index("--requirement-id") + 1] for argv in submitted) == (
+        sorted(r["requirement_id"] for r in requirements)
+    )
     run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    # The record, which downstream readers consume, keeps manifest order.
+    assert [
+        leaf["requirement_id"] for leaf in run["functional_execution"]["leaves"]
+    ] == [r["requirement_id"] for r in requirements]
     assert run["tests_passed"] == 70
     assert all(
         run["arch_results"][arch]["verdict"] == "SUCCESS"
@@ -7151,3 +7157,70 @@ def test_sealed_functional_still_covers_a_mixed_llk_metal_ttnn_route(
     # One patch digest across all three suites: the sealed invariant holds.
     assert reduction["patch_sha256"]
     assert len(_submitted(calls)) == 2  # host runs locally, two silicon leaves
+
+
+def test_sealed_functional_runs_architectures_concurrently(tmp_path, monkeypatch):
+    """Blackhole and wormhole leaves build and run on different hosts.
+
+    Run 24095 serialised them, so every metal and ttnn round waited for one
+    architecture before starting the other. Each fake dispatch here blocks on a
+    two-party barrier: a serial executor would time the barrier out on the
+    first leaf, a concurrent one lets both arrive.
+    """
+    import threading
+
+    requirements = [
+        _requirement(
+            arch,
+            selector={
+                "test": "test_device.py",
+                "test_id": "test_device.py::test_device",
+                "k": "device",
+            },
+        )
+        for arch in ("wormhole", "blackhole")
+    ]
+    writer, args, manifest, _ = _functional_fixture(tmp_path, monkeypatch, requirements)
+    _fake_functional_dispatch(monkeypatch, writer, args, manifest)
+    barrier = threading.Barrier(2, timeout=10)
+    fake = writer.subprocess.run
+
+    def gated(argv, **kwargs):
+        if argv[0] == "sealed-dispatch-fixture" and not (
+            "--help" in argv or "--describe" in argv
+        ):
+            barrier.wait()  # BrokenBarrierError if the other arch is not running
+        return fake(argv, **kwargs)
+
+    monkeypatch.setattr(writer.subprocess, "run", gated)
+    assert writer.cmd_execute_functional(args) == 0
+    run = json.loads((Path(args.log_dir) / "run.json").read_text())
+    assert run["functional_execution"]["status"] == "success"
+    assert run["functional_execution"]["unstarted"] == []
+
+
+def test_a_failing_architecture_stops_its_own_later_leaves(tmp_path, monkeypatch):
+    """Within one architecture the serial stop semantics are unchanged: after a
+    defect, that arch's later leaves stay deterministically unstarted."""
+    first = _requirement(
+        "blackhole", selector={"test": "test_device.py", "test_id": None, "k": None}
+    )
+    second = _requirement(
+        "blackhole",
+        index=2,
+        selector={
+            "test": "test_device.py",
+            "test_id": "test_device.py::test_device",
+            "k": None,
+        },
+    )
+    writer, args, manifest, _ = _functional_fixture(
+        tmp_path, monkeypatch, [first, second]
+    )
+    calls = _fake_functional_dispatch(monkeypatch, writer, args, manifest, missing=True)
+    assert writer.cmd_execute_functional(args) == 1
+    record = json.loads((Path(args.log_dir) / "run.json").read_text())[
+        "functional_execution"
+    ]
+    assert len(_submitted(calls)) == 1
+    assert record["unstarted"] == [second["requirement_id"]]
