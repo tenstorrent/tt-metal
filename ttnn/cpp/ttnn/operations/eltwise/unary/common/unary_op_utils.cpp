@@ -230,6 +230,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
         case UnaryOpType::RELU_MIN:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 &&
+                std::bit_cast<uint32_t>(params[0]) == 0x00000000u) {
+                return {
+                    "relu_min_tt_poly_bf16_tile_init();",
+                    fmt::format("relu_min_tt_poly_bf16_tile({}, 0x00000000u);", idst)};
+            }
+#endif
+
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::UINT16) {
