@@ -39,10 +39,29 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #else
 
-// BF16 arm: odd rational x·P(x²)/Q(x²), P of degree 3 and Q of degree 4 in x², Q0 = 1; coefficients aligned with
-// the WH v3 on-device refit (see PR #42540). P0 and Q1 are held in vConstFloatPrgm1/2 (programmed by erf_init).
+// BF16 arm: odd rational x·P(x²)/Q(x²), P of degree 3 and Q of degree 4 in x², Q0 = 1. Two coefficient sets:
+//
+// - exact (APPROXIMATION_MODE = false, the ttnn default): P0 and Q1 are full fp32 constants held in
+//   vConstFloatPrgm1/2 (programmed by erf_init); the other six are on the one-SFPLOADI fp16/bf16 grid. Grid-searched
+//   against every bf16 input with both a BF16 (truncating store) and an FP32 dest so that max and mean ULP vs
+//   float64 do not regress in any input range; P0 is 2/sqrt(pi) rounded to fp32. Blackhole only: this
+//   intentionally departs from the WH v3 on-device refit (PR #42540) the previous set was aligned with.
+// - fast_and_approx: the raw SFPARECIP (~7 bits) dominates the error, and the grid set measured worse on
+//   silicon for |x| >= 4, so this mode keeps the WH-aligned set (P0 and Q1 still come from vConstFloatPrgm1/2).
 template <bool APPROXIMATION_MODE>
 struct ErfBf16Coeffs {
+    static constexpr float P0 = 0x1.20dd76p+0f;  // vConstFloatPrgm1
+    static constexpr float P1 = 0x1.1ap-2f;
+    static constexpr float P2 = 0x1.738p-5f;
+    static constexpr float P3 = 0x1.868p-11f;
+    static constexpr float Q1 = 0x1.26425ap-1f;  // vConstFloatPrgm2
+    static constexpr float Q2 = 0x1.18p-3f;
+    static constexpr float Q3 = 0x1.0f8p-7f;
+    static constexpr float Q4 = 0x1.9ep-16f;
+};
+
+template <>
+struct ErfBf16Coeffs<true> {
     static constexpr float P0 = 1.1280932447e+00f;  // vConstFloatPrgm1
     static constexpr float P1 = 2.7609212279e-01f;
     static constexpr float P2 = 4.5400281738e-02f;

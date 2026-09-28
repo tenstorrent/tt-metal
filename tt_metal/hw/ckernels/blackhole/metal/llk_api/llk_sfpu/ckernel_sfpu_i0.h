@@ -24,18 +24,20 @@ namespace sfpu {
           t4) *                                                                                                   \
      t4)
 #ifndef INP_FLOAT32
-// BF16-input arm: the same degree-11 Taylor series in t = x² (coefficient k = 1/(4^k (k!)²)), evaluated by explicit
-// Horner in the order POLYVAL10 uses. I0_BF16_C3/C4 live in vConstFloatPrgm1/2 (programmed by i0_init) instead of
-// costing two SFPLOADI per row each.
-constexpr float I0_BF16_C3 = 0.0004340277778f;    // vConstFloatPrgm1
-constexpr float I0_BF16_C4 = 0.000006781684028f;  // vConstFloatPrgm2
-constexpr float I0_BF16_C5 = 6.78E-08f;
-constexpr float I0_BF16_C6 = 4.71E-10f;
-constexpr float I0_BF16_C7 = 2.40E-12f;
-constexpr float I0_BF16_C8 = 9.39E-15f;
-constexpr float I0_BF16_C9 = 2.90E-17f;
-constexpr float I0_BF16_C10 = 7.24E-20f;
-constexpr float I0_BF16_C11 = 1.50E-22f;
+// BF16-input arm: degree-11 polynomial in t = x², evaluated by explicit Horner in the order POLYVAL10 uses. It
+// starts from the Taylor series (coefficient k = 1/(4^k (k!)²)); C3 and C4 are full fp32 constants held in
+// vConstFloatPrgm1/2 (programmed by i0_init), C5 is an fp32 immediate, and C6..C11 are on the one-SFPLOADI bf16 grid,
+// grid-searched against every bf16 input with both BF16 (truncating store) and FP32 dest so that max and mean ULP vs
+// float64 do not regress anywhere. The INP_FLOAT32 arm keeps the exact series coefficients.
+constexpr float I0_BF16_C3 = 0x1.c71c72p-12f;  // vConstFloatPrgm1
+constexpr float I0_BF16_C4 = 0x1.c7238ep-18f;  // vConstFloatPrgm2
+constexpr float I0_BF16_C5 = 0x1.234e32p-24f;
+constexpr float I0_BF16_C6 = 0x1.02p-31f;
+constexpr float I0_BF16_C7 = 0x1.56p-39f;
+constexpr float I0_BF16_C8 = 0x1.4cp-47f;
+constexpr float I0_BF16_C9 = 0x1.12p-55f;
+constexpr float I0_BF16_C10 = 0x1.5cp-64f;
+constexpr float I0_BF16_C11 = 0x1.6cp-73f;
 #endif
 
 inline void i0_init() {
