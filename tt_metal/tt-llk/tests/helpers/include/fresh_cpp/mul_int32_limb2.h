@@ -17,8 +17,16 @@ namespace ckernel::sfpu
 // test_sfpu_binary_int_uniform SfpuMulInt32) draws operands uniform from
 // [1, 40000] -- magnitudes < 2^16, products < 2^31 -- because the
 // sign-magnitude Dst packer only round-trips non-negative low-32 products.
-// On that contract the radix-23 cross terms of the full identity are
-// identically zero: for raw operands a, b < 2^23,
+// On that contract the SM32 source words are already the unsigned
+// magnitudes: no sign-magnitude-to-vInt conversion is needed before the
+// unsigned limb operations.  Keeping that representation is important on
+// BH, where the native SM32->INT32 cast maps sign-magnitude negative zero to
+// INT_MIN and therefore is not a general inverse; the correct generic SFPI
+// conversion uses a predicated sign/negate sequence.  The row excludes the
+// exceptional representation by construction (both operands are positive).
+//
+// The radix-23 cross terms of the full identity are identically zero: for
+// raw operands a, b < 2^23,
 //
 //     a * b mod 2^32 == SFPMUL24_LOWER(a, b) + (SFPMUL24_UPPER(a, b) << 23)
 //
@@ -28,13 +36,20 @@ namespace ckernel::sfpu
 // Certified against the pinned sim's byte-equivalent SFPMUL24 model, tied to
 // the impl-1 full-domain form: exhaustive over ALL 2^32 pairs in [0,2^16)^2
 // plus 5.5e9 directed-slice evaluations covering [0,2^23)
-// (laneGG-evidence-20260824/mulint32_limb2_cert.c, zero failures).  Same
-// domain-restriction discipline as divint32floor (<2^24) and lcm (<2^15):
-// the restriction *is* the documented row contract, stated here and in the
-// sweep row note.  Operands with magnitude >= 2^23 would need impl 1's cross
-// terms (the production kernel's full identity) -- outside this body's
-// contract.  Two SFPMUL24s, one shift, one add per row: 7 issued words/row
-// against impl 1's 13-word formed calendar and the hand SFPLOADMACRO
+// (laneGG-evidence-20260824/mulint32_limb2_cert.c, zero failures).  The final
+// product is still reinterpreted as vInt before the SM32 store: unlike the
+// inputs, a product of two values below 2^23 may have bit 31 set, and the
+// normal INT32->SM32 conversion is required to preserve the original body's
+// output encoding for that signed low-32 result.  In particular INT_MIN maps
+// to the SM32 negative-zero bit pattern; SM32 cannot faithfully represent
+// signed INT_MIN, so this is encoding equivalence to the pre-uplift body, not
+// a claim that the Dst format round-trips every signed 32-bit value.  This
+// keeps the same domain-restriction discipline as divint32floor (<2^24) and
+// lcm (<2^15): the restriction *is* the documented row contract, stated here
+// and in the sweep row note.  Operands with magnitude >= 2^23 would need impl
+// 1's cross terms (the production kernel's full identity) -- outside this
+// body's contract.  Two SFPMUL24s, one shift, one add per row: 7 issued
+// words/row against impl 1's 13-word formed calendar and the hand SFPLOADMACRO
 // kernel's 8 issue slots/row.  No fixed LREGs, raw instructions, replay
 // slots, or SFPLOADMACRO templates.
 template <int ITERATIONS>
@@ -54,8 +69,8 @@ __attribute__((noinline)) void calculate_mul_int_limb2_fresh_cpp()
 #pragma GCC unroll 8
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            const sfpi::vInt a                              = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
-            const sfpi::vInt b                              = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vSMag a                             = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
+            const sfpi::vSMag b                             = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
             const sfpi::vUInt ua                            = sfpi::as<sfpi::vUInt>(a);
             const sfpi::vUInt ub                            = sfpi::as<sfpi::vUInt>(b);
             const sfpi::vUInt hi                            = sfpi::fractional_mul(ua, ub, sfpi::FractionalHalf::High);

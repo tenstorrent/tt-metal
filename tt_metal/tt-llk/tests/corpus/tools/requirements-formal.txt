@@ -1,0 +1,2 @@
+# Minimal reproducible dependency set for LLK formal proof scripts.
+z3-solver==4.15.4.0
