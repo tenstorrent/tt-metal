@@ -205,3 +205,12 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - The default gate (2x2) already passes, because the device norm module covers every norm step: PCC 0.999996, rel 0.0029, ratio [0.9935, 1.0061].
   The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_norm.py`
+
+## S.sliding_moe.01.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_01_attn_norm.py` (same golden,
+  layer 1); only the docstring differs. Checks: pcc_swap_out >= 0.98 (gated); block out finite, rel L2 <= 0.01; the attn_norm output vs golden:
+  PCC >= component threshold, rel L2 <= 0.03, per-token norm ratio [0.97, 1.03].
+- BRINGUP_IMPL=reference: out 0.999996 / rel 0.0030, step rel 0.0024 / ratio [0.9954, 1.0043], PASS. BRINGUP_IMPL=stub: out rel 16.9, FAIL.
+- Default gate (2x2) already passes because the device norm module covers every norm step: out 0.999995 / rel 0.0031, step rel 0.0029 / ratio
+  [0.9935, 1.0061]. The first `FAIL pcc=0` lines come from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_01_attn_norm.py`
