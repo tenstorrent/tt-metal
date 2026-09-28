@@ -18,10 +18,13 @@ Public surface:
                                                 (cached in .refcache.pt)
 - ``create_icl_embedding_ttnn(...)``         – build ICL embedding for prefill
 - ``decode_audio(codes, decoder_weights)``   – Mimi decode → 24 kHz waveform
-- ``decode_icl_audio(ref_codes, codes, decoder_weights)``
+- ``decode_icl_audio(ref_codes, codes, decoder_weights, ref_state=None)``
                                               – ICL decode: ref as decoder context,
                                                 reference audio cut off (use this
                                                 for run_inference output)
+- ``prepare_icl_decoder_state(ref_codes, decoder_weights)``
+                                              – per-voice decoder state; pass as
+                                                ref_state to skip re-decoding the ref
 - ``load_weights()``                         – HF download (main + speech_tokenizer)
 - ``allocate_kv_cache(...)``, ``deallocate_kv_cache(...)``
 
@@ -2752,23 +2755,52 @@ def decode_audio(codes: torch.Tensor, decoder_weights: dict) -> torch.Tensor:
     return audio
 
 
-def decode_icl_audio(ref_codes: torch.Tensor, codes: torch.Tensor, decoder_weights: dict) -> torch.Tensor:
+def prepare_icl_decoder_state(ref_codes: torch.Tensor, decoder_weights: dict) -> dict:
+    """Decoder state after the reference codes, for ``decode_icl_audio(..., ref_state=...)``.
+
+    Depends only on the reference, so compute it once per voice and reuse it for every request.
+    """
+    from models.demos.qwen3_tts.reference.functional import (
+        SpeechTokenizerDecoderConfig,
+        speech_tokenizer_decoder_prefill,
+    )
+
+    with torch.no_grad():
+        return speech_tokenizer_decoder_prefill(
+            ref_codes.clamp(max=2047).T.unsqueeze(0), decoder_weights, SpeechTokenizerDecoderConfig()
+        )
+
+
+def decode_icl_audio(
+    ref_codes: torch.Tensor, codes: torch.Tensor, decoder_weights: dict, ref_state: Optional[dict] = None
+) -> torch.Tensor:
     """Decode ICL-generated codes to audio, matching HF Qwen3-TTS ``generate_voice_clone``.
 
     The generated codes continue the reference codes, so the decoder needs the
-    reference as left context: decode ``cat([ref_codes, codes])`` and cut the
-    reference's share (``ref_len / total_len``) of the waveform. That cut is also
-    what removes reference echo; do not additionally trim leading codec frames,
-    which deletes the start of the target speech (0.08s per frame).
+    reference as left context. HF decodes ``cat([ref_codes, codes])`` and cuts the
+    reference's share of the waveform; that cut is also what removes reference echo.
+    Do not additionally trim leading codec frames, which deletes the start of the
+    target speech (0.08s per frame).
+
+    The decoder is causal, so this computes the same audio without decoding the
+    reference to a waveform: the reference only runs through the decoder front-end
+    (``prepare_icl_decoder_state``), and only the generated frames are decoded.
 
     Args:
         ref_codes: [ref_len, 16] reference codes (as passed to create_icl_embedding_ttnn)
         codes: [num_frames, 16] generated codes from run_inference
+        ref_state: optional ``prepare_icl_decoder_state(ref_codes, ...)`` result to reuse
     Returns:
-        Waveform tensor of the generated speech only, same layout as ``decode_audio``.
+        Waveform tensor [1, 1, num_frames * 1920] of the generated speech only.
     """
-    ref_len = ref_codes.shape[0]
-    codes_for_decode = torch.cat([ref_codes.to(codes.dtype), codes], dim=0)
-    audio = decode_audio(codes_for_decode, decoder_weights)
-    cut = int(ref_len / codes_for_decode.shape[0] * audio.shape[-1])
-    return audio[..., cut:]
+    from models.demos.qwen3_tts.reference.functional import (
+        SpeechTokenizerDecoderConfig,
+        speech_tokenizer_decoder_continue,
+    )
+
+    if ref_state is None:
+        ref_state = prepare_icl_decoder_state(ref_codes, decoder_weights)
+    with torch.no_grad():
+        return speech_tokenizer_decoder_continue(
+            ref_state, codes.clamp(max=2047).T.unsqueeze(0), decoder_weights, SpeechTokenizerDecoderConfig()
+        )

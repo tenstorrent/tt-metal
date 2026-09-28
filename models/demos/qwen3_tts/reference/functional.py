@@ -6,7 +6,7 @@ Functional implementations for Qwen3-TTS modules.
 Each function is standalone and takes (x, state_dict/weights, config) as arguments.
 """
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -968,7 +968,10 @@ def pre_transformer_attention(
     num_heads: int = 16,
     head_dim: int = 64,
     sliding_window: int = 72,
-) -> torch.Tensor:
+    past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    start_pos: int = 0,
+    return_kv: bool = False,
+):
     """
     Pre-transformer attention (simpler than main model, with sliding window).
 
@@ -980,9 +983,13 @@ def pre_transformer_attention(
         num_heads: Number of attention heads
         head_dim: Head dimension
         sliding_window: Sliding window size for attention
+        past_key_value: Optional cached (key, value) [batch, heads, start_pos, head_dim] for positions
+            0..start_pos-1 (keys already rotated); cos/sin must then cover positions start_pos onwards
+        start_pos: Absolute position of the first query
+        return_kv: Also return the (key, value) cache including this call's positions
 
     Returns:
-        Output of shape [batch, seq_len, hidden_size]
+        Output of shape [batch, seq_len, hidden_size] (and the (key, value) cache if return_kv)
     """
     batch_size, seq_len, hidden_size = hidden_states.shape
 
@@ -1000,21 +1007,24 @@ def pre_transformer_attention(
     if cos is not None and sin is not None:
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
+    if past_key_value is not None:
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+    kv_len = key_states.shape[2]
+
     # Compute attention scores
     scaling = head_dim**-0.5
     attn_weights = torch.matmul(query_states, key_states.transpose(-2, -1)) * scaling
 
-    # Apply causal mask with sliding window
-    causal_mask = torch.full((seq_len, seq_len), float("-inf"), device=attn_weights.device, dtype=attn_weights.dtype)
-    causal_mask = torch.triu(causal_mask, diagonal=1)
-
-    # Apply sliding window mask: query i attends to keys j with i - sliding_window < j <= i
+    # Causal sliding-window mask: query i attends to keys j with i - sliding_window < j <= i
     # (transformers create_sliding_window_causal_mask, as used by the official decoder).
-    if sliding_window is not None and sliding_window < seq_len:
-        too_far = torch.tril(
-            torch.ones(seq_len, seq_len, dtype=torch.bool, device=attn_weights.device), diagonal=-sliding_window
-        )
-        causal_mask = causal_mask.masked_fill(too_far, float("-inf"))
+    q_pos = torch.arange(start_pos, start_pos + seq_len, device=attn_weights.device)[:, None]
+    k_pos = torch.arange(kv_len, device=attn_weights.device)[None, :]
+    allowed = k_pos <= q_pos
+    if sliding_window is not None:
+        allowed = allowed & (q_pos - k_pos < sliding_window)
+    causal_mask = torch.zeros(seq_len, kv_len, device=attn_weights.device, dtype=attn_weights.dtype)
+    causal_mask = causal_mask.masked_fill(~allowed, float("-inf"))
 
     attn_weights = attn_weights + causal_mask
 
@@ -1029,6 +1039,8 @@ def pre_transformer_attention(
     attn_output = attn_output.reshape(batch_size, seq_len, -1)
     attn_output = F.linear(attn_output, o_proj_weight, o_proj_bias)
 
+    if return_kv:
+        return attn_output, (key_states, value_states)
     return attn_output
 
 
@@ -1041,9 +1053,14 @@ def pre_transformer_layer(
     config: SpeechTokenizerDecoderConfig,
     cos: torch.Tensor,
     sin: torch.Tensor,
-) -> torch.Tensor:
+    past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    start_pos: int = 0,
+    return_kv: bool = False,
+):
     """
     Single pre-transformer layer with attention and MLP.
+
+    ``past_key_value`` / ``start_pos`` / ``return_kv``: see ``pre_transformer_attention``.
 
     Args:
         hidden_states: Input of shape [batch, seq_len, hidden_size]
@@ -1074,7 +1091,12 @@ def pre_transformer_layer(
         sin=sin,
         num_heads=config.pre_transformer_num_heads,
         head_dim=config.pre_transformer_head_dim,
+        past_key_value=past_key_value,
+        start_pos=start_pos,
+        return_kv=return_kv,
     )
+    if return_kv:
+        attn_output, key_value = attn_output
 
     # Apply layer scale if present (key can be self_attn_layer_scale or self_attn_layer_scale.scale)
     layer_scale_key = None
@@ -1110,6 +1132,8 @@ def pre_transformer_layer(
 
     hidden_states = residual + mlp_output
 
+    if return_kv:
+        return hidden_states, key_value
     return hidden_states
 
 
@@ -1120,9 +1144,15 @@ def pre_transformer_forward(
     embeddings: torch.Tensor,
     weights: dict,
     config: SpeechTokenizerDecoderConfig,
-) -> torch.Tensor:
+    past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+    start_pos: int = 0,
+    return_kv: bool = False,
+):
     """
     Forward pass through the pre-transformer.
+
+    With ``past_key_values`` (one (key, value) per layer, from a previous call with
+    ``return_kv=True``) the input continues the cached sequence at ``start_pos``.
 
     Matches official qwen_tts implementation:
     1. input_proj: latent_dim -> hidden_size
@@ -1145,15 +1175,30 @@ def pre_transformer_forward(
     hidden_states = F.linear(embeddings, weights["input_proj.weight"], weights.get("input_proj.bias"))
 
     # Compute RoPE frequencies
-    cos, sin = compute_rope_frequencies(config.pre_transformer_head_dim, seq_len, config.rope_theta, device)
-    cos = cos.to(hidden_states.dtype)
-    sin = sin.to(hidden_states.dtype)
+    cos, sin = compute_rope_frequencies(config.pre_transformer_head_dim, start_pos + seq_len, config.rope_theta, device)
+    cos = cos[:, start_pos:].to(hidden_states.dtype)
+    sin = sin[:, start_pos:].to(hidden_states.dtype)
 
     # Process through transformer layers
+    new_key_values = []
     for layer_idx in range(config.pre_transformer_num_layers):
         layer_prefix = f"layers.{layer_idx}."
         layer_weights = {k.replace(layer_prefix, ""): v for k, v in weights.items() if k.startswith(layer_prefix)}
-        hidden_states = pre_transformer_layer(hidden_states, layer_weights, config, cos, sin)
+        out = pre_transformer_layer(
+            hidden_states,
+            layer_weights,
+            config,
+            cos,
+            sin,
+            past_key_value=past_key_values[layer_idx] if past_key_values is not None else None,
+            start_pos=start_pos,
+            return_kv=return_kv,
+        )
+        if return_kv:
+            hidden_states, key_value = out
+            new_key_values.append(key_value)
+        else:
+            hidden_states = out
 
     # Final norm
     hidden_states = rms_norm(hidden_states, weights["norm.weight"], config.rms_norm_eps)
@@ -1163,6 +1208,8 @@ def pre_transformer_forward(
     if "output_proj.weight" in weights:
         hidden_states = F.linear(hidden_states, weights["output_proj.weight"], weights.get("output_proj.bias"))
 
+    if return_kv:
+        return hidden_states, new_key_values
     return hidden_states
 
 
@@ -1370,24 +1417,8 @@ def conv_decoder_block(
 # =============================================================================
 # Speech Tokenizer Decoder - Full Forward Pass
 # =============================================================================
-def speech_tokenizer_decoder_forward(
-    token_ids: torch.Tensor,
-    weights: dict,
-    config: SpeechTokenizerDecoderConfig,
-) -> torch.Tensor:
-    """
-    Full forward pass of the Speech Tokenizer Decoder.
-
-    Converts codec tokens to audio waveform.
-
-    Args:
-        token_ids: Token IDs of shape [batch, num_quantizers, seq_len]
-        weights: Dictionary with all decoder weights
-        config: Decoder configuration
-
-    Returns:
-        Audio waveform of shape [batch, 1, num_samples]
-    """
+def _decoder_embed(token_ids: torch.Tensor, weights: dict) -> torch.Tensor:
+    """RVQ codebook lookup: [batch, num_quantizers, seq_len] -> [batch, codebook_dim, seq_len]."""
     batch_size, num_quantizers, seq_len = token_ids.shape
     device = token_ids.device
 
@@ -1418,35 +1449,33 @@ def speech_tokenizer_decoder_forward(
         rvq_first_cluster_usage,
         rvq_rest_cluster_usages,
     )
-    # embeddings is now [batch, codebook_dim, seq_len] (channels-first)
+    return embeddings
 
-    # 2. Pre-transformer
-    pre_transformer_weights = {
-        k.replace("pre_transformer.", ""): v for k, v in weights.items() if k.startswith("pre_transformer.")
-    }
 
-    # 3. Pre-conv (causal padding for streaming)
-    # embeddings is [batch, codebook_dim, seq_len]
-    if "pre_conv.conv.weight" in weights:
-        conv_weight = weights["pre_conv.conv.weight"]
-        kernel_size = conv_weight.shape[-1]
-        # Causal padding: pad left side only
-        hidden_states = F.pad(embeddings, (kernel_size - 1, 0), mode="constant", value=0)
-        hidden_states = F.conv1d(hidden_states, conv_weight, weights.get("pre_conv.conv.bias"))
+def _decoder_pre_conv(
+    embeddings: torch.Tensor, weights: dict, left_context: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    """Causal pre-conv. ``left_context`` holds the preceding embedding frames (continuation)."""
+    if "pre_conv.conv.weight" not in weights:
+        return embeddings
+    conv_weight = weights["pre_conv.conv.weight"]
+    kernel_size = conv_weight.shape[-1]
+    if left_context is not None:
+        embeddings = torch.cat([left_context, embeddings], dim=-1)
+        pad = max(kernel_size - 1 - left_context.shape[-1], 0)
     else:
-        hidden_states = embeddings
+        pad = kernel_size - 1
+    # Causal padding: pad left side only
+    hidden_states = F.pad(embeddings, (pad, 0), mode="constant", value=0)
+    return F.conv1d(hidden_states, conv_weight, weights.get("pre_conv.conv.bias"))
 
-    # 4. Pre-transformer
-    # Transpose to [batch, seq_len, hidden] for transformer
-    hidden_states = hidden_states.transpose(1, 2)  # [batch, seq_len, latent_dim]
 
-    if pre_transformer_weights:
-        hidden_states = pre_transformer_forward(hidden_states, pre_transformer_weights, config)
-    # hidden_states is [batch, seq_len, latent_dim]
+def _decoder_pre_transformer_weights(weights: dict) -> dict:
+    return {k.replace("pre_transformer.", ""): v for k, v in weights.items() if k.startswith("pre_transformer.")}
 
-    # Transpose back to channels-first for conv decoder
-    hidden_states = hidden_states.transpose(1, 2)  # [batch, latent_dim, seq_len]
 
+def _decoder_backend(hidden_states: torch.Tensor, weights: dict, config: SpeechTokenizerDecoderConfig) -> torch.Tensor:
+    """Upsampler + conv decoder: [batch, latent_dim, seq_len] -> audio [batch, 1, seq_len * 1920]."""
     # 5. Upsampler (ConvNeXt blocks)
     for i, ratio in enumerate(config.upsampling_ratios):
         upsample_prefix = f"upsample.{i}."
@@ -1510,6 +1539,98 @@ def speech_tokenizer_decoder_forward(
     audio = hidden_states.clamp(min=-1, max=1)
 
     return audio
+
+
+def speech_tokenizer_decoder_forward(
+    token_ids: torch.Tensor,
+    weights: dict,
+    config: SpeechTokenizerDecoderConfig,
+) -> torch.Tensor:
+    """
+    Full forward pass of the Speech Tokenizer Decoder.
+
+    Converts codec tokens to audio waveform.
+
+    Args:
+        token_ids: Token IDs of shape [batch, num_quantizers, seq_len]
+        weights: Dictionary with all decoder weights
+        config: Decoder configuration
+
+    Returns:
+        Audio waveform of shape [batch, 1, num_samples]
+    """
+    embeddings = _decoder_embed(token_ids, weights)
+    hidden_states = _decoder_pre_conv(embeddings, weights)
+
+    # Pre-transformer on [batch, seq_len, latent_dim]
+    pre_transformer_weights = _decoder_pre_transformer_weights(weights)
+    if pre_transformer_weights:
+        hidden_states = pre_transformer_forward(hidden_states.transpose(1, 2), pre_transformer_weights, config)
+        hidden_states = hidden_states.transpose(1, 2)
+
+    return _decoder_backend(hidden_states, weights, config)
+
+
+# Latent frames of left context the conv backend needs for a continuation to be exact:
+# its causal receptive field is 10 frames (a latent frame affects output up to 10 frames
+# later), plus margin.
+DECODER_BACKEND_CONTEXT_FRAMES = 12
+
+
+def speech_tokenizer_decoder_prefill(
+    token_ids: torch.Tensor,
+    weights: dict,
+    config: SpeechTokenizerDecoderConfig,
+) -> dict:
+    """Run the decoder front-end over a fixed prefix (e.g. ICL reference codes) and return the
+    state needed to decode what follows it, without decoding the prefix to audio.
+
+    The decoder is causal (causal convs + sliding-window causal attention), so
+    ``speech_tokenizer_decoder_continue(state, codes)`` equals the ``codes`` span of decoding
+    ``cat([prefix, codes])``. The state does not change across continuations and can be reused.
+    """
+    embeddings = _decoder_embed(token_ids, weights)
+    hidden_states = _decoder_pre_conv(embeddings, weights)
+    pre_transformer_weights = _decoder_pre_transformer_weights(weights)
+    key_values = None
+    if pre_transformer_weights:
+        hidden_states, key_values = pre_transformer_forward(
+            hidden_states.transpose(1, 2), pre_transformer_weights, config, return_kv=True
+        )
+        hidden_states = hidden_states.transpose(1, 2)
+    pre_conv_ctx = weights["pre_conv.conv.weight"].shape[-1] - 1 if "pre_conv.conv.weight" in weights else 0
+    return {
+        "num_frames": token_ids.shape[-1],
+        "embedding_tail": embeddings[..., max(embeddings.shape[-1] - pre_conv_ctx, 0) :],
+        "key_values": key_values,
+        "latent_tail": hidden_states[..., -DECODER_BACKEND_CONTEXT_FRAMES:],
+    }
+
+
+def speech_tokenizer_decoder_continue(
+    state: dict,
+    token_ids: torch.Tensor,
+    weights: dict,
+    config: SpeechTokenizerDecoderConfig,
+) -> torch.Tensor:
+    """Decode ``token_ids`` [batch, num_quantizers, n] that follow the prefix in ``state``.
+
+    Returns audio [batch, 1, n * 1920] for the new frames only.
+    """
+    embeddings = _decoder_embed(token_ids, weights)
+    hidden_states = _decoder_pre_conv(embeddings, weights, left_context=state["embedding_tail"])
+    pre_transformer_weights = _decoder_pre_transformer_weights(weights)
+    if pre_transformer_weights:
+        hidden_states = pre_transformer_forward(
+            hidden_states.transpose(1, 2),
+            pre_transformer_weights,
+            config,
+            past_key_values=state["key_values"],
+            start_pos=state["num_frames"],
+        ).transpose(1, 2)
+    context = state["latent_tail"]
+    audio = _decoder_backend(torch.cat([context, hidden_states], dim=-1), weights, config)
+    return audio[..., audio.shape[-1] * context.shape[-1] // (context.shape[-1] + hidden_states.shape[-1]) :]
 
 
 def extract_speech_tokenizer_decoder_weights(state_dict: dict) -> dict:

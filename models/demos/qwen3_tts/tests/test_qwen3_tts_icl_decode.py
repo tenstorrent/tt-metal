@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.demos.qwen3_tts.tt.server import TTSConfig, decode_audio, decode_icl_audio
+from models.demos.qwen3_tts.tt.server import TTSConfig, decode_audio, decode_icl_audio, prepare_icl_decoder_state
 
 SAMPLES_PER_FRAME = 1920  # 24 kHz / 12.5 fps
 REF_CACHE = Path(__file__).resolve().parents[1] / "demo" / "jim_reference.refcache.pt"
@@ -59,3 +59,14 @@ def test_decoder_is_causal_past_sliding_window(decoder_weights):
     alone = decode_audio(prefix, decoder_weights).squeeze()
     within = decode_audio(joint, decoder_weights).squeeze()[: alone.shape[-1]]
     torch.testing.assert_close(alone, within, atol=1e-4, rtol=0)
+
+
+def test_cached_reference_state_is_reusable(decoder_weights):
+    # One precomputed reference state serves many continuations, each matching a full decode.
+    codes_all = torch.load(REF_CACHE, weights_only=True)["ref_codes"].long()
+    ref_codes = codes_all[:30]
+    state = prepare_icl_decoder_state(ref_codes, decoder_weights)
+    for gen_codes in (codes_all[30:], codes_all[:21], torch.cat([codes_all, codes_all])):
+        audio = decode_icl_audio(ref_codes, gen_codes, decoder_weights, ref_state=state).squeeze()
+        full = decode_audio(torch.cat([ref_codes, gen_codes]), decoder_weights).squeeze()
+        torch.testing.assert_close(audio, full[ref_codes.shape[0] * SAMPLES_PER_FRAME :], atol=1e-4, rtol=0)
