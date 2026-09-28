@@ -68,14 +68,14 @@ def get_device_info(device: Device, cd: ClusterDescriptor, pci_bdfs: dict) -> De
     # ARC firmware version and postcode both come from the device firmware. Where there is none,
     # report them as absent rather than letting the read fail and take the whole row -- the
     # remaining fields are still useful.
-    has_arc = device_has_firmware(device)
-    if has_arc:
+    has_firmware = device_has_firmware(device)
+    if has_firmware:
         fw = device.firmware_version
         arc_fw = f"{fw.major}.{fw.minor}.{fw.patch}"
     else:
         arc_fw = "N/A"
 
-    if not has_arc or device.is_blackhole():
+    if not has_firmware or device.is_blackhole():
         # Postcode check is skipped for blackhole due to https://github.com/tenstorrent/tt-exalens/issues/535
         postcode = "N/A"
     else:
