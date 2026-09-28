@@ -59,7 +59,9 @@ test layernorm), so pick a reasonable set, not an exhaustive one:
    cases with a `k:` filter (a parametrize id or a test name). Skip:
    - model tests (they need weights);
    - tests for meshes this box does not have (T3K, Galaxy);
-   - tests that are already skipped;
+   - tests that are already skipped (except where a conftest's hardware table skips cases this box can run: an
+     entry's `unskip: "<skip reason text>"` drops those skips in both runs; say in `why:` why they run here, as
+     `ttnn/ttnn/bringup/dispatch/tests/source.yaml` does);
    - look-alike ops with their own kernels.
 3. Aim for minutes, not hours. A check (fork only, warm kernel cache) should take a few minutes; recording runs
    everything twice, cold the first time. Prefer breadth (layouts, placements, dtypes, program configs) over many
