@@ -58,7 +58,23 @@
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_ring.py
   skus:
     bh_p300:
-      timeout: 10
+      timeout: 25  # ring suite measured ~19 min on two P150b
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: e2e
+
+- id: bh-streaming-sdpa-recipes-exp-ring
+  name: streaming SDPA recipes on exp ring, generic ring geometry and device-tensor lengths
+  # Measured ~40 min on two P150b (exp ring ~7 min; ring/exp geometry, lengths and the
+  # default-L1 kernel-config-buffer check ~33 min).
+  cmd: >-
+    pytest tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_exp_ring.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_ring_geometry.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_ring_lengths.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_exp_ring_config_buffer.py
+  skus:
+    bh_p300:
+      timeout: 45
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: e2e
