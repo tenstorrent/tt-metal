@@ -176,6 +176,22 @@ std::vector<Tensor> softplus_bw(
     float beta,
     float threshold,
     const std::optional<MemoryConfig>& output_mem_config) {
+#if !defined(TT_POLY_LLK_DISABLE)
+    // Complete selected callback; numerical closure is validated by the package.
+    if (std::bit_cast<uint32_t>(beta) == 0x3f800000u && std::bit_cast<uint32_t>(threshold) == 0x41a00000u &&
+        input.storage_type() == StorageType::DEVICE && grad.storage_type() == StorageType::DEVICE &&
+        input.device() == grad.device() &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+        input.dtype() == DataType::BFLOAT16 && grad.dtype() == DataType::BFLOAT16 && input.layout() == Layout::TILE &&
+        grad.layout() == Layout::TILE && !input.is_sharded() && !grad.is_sharded() &&
+        input.logical_shape() == grad.logical_shape() && input.padded_shape() == grad.padded_shape() &&
+        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
+        const std::vector<operations::unary::EltwiseUnaryWithParam> factor{
+            {operations::unary::UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW}};
+        return {ttnn::multiply(input, grad, std::nullopt, output_mem_config, std::nullopt, {}, factor, {}, false)};
+    }
+#endif
+
     std::vector<Tensor> grad_tensor;
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
     Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_mem_config);
@@ -432,6 +448,21 @@ std::vector<Tensor> trunc_bw(
 // z = exp(-abs(input))
 std::vector<Tensor> log_sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+#if !defined(TT_POLY_LLK_DISABLE)
+    // Complete selected callback; numerical closure is validated by the package.
+    if (input.storage_type() == StorageType::DEVICE && grad.storage_type() == StorageType::DEVICE &&
+        input.device() == grad.device() &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0) &&
+        input.dtype() == DataType::BFLOAT16 && grad.dtype() == DataType::BFLOAT16 && input.layout() == Layout::TILE &&
+        grad.layout() == Layout::TILE && !input.is_sharded() && !grad.is_sharded() &&
+        input.logical_shape() == grad.logical_shape() && input.padded_shape() == grad.padded_shape() &&
+        (!output_mem_config.has_value() || !output_mem_config->is_sharded())) {
+        const std::vector<operations::unary::EltwiseUnaryWithParam> factor{
+            {operations::unary::UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW}};
+        return {ttnn::multiply(input, grad, std::nullopt, output_mem_config, std::nullopt, {}, factor, {}, false)};
+    }
+#endif
+
     std::vector<Tensor> grad_tensor;
     Tensor max_deriv = ttnn::where(ttnn::ltz(input, output_mem_config), 1.f, 0.f, output_mem_config);
     Tensor in_sign = ttnn::where(ttnn::ltz(input, output_mem_config), 1.f, -1.f, output_mem_config);
