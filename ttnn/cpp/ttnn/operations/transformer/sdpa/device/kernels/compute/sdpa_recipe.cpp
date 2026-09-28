@@ -12,7 +12,7 @@
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("Os")
-#elif !defined(SDPA_RECIPE_BASELINE)
+#elif defined(SDPA_RECIPE_ACCURATE)
 #define SDPA_RECIPE_OPTIMIZE_PUSHED
 #pragma GCC push_options
 #pragma GCC optimize("O2")
