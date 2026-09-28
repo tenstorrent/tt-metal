@@ -6,10 +6,9 @@
 // (u, w, q_decay, intra, k_dec_t, dl) and carries the recurrent state S [K,V] on-core.
 //
 // Per chunk (Ct=C/32, Kt=K/32, Vt=V/32):
-//   v_prime = w @ S ; v_new = u - v_prime
-//   o       = q_decay @ S + intra @ v_new
-//   s_upd   = k_dec_t @ v_new
-//   S       = S * dl + s_upd        (dl = exp(g_sum), scalar in dl tile [0,0])
+//   v_new = T_inv @ (v_beta - kd @ S)
+//   o     = q_decay @ S + intra @ v_new         (one DST accumulate)
+//   S     = (dl*I) @ S + k_dec_t @ v_new        (one DST accumulate; dl = exp(g_sum) on the diagonal)
 // No matrix inverse here — that (the expensive part) lives entirely in the prep phase.
 //
 
@@ -31,7 +30,7 @@ constexpr uint32_t cb_dl = 22, cb_Tinv = 13;
 constexpr uint32_t cb_S = 8, cb_out = 16;
 constexpr uint32_t cb_vbeta = 14, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_s2 = 21, cb_vnew = 11, cb_ointer = 23, cb_kdec_t = 24;
-constexpr uint32_t cb_supd = 25, cb_stmp = 26, cb_final = 27;
+constexpr uint32_t cb_final = 27;
 constexpr uint32_t cb_scr1 = 28, cb_s3 = 31;
 
 constexpr GdnScanCbs CBS{
@@ -45,8 +44,6 @@ constexpr GdnScanCbs CBS{
     .vnew = cb_vnew,
     .ointer = cb_ointer,
     .kdec_t = cb_kdec_t,
-    .supd = cb_supd,
-    .stmp = cb_stmp,
     .scr1 = cb_scr1};
 
 }  // namespace

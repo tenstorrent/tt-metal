@@ -216,42 +216,6 @@ inline void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, ui
     cb_push_back(o, Mt * Nt);
 }
 
-// out = A * scalar, n tiles. scalar is the [0,0] element of the single `scal` tile.
-inline void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n, bool skip_reconfig = false) {
-    cb_reserve_back(o, n);
-    if (!skip_reconfig) {
-        pack_reconfig_data_format(o);
-        reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
-    }
-    mul_bcast_scalar_init(a, scal);
-    if constexpr (kDstTiles == 1) {
-        for (uint32_t i = 0; i < n; i++) {
-            tile_regs_acquire();
-            mul_tiles_bcast_scalar(a, scal, i, 0, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, o, i);
-            tile_regs_release();
-        }
-        cb_push_back(o, n);
-        return;
-    }
-    for (uint32_t i0 = 0; i0 < n; i0 += kDstTiles) {
-        const uint32_t nb = (n - i0 < kDstTiles) ? (n - i0) : kDstTiles;
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < nb; j++) {
-            mul_tiles_bcast_scalar(a, scal, i0 + j, 0, j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < nb; j++) {
-            pack_tile(j, o, i0 + j);
-        }
-        tile_regs_release();
-    }
-    cb_push_back(o, n);
-}
-
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
 inline void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o, bool skip_reconfig = false) {
     cb_reserve_back(o, 1);
@@ -527,7 +491,7 @@ struct GdnPrepCbs {
 struct GdnScanCbs {
     uint32_t dl, Tinv, out;
     uint32_t vbeta, kd, qdecay, intra;
-    uint32_t vnew, ointer, kdec_t, supd, stmp;
+    uint32_t vnew, ointer, kdec_t;
     uint32_t scr1;
 };
 
@@ -759,10 +723,14 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     cb_push_back(cb.kdec_t, Kt * Ct);
     POP(cb.scr1, ck);
 
-    // ---- dl = exp(g_sum) = decayfac[i]*decay_exp[i] (same for all i); 1 tile, [0,0] holds dl.
-    // The scan kernel uses it to decay the recurrent state: S <- S*dl + k_dec_t@v_new.
-    ew(cb.decayfac, cb.decay_exp, cb.dl, 1, 2);
+    // ---- dl*I: dl = exp(g_sum) = decayfac[i]*decay_exp[i] (the same value in every row of column 0),
+    // broadcast down the identity -> one tile with dl on the diagonal. The scan decays the state as
+    // the matmul (dl*I) @ S_tile so the update S <- dl*S + k_dec_t@v_new accumulates in one DST pass.
+    ew(cb.decayfac, cb.decay_exp, cb.scr1, 1, 2);
+    WAIT(cb.scr1, 1);
+    bcast_cols_mul(cb.eye, cb.scr1, cb.dl, 1, 1);
     WAIT(cb.dl, 1);
+    POP(cb.scr1, 1);
     POP(cb.decayfac, Ct);
     POP(cb.decay_exp, Ct);
     // u, w, k_dec_t, q_decay, intra, dl remain pushed in their CBs -> prep writer -> DRAM.
@@ -812,53 +780,76 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         POP(cb.ointer, cv);
     }
 
-    // The three remaining matmuls are independent of each other (all inputs ready): issue them
-    // back to back so the FPU stays in matmul mode, then the three FPU eltwise ops.
-    // o_inter = q_decay @ S
-    {
-        GDN_ZONE("st_qS");
-        WAIT(cb.qdecay, ck);
-        mm(cb.qdecay, cur_S, cb.ointer, Ct, Kt, Vt, false, H);
-        WAIT(cb.ointer, cv);
-        POP(cb.qdecay, ck);
-    }
-    // intra_v = intra @ v_new
-    {
-        GDN_ZONE("st_intra");
-        WAIT(cb.intra, cc);
-        mm(cb.intra, cb.vnew, cb.scr1, Ct, Ct, Vt, false, H);
-        WAIT(cb.scr1, cv);
-        POP(cb.intra, cc);
-    }
-    // s_upd = k_dec_t @ v_new
-    {
-        GDN_ZONE("st_supd");
-        WAIT(cb.kdec_t, kc);
-        mm(cb.kdec_t, cb.vnew, cb.supd, Kt, Ct, Vt, false, H);
-        WAIT(cb.supd, kv);
-        POP(cb.kdec_t, kc);
-        POP(cb.vnew, cv);
-    }
-    // o = o_inter + intra_v -> cb_out (drained by writer)
+    // The two outputs are each a sum of two matmuls; both sums stay in DST: the second matmul
+    // accumulates onto the first (MVMUL adds into DST, which only the packer zeroes at release), so
+    // there is no packed intermediate, no re-unpack and no eltwise block. matmul_tiles binds its
+    // operand CBs per call, so one matmul_init serves both products of a block.
+    // o = q_decay @ S + intra @ v_new -> cb_out (drained by the writer)
     {
         GDN_ZONE("st_o");
-        ew(cb.ointer, cb.scr1, cb.out, cv, 0, H);
-        POP(cb.ointer, cv);
-        POP(cb.scr1, cv);
+        WAIT(cb.qdecay, ck);
+        WAIT(cb.intra, cc);
+        cb_reserve_back(cb.out, cv);
+        matmul_init(cb.qdecay, cur_S, 0);
+        for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
+            const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < nb; j++) {
+                const uint32_t t = t0 + j;
+                const uint32_t mi = t / Vt;
+                const uint32_t ni = t - mi * Vt;
+                for (uint32_t ki = 0; ki < Kt; ki++) {
+                    matmul_tiles(cb.qdecay, cur_S, mi * Kt + ki, ki * Vt + ni, j);
+                }
+                for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
+                    matmul_tiles(cb.intra, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < nb; j++) {
+                pack_tile(j, cb.out, t0 + j);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb.out, cv);
+        POP(cb.qdecay, ck);
+        POP(cb.intra, cc);
     }
-    // S_new = cur_S * dl + s_upd  (dl scalar in cb_dl tile [0,0])
-    {
-        GDN_ZONE("st_decay");
-        WAIT(cb.dl, 1);
-        bcast_scalar_mul(cur_S, cb.dl, cb.stmp, kv, H);
-        WAIT(cb.stmp, kv);
-        POP(cb.dl, 1);
-        POP(cur_S, kv);
-    }
+    // S_new = (dl*I) @ S + k_dec_t @ v_new -> dst (the next chunk's cur_S, or the final state).
+    // The decay is block-diagonal, so every state tile (i,j) uses the single dl*I tile as in0.
     {
         GDN_ZONE("st_snew");
-        ew(cb.stmp, cb.supd, dst, kv, 0, H);
-        POP(cb.stmp, kv);
-        POP(cb.supd, kv);
+        WAIT(cb.kdec_t, kc);
+        WAIT(cb.dl, 1);
+        cb_reserve_back(dst, kv);
+        matmul_init(cb.dl, cur_S, 0);
+        for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
+            const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < nb; j++) {
+                matmul_tiles(cb.dl, cur_S, 0, t0 + j, j);
+            }
+            for (uint32_t j = 0; j < nb; j++) {
+                const uint32_t t = t0 + j;
+                const uint32_t mi = t / Vt;
+                const uint32_t ni = t - mi * Vt;
+                for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
+                    matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < nb; j++) {
+                pack_tile(j, dst, t0 + j);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(dst, kv);
+        POP(cb.kdec_t, kc);
+        POP(cb.dl, 1);
     }
+    // v_new and the input state fed both blocks; release them once everything is packed.
+    POP(cb.vnew, cv);
+    POP(cur_S, kv);
 }

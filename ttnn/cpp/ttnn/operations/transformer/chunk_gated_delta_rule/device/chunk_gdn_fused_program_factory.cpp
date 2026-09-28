@@ -181,7 +181,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(union_set, fcb::qdecay, ck, kHandoffNbuf);
     add_cb(union_set, fcb::intra, cc, kHandoffNbuf);
     add_cb(union_set, fcb::kdec_t, kc, kHandoffNbuf);
-    // dl is 1 tile. (The phased prep factory sized this index cv as cb_vnew for monolithic layout
+    // dl*I is 1 tile. (The phased prep factory sized this index cv as cb_vnew for monolithic layout
     // parity, but the prep kernel only ever uses 1 tile of it, as cb_dl.)
     add_cb(union_set, fcb::dl, 1, kHandoffNbuf);
     add_cb(union_set, fcb::Tinv, cc, kHandoffNbuf);
@@ -233,8 +233,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(rcv_set, fcb::out, cvl, 2, tt::DataFormat::Float32);
     add_cb(rcv_set, fcb::s2, kvl);
     add_cb(rcv_set, fcb::ointer, cvl);
-    add_cb(rcv_set, fcb::supd, kvl);
-    add_cb(rcv_set, fcb::stmp, kvl);
     add_cb(rcv_set, fcb::final_s, kvl);
     add_cb(rcv_set, fcb::scr1, scr_l);
     add_cb(rcv_set, fcb::s3, kvl);
