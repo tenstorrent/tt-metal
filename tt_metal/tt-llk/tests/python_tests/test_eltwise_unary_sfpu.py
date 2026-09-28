@@ -1379,12 +1379,15 @@ _TT_POLY_FP32_DEST = {
     "acos": (),
     "acosh": ("blackhole", "wormhole"),
     "atanh": (),
+    "celu": (),
+    "elu": (),
     "erf": (),
     "erfc": (),
     "exp2": (),
     "expm1": (),
     "hardsigmoid": (),
     "relu": (),
+    "selu": (),
     "sigmoid": (),
 }
 _TT_POLY_COPY_REBASE = {}
@@ -1493,6 +1496,8 @@ _GENERATED_UNARY_CASES = [
         "None",
         "ckernel_sfpu_trigonometry.h",
     ),
+    (MathOperation.Celu, "celu", False, False, 32, "None", "ckernel_sfpu_celu.h"),
+    (MathOperation.Elu, "elu", False, False, 32, "None", "ckernel_sfpu_elu.h"),
     (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
@@ -1507,6 +1512,7 @@ _GENERATED_UNARY_CASES = [
         "ckernel_sfpu_activations.h",
     ),
     (MathOperation.Relu, "relu", True, False, 8, "RC", "ckernel_sfpu_relu.h"),
+    (MathOperation.Selu, "selu", False, False, 32, "None", "ckernel_sfpu_selu.h"),
     (MathOperation.Sigmoid, "sigmoid", True, True, 8, "RC", "ckernel_sfpu_sigmoid.h"),
 ]
 
@@ -1572,12 +1578,15 @@ _TT_POLY_PERF_OPERATIONS = (
     "acos",
     "acosh",
     "atanh",
+    "celu",
+    "elu",
     "erf",
     "erfc",
     "exp2",
     "expm1",
     "hardsigmoid",
     "relu",
+    "selu",
     "sigmoid",
 )
 
@@ -1804,11 +1813,14 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "acos",
     "acosh",
     "atanh",
+    "celu",
+    "elu",
     "erf",
     "erfc",
     "exp2",
     "expm1",
     "hardsigmoid",
     "relu",
+    "selu",
     "sigmoid",
 )
