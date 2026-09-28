@@ -25,6 +25,7 @@ from ttml.common.sampling import positions_to_tensor
 
 from .completer_common import deallocate_tensors, async_read_to_host
 from .llama_overrides import LlamaCompositeKV
+from .ttml_rollout_sampler import load_checkpoint
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
@@ -44,34 +45,6 @@ class LlamaCompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
-    from safetensors.numpy import load_file
-    import ml_dtypes
-
-    checkpoint = load_file(checkpoint_path)
-    parameters = model.parameters()
-    loaded, missing = 0, []
-
-    for name, param in parameters.items():
-        if name in checkpoint:
-            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-            if arr.ndim == 1:
-                arr = arr.reshape(1, 1, 1, -1)
-            elif arr.ndim == 2:
-                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-            param.assign(restored)
-            loaded += 1
-        else:
-            missing.append(name)
-
-    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
-    if missing:
-        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
-        for n in missing:
-            print(f"  - {n}")
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
