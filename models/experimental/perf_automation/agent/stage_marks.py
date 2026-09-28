@@ -38,10 +38,31 @@ from . import stage_seams as _seams
 from .profiler_drain import ProfilerDrain, capacity_cadence, is_device
 
 import ast
+import functools
+import inspect
+import os
 import re
 import sys
+import textwrap
 
 _UNKNOWN = object()
+
+# The marks one stage's window is bounded by. tracy_tool.stage_windows reads exactly these back.
+_STAGE_MARK = "stage:%s"
+_STAGE_END_MARK = "stage:%s:end"
+
+# THE SEPARATE PER-STAGE PASS IS A SWITCH. On (the default, and unset) it runs every declared stage once
+# more, between marks, as it always has. Off ("0"), the same marks go on the MEASURED forward instead:
+# each stage's own method, found from the model's <stage>_trace_step hook, is wrapped on the pipeline
+# instance to emit its marks as the forward calls it. On a WH Galaxy (2026-09-28) the separate pass
+# cost 10,458 of the 32,769 ops tracy can record per chip, and the forward it was measuring for was
+# cut off at 65%; marked in place, nothing runs twice. A pipeline whose stages cannot be matched to a
+# method falls back to the pass, so switching it off never leaves a model unmarked.
+STAGE_PASS_ENV = "PERF_MCP_STAGE_PASS"
+
+
+def stage_pass_enabled() -> bool:
+    return os.environ.get(STAGE_PASS_ENV, "1") != "0"
 
 
 def signpost(name: str) -> None:
@@ -126,7 +147,7 @@ def mark_stages(adapter, device) -> int:
             step = getattr(st, "step", None)
             if not name or not callable(step):
                 continue
-            signpost("stage:%s" % name)
+            signpost(_STAGE_MARK % name)
             try:
                 step()
                 ttnn.synchronize_device(device)
@@ -140,11 +161,25 @@ def mark_stages(adapter, device) -> int:
                     flush=True,
                 )
             finally:
-                signpost("stage:%s:end" % name)
+                signpost(_STAGE_END_MARK % name)
                 drain.read()
     if not n:
         no_marks("%d declared stage(s), none could be run one at a time" % len(stages))
     return n
+
+
+_STAGES_ATTR = "PIPELINE_STAGES"  # the stage list a pipeline declares -- the contract's name for it
+
+
+def _declared_stages(obj) -> tuple:
+    """(the stage names the pipeline declares, whether it declares them on itself rather than on its
+    module) -- ([], False) when it declares none."""
+    names = getattr(obj, _STAGES_ATTR, None)
+    if isinstance(names, (list, tuple)) and names:
+        return list(names), True
+    mod = sys.modules.get(type(obj).__module__)
+    names = getattr(mod, _STAGES_ATTR, None) if mod else None
+    return (list(names), False) if isinstance(names, (list, tuple)) and names else ([], False)
 
 
 def looks_like_a_pipeline(obj) -> bool:
@@ -152,14 +187,73 @@ def looks_like_a_pipeline(obj) -> bool:
 
     The same two things perf_adapter looks for: a PIPELINE_STAGES list, or the per-stage trace hooks
     named after its entries. Shape, not type -- the tool never imports a model's classes."""
-    names = getattr(obj, "PIPELINE_STAGES", None)
-    if isinstance(names, (list, tuple)) and names:
+    names, own = _declared_stages(obj)
+    if own:
         return True
-    mod = sys.modules.get(type(obj).__module__)
-    names = getattr(mod, "PIPELINE_STAGES", None) if mod else None
-    if not isinstance(names, (list, tuple)) or not names:
-        return False
-    return any(callable(getattr(obj, _seams.hook(n, _seams.STEP), None)) for n in names)
+    return bool(names) and any(callable(getattr(obj, _seams.hook(n, _seams.STEP), None)) for n in names)
+
+
+def _methods_a_hook_calls(hook) -> set:
+    """Names of the methods `hook` calls on its own instance, read from its source."""
+    try:
+        fn = ast.parse(textwrap.dedent(inspect.getsource(hook))).body[0]
+        me = fn.args.args[0].arg
+    except Exception:  # noqa: BLE001 -- no source, or not a method: nothing to read
+        return set()
+    return {
+        n.func.attr
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == me
+    }
+
+
+def stage_methods(pipe) -> dict:
+    """{stage: the method the measured forward runs that stage through}, or {} when not every declared
+    stage resolves to exactly one.
+
+    Read from the model's own hooks, never from a name typed here: <stage>_trace_step exists to run
+    ONE stage, so the method it calls that no other stage's step also calls is that stage's own.
+    Helpers every hook shares (input prep, readback) drop out by that rule, and so do the seams."""
+    stages, _ = _declared_stages(pipe)
+    seams = {_seams.hook(st, sm) for st in stages for sm in _seams.ALL}
+    calls = {}
+    for st in stages:
+        hook = getattr(type(pipe), _seams.hook(st, _seams.STEP), None)
+        if hook is None:
+            return {}
+        calls[st] = _methods_a_hook_calls(hook)
+    out = {}
+    for st, names in calls.items():
+        shared = set().union(*[v for k, v in calls.items() if k != st])
+        own = [n for n in sorted(names - shared - seams) if callable(getattr(pipe, n, None))]
+        if len(own) != 1:
+            return {}
+        out[st] = own[0]
+    return out if len(set(out.values())) == len(out) else {}
+
+
+def mark_stages_on_forward(pipe) -> int:
+    """Wrap each stage's own method on THIS pipeline so the forward emits its marks. Returns how many
+    stages were marked, 0 when they cannot be matched (the caller then runs the separate pass).
+
+    On the instance, not the class: the wrap lives exactly as long as the pipeline the profiled
+    forward runs, and no other pipeline -- a trace-replay build, a second test -- ever sees it."""
+    mapping = stage_methods(pipe)
+    for stage, name in mapping.items():
+        fn = getattr(pipe, name)
+
+        def _marked(*a, _fn=fn, _stage=stage, **k):
+            signpost(_STAGE_MARK % _stage)
+            try:
+                return _fn(*a, **k)
+            finally:
+                signpost(_STAGE_END_MARK % _stage)
+
+        setattr(pipe, name, functools.wraps(fn)(_marked))
+    return len(mapping)
 
 
 def find_pipeline_in_scope(scope: dict):
@@ -391,6 +485,22 @@ def mark_stages_in_scope(scope: dict, device=None, bind=None) -> int:
     if pipe is None:
         no_marks("no object in scope exposes PIPELINE_STAGES or <stage>_trace_step hooks")
         return 0
+    if not stage_pass_enabled():
+        n = mark_stages_on_forward(pipe)
+        if n:
+            print(
+                "  [stage-marks] %s=0: %d stage(s) marked on the measured forward, no separate pass"
+                % (STAGE_PASS_ENV, n),
+                file=sys.stderr,
+                flush=True,
+            )
+            return n
+        print(
+            "  [stage-marks] %s=0, but the stages could not be matched to the forward's own methods; "
+            "running the separate pass" % STAGE_PASS_ENV,
+            file=sys.stderr,
+            flush=True,
+        )
     if callable(bind):
         try:
             _call_preparer(bind, pipe, scope)
