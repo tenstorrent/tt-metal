@@ -40,3 +40,11 @@ Run1 complete, 60/60 tasks PASS, nothing pushed. Layers 0-5 of 48 (a subset resu
   layer (goldens, parity) + physical-core threads, F41 contract serves the subset, F42 full prefill of a subset.
 - Open: V padded 128 -> 192 in the KV cache and SDPA (bandwidth); LM head on host; qkv / dense MLP in bf16 (bfp8 is a
   candidate); the full 48-layer model does not fit the box.
+
+## 2026-09-28 checkpoint trimmed to layers 0-5 (owner request)
+Owner: the whole-model checkpoint was only needed for the one-time R.1 HF sanity. `/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/hf`
+was rewritten to layers 0-5 + embed_tokens / norm / lm_head (7733 of 73081 tensors, bytes unchanged and verified by
+sha256 per tensor) in `subset-*.safetensors`; the new `model.safetensors.index.json` points at them, the original index
+is kept as `model.safetensors.index.full.json`; the 64 expert-parallel shards were deleted (160 GB -> 20 GB).
+Consequence: R.1 (whole-model sanity, checkpoint counts) of mimo_v2_6_d_p and mimo_v2_6_d_p_2x2 no longer reruns; to
+rerun it, re-download revision 5711b268169967567844e1e560e8a3966da959b1. Everything else uses layers 0-5 only.

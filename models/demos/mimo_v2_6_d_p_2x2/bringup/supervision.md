@@ -21,3 +21,11 @@ vs the 1x4 prior (final state, 204.9 ms chunk after its perf work):
 - 50k->55k chunk device: 249.9 ms (1x4 204.9 ms). The gap is the MoE fabric dispatch + combine within each column (41.7 + 26.3 ms vs 8.7 + 12.6 local on 1x4); owner declined local dispatch / dispatch tuning.
 - 0->55k warm TTFT: 2524 ms (1x4 X.3: 2209 ms, measured before its last perf work)
 - bring-up ops: reused rms_norm_ttnn (incl. return_residual_sum), sdpa (V 128), unified_routed_expert_ffn (high_precision), dispatch / combine / offset_cumsum (now on a 2-device axis, fabric on). No fork extended, none created; no existing TTNN op touched.
+
+## 2026-09-28 checkpoint trimmed to layers 0-5 (owner request)
+Owner: the whole-model checkpoint was only needed for the one-time R.1 HF sanity. `/localdev/dnijemcevic/bringup/mimo_v2_6_d_p/hf`
+was rewritten to layers 0-5 + embed_tokens / norm / lm_head (7733 of 73081 tensors, bytes unchanged and verified by
+sha256 per tensor) in `subset-*.safetensors`; the new `model.safetensors.index.json` points at them, the original index
+is kept as `model.safetensors.index.full.json`; the 64 expert-parallel shards were deleted (160 GB -> 20 GB).
+Consequence: R.1 (whole-model sanity, checkpoint counts) of mimo_v2_6_d_p and mimo_v2_6_d_p_2x2 no longer reruns; to
+rerun it, re-download revision 5711b268169967567844e1e560e8a3966da959b1. Everything else uses layers 0-5 only.
