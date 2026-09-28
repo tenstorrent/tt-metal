@@ -56,3 +56,37 @@ def test_gate_commit_stages_the_task_extras_and_the_fork_calls(fx):
     assert {"O.1.json", "O.1_extra.json", "fork_calls.json"} <= got and "X.3_profile.json" not in got
     got = names({"id": "X.3", "step": "perf"})
     assert "X.3_profile.json" in got and "fork_calls.json" not in got
+
+
+def test_source_swap_points_the_original_name_at_the_fork(monkeypatch):
+    """fork_source's plugin swaps attributes for the session and puts them back."""
+    import sys
+    import types
+
+    from models.demos.common.bringup.testing import fork_source as S
+
+    orig_mod = types.ModuleType("fakepkg_orig")
+    orig_mod.op = "original"
+    fork_mod = types.ModuleType("fakepkg_fork")
+    fork_mod.op = "fork"
+    monkeypatch.setitem(sys.modules, "fakepkg_orig", orig_mod)
+    monkeypatch.setitem(sys.modules, "fakepkg_fork", fork_mod)
+    monkeypatch.setenv(S.ENV, json.dumps({"fakepkg_orig.op": "fakepkg_fork.op"}))
+    S.pytest_configure(None)
+    assert orig_mod.op == "fork"
+    S.pytest_unconfigure(None)
+    assert orig_mod.op == "original"
+
+
+def test_source_outcomes_from_junit(tmp_path):
+    from models.demos.common.bringup.testing import fork_source as S
+
+    x = tmp_path / "r.xml"
+    x.write_text(
+        "<testsuites><testsuite>"
+        '<testcase classname="m" name="a"/>'
+        '<testcase classname="m" name="b"><failure message="x"/></testcase>'
+        '<testcase classname="m" name="c"><skipped/></testcase>'
+        "</testsuite></testsuites>"
+    )
+    assert S._outcomes(x) == {"m::a": "passed", "m::b": "failed", "m::c": "skipped"}
