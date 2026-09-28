@@ -54,9 +54,12 @@ private:
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-    void write_program_commands_to_devices(
-        const std::vector<IDevice*>& devices,
+    // Writes one program's command sequence to one device, as a single fetch of `one_shot_size` bytes when it fits
+    // in one.
+    void write_program_commands_to_device(
+        IDevice* device,
         ProgramCommandSequence& program_cmd_seq,
+        uint32_t one_shot_size,
         bool stall_first,
         bool stall_before_program);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
@@ -170,6 +173,21 @@ private:
     std::unique_ptr<RingbufferCacheManager> prefetcher_cache_manager_;
     // The backup prefetcher cache manager is used to stash away the prefetcher cache state during trace recording.
     std::unique_ptr<RingbufferCacheManager> dummy_prefetcher_cache_manager_;
+
+    // Per-call state of enqueue_mesh_workload, kept to reuse the allocations.
+    struct DeviceProgramWrite {
+        IDevice* device;
+        ProgramCommandSequence* program_cmd_seq;
+        uint32_t one_shot_size;
+    };
+    std::vector<DeviceProgramWrite> device_program_writes_;
+    std::vector<uint32_t> device_program_write_ids_;
+    // Unique to each enqueue_mesh_workload call in the process, so that a thread's packed copy of a program is not
+    // reused by a later enqueue, including one on a queue or program that was allocated at the same address.
+    uint64_t enqueue_generation_ = 0;
+    // Whether enqueue_mesh_workload fans the device writes out across the dispatch thread pool. Only when its
+    // workers stay awake between fan-outs: waking a parked worker takes longer than a model-sized op's writes.
+    const bool fan_out_program_writes_;
 
     // Used to define when the exception should be handled.
     // The goal is to not throw exceptions in loop and do it just once
