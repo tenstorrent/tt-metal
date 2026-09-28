@@ -24,6 +24,10 @@
 //            [B]       add<Row>           cb_normalized, cb_bias_tiles
 //                                                            -> cb_output_tiles
 //            [RM]      untilize           cb_output_tiles    -> cb_output_sticks
+//   CHANGELOG 5, at fp32_dest_acc_en with [G] or [B] (PC_IN_DEST): the three pass-B stages are ONE
+//   window -- mul<Col> CB_T, CB_STAT_B -> D0; gamma / bias Row-broadcast into D1 / D2; the SFPU
+//   PcRowBcast D0 = D0 * gamma + bias; one pack to cb_output_tiles.  No cb_normalized, and the
+//   routing below applies at 16-bit DEST only.
 //
 // CB_T is the tensor the statistics and pass B operate on: cb_x_sum when a
 // residual is present (which is why cb_x_sum, not cb_input_tiles, is the HELD
@@ -120,6 +124,11 @@
 // ckl::Square -- the DEST-only SFPU square Lamp L-RES-FUSE's fused pass-A chain
 // applies to the residual sum without unpacking it back out of cb_x_sum.
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+// CHANGELOG 5: pass B's per-channel stages in DEST at fp32_dest_acc_en -- UnaryBcast (gamma / bias
+// Row-broadcast into their own DEST slots) and the SFPU body PcRowBcast below.
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -255,6 +264,7 @@ ALWI void transform_in_place(uint32_t cb, Transform t) {
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"              // ckernel::sfpu::_calculate_sqrt_body_
 #include "ckernel_sfpu_binop_with_unary.h"  // ckernel::sfpu::Converter::as_float
+#include "llk_math_eltwise_binary_sfpu_params.h"  // _llk_math_eltwise_binary_sfpu_params_ (PcRowBcast)
 
 template <int STRIDE, int ITERS>
 sfpi_inline void rms_stat_scale_body(uint32_t inv_w_bits, uint32_t eps_bits) {
@@ -358,6 +368,65 @@ template <uint32_t RMS_INV_W, uint32_t RMS_EPS>
 struct StatFinalize : compute_kernel_lib::UnaryOp<StatFinalize<RMS_INV_W, RMS_EPS>, compute_kernel_lib::Dst::D0> {
     static ALWI void init() { rsqrt_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { stat_finalize_payload<RMS_INV_W, RMS_EPS>(slot_offset); }
+};
+
+// ---- CHANGELOG 5: the per-channel stages on the SFPU, in DEST (PC_IN_DEST) ----------------
+// y = y * gamma [+ bias] with y (x * 1/rms, fp32 DEST) never leaving DEST.  gamma / bias are
+// unpacked with their Row broadcast into their own DEST slots by UnaryBcast first.
+//
+// Not the stock MulBinary / AddBinary: a Row-broadcast tile is constant down each column, and
+// the SFPU walks a face as [rg0-even, rg0-odd, rg1-even, ...] (column parity is the inner walk
+// axis, see rms_stat_scale_body above), so vector k of a face of it equals vector (k & 1).  The
+// body therefore loads the operand's two vectors once per face and keeps them in LREGs: 1 DEST
+// load per output vector instead of 2 (the stock binary), and with a bias one SFPMAD computes
+// y * g + b (one rounding) instead of a second full pass.  Two vectors are processed per step so
+// each MAD's latency is covered by the other's load.
+#ifdef TRISC_MATH
+template <bool MUL, bool ADD>
+sfpi_inline void pc_rowbcast_face(uint32_t d_y, uint32_t d_g, uint32_t d_b) {
+    constexpr uint32_t T = 32;  // one tile in sfpi rows (64 / SFP_DESTREG_STRIDE)
+    sfpi::vFloat g0 = 1.0f, g1 = 1.0f, b0 = 0.0f, b1 = 0.0f;
+    if constexpr (MUL) {
+        g0 = sfpi::dst_reg[d_g * T + 0];
+        g1 = sfpi::dst_reg[d_g * T + 1];
+    }
+    if constexpr (ADD) {
+        b0 = sfpi::dst_reg[d_b * T + 0];
+        b1 = sfpi::dst_reg[d_b * T + 1];
+    }
+#pragma GCC unroll 4
+    for (int i = 0; i < 4; ++i) {
+        sfpi::vFloat y0 = sfpi::dst_reg[d_y * T + 0];
+        sfpi::vFloat y1 = sfpi::dst_reg[d_y * T + 1];
+        if constexpr (MUL && ADD) {
+            y0 = y0 * g0 + b0;
+            y1 = y1 * g1 + b1;
+        } else if constexpr (MUL) {
+            y0 = y0 * g0;
+            y1 = y1 * g1;
+        } else {
+            y0 = y0 + b0;
+            y1 = y1 + b1;
+        }
+        sfpi::dst_reg[d_y * T + 0] = y0;
+        sfpi::dst_reg[d_y * T + 1] = y1;
+        sfpi::dst_reg += 2;  // net +8 per face, the stock bodies' advance (8 x dst_reg++)
+    }
+}
+#endif  // TRISC_MATH
+
+// DEST slots: Y = y (in place), G = the Row-broadcast gamma, B = the Row-broadcast bias.
+template <bool MUL, bool ADD, ckl::Dst Y, ckl::Dst G, ckl::Dst B>
+struct PcRowBcast : ckl::TernaryOp<PcRowBcast<MUL, ADD, Y, G, B>, Y, G, B, Y> {
+    static ALWI void init() { mul_binary_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        MATH((_llk_math_eltwise_binary_sfpu_params_(
+            pc_rowbcast_face<MUL, ADD>,
+            ckl::to_u32(Y) + slot_offset,
+            ckl::to_u32(G) + slot_offset,
+            ckl::to_u32(B) + slot_offset,
+            VectorMode::RC)));
+    }
 };
 
 // Largest divisor of `wt` that is <= `cap` -- pass B's DEST-lane block size (Perf 2,
@@ -978,7 +1047,21 @@ void kernel_main() {
     // cb_normalized; each stage in S except the LAST writes cb_normalized IN
     // PLACE, and the last writes cb_output_tiles.  With S = [scale] or S = [] this
     // collapses to exactly the seed's routing.
-    constexpr uint32_t NORM_OUT = (HAS_G || HAS_B) ? cb_normalized : cb_output_tiles;
+    //
+    // CHANGELOG 5: at fp32_dest_acc_en the per-channel stages run in pass B's scale window instead
+    // (PC_IN_DEST, see the pass-B call site): x * (1/rms) stays in fp32 DEST, gamma / bias are applied
+    // on the SFPU and y is packed once, so cb_normalized is not allocated (the host's norm_cb_depth
+    // mirrors this predicate).  At 16-bit DEST, DEST holds x * (1/rms) at bf16 precision anyway, so
+    // that program keeps the staged path unchanged.
+    constexpr bool PC_IN_DEST = DST_ACCUM_MODE && (HAS_G || HAS_B);
+    constexpr uint32_t NORM_OUT = ((HAS_G || HAS_B) && !PC_IN_DEST) ? cb_normalized : cb_output_tiles;
+    // DEST slots per lane: D0 = y, then the Row-broadcast gamma (D1) and / or bias (D1, or D2 after gamma).
+    constexpr auto PC_B_SLOT = (HAS_G && HAS_B) ? ckl::Dst::D2 : ckl::Dst::D1;
+    constexpr uint32_t PC_LANE = 1 + (HAS_G ? 1 : 0) + (HAS_B ? 1 : 0);
+    constexpr uint32_t PC_BLK_CAP = ckl::DEST_AUTO_LIMIT / PC_LANE;
+    constexpr uint32_t PASS_B_PC_BLK = pass_b_blk(WT_CHUNK, (PASS_B_BLK < PC_BLK_CAP) ? PASS_B_BLK : PC_BLK_CAP);
+    static_assert(
+        !PC_IN_DEST || PC_LANE * PASS_B_PC_BLK <= ckl::DEST_AUTO_LIMIT, "rms_norm_ttnn: PASS_B_PC_BLK overflows DEST");
 
     // Perf 2 (descriptor D21): pass B's DEST-LANE BLOCK SIZE.
     //
@@ -1952,7 +2035,36 @@ void kernel_main() {
             //     0.983x and 0.989x in two independent sessions on perf case 05
             //     (1,1,8192,2304).  Every other combine=False case was flat, so the
             //     carve-out is the regime, not that one shape.
-            if constexpr (!HAS_G || !CROSS_CORE) {
+            if constexpr (PC_IN_DEST) {
+                // ---- CHANGELOG 5: y = x * (1/rms) * gamma + bias in ONE DEST window, packed once ----
+                // D0 = x * stat on the FPU (the same BinaryFpu<Mul, Col> as the 16-bit scale stage), then the
+                // per-channel operands are unpacked with their Row broadcast into D1 (UnaryBcast: unpack to
+                // srcB + MOVB2D, so gamma / bias -- L1 values, bf16 or tf32-exact -- are the only thing that
+                // passes through a source register) and applied on the SFPU in fp32 DEST by PcRowBcast:
+                // D0 = D0 * gamma [+ bias], one SFPMAD per vector.
+                // x * (1/rms) never leaves DEST, so y is rounded once, on the output pack.  PC_LANE slots per lane, so
+                // the DEST block is PASS_B_PC_BLK (<= DEST_AUTO_LIMIT / PC_LANE), not PASS_B_BLK.
+                MaybeDeviceZoneScope("compute_scale");
+                ckl::eltwise_chain(
+                    ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_PC_BLK),
+#ifdef RMS_ABLATE_COMPUTE
+                    ckl::CopyTile<X_IN_B>{hold_base},
+#else
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Mul,
+                        X_IN_B,
+                        ckl::input(
+                            CB_STAT_B,
+                            ckl::BroadcastDim::Col,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
+                            ckl::InputTileMapping::Col)>{hold_base},
+#endif
+                    ckl::Optional<HAS_G, ckl::UnaryBcast<ckl::BroadcastDim::Row, G_IN, ckl::Dst::D1>>{pc_base},
+                    ckl::Optional<HAS_B, ckl::UnaryBcast<ckl::BroadcastDim::Row, B_IN, PC_B_SLOT>>{pc_base},
+                    PcRowBcast<HAS_G, HAS_B, ckl::Dst::D0, ckl::Dst::D1, PC_B_SLOT>{},
+                    ckl::PackTile<PASS_B_OUT_GAMMA>{});
+            } else if constexpr (!HAS_G || !CROSS_CORE) {
                 // ---- the shipped order: scale, then gamma ----
                 // x * (1/rms). The stat is a REDUCE_ROW result: column-shaped, so it
                 // broadcasts back ACROSS columns (BroadcastDim::Col) and must be
@@ -2109,7 +2221,7 @@ void kernel_main() {
                 }
             }
 
-            if constexpr (HAS_B) {
+            if constexpr (HAS_B && !PC_IN_DEST) {
                 // A2: the per-channel SHIFT, and it is the LAST stage -- it packs
                 // cb_output_tiles.  Same operand shape and the same Row broadcast
                 // as the scale (a bias is a 1 x W vector valid in row 0), so it is

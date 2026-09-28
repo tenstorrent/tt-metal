@@ -2105,10 +2105,12 @@ def _width_chunk(wt_core: int, cap: int, ragged_ok: bool) -> tuple[int, int]:
     return wtc, n
 
 
-def _norm_cb_depth(has_gamma: bool, has_bias: bool, block_rows: int = 0) -> int:
+def _norm_cb_depth(has_gamma: bool, has_bias: bool, block_rows: int = 0, pc_in_dest: bool = False) -> int:
     """Ring depth of cb_normalized, in whole blocks.  ONE source of truth (D29).
 
     0  no post-normalize stage at all -- normalize packs cb_output_tiles direct.
+       Also at fp32_dest_acc_en with a weight or bias (`pc_in_dest`, CHANGELOG 5): the compute
+       kernel applies them to x * (1/rms) in DEST (PC_IN_DEST) and packs y once.
     1  exactly ONE post-stage (scale OR bias): it reads cb_normalized and packs
        cb_output_tiles, so the ring is filled once and drained once per block.
     2  BOTH stages: the scale transforms cb_normalized IN PLACE (design B10) and
@@ -2121,7 +2123,7 @@ def _norm_cb_depth(has_gamma: bool, has_bias: bool, block_rows: int = 0) -> int:
        different CB, and it takes D6's fix: doubling the ring keeps the window
        contiguous for ANY rows <= BLOCK_ROWS.
     """
-    if not (has_gamma or has_bias):
+    if not (has_gamma or has_bias) or pc_in_dest:
         return 0
     if not (has_gamma and has_bias):
         return 1
@@ -2148,6 +2150,7 @@ def _cb_block_bytes(
     has_residual: bool = False,
     depth_r: int = 0,
     block_rows: int = 0,
+    pc_in_dest: bool = False,
 ) -> int:
     """BYTES per block-tile summed over the BLOCK-SCOPED CBs (op_design.md 1.4).
 
@@ -2175,7 +2178,7 @@ def _cb_block_bytes(
     """
     # `qt` prices cb_x_squared (fp32 when it holds a DEST-folded partial sum, see _sq_dtype);
     # `it` prices cb_normalized and cb_x_sum.
-    total = depth_x * bt + qt + _norm_cb_depth(has_gamma, has_bias, block_rows) * it + depth_out * bt
+    total = depth_x * bt + qt + _norm_cb_depth(has_gamma, has_bias, block_rows, pc_in_dest) * it + depth_out * bt
     if has_residual:
         total += depth_r * bt + it  # cb_residual_tiles + cb_x_sum
     return total
@@ -3536,6 +3539,8 @@ def create_program_descriptor(
     interm_dtype = _intermediate_dtype(input_tensor.dtype)
     it = ttnn.tile_size(interm_dtype)
     fp32_dest = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", False))
+    # CHANGELOG 5: gamma / bias applied in DEST (the compute kernel's PC_IN_DEST): no cb_normalized.
+    pc_in_dest = fp32_dest and (has_gamma or has_bias)
     gt = ttnn.tile_size(weight.dtype) if has_gamma else 0
     bit = ttnn.tile_size(bias.dtype) if has_bias else 0
     st = ttnn.tile_size(ttnn.bfloat16)  # cb_bank (the one-hot permutation tiles) -- always bf16
@@ -3793,6 +3798,7 @@ def create_program_descriptor(
                 has_residual,
                 _residual_depth(depth if dr0 is None else dr0),
                 block_rows,
+                pc_in_dest,
             )
             per_row_bytes, combine_fixed = _f32_terms(compact)
             fixed = (
@@ -4003,7 +4009,7 @@ def create_program_descriptor(
             # staging rings (D2).
             # cb_x_squared is priced per candidate chunk (_sq_row_bytes), not per tile.
             per_chunk_tile = (
-                it * _norm_cb_depth(has_gamma, has_bias, 1)  # cb_normalized
+                it * _norm_cb_depth(has_gamma, has_bias, 1, pc_in_dest)  # cb_normalized
                 + bt * depth_out  # cb_output_tiles carries the output tensor
                 + (bt * (depth_x + _residual_depth(depth_x)) if has_residual else 0)
                 + _per_channel_bytes(0, 1)
@@ -4082,7 +4088,9 @@ def create_program_descriptor(
         # parallelization.
         depth = depth_candidates[0]
         # qt = 0: cb_x_squared is priced per candidate chunk (_sq_row_bytes).
-        mult = _cb_block_bytes(bt, it, 0, depth, depth, has_gamma, has_bias, has_residual, _residual_depth(depth), 1)
+        mult = _cb_block_bytes(
+            bt, it, 0, depth, depth, has_gamma, has_bias, has_residual, _residual_depth(depth), 1, pc_in_dest
+        )
         per_chunk_tile_bytes = (
             mult + _per_channel_bytes(1, 1) + (rm_stage_rings * CB_RM_STAGE_DEPTH * bt if not is_tile else 0)  # D2
         )
@@ -4341,7 +4349,7 @@ def create_program_descriptor(
         cbs.append(_cb(CB_BIAS_TILES, bit, pc_tile_pages, bias.dtype, all_cores))
         if pc_compact:
             cbs.append(_cb(CB_BIAS_COMPACT, 2 * TILE_DIM * bias_elem_bytes, pc_hold_wt, bias.dtype, all_cores))
-    norm_depth = _norm_cb_depth(has_gamma, has_bias, block_rows)
+    norm_depth = _norm_cb_depth(has_gamma, has_bias, block_rows, pc_in_dest)
     if norm_depth:
         cbs.append(_cb(CB_NORMALIZED, it, norm_depth * block_rows * wt_chunk, interm_dtype, all_cores))
     if plan.native_out:
