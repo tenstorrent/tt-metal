@@ -436,6 +436,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_normalized_log_odds.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_normalized_log_odds_core.h
     inc/api/compute/eltwise_unary/logit_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/logsigmoid_tt_poly_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_inverse_square_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_relu_bf16.h
