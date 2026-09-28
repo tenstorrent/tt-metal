@@ -214,6 +214,15 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--ulp-measure",
+        default=None,
+        metavar="PATH",
+        help="Append one JSON row per comparison (test, variant, measured max ULP and "
+        "lane counts) to PATH, for folding a full sweep back into the budget table. "
+        "PATH is created and truncated at session start. Reporting only: it cannot "
+        "change a verdict.",
+    )
+    parser.addoption(
         "--ulp-emit",
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep records what it "
@@ -480,9 +489,23 @@ def pytest_configure(config):
         ulp_sweep.EMIT = True
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
+    if config.getoption("--ulp-measure"):
+        # The assignment stays out of the master-only block below so xdist workers see
+        # it; only the preparation is master-only, or each worker would truncate the
+        # others' rows.
+        utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
+        if utils_module._ULP_MEASURE_PATH:
+            # Prepared once, like --record-test-order's file below: the parent
+            # directory created, so a path into a missing one cannot raise
+            # FileNotFoundError out of `passed_test` and break the "cannot change a
+            # verdict" promise, and the file truncated, so a second run does not fold
+            # its rows in with the first's.
+            measure_path = Path(utils_module._ULP_MEASURE_PATH)
+            measure_path.parent.mkdir(parents=True, exist_ok=True)
+            measure_path.write_text("", encoding="utf-8")
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
