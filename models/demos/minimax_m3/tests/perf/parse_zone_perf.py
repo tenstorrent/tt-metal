@@ -68,14 +68,14 @@ OPTIONAL_COLS = [
 DEVICE_OP_TYPE = "tt_dnn_device"
 
 # Child-call columns tracy adds per op when --child-functions is passed. A non-zero read/write_buffer
-# inside the profiled chunk is literal host<->device data movement mid-forward; ProgramImpl::compile means a
+# inside the profiled chunk is literal host<->device data movement mid-forward; CompileProgram means a
 # program cache miss (i.e. the warmup did not cover this shape).
 HOST_MOVEMENT_COLS = {
     "HWCommandQueue_write_buffer_TT_HOST_FUNC [ns]": "H2D write_buffer",
     "HWCommandQueue_read_buffer_TT_HOST_FUNC [ns]": "D2H read_buffer",
     "EnqueueReadBuffer_TT_HOST_FUNC [ns]": "D2H EnqueueReadBuffer",
     "EnqueueWriteBuffer_TT_HOST_FUNC [ns]": "H2D EnqueueWriteBuffer",
-    "ProgramImpl::compile_TT_HOST_FUNC [ns]": "ProgramImpl::compile (cache miss)",
+    "CompileProgram_TT_HOST_FUNC [ns]": "CompileProgram (cache miss)",
 }
 
 
@@ -157,7 +157,7 @@ class ZoneAccumulator:
         self.rows_in_root = 0
         # Host/device-movement audit, all keyed on the layer-relative zone path:
         #   host_ops[zone][op_code] = {"count", "ns"}   ops that did NOT run as a device kernel
-        #   movement[zone][label]   = ns                read/write_buffer + ProgramImpl::compile child calls
+        #   movement[zone][label]   = ns                read/write_buffer + CompileProgram child calls
         self.host_ops = defaultdict(lambda: defaultdict(lambda: {"count": 0, "ns": 0.0}))
         self.movement = defaultdict(lambda: defaultdict(float))
         # Whether the CSV even carries the child-call columns. Without them "no movement" means
@@ -414,9 +414,9 @@ def print_report(summary, by_class, acc, top=0):
             print("  NOT MEASURED: buffer transfers / program-cache misses. Those are child calls, and this")
             print("  CSV has no *_TT_HOST_FUNC columns, so H2D/D2H copies cannot be ruled out from it.")
             print("  Re-run `python -m tracy` with:")
-            print("    --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,ProgramImpl::compile")
+            print("    --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
         else:
-            print("  Also zero buffer transfers and zero ProgramImpl::compile calls (both measured).")
+            print("  Also zero buffer transfers and zero CompileProgram calls (both measured).")
     else:
         if acc.host_ops:
             print(f"  {'zone':<40} {'op [type]':<44} {'count':>6} {'host ms':>9}")
@@ -433,8 +433,8 @@ def print_report(summary, by_class, acc, top=0):
                 print(f"  {z:<40} {lbl:<32} {ns/1e6:>9.3f}")
         else:
             print()
-            print("  (no read/write_buffer or ProgramImpl::compile child calls recorded — pass")
-            print("   --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,ProgramImpl::compile")
+            print("  (no read/write_buffer or CompileProgram child calls recorded — pass")
+            print("   --child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
             print("   to `python -m tracy` to measure buffer transfers explicitly)")
 
     if top:

@@ -567,7 +567,7 @@ document.getElementById("move").innerHTML=
   <div style="display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap">
    <span class="tag ${D.movementMeasured?"ok":"unk"}">${D.movementMeasured?"transfers measured":"transfers not measured"}</span>
    <span>${D.movementMeasured?"Buffer-transfer child calls were instrumented and none were recorded inside the chunk."
-    :"This capture has no <code>*_TT_HOST_FUNC</code> columns, so H2D/D2H copies cannot be ruled out. Re-run with <code>--child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,ProgramImpl::compile</code>."}</span></div>`;
+    :"This capture has no <code>*_TT_HOST_FUNC</code> columns, so H2D/D2H copies cannot be ruled out. Re-run with <code>--child-functions HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram</code>."}</span></div>`;
 </script>
 """
 
