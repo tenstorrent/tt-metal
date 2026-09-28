@@ -1313,7 +1313,6 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     chunk_global = sp * q_per_rank
     k_capacity = 128 * 1024
     kv_lens = (56320, 112640)
-    dim = 128
     grid = mesh_device.compute_with_storage_grid_size()
     worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     subdevice_id = ttnn.SubDeviceId(0)

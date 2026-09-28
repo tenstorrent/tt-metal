@@ -64,43 +64,42 @@ void kernel_main() {
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
     constexpr uint32_t NVH = get_compile_time_arg_val(3);
-    constexpr uint32_t Sqt = get_compile_time_arg_val(4);
-    constexpr uint32_t Skt = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(6);
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(7);
-    constexpr uint32_t DHt = get_compile_time_arg_val(8);
-    constexpr uint32_t vDHt = get_compile_time_arg_val(9);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(10);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(12);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(18) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(19) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(21);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(22);
-    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t use_mla = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t mla_kv_overlap = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(27);
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t Skt = get_compile_time_arg_val(4);
+    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(5);
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(6);
+    constexpr uint32_t DHt = get_compile_time_arg_val(7);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(8);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(9);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(10);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(11);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(13);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t use_mla = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t mla_kv_overlap = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(25);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(26);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(27) == 1;
 
     // Semaphore IDs for KV chain forwarding (non-causal only, but always present in compile args)
-    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(29);
-    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(30);
-    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(31);
-    constexpr bool mcast_enabled = get_compile_time_arg_val(32) == 1;
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(28);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(29);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(30);
+    constexpr bool mcast_enabled = get_compile_time_arg_val(31) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(32) == 1;
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
-    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
+    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(33) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<34>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -118,7 +117,6 @@ void kernel_main() {
     const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t chunk_start_idx_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_phases = get_arg_val<uint32_t>(argidx++);
     const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(argidx++);
     const uint32_t read_offset_phase_1 = get_arg_val<uint32_t>(argidx++);
@@ -159,7 +157,6 @@ void kernel_main() {
         is_sink = get_arg_val<uint32_t>(argidx++);
         chain_batch = get_arg_val<uint32_t>(argidx++);
         chain_head = get_arg_val<uint32_t>(argidx++);
-        argidx += 2;  // skip chain_q_chunk_start, chain_q_chunk_count (host-only metadata)
         prev_physical_x = get_arg_val<uint32_t>(argidx++);
         prev_physical_y = get_arg_val<uint32_t>(argidx++);
         next_physical_x = get_arg_val<uint32_t>(argidx++);
@@ -201,7 +198,6 @@ void kernel_main() {
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
     // different valid_Sqt (e.g. ring_distributed uses full Q length in tiles).
 
-    constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
 

@@ -34,7 +34,7 @@ using tt::tt_metal::UnpackMode;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::ComputeHardwareConfig;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -47,7 +47,6 @@ using tt::tt_metal::experimental::ProgramSpec;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -60,7 +59,7 @@ using dram_sharded_helpers::get_optimal_dram_bank_to_reader_assignment;
 // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
 // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
 static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spec(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     ComputeHardwareConfig compute_hw,
@@ -90,7 +89,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     bool untilize_out,
     bool skip_compute,
     bool skip_write_back) {
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
@@ -128,12 +127,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     std::vector<uint32_t> input_storage_noc_x, input_storage_noc_y;
     std::vector<uint32_t> output_storage_noc_x, output_storage_noc_y;
     for (const auto& core : input_storage_cores_ordered) {
-        auto phys_core = device->worker_core_from_logical_core(core);
+        auto phys_core = device.worker_core_from_logical_core(core);
         input_storage_noc_x.push_back(phys_core.x);
         input_storage_noc_y.push_back(phys_core.y);
     }
     for (const auto& core : output_storage_cores_ordered) {
-        auto phys_core = device->worker_core_from_logical_core(core);
+        auto phys_core = device.worker_core_from_logical_core(core);
         output_storage_noc_x.push_back(phys_core.x);
         output_storage_noc_y.push_back(phys_core.y);
     }
@@ -154,7 +153,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     CoreRangeSet all_cores_in_rect_grid({bounding_box});
 
     uint32_t num_cores = num_workers;
-    uint32_t num_dram_banks = device->num_dram_channels();
+    uint32_t num_dram_banks = device.num_dram_channels();
     uint32_t batches_per_core = (B + num_cores - 1) / num_cores;
 
     TT_FATAL(
@@ -313,11 +312,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
 
     writer_defines["OUT_SHARDED"] = "1";
 
@@ -432,7 +431,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
             {
                 .runtime_arg_names = {"worker_core_type", "input_storage_noc_x", "input_storage_noc_y"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = in0_noc,
+                    },
+            },
     };
 
     // in1 reader / output writer kernel
@@ -481,7 +487,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
                 .runtime_arg_names =
                     {"is_worker_core", "dram_bank_id", "vc", "output_storage_noc_x", "output_storage_noc_y"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = in1_noc,
+                    },
+            },
     };
     if (bias_tensor.has_value()) {
         in1_writer.dfb_bindings.push_back(DFBBinding{
@@ -502,13 +515,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    unpack_modes(compute_hw) = {
+    compute_hw.unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
         {INTERMED0_DFB, UnpackMode::UnpackToSrc},
     };
     if (bias_tensor.has_value()) {
-        unpack_modes(compute_hw).insert({BIAS_DFB, UnpackMode::UnpackToSrc});
+        compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
     }
 
     KernelSpec compute{
@@ -687,7 +700,7 @@ MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_program_artifacts
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt::tt_metal::IDevice* device = &a.mutable_device();
+    tt::tt_metal::distributed::MeshDevice& device = a.mutable_device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -729,7 +742,7 @@ MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_program_artifacts
     const auto& untilize_out = operation_attributes.untilize_out;
 
     [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     uint32_t B = ashape[1];
     uint32_t M = ashape[-2] / in0_tile_shape[0];
@@ -744,7 +757,7 @@ MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_program_artifacts
         device,
         input_all_cores_storage,
         output_all_cores_storage,
-        ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        ttnn::to_compute_hardware_config(compute_kernel_config),
         fp32_dest_acc_en,
         packer_l1_acc,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config),

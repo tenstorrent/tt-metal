@@ -412,13 +412,9 @@ safe-outputs:
       - blackhole-e2e-tests
 
       - galaxy-profiler-tests
-      - galaxy-multi-user-isolation-tests
-      - galaxy-unit-tests
-      - galaxy-integration-tests
-      - galaxy-stress-tests
-      - galaxy-e2e-tests
+      - galaxy-tests
       - galaxy-sanity
-      - galaxy-health
+      - galaxy-stress-tests
 
       - t3000-tests
       - t3000-dispatch-tests
@@ -623,10 +619,10 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 |---|---|---|
 | `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles nine independent suites, eight of them on by default (the LLK leg is opt-in) — select them, do not take the default of all eight |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
-| `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
-| `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
+| `galaxy-sanity` | Galaxy (WH/BH) | Quick Galaxy-reachability check plus the Galaxy health suite, before committing to the heavier Galaxy suites |
+| `galaxy-tests` | Galaxy (WH/BH) | Fabric, CCL, multi-device, large-mesh and multi-tenant isolation code paths |
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
-| `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
+| `galaxy-stress-tests` | Galaxy | Stability and long-run behaviour |
 | `t3000-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
 | `t3000-dispatch-tests` | T3000 (8×WH) | The T3K fast (sanity) suite, on request |
@@ -660,7 +656,6 @@ validation.** You must supply at least:
 
 | Pipeline | Must supply |
 |---|---|
-| `galaxy-sanity` | `arch` |
 | `models-t1-e2e-tests`, `models-t1-unit-tests` | `model` |
 | `models-t2-e2e-tests`, `models-t2-unit-tests` | `model` |
 | `models-t3-e2e-tests`, `models-t3-unit-tests` | `model` |
@@ -679,13 +674,13 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   set `all: false` *and* the specific platform. This is the single easiest way to
   accidentally run the full matrix.
 - `wormhole` / `blackhole` / `multichip` booleans select architecture on the `runtime-*`,
-  `galaxy-e2e-tests`, and `galaxy-health` pipelines.
+  `galaxy-tests`, and `galaxy-sanity` pipelines.
 - `model` and `sku` are `choice` inputs on the `models-t*` and `vllm-model-tests`
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
 - **Suite and board toggles: `run-<something>` booleans, defaulting to `true` unless marked
-  otherwise below.** Four pipelines bundle independent suites this way, and taking the
+  otherwise below.** Six pipelines bundle independent suites this way, and taking the
   defaults runs all of them:
 
   | Pipeline | Toggles (default `true` unless noted) |
@@ -694,6 +689,8 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
   | `t3000-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` which defaults to **`false`** — the e2e suite costs about 195 of the 279 machine-minutes of a full run, so pass `run-e2e-tests: true` only when the change touches CCL, fabric or dispatch |
+  | `galaxy-sanity` | `run-health-tests` — the sanity suite always runs; this adds the health suite |
+  | `galaxy-tests` | `run-unit-tests`, `run-integration-tests`, and `run-e2e-tests` and `run-multi-user-isolation-tests` which default to **`false`** — those 2 suites are about 266 of the 306 machine-minutes of a full run, so pass them only when the change touches Galaxy fabric, CCL or multi-tenant isolation; `e2e-test-selection` narrows e2e to one id from `galaxy_e2e_tests.yaml` |
 
   The names say what each covers, so map them the same way you mapped paths to pipelines:
   a single-device `ttnn` op change reaches `run-ttnn-sanity-tests` and `run-ops-sanity-tests`
