@@ -82,8 +82,42 @@ def decode_forward(
     sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
     output_tile = ttnn.Tile([32, 32])
 
-    gate_up_config = _build_sparse_matmul_config(batch_size, intermediate_size)
-    down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
+    _k_tiles = int(math.ceil(config.hidden_size / 32))
+    _gu_in0_block_w = max(d for d in range(1, min(44, _k_tiles) + 1) if _k_tiles % d == 0)
+    _gu_ckc = ttnn.init_device_compute_kernel_config(
+        hidden_states.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    gate_up_config = _build_sparse_matmul_config(batch_size, intermediate_size, in0_block_w=_gu_in0_block_w)
+    _down_ckc = ttnn.init_device_compute_kernel_config(
+        hidden_states.device().arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    _down_n_tiles = int(math.ceil(config.hidden_size / 32))
+    _down_k_tiles = int(math.ceil(intermediate_size / 32))
+    if _down_n_tiles == 88 and _down_k_tiles == 6 and batch_size <= 32:
+        # 22 cores (11x2) instead of 8; in0_block_w kept at 1 (in0_block_w=6 moved accuracy below the gate)
+        down_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(11, 4),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=1,
+            out_block_w=2,
+            per_core_M=1,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    else:
+        down_config = _build_sparse_matmul_config(batch_size, config.hidden_size)
 
     # Gate projection: [1,1,S,H] × [1,E,H,I] → [1,1,S,E,S_tile,I]
     gate = ttnn.sparse_matmul(
@@ -94,6 +128,7 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
+        compute_kernel_config=_gu_ckc,
         dtype=ttnn.bfloat16,
     )
     # sparse_matmul output uses logical intermediate dim (may differ from padded weight size)
@@ -112,6 +147,7 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         output_tile=output_tile,
         program_config=gate_up_config,
+        compute_kernel_config=_gu_ckc,
         dtype=ttnn.bfloat16,
     )
     up = ttnn.reshape(up, (batch_size, num_experts, 1, sm_intermediate))
