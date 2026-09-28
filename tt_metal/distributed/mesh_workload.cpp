@@ -527,6 +527,9 @@ namespace tt::tt_metal::experimental::program_preparation {
 
 ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device) {
     TT_FATAL(mesh_device != nullptr, "MeshDevice pointer cannot be null");
+    // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
+    TT_FATAL(
+        !mesh_device->get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
     workload.pimpl_->compile(mesh_device);
     ProgramCapacity result;
     const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
