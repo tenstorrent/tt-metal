@@ -119,7 +119,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     }
 
     auto& env = mesh_impl.metal_env();
-    if (env.get_rtoptions().get_fast_dispatch()) {
+    // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
+    // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
+    const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
