@@ -1289,3 +1289,35 @@ Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_
 - CHANGELOG of the sdpa fork: added a "Model cases" entry (no op change).
 - Gate: `{"forks_used": 6, "fork_calls": 8, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`, 15 fork tests passed in 242 s.
 - Re-run the sdpa cases alone: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/sdpa/tests/test_sdpa.py` (~75 s, most of it the CPU reference).
+
+## O.1 optests (orchestrator attempt 2: out-of-scope diff)
+- The sdpa cases from attempt 1 are already committed (bb90b168485); no fork or test code changed in this attempt.
+- Attempt 1 was flagged for `models/demos/mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_02_attention.py`. That diff is the owner's threshold decision (attention rel 0.02 -> 0.025, ratio 0.95 -> 0.93, commented "owner decision, 2026-09-28"), not agent work, so it was left in place. A backup copy is at `runs/run1/O.1.optests.2.swap02_owner_edit.patch`.
+- Gate re-run: ladder rung last PASS, 15 fork tests passed (244 s), `{"forks_used": 6, "fork_calls": 8, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`.
+
+## O.1 optests (orchestrator attempt 3: HANG in the ladder)
+- No code changed. The attempt-2 HANG was in the ladder, not a fork test: layer-0 attention `ttnn.all_reduce` (reduce_scatter_minimal_async, op 128) timed out. The same code had passed the gate in attempt 2.
+- 1st re-run: ladder PASS, then all 15 fork tests errored at setup with `IndexError: unordered_map::at` in `GetNumPCIeDevices`. Another session was running `tt-probe.sh --device auto mimo_norm_cmp` on card 0 at the same time (the gate waited on it for the card lock). 2nd re-run: the ladder errored the same way.
+- Fix: once no other holder was left, `touch /tmp/tt-device-{0..3}.dirty` (the pool resets all 4 cards on the next acquire; known issue "single-card reset"), then re-ran. Gate: ladder PASS, 15 fork tests passed (237 s), `{"forks_used": 6, "fork_calls": 8, "fork_calls_uncovered": 0, "fork_tests_failed": 0}`.
+- Re-run: the brief's gate command with `PYTHONPATH=$PWD`. Do not run single-card probes during a mesh gate.
+
+## rms_norm fork precision fix and the swap 02 limits (before the O.1 rerun)
+- O.1 was STOPPED after attempts 2 and 3 hung. Both hangs came from concurrent device use (known issue
+  "Concurrent single-card probe during a gate"); no model code was at fault.
+- ttnn.bringup.rms_norm bug fix (CHANGELOG 3, commit 3fb9b69b502). At fp32_dest_acc_en the cross-chunk sum of
+  squares was truncated to bf16 by CopySeedPairs' DEST_TO_SRCB reuse add. MiMo's weight norm ran 3 chunks of 43, so
+  every row's scale came out +0.09% high. The fix uses CopySeedSfpuAdd for the carry, and fp32 cb_x_squared and
+  cb_normalized. Blocking at MiMo's shape: 43x3 -> 32x4.
+  - Golden L1 chunk 1 + attn_norm weight vs float64, row-norm ratio / rel L2: 1.00090 / 0.00248 -> 0.99968 /
+    0.00197 (native 0.99945 / 0.00205).
+  - Perf 0.215 -> 0.219 ms (norm), 0.414 -> 0.417 ms (fused residual).
+  - The six norm component tests pass (pcc 0.999996-0.999999).
+  - Ladder rung last: L00 0.998576, L01 0.998450, L02 0.998425, L03 0.998513, L04 0.998787, L05 0.998414, state_min
+    0.999280. That is unchanged to within 2e-5.
+- test_swap_sliding_moe_02_attention.py re-frozen (commit 4926c2fb757), owner decision: attention rel 0.02 -> 0.022
+  and ratio upper bound 1.05 -> 1.08. Everything else is unchanged. This supersedes the attempt-1 owner edit noted
+  above (rel 0.025 / ratio 0.93), which was no longer in the file. The cause is sliding preset "S" (fp32
+  accumulation off, kept for speed). At the defaults, before the norm fix: rel 0.0220, ratio [0.9420, 1.0319].
+  After: rel 0.0196, ratio [0.9742, 1.0657], worst row 0.066. Gate PASS on the device.
+- The O.1 rerun is expected to need the rms_norm model cases re-checked, because their outputs moved. Both still
+  pass at their recorded limits: norm pcc 0.9999985 / max abs 0.041; residual-sum max rel 0.0091.
