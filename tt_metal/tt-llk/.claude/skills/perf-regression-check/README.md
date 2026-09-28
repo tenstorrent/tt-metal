@@ -30,7 +30,8 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 | `--baseline <ref>` | `merge-base origin/main HEAD` | what to compare against |
 | `--current <ref>` | `HEAD` | what to judge |
 | `--iterations <N>` | `3` | sweeps per side; median-vs-median |
-| `--threshold <T>` | `0.05` | 5% — flagged in both directions |
+| `--threshold <T>` | `0.02` | 2% — flagged in both directions |
+| `--min-cycles <N>` | `30` | a point must ALSO move this many cycles; `0` disables |
 | `--speed-of-light` | off | compile-time-parameter build, applied to both sides |
 | `--refresh` | off | ignore cached runs and re-measure |
 | `--dry-run` | off | resolve refs, report the plan, measure nothing |
@@ -65,5 +66,10 @@ B-vs-C) only pays for the new commit.
 For each side: a sparse `git worktree` at that commit (tt-llk plus the trees a kernel build
 includes from outside it), a private build tree, then N producer/consumer sweeps — interleaved
 between the two sides so thermals and other tenants bias neither. The two sets of CSVs go to
-`perf_regression_compare.py`, which reads the raw `perf_data` CSVs directly (no Parquet, no
-database — works on any commit, merged or not) and reports median-vs-median per point.
+`perf/regression_compare.py` — the same module the PR gate runs — which reads the raw
+`perf_data` CSVs directly (no Parquet, no database — works on any commit, merged or not) and
+reports median-vs-median per point.
+
+A point is a regression only when it is **both** more than `--threshold` slower **and** more
+than `--min-cycles` slower. Either clause alone produces false positives: percentage on small
+markers, cycles on large ones.
