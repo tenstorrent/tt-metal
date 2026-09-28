@@ -301,6 +301,7 @@ public:
     void wait_for_completion(bool reset_launch_msg_state) override;
     void finish_and_reset_in_use() override;
     bool in_use() override { return in_use_.load(); }
+    bool completion_reader_failed() const override { return thread_exception_state_.load(); }
 };
 
 }  // namespace tt::tt_metal::distributed

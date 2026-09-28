@@ -19,6 +19,7 @@
 #include <flatbuffers/verifier.h>
 
 #include <tt_stl/cleanup.hpp>
+#include <tt-metalium/experimental/memory_pin_access.hpp>
 
 #include "tensor/flatbuffer/overlapped_tensor_flatbuffer.hpp"
 #include "tensor/flatbuffer/tensor_file_layout.hpp"
@@ -90,6 +91,9 @@ std::vector<OverlappedTensorView> load_overlapped_tensors(
 
     std::shared_ptr<void> mmap_ptr(mmap_addr, [file_size](void* addr) { munmap(addr, file_size); });
     MemoryPin memory_pin(mmap_ptr);
+    // The mapping is PROT_READ and owned here, so nothing in this process can write it while the pin lives; uploads
+    // may then return before the device has finished reading it.
+    tt::tt_metal::experimental::MemoryPinMarkDeviceImmutable(memory_pin);
 
     auto* file_data = static_cast<std::byte*>(mmap_addr);
     uint64_t header_size = 0;

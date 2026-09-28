@@ -1066,6 +1066,18 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
     return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
 }
 
+void Cluster::set_pin_handle_count(ChipId mmio_device_id, size_t count) const {
+    if (this->target_type_ != tt::TargetDevice::Silicon) {
+        return;
+    }
+    umd::PCIDevice* pci_device = this->driver_->get_tt_device(mmio_device_id)->get_pci_device();
+    TT_FATAL(
+        pci_device != nullptr,
+        "Device {} has no PCIe device; set_pin_handle_count needs an MMIO device id.",
+        mmio_device_id);
+    pci_device->set_pin_handle_count(count);
+}
+
 std::optional<tt::umd::SemVer> Cluster::get_ethernet_firmware_version() const {
     return this->driver_->get_ethernet_firmware_version();
 }

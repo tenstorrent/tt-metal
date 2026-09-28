@@ -137,6 +137,10 @@ public:
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
 
+    // True once the thread that reads this queue's completions has stopped on a device error (a dispatch timeout):
+    // events recorded on the queue that had not completed by then never complete.
+    virtual bool completion_reader_failed() const { return false; }
+
     // Resets this queue's dispatch state. `reset_launch_msg_state` additionally resets state that is shared
     // by all hardware CQs (the worker launch message ring buffer and the GO mailboxes), so exactly one CQ may
     // be given it, and only once every other CQ has been drained. The implementation drains the CQs that are

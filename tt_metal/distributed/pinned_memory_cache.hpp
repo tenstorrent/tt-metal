@@ -77,6 +77,11 @@ public:
         PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite);
 
     /**
+     * @brief Return whether any entry is cached for `host_address`, without pinning anything.
+     */
+    bool contains(const void* host_address) const;
+
+    /**
      * @brief Release all cache entries whose host address matches `host_address`.
      */
     void release(const void* host_address);

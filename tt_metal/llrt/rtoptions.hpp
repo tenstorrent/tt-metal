@@ -278,6 +278,8 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
+    // Threads that pin large tensor uploads in chunks; 0 uploads each shard with a single pin instead.
+    uint32_t pinned_upload_threads = 8;
 
     // Firmware throttler TDP limit [W] to apply when the cluster opens, or the restore sentinel.
     std::optional<uint32_t> tdp_limit_watts;
@@ -770,6 +772,9 @@ public:
 
     size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
     void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
+
+    uint32_t get_pinned_upload_threads() const { return pinned_upload_threads; }
+    void set_pinned_upload_threads(uint32_t num_threads) { pinned_upload_threads = num_threads; }
 
     std::optional<uint32_t> get_tdp_limit_watts() const { return tdp_limit_watts; }
     void set_tdp_limit_watts(std::optional<uint32_t> limit_watts) { tdp_limit_watts = limit_watts; }

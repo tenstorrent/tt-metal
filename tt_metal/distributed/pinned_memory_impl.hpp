@@ -90,6 +90,8 @@ public:
     void unlock();
 
 private:
+    // Waits for the transfers that use this memory. Stops early, without throwing, if their command queue stopped on
+    // a device error, since those transfers never complete; runs from the destructor.
     void drain_barrier_events();
 
     void initialize_from_devices(

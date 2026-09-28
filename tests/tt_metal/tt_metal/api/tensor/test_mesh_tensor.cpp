@@ -56,6 +56,7 @@
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "impl/context/metal_context.hpp"
+#include "pinned_upload_test_utils.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -582,6 +583,8 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries)
         return;
     }
 
+    // Whole-shard pins are what the cache holds; the chunked upload does not add cache entries.
+    ScopedPinnedUploadThreads whole_shard_pins(0);
     std::vector<uint32_t> shard_fills(shard_count);
     std::iota(shard_fills.begin(), shard_fills.end(), 1u);
     auto host_tensor = make_full_coverage_aligned_host_tensor(shape, mesh_device_->shape(), shard_fills);
@@ -1005,6 +1008,8 @@ void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_de
     auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
     auto& cq = mesh_device.mesh_command_queue();
     const size_t entries_before = cache.num_entries();
+    // This covers the cached whole-shard pin; the chunked upload's pins are not cached (see test_pinned_upload.cpp).
+    ScopedPinnedUploadThreads whole_shard_pins(0);
     MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
     cq.finish();
 
