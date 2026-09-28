@@ -115,6 +115,29 @@ inline void _llk_math_dest_section_done_()
 }
 
 /**
+ * @brief Clear the acquired DST section from MATH instead of clearing it on PACK release.
+ *
+ * The caller must acquire the section first and use PACK release without clearing throughout the kernel.
+ * Unpack-to-DST must wait for MATH's ready signal; there must be no independent DST writer.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_math_clear_dest_section_()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU, p_stall::MATH | p_stall::WAIT_SFPU);
+    if constexpr (Dst == DstSync::SyncFull)
+    {
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+    }
+    else
+    {
+        static_assert(Dst == DstSync::SyncHalf);
+        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+    }
+    // Do not let SFPU writes or an unpack-to-DST ready signal overtake the clear.
+    TTI_STALLWAIT(p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::MATH);
+}
+
+/**
  * @brief Initialize the math/pack synchronization semaphore and reset the destination section base.
  *
  * Waits for any in-flight packs to finish, then seeds the MATH_PACK semaphore (max count 1 for SyncFull, 2 for

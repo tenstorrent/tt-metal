@@ -179,8 +179,8 @@ def test_std_var_hw_compact_partial_width(device, enabled_program_cache, dtype, 
     "shape", [(2, 3, 33, 143), (1, 1, 32, 10529)], ids=["batch_partial_height", "wide_partial_width"]
 )
 def test_std_var_hw_compact_repeated_dst_reuse(device, enabled_program_cache, dtype, shape):
-    # Repeated MATH/PACK hand-offs exposed intermittent zeroed compact records
-    # when only even columns of invalidated DST rows were written.
+    # Repeated MATH/PACK hand-offs on Blackhole exposed a race between PACK's ZEROACC and
+    # SFPU stores into the other DST half, intermittently zeroing compact records.
     torch.manual_seed(31)
     values = torch.randn(shape)
     columns = torch.arange(shape[-1])

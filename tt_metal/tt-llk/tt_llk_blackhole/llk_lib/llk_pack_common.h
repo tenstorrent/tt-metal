@@ -55,27 +55,36 @@ inline void _llk_packer_set_math_semaphore_()
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam clear_dest: Clear on release (default). If false, MATH must clear after acquiring each section.
  */
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true>
 inline void _llk_pack_dest_section_done_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
-
-    if constexpr (Dst == DstSync::SyncFull)
+    if constexpr (clear_dest)
     {
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
+
+        if constexpr (Dst == DstSync::SyncFull)
+        {
+            TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+        }
+        else
+        {
+            static_assert(Dst == DstSync::SyncHalf);
+            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+        }
+
+        // Tell math that it can write again
+        _llk_packer_set_math_semaphore_<p_stall::NONE>();
     }
     else
     {
-        static_assert(Dst == DstSync::SyncHalf);
-        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+        // Without ZEROACC, block SEMGET itself until PACK has finished reading DST.
+        _llk_packer_set_math_semaphore_<p_stall::PACK>();
     }
-
-    // Tell math that it can write again
-    _llk_packer_set_math_semaphore_<p_stall::NONE>();
 
     if constexpr (Dst == DstSync::SyncHalf)
     {

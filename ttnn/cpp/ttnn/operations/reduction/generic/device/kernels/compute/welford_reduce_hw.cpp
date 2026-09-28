@@ -25,6 +25,9 @@
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#if defined(WELFORD_SFPU_LEAF_COMBINE) && defined(ARCH_BLACKHOLE)
+#include "api/compute/experimental/reg_api.h"
+#endif
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -85,7 +88,11 @@ void kernel_main() {
         for (std::uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (std::uint32_t wt = 0; wt < Wt; ++wt) {
                 copy_init(dfb::in);
+#if defined(WELFORD_SFPU_LEAF_COMBINE) && defined(ARCH_BLACKHOLE)
+                tile_regs_acquire_math_clear();
+#else
                 tile_regs_acquire();
+#endif
                 two_pass_stats_init_shifted();
 
                 for (std::uint32_t ht = 0; ht < Ht; ++ht) {
@@ -155,7 +162,11 @@ void kernel_main() {
                 dfb_partial.reserve_back(2);
                 tile_regs_wait();
                 pack_block(mean_dst, dfb::partial, 2);
+#if defined(WELFORD_SFPU_LEAF_COMBINE) && defined(ARCH_BLACKHOLE)
+                tile_regs_release_math_clear();
+#else
                 tile_regs_release();
+#endif
                 dfb_partial.push_back(2);
             }
         }
@@ -171,7 +182,11 @@ void kernel_main() {
         // configured for dfb::in's format (e.g. Float16_b) during Phase 1.
         // dfb::combined uses Float32, so the unpacker must be reconfigured.
         reconfig_data_format_srca(dfb::combined);
+#if defined(WELFORD_SFPU_LEAF_COMBINE) && defined(ARCH_BLACKHOLE)
+        tile_regs_acquire_math_clear();
+#else
         tile_regs_acquire();
+#endif
         copy_init(dfb::combined);
         copy_tile(dfb::combined, 0, input_dst);
         if constexpr (is_std) {
@@ -191,7 +206,11 @@ void kernel_main() {
         tile_regs_wait();
         pack_reconfig_data_format(dfb::out);
         pack_tile(input_dst, dfb::out);
+#if defined(WELFORD_SFPU_LEAF_COMBINE) && defined(ARCH_BLACKHOLE)
+        tile_regs_release_math_clear();
+#else
         tile_regs_release();
+#endif
         dfb_out.push_back(onetile);
     }
 }

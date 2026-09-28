@@ -214,9 +214,9 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
 
     const auto reduce_batch_size = plan.reduce_batch_size;
     const auto use_sfpu_leaf_combine = plan.use_sfpu_leaf_combine;
-    // A single column must wait for the writer's combined result: there is no next column to overlap.
-    // Retain Wormhole's lower-overhead single-buffered path here; batch/multi-column reductions
-    // use both DST sections now that the compact finaliser writes complete rows.
+    // Blackhole compact combining clears DST on MATH acquisition to avoid its cross-half ZEROACC race.
+    // Wormhole's normal PACK-side clear cannot race with writes to the other half's 256-row groups.
+    // A single unbatched column has no next column to overlap; retain Wormhole's cheaper full sync.
     const bool compact_hw_single_buffer =
         use_sfpu_leaf_combine && device.arch() == tt::ARCH::WORMHOLE_B0 && Wt == 1 && reduce_batch_size == 1;
     const auto num_cores = plan.num_cores;
