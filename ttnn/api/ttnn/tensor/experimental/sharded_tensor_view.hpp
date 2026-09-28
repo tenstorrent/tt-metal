@@ -21,7 +21,8 @@ namespace ttnn::experimental {
  *
  * The view keeps the owner's allocation alive while it exists. Explicitly deallocating the owner frees that memory and
  * invalidates every view created from it, directly or through other views. Deallocating a view invalidates the views
- * created from it and releases only that view's hold on the owner's allocation.
+ * created from it and releases only that view's hold on the owner's allocation. The full ownership model is described
+ * with DeviceStorage in ttnn/tensor/storage.hpp.
  */
 Tensor create_sharded_tensor_view(
     const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);

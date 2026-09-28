@@ -51,6 +51,34 @@ private:
 // - It is copyable, copying a DeviceStorage shares the underlying device memory.
 // - It represents a MeshTensor at specific coordinates of the MeshDevice.
 //
+// Ownership model:
+// Every DeviceStorage refers to a holder that contains its MeshTensor. Copies, assignments, and the
+// coordinate-subset constructor share the holder and behave as one storage. There are three kinds of storage:
+// - Owning storage: constructed from a MeshTensor. Its holder owns the device memory and is its own root.
+// - Reinterpretation: DeviceStorage(owning_storage, reinterpreted_mesh_tensor) of an owning storage or of another
+//   reinterpretation, as built by Tensor::view and unchecked_reinterpret_layout. Its own holder refers to the same
+//   device memory without owning it and records the root holder that owns it.
+// - Retained view: built by ttnn::experimental::create_sharded_tensor_view, or a reinterpretation of a retained view.
+//   Its own holder retains the holder of its source, an owning storage or another retained view, so the sources
+//   form a chain that ends at the root holder.
+// A storage that is never deallocated explicitly keeps the device memory it refers to alive until it is destroyed;
+// a retained view keeps its whole source chain alive.
+// - is_allocated(): an owning storage or a reinterpretation reports its own holder. A reinterpretation keeps
+//   reporting allocated after its root is deallocated; is_root_allocated() reports the root. A retained view is
+//   allocated only while its own holder and every source in its chain are allocated.
+// - deallocate(): on an owning storage or a reinterpretation, frees the root's device memory, even while retained
+//   views still refer to it, and marks the root holder and its own holder deallocated. Its copies and every retained
+//   view that depends on the root then report deallocated; other reinterpretations of the root do not. On a retained
+//   view, releases only the view: its sources stay allocated, and views created from it report deallocated.
+// - is_sole_owner_of_device_memory(), which decides whether Tensor::deallocate() proceeds without force (the default
+//   for Tensor::deallocate and Python Tensor.deallocate; Python ttnn.deallocate forces by default): for an
+//   owning storage or a reinterpretation, no other storage shares or depends on its holder or the root holder; for a
+//   retained view, no other storage shares or depends on its holder, including views and reinterpretations of it.
+// - release_mesh_tensor(): moves the MeshTensor out of an owning storage or a reinterpretation; rejected for a
+//   retained view, whose MeshTensor does not record its sources.
+// - A retained view can be created from an owning storage or a retained view, but not from a reinterpretation of an
+//   owning storage, whose root is not part of a source chain.
+//
 // Invariant:
 // - A default-constructed DeviceStorage acts like a deallocated DeviceStorage. However it is not associated with
 // tt::tt_metal::TensorSpec and tt::tt_metal::TensorTopology.
@@ -58,7 +86,6 @@ private:
 //   DeviceStorage.
 // - tt::tt_metal::TensorSpec and tt::tt_metal::TensorTopology are always accessible for a DeviceStorage constructed
 // from a MeshTensor. This stays true even after deallocate() is called.
-// - deallocate() releases the underlying device memory.
 // - MeshTensor getters will always throw if the DeviceStorage is deallocated.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated

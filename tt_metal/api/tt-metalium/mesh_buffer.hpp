@@ -208,6 +208,13 @@ private:
 
     DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
 
+    // `MeshBufferState` specifies the state of the MeshBuffer:
+    // 1. Owned - a single backing buffer owns the allocation and provides the address for the whole mesh.
+    // 2. Externally owned - a view over an existing address; it owns no allocation.
+    // 3. Deallocated.
+    // 4. Per-core owned - each device buffer owns its own per-core allocation.
+    // 5. Retained view - a view at an offset within an owner MeshBuffer that it keeps alive. Deallocating the view
+    //    releases that reference; the view reports deallocated once its owner is deallocated.
     struct OwnedBufferState {
         std::shared_ptr<Buffer> backing_buffer;
     };
