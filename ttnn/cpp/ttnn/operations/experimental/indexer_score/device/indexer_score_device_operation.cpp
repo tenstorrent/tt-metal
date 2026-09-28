@@ -854,7 +854,7 @@ ttnn::Tensor launch_indexer_score(
     uint32_t block_size,
     bool synthesize_gate,
     float gate_scale,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
@@ -882,6 +882,17 @@ ttnn::Tensor launch_indexer_score(
 
     const uint32_t Sq = q.logical_shape()[2];
     const bool full_mesh = fused_ring.has_value() && fused_ring->full_mesh;
+    const auto tile_bytes = [](const ttnn::Tensor& t) {
+        return t.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.dtype()));
+    };
+    const auto resolved_program_config =
+        program_config.value_or(ttnn::operations::experimental::indexer_score::program::default_program_config(
+            q.logical_shape()[1],
+            k.logical_shape()[2] / tt::constants::TILE_WIDTH,
+            q.logical_shape()[3] / tt::constants::TILE_WIDTH,
+            tile_bytes(q),
+            tile_bytes(k),
+            ttnn::operations::experimental::indexer_score::program::cb_l1_budget(q)));
 
     // Block-cyclic (per-SP-shard) K layout -- interface matches ttnn.transformer.sparse_sdpa: the caller
     // names the MESH AXIS the cache was striped over (block_cyclic_sp_axis) and passes the per-shard chunk
@@ -1071,7 +1082,7 @@ ttnn::Tensor launch_indexer_score(
         block_size,
         synthesize_gate,
         gate_scale,
-        program_config,
+        resolved_program_config,
         resolved,
         cache_batch_idx,
         kv_len,
@@ -1095,7 +1106,7 @@ ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
@@ -1132,7 +1143,7 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> chunk_start_idx,
     float scale,
     uint32_t block_size,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
@@ -1177,7 +1188,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t num_links,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id,
     std::optional<uint32_t> chunk_start_idx,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
+    std::optional<ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig> program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,

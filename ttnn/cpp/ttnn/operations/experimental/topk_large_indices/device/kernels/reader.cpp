@@ -14,8 +14,10 @@
 
 void kernel_main() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
-    const uint32_t start_row = get_arg_val<uint32_t>(0);
-    const uint32_t num_rows = get_arg_val<uint32_t>(1);
+    const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::reader_start_row);
+    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::reader_num_rows);
+    const uint32_t seg_first_chunk = get_arg_val<uint32_t>(topk_core_args::reader_seg_first_chunk);
+    const uint32_t seg_end_chunk = get_arg_val<uint32_t>(topk_core_args::reader_seg_end_chunk);
     uint32_t search_len = get_common_arg_val<uint32_t>(topk_common_args::search_length);
     const uint32_t input_page_bytes = get_common_arg_val<uint32_t>(topk_common_args::input_row_bytes);
 
@@ -31,6 +33,7 @@ void kernel_main() {
     constexpr uint32_t meta_cb = get_compile_time_arg_val(metadata_args_base + 1);
     constexpr uint32_t meta_offset = get_compile_time_arg_val(metadata_args_base + 2);
     constexpr auto meta_args = TensorAccessorArgs<metadata_args_base + 3>();
+    constexpr uint32_t neginf_bf16_pair = 0xFF80FF80u;
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -38,6 +41,7 @@ void kernel_main() {
     Noc noc;
 
     TopkMetadataBounds bounds;
+    TopkSegmentBounds segment;
     if constexpr (valid_length_from_metadata) {
         CircularBuffer meta_cb_obj(meta_cb);
         meta_cb_obj.reserve_back(1);
@@ -54,20 +58,34 @@ void kernel_main() {
         ASSERT(metadata_valid);
         search_len = metadata_valid ? metadata_length + meta_offset : input_width;
         bounds = calculate_topk_bounds(search_len, llk_k);
+        segment = calculate_topk_segment_bounds(bounds, llk_k, seg_first_chunk, seg_end_chunk);
+        // The compute sees only this core's segment of the metadata-bounded row.
         CoreLocalMem<TopkMetadataBounds> mailbox(scratch);
-        mailbox->num_chunks = bounds.num_chunks;
-        mailbox->tail_elements = bounds.tail_elements;
+        mailbox->num_chunks = segment.num_chunks;
+        mailbox->tail_elements = segment.tail_elements;
         clobber_all_memory();
         meta_cb_obj.push_back(1);
     } else {
         bounds = calculate_topk_bounds(search_len, llk_k);
+        segment = calculate_topk_segment_bounds(bounds, llk_k, seg_first_chunk, seg_end_chunk);
     }
-    const uint32_t tail_chunk_bytes = bounds.tail_elements * element_bytes;
+    const uint32_t tail_chunk_bytes = segment.tail_elements * element_bytes;
 
     for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
         const uint32_t row = start_row + local_row;
-        for (uint32_t chunk = 0; chunk < bounds.num_chunks; ++chunk) {
-            const uint32_t active_chunk_bytes = (chunk + 1 == bounds.num_chunks) ? tail_chunk_bytes : chunk_bytes;
+        if (segment.empty) {
+            // Nothing valid in this segment: hand the compute one chunk of -inf so its survivors lose every merge.
+            input_cb.reserve_back(tiles_per_chunk);
+            auto* chunk_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_cb.get_write_ptr());
+            for (uint32_t word = 0; word < tiles_per_chunk * tile_bytes / sizeof(uint32_t); ++word) {
+                chunk_words[word] = neginf_bf16_pair;
+            }
+            input_cb.push_back(tiles_per_chunk);
+            continue;
+        }
+        for (uint32_t chunk = 0; chunk < segment.num_chunks; ++chunk) {
+            const uint32_t row_chunk = segment.first_chunk + chunk;
+            const uint32_t active_chunk_bytes = (chunk + 1 == segment.num_chunks) ? tail_chunk_bytes : chunk_bytes;
             input_cb.reserve_back(tiles_per_chunk);
             for (uint32_t tile = 0; tile < tiles_per_chunk; ++tile) {
                 const uint32_t tile_offset = tile * tile_bytes;
@@ -81,7 +99,7 @@ void kernel_main() {
                         input,
                         input_cb,
                         read_bytes,
-                        {.page_id = row, .offset_bytes = chunk * chunk_bytes + tile_offset},
+                        {.page_id = row, .offset_bytes = row_chunk * chunk_bytes + tile_offset},
                         {.offset_bytes = tile_offset});
                 }
             }
