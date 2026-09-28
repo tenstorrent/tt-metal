@@ -70,7 +70,7 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
     if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
@@ -232,7 +232,6 @@ def test_eltwise_binary(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

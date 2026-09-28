@@ -541,6 +541,13 @@ def infer_data_formats(
 
     same_src_format = input_format == input_format_B
 
+    # The math format doubles as the SrcA/SrcB format the kernel writes into the ALU format
+    # fields when the math format is not implied. A 2x register format stays 2x in SrcA/SrcB,
+    # so the ALU has to be told the 2x encoding rather than the format it expands to
+    # downstream. sfpu_src and pack_in keep the expanded format -- neither reads SrcA/SrcB.
+    if register_format_hint is not None:
+        math = register_format_hint
+
     # Check if unpack_out (src or dest reg) and pack_in (dest reg) formats are valid for Quasar
     if chip_arch == ChipArchitecture.QUASAR:
         validate_quasar_data_formats(

@@ -149,12 +149,6 @@ def _run_matmul_custom_no_mop(
             dimensions=input_B_dimensions,
         )
 
-    # 2x register-format opt-in has to flow through inference; only disable inference for plain MX
-    # formats, where there is nothing to infer.
-    disable_format_inference = (
-        formats.input_format.is_mx_format() and formats.register_format_hint is None
-    )
-
     formats_config = data_formats(
         input_format=formats.input_format,
         input_format_B=formats.input_format_B,
@@ -162,7 +156,6 @@ def _run_matmul_custom_no_mop(
         is_fp32_dest_acc_en=dest_acc,
         num_iterations=1,
         unpacking_to_dest=False,
-        disable_format_inference=disable_format_inference,
         register_format_hint=formats.register_format_hint,
     )[0]
     pack_src_format = formats_config.pack_src
@@ -212,7 +205,6 @@ def _run_matmul_custom_no_mop(
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,
-        disable_format_inference=disable_format_inference,
         boot_mode=boot_mode,
     )
 
@@ -312,8 +304,7 @@ def test_matmul_custom_no_mop_quasar_mxfp4_2x(
         math_fidelity,
         formats,
         dest_acc,
-        # MX formats carry their exponent in the data, so the math format has to be implied.
-        ImpliedMathFormat.Yes,
+        ImpliedMathFormat.No,
         input_A_dimensions,
         input_B_dimensions,
         enable_2x_format=True,

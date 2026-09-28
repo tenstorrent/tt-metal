@@ -134,7 +134,7 @@ def pack_l1_acc_implied_math_formats(formats_dest_acc, *, is_perf=False):
         return [ImpliedMathFormat.Yes]
     formats = formats_dest_acc[0]
     if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
@@ -273,7 +273,6 @@ def test_pack_l1_acc_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

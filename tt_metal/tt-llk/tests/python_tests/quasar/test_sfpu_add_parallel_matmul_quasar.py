@@ -304,7 +304,6 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         variant_stimuli=stimuli,
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     outcome = configuration.run()

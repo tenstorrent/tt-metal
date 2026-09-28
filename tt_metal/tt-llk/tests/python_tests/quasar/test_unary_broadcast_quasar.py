@@ -77,7 +77,7 @@ def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
     if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
+        return [ImpliedMathFormat.No]
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
