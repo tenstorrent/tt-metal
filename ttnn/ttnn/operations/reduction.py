@@ -43,10 +43,12 @@ def _create_golden_function(torch_function_name):
         dim: Optional[Union[int, Tuple[int]]] = None,
         keepdim=False,
         correction=None,
+        scalar=1.0,
         **_,
     ):
         import torch
 
+        input_dtype = input_tensor.dtype
         if spec.widen_unsigned and input_tensor.dtype in (torch.uint16, torch.uint32):
             input_tensor = input_tensor.to(torch.int64)
 
@@ -54,22 +56,45 @@ def _create_golden_function(torch_function_name):
         if spec.passes_correction and correction is not None:
             function_kwargs["correction"] = correction
 
+        torch_name = spec.torch_name
+        multi_axis_torch_name = spec.multi_axis_torch_name
+        if scalar < 0:
+            if torch_name == "max":
+                torch_name = "min"
+                multi_axis_torch_name = "amin"
+            elif torch_name == "min":
+                torch_name = "max"
+                multi_axis_torch_name = "amax"
+
         if dim is None:
             if spec.dim_none_means_flatten:
-                return getattr(torch, spec.torch_name)(input_tensor, dim=None, **function_kwargs)
-            if not keepdim:
+                output = getattr(torch, torch_name)(input_tensor, dim=None, **function_kwargs)
+            elif not keepdim:
                 # When dim is None, PyTorch reduces over all dimensions; keepdim is not accepted.
                 function_kwargs.pop("keepdim")
-                return getattr(torch, spec.torch_name)(input_tensor, **function_kwargs)
-            # For keepdim to work, we need to specify all dimensions explicitly.
-            dim = tuple(range(len(input_tensor.shape)))
+                output = getattr(torch, torch_name)(input_tensor, **function_kwargs)
+            else:
+                # For keepdim to work, we need to specify all dimensions explicitly.
+                dim = tuple(range(len(input_tensor.shape)))
 
-        if spec.multi_axis_torch_name is not None and isinstance(dim, (tuple, list)):
-            return getattr(torch, spec.multi_axis_torch_name)(input_tensor, dim=dim, **function_kwargs)
+        if dim is not None:
+            if multi_axis_torch_name is not None and isinstance(dim, (tuple, list)):
+                output = getattr(torch, multi_axis_torch_name)(input_tensor, dim=dim, **function_kwargs)
+            else:
+                output = getattr(torch, torch_name)(input_tensor, dim=dim, **function_kwargs)
+                if spec.values_only:
+                    output = output.values
 
-        output = getattr(torch, spec.torch_name)(input_tensor, dim=dim, **function_kwargs)
-        if spec.values_only:
-            output = output.values
+        if torch_function_name in ("sum", "mean", "max", "min"):
+            if input_dtype == torch.int32 and scalar != 1.0:
+                output = (output.to(torch.float32) * scalar).to(torch.int32)
+            else:
+                output = output * scalar
+        elif torch_function_name == "var":
+            output = output * scalar**2
+        elif torch_function_name == "std":
+            output = output * abs(scalar)
+
         return output
 
     return golden_function

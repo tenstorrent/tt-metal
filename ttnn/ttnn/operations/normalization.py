@@ -33,7 +33,7 @@ def find_closest_largest_divisor(num: int, start_divisor: int):
 def _golden_function(input_tensor: ttnn.Tensor, dim: Optional[int] = None, **_):
     import torch
 
-    dim = dim or -1
+    dim = -1 if dim is None else dim
 
     return torch.nn.Softmax(dim)(input_tensor)
 
@@ -110,8 +110,19 @@ def _golden_function(
 ttnn.attach_golden_function(ttnn.layer_norm, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
+def _golden_function(
+    input_tensor: ttnn.Tensor,
+    weight=None,
+    *,
+    epsilon=1e-12,
+    bias=None,
+    residual_input_tensor=None,
+    **_,
+):
     import torch
+
+    if residual_input_tensor is not None:
+        input_tensor = input_tensor + residual_input_tensor
 
     variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
     input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
@@ -119,7 +130,7 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     if weight is not None and weight.dtype in [torch.float16, torch.bfloat16]:
         input_tensor = input_tensor.to(weight.dtype)
 
-    return weight * input_tensor if weight is not None else input_tensor
+    return _apply_affine(input_tensor, weight, bias)
 
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)

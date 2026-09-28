@@ -546,7 +546,7 @@ def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, 
 ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hardtanh)
 
 
-def _golden_function_leaky_relu(input_tensor, *args, negative_slope=0.01, **kwargs):
+def _golden_function_leaky_relu(input_tensor, negative_slope=0.01, *args, **kwargs):
     import torch
 
     if input_tensor.dtype == torch.uint8 or integer_golden.is_unsigned_dtype(input_tensor.dtype):
@@ -648,10 +648,17 @@ def _golden_function_round(input_tensor_a, decimals=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.round, golden_function=_golden_function_round)
 
 
-def _golden_function_selu(input_tensor_a, *args, **kwargs):
+def _golden_function_selu(input_tensor_a, *args, scale=1.0507, alpha=1.67326, **kwargs):
     import torch
 
-    return torch.nn.functional.selu(input_tensor_a)
+    input_dtype = input_tensor_a.dtype
+    input_tensor_a = input_tensor_a.to(torch.float64)
+    output = scale * torch.where(
+        input_tensor_a > 0,
+        input_tensor_a,
+        alpha * torch.expm1(input_tensor_a),
+    )
+    return output.to(input_dtype)
 
 
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
