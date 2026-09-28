@@ -403,7 +403,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 }
 
 // ---------------------------------------------------------------------------
-// build_prefill_program – constructs a pre-fill Program
+// build_prefill_program – constructs a pre-fill Program and owns its inputs
 //
 // Creates DRAM buffers, fills them with random data, and builds a program
 // that reads from DRAM into L1 on all cores.
@@ -411,7 +411,13 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 //   - Buffer 1: 8 tiles of bfloat16 from DRAM
 // ---------------------------------------------------------------------------
 
-static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
+struct PrefillProgram {
+    Program program;
+    shared_ptr<Buffer> dram_buffer0;
+    shared_ptr<Buffer> dram_buffer1;
+};
+
+static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
     const CoreRange core_range(cfg.grid_start, cfg.grid_end);
     const CoreRangeSet core_range_set({core_range});
 
@@ -492,7 +498,11 @@ static Program build_prefill_program(IDevice* device, MaxUtilConfig& cfg) {
             .compile_args = std::move(prefill_compile_args),
         });
 
-    return program;
+    return PrefillProgram{
+        .program = std::move(program),
+        .dram_buffer0 = std::move(dram_buffer0),
+        .dram_buffer1 = std::move(dram_buffer1),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -544,9 +554,9 @@ static uint32_t fpu_pct_to_cycles_to_wait(uint32_t pct) { return kFpuUtilToCycle
 // Maps hot-workload duty cycle percentage (in 10% increments) to the number
 // of slow cos() loops to interleave between each max-util dispatch.
 //
-// Values are CALIBRATED FOR num_wl_loops = 1000.  At runtime the raw map
-// value is scaled linearly by (num_wl_loops / 1000) so that the duty cycle
-// stays correct regardless of the hot-workload loop count:
+// Values are CALIBRATED FOR num_wl_loops = 1000. At runtime the raw map value
+// is scaled linearly for the requested hot-workload loop count. Integer
+// rounding limits accuracy at very small loop counts:
 //
 //   num_slow_wl_loops = map_value_at_1000 × num_wl_loops / 1000
 //
@@ -601,9 +611,9 @@ static uint32_t get_duty_cycle_pct() {
 }
 
 /// Returns the num_slow_wl_loops for a given duty cycle, scaled to match the
-/// actual hot-workload loop count.  Map values are calibrated at
-/// kDutyCycleCalibrationLoops; scaling is linear so that the ratio of
-/// hot-time to slow-time remains constant across different loop counts.
+/// actual hot-workload loop count. Map values are calibrated at
+/// kDutyCycleCalibrationLoops; integer rounding limits accuracy for very small
+/// loop counts.
 static uint32_t duty_cycle_to_slow_loops(uint32_t duty_cycle_pct, uint32_t num_wl_loops) {
     auto it = kDutyCycleToSlowLoopsMap.find(duty_cycle_pct);
     if (it == kDutyCycleToSlowLoopsMap.end() || it->second == 0) {
@@ -611,6 +621,13 @@ static uint32_t duty_cycle_to_slow_loops(uint32_t duty_cycle_pct, uint32_t num_w
     }
     // 64-bit multiply to avoid overflow before dividing back down.
     uint64_t scaled = static_cast<uint64_t>(it->second) * num_wl_loops / kDutyCycleCalibrationLoops;
+    if (scaled == 0) {
+        log_warning(
+            LogTest,
+            "Duty cycle {}% cannot be represented with only {} hot-workload loops; no slow workload will run",
+            duty_cycle_pct,
+            num_wl_loops);
+    }
     return static_cast<uint32_t>(scaled);
 }
 
@@ -788,10 +805,9 @@ static Program build_slow_cos_program(const MaxUtilConfig& cfg) {
             .compile_args =
                 {
                     cfg.l1_buffer0_addr,    // 0: l1_buffer0_addr (bfloat16 input)
-                    cfg.l1_buffer1_addr,    // 1: l1_buffer1_addr (bfloat16, kept for unpack HW compat)
-                    cfg.l1_buffer2_addr,    // 2: l1_buffer2_addr (output)
-                    cfg.num_tiles,          // 3: num_tiles (8)
-                    cfg.num_slow_wl_loops,  // 4: num_loops
+                    cfg.l1_buffer2_addr,    // 1: l1_buffer2_addr (output)
+                    cfg.num_tiles,          // 2: num_tiles (8)
+                    cfg.num_slow_wl_loops,  // 3: num_loops
                 },
         });
 
@@ -975,7 +991,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
 
     // Run pre-fill program
     auto prefill_workload = distributed::MeshWorkload();
-    prefill_workload.add_program(target, std::move(prefill_program));
+    prefill_workload.add_program(target, std::move(prefill_program.program));
     distributed::EnqueueMeshWorkload(cq, prefill_workload, /*blocking=*/true);
     distributed::Finish(cq);
 
@@ -1059,8 +1075,9 @@ static bool run_all_devices(
         IDevice* device = mesh_device->get_devices().at(0);
         MaxUtilConfig cfg =
             full_grid_config(device, num_tiles, num_iterations, num_wl_loops, num_slow_wl_loops, super_sync);
+        auto prefill_program = build_prefill_program(device, cfg);
         auto prefill_workload = distributed::MeshWorkload();
-        prefill_workload.add_program(target, build_prefill_program(device, cfg));
+        prefill_workload.add_program(target, std::move(prefill_program.program));
         auto& cq = mesh_device->mesh_command_queue();
         distributed::EnqueueMeshWorkload(cq, prefill_workload, /*blocking=*/true);
         distributed::Finish(cq);
@@ -1163,6 +1180,7 @@ void max_util_smoke(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     cfg.num_wl_loops = 1;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
     cfg.eth_dram_util_pct = get_dram_utilization_pct();
+    cfg.eth_page_size = get_dram_page_size_bytes();
     cfg.super_sync = get_super_sync();
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
@@ -1226,14 +1244,23 @@ void max_util_all_devices(const std::vector<shared_ptr<distributed::MeshDevice>>
 // ---------------------------------------------------------------------------
 
 TEST_F(MeshDispatchFixture, MaxUtilWorkload_Smoke) {
+    if (MetalContext::instance().hal().get_arch() != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Max-util workload is calibrated for Blackhole hardware";
+    }
     unit_tests::didt::max_util_workload::max_util_smoke(devices_.at(0));
 }
 
 TEST_F(MeshDispatchFixture, MaxUtilWorkload_Stress) {
+    if (MetalContext::instance().hal().get_arch() != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Max-util workload is calibrated for Blackhole hardware";
+    }
     unit_tests::didt::max_util_workload::max_util_stress(devices_.at(0));
 }
 
 TEST_F(MeshDispatchFixture, MaxUtilWorkload_AllDevices) {
+    if (MetalContext::instance().hal().get_arch() != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Max-util workload is calibrated for Blackhole hardware";
+    }
     unit_tests::didt::max_util_workload::max_util_all_devices(devices_);
 }
 

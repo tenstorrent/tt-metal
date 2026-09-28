@@ -39,10 +39,12 @@ void kernel_main() {
     uint32_t core_x = get_arg_val<uint32_t>(6);
     uint32_t core_y = get_arg_val<uint32_t>(7);
 
-    // based on the distance from the super sync core, calculate the number of cycles to wait
-    // the farther away, the less cycles to wait (200 - distance * 1)
-    const uint32_t distance_from_super_sync_core = (core_x - super_sync_core_x) + (core_y - super_sync_core_y);
-    const uint32_t cycles_to_wait = 220 - distance_from_super_sync_core * 9;
+    // Farther cores wait less to compensate for multicast propagation delay.
+    const uint32_t x_distance = core_x > super_sync_core_x ? core_x - super_sync_core_x : super_sync_core_x - core_x;
+    const uint32_t y_distance = core_y > super_sync_core_y ? core_y - super_sync_core_y : super_sync_core_y - core_y;
+    const uint32_t distance_from_super_sync_core = x_distance + y_distance;
+    const uint32_t distance_compensation = distance_from_super_sync_core * 9;
+    const uint32_t cycles_to_wait = distance_compensation < 220 ? 220 - distance_compensation : 0;
     const uint32_t super_sync_core_wait_cycles = 600;
 
     const uint64_t super_sync_sender_semaphore_addr = get_semaphore(super_sync_sender_semaphore_id);

@@ -13,12 +13,9 @@
 //
 // Compile-time args:
 //   0: l1_buffer0_addr  – L1 address of pre-filled input buffer (bfloat16)
-//   1: l1_buffer1_addr  – L1 address of pre-filled buffer 1 (unpacked to keep
-//                         unpack HW state compatible with max_util_compute;
-//                         data is not used by the SFPU cosine)
-//   2: l1_buffer2_addr  – L1 output buffer for cosine results (bfloat16)
-//   3: num_tiles        – number of tiles per inner iteration (8)
-//   4: num_loops        – number of workload repetitions (slow-WL loop count)
+//   1: l1_buffer2_addr  – L1 output buffer for cosine results (bfloat16)
+//   2: num_tiles        – number of tiles per inner iteration (8)
+//   3: num_loops        – number of workload repetitions (slow-WL loop count)
 
 // Provides TRISC_UNPACK infra (llk_unpack_AB_matmul_api.h, etc.) and the
 // shared compute pack/common headers.
@@ -32,7 +29,7 @@
 // ---------------------------------------------------------------------------
 
 #ifdef TRISC_UNPACK
-ALWI void slow_cos_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr) {
+ALWI void slow_cos_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer0_addr) {
     constexpr bool is_fp32_dest_acc_en = false;
     constexpr uint32_t face_r_dim = 16;
     constexpr uint32_t num_faces_A = 4;
@@ -217,12 +214,11 @@ ALWI void slow_cos_pack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buff
 
 void kernel_main() {
     constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t num_loops = get_compile_time_arg_val(4);
+    constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t num_loops = get_compile_time_arg_val(3);
 
-    UNPACK((slow_cos_unpack(num_loops, num_tiles, l1_buffer0_addr, l1_buffer1_addr)));
+    UNPACK((slow_cos_unpack(num_loops, num_tiles, l1_buffer0_addr)));
     MATH((slow_cos_math(num_loops, num_tiles)));
     PACK((slow_cos_pack(num_loops, num_tiles, l1_buffer2_addr)));
 }

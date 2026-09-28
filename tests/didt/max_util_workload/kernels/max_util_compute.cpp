@@ -9,7 +9,7 @@
 
 // Compute kernel for max-utilization workload.
 // Uses pre-loaded L1 buffers directly - completely decoupled from data movement.
-// No CB dependencies, no waits - runs compute at full speed.
+// It has no CB dependencies; cycles_to_wait optionally throttles compute.
 //
 // Compile-time args:
 //   0: l1_buffer0_addr     – L1 address of pre-filled buffer 0 (float16_b)
@@ -179,12 +179,6 @@ template <uint32_t cycles_to_wait>
 ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
-    constexpr uint32_t face_rc_dim = 16;
-    constexpr uint32_t tile_rc_dim = 32;
-    constexpr MathFidelity math_fidelity = MathFidelity::LoFi;
-    constexpr int THROTTLE_LEVEL = 0;
-    constexpr uint32_t num_faces_A = 4;
-    constexpr uint32_t num_faces_B = 4;
     _llk_math_hw_configure_<is_fp32_dest_acc_en>((uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
@@ -195,7 +189,6 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
     }
         .set(ADDR_MOD_0);
     addr_mod_t{
-        //.srca = {.incr = srca_increment, .clr = 0, .cr = 0},
         .srca = {.incr = 16, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 1},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
@@ -209,10 +202,8 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
         .set(ADDR_MOD_2);
     addr_mod_t{
         .srca = {.incr = 32, .clr = 0, .cr = 1},
-        //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
         .srcb = {.incr = 48, .clr = 0, .cr = 1},  // cr=32 before, cr+48=16 after wrapping
         .dest = {.incr = 0, .clr = 0, .cr = 1},
-        // .bias = {.incr = 1},
     }
         .set(ADDR_MOD_4);
     addr_mod_t{
@@ -428,6 +419,6 @@ void kernel_main() {
     // TRISC1: perform MVMUL to DST
     MATH((max_util_math<cycles_to_wait>(num_loops, num_tiles)));
 
-    // TRISC2: perform pack to output L1 addr or SFPU programming
+    // TRISC2: pack results to the output L1 address
     PACK((max_util_pack(num_loops, num_tiles, l1_buffer2_addr)));
 }
