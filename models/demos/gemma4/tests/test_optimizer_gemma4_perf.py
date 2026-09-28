@@ -57,11 +57,14 @@ def signpost(name: str, enabled: bool) -> None:
     """Tracy signpost when `enabled`. Call sites pass literal names (an optimizer's harness scanner
     reads `signpost("...")` calls from the source).
 
-    The stage markers are emitted in every mode, not only under the device profiler: tt-opt's
-    call-site discovery runs this test unprofiled and tags each ttnn call with the stage its
-    signposts put it in. Gated on the profiler, every record carried no stage and prefill and
-    decode calls of one shape could not be told apart (2026-09-28). Outside a capture
-    tracy.signpost is a tracy_message plus a log line."""
+    Where the stage markers go depends on the mode. Under the device profiler (trace off) they
+    bracket the measured steps, which is the window the profile is cut to. With trace on they
+    bracket the steps that capture each trace, because those are the only steps whose ttnn calls
+    the host issues: tt-opt's call-site discovery runs this test unprofiled, tags each call with
+    the stage its signposts put it in, and a trace replay issues no calls to tag. Gated on the
+    profiler alone, every record carried no stage and prefill and decode calls of one shape could
+    not be told apart (2026-09-28). Outside a capture tracy.signpost is a tracy_message plus a
+    log line, so the markers cost nothing and none sits inside a timed span."""
     if not enabled:
         return
     try:
@@ -194,20 +197,22 @@ def test_optimizer_gemma4_perf(monkeypatch):
             # captured by the first decode step after the timed prefills (the demo's order); capturing
             # it before them and replaying it after three prefill replays never completed on QB2
             # (2026-09-28), while the demo's prefill-then-decode order ran.
+            # With trace on, this is the step whose prefill calls the host issues (see signpost).
+            signpost("stage:prefill", enable_trace and not DECODE_ONLY)
             prefill()
             ttnn.synchronize_device(mesh_device)
+            signpost("stage:prefill:end", enable_trace and not DECODE_ONLY)
 
             signpost("start", profiling and not DECODE_ONLY)
             prefill_ms = []
             first_token = None
             for _ in range(prefill_samples):
-                # Stage markers in every mode (see signpost); each sits outside its timed span.
-                signpost("stage:prefill", not DECODE_ONLY)
+                signpost("stage:prefill", profiling and not DECODE_ONLY)
                 started = time.perf_counter()
                 first_token = prefill()
                 ttnn.synchronize_device(mesh_device)
                 prefill_ms.append((time.perf_counter() - started) * 1000.0)
-                signpost("stage:prefill:end", not DECODE_ONLY)
+                signpost("stage:prefill:end", profiling and not DECODE_ONLY)
             ttft_ms = statistics.median(prefill_ms)
             signpost("stop", profiling and PREFILL_ONLY)
 
@@ -215,19 +220,22 @@ def test_optimizer_gemma4_perf(monkeypatch):
             if not PREFILL_ONLY:
                 # Step 0 compiles and captures the decode trace; it is not timed (the demo excludes it
                 # the same way). The timed steps follow it.
+                # With trace on, step 0 is the step whose decode calls the host issues.
                 current_pos = torch.tensor([INPUT_TOKENS], dtype=torch.int64)
+                signpost("stage:decode", enable_trace)
                 out_tok = decode_step(first_token, current_pos)
                 current_pos += 1
                 ttnn.synchronize_device(mesh_device)
+                signpost("stage:decode:end", enable_trace)
                 signpost("start", profiling and DECODE_ONLY)
-                signpost("stage:decode", True)
+                signpost("stage:decode", profiling)
                 decode_start = time.perf_counter()
                 for _ in range(decode_tokens):
                     out_tok = decode_step(out_tok, current_pos)
                     current_pos += 1
                 ttnn.synchronize_device(mesh_device)
                 decode_seconds = time.perf_counter() - decode_start
-                signpost("stage:decode:end", True)
+                signpost("stage:decode:end", profiling)
                 signpost("stop", profiling)
 
             wall_ms = ttft_ms + decode_seconds * 1000.0
