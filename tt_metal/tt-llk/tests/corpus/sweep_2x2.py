@@ -2292,6 +2292,15 @@ for _k in KNOB_MODES:
         sys.exit(f"KNOB_MODES[{_k}] must be 'solo', 'drop-one' or 'on-plus'")
     knob_legs(_k)  # drop-one/on-plus flag checks exit loudly
 
+# Knobs eligible for the historical, implicit ``--knob-attribution`` scan.
+# record-hoist is intentionally still present in KNOBS/KNOB_MODES so an
+# owner can request a controlled diagnostic with ``--knobs record-hoist``.
+# It must not reach automatic headline silicon, however: on the current
+# compiler it reproducibly hangs a BH even though compilation/classification
+# succeeds, so the device timeout would discover the known failure too late
+# and poison the remainder of a weekly run.
+AUTOMATIC_KNOBS = tuple(k for k in KNOBS if k != "record-hoist")
+
 
 # ---- dst-layout-32b integration wiring (lane DZ; DU integration note 4,
 # pin-15 lreg-allocator measurement prerequisite) ----------------------------
@@ -2793,7 +2802,7 @@ class Sweep:
             sys.exit("--knobs requires the classify phase")
         self.knobs = validate_requested_names(
             requested_knobs, KNOBS, "--knobs"
-        ) or tuple(KNOBS)
+        ) or AUTOMATIC_KNOBS
         # An explicit knob list is an explicit census request, not the
         # historical compile-cost heuristic.  It opens every clean runnable
         # row for exactly the selected knobs and is closed by a strict
@@ -5845,7 +5854,7 @@ exit $RC
         ):
             return {"op": row["op"], "status": "SKIP_NOT_CHANGED"}
         firing = []
-        for knob in getattr(self, "knobs", tuple(KNOBS)):
+        for knob in getattr(self, "knobs", AUTOMATIC_KNOBS):
             # Leg shape per knob MODE (knob_legs): solo = OFF vs OFF+flag;
             # drop-one = reviewed-ON-minus-flag vs full reviewed-ON (the
             # only shape that can see a dependent/service pass fire).
@@ -7110,7 +7119,8 @@ exit $RC
             self._solo_classify_pool(unproven, "batched-classify fallback")
         if self.a.knob_attribution:
             # Knob-attribution prewarm (owner order 2026-08-20, laneDB):
-            # attribute_knobs runs len(KNOBS) solo classify verdicts per
+            # attribute_knobs runs the implicit AUTOMATIC_KNOBS classify
+            # verdicts per
             # CHANGED row inside the sequential gating loop — the
             # serialized stretch that dominated weekly classify
             # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
@@ -7136,7 +7146,7 @@ exit $RC
                 # also get knob legs, so their prewarm must match).
                 if cached is None or not self._knob_pregate_open(row, cached):
                     continue
-                for knob in getattr(self, "knobs", tuple(KNOBS)):
+                for knob in getattr(self, "knobs", AUTOMATIC_KNOBS):
                     knob_specs.append(
                         (
                             row,
@@ -7543,7 +7553,8 @@ def main():
     ap.add_argument(
         "--knob-attribution",
         action="store_true",
-        help="weekly: classify each changed row against each single optimization knob",
+        help="weekly: classify each changed row against each automatically "
+        "eligible optimization knob (use --knobs for an explicit set)",
     )
     ap.add_argument(
         "--knobs",

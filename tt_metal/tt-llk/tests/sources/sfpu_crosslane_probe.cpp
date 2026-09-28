@@ -314,10 +314,10 @@ inline void body_indexed_swap()
 inline void body_config_broadcast()
 {
     auto v0 = LDROW(0);
-    __builtin_rvtt_sfpwriteconfig_v(v0, 11);
+    __builtin_rvtt_sfpwriteconfig_v(v0, 0, 11);
     STROW(__builtin_rvtt_sfpreadlreg(11), 0);
     auto v1 = LDROW(1);
-    __builtin_rvtt_sfpwriteconfig_v(v1, 12);
+    __builtin_rvtt_sfpwriteconfig_v(v1, 0, 12);
     STROW(__builtin_rvtt_sfpreadlreg(12), 1);
 }
 
@@ -355,7 +355,7 @@ inline void body_reduce_int()
     auto s = __builtin_rvtt_sfpiadd_v(t0, t1, sfpi::SFPIADD_MOD1_CC_NONE);
     s = __builtin_rvtt_sfpiadd_v(t2, s, sfpi::SFPIADD_MOD1_CC_NONE);
     s = __builtin_rvtt_sfpiadd_v(t3, s, sfpi::SFPIADD_MOD1_CC_NONE);
-    __builtin_rvtt_sfpwriteconfig_v(s, 11);
+    __builtin_rvtt_sfpwriteconfig_v(s, 0, 11);
     STROW(__builtin_rvtt_sfpreadlreg(11), 1);
 }
 

@@ -283,9 +283,23 @@ with tempfile.TemporaryDirectory() as td:
         seen_legs.get("knobs/init-hoist"),
     )
     check(
-        "attribute_knobs: every KNOBS knob got exactly its knob_legs spec",
-        all(seen_legs.get(f"knobs/{k}") == sweep.knob_legs(k) for k in sweep.KNOBS),
+        "attribute_knobs: every automatic knob got exactly its knob_legs spec",
+        all(
+            seen_legs.get(f"knobs/{k}") == sweep.knob_legs(k)
+            for k in sweep.AUTOMATIC_KNOBS
+        )
+        and "knobs/record-hoist" not in seen_legs,
         sorted(seen_legs),
+    )
+    check(
+        "record-hoist: automatic scan quarantines it but explicit selection remains available",
+        "record-hoist" not in sweep.AUTOMATIC_KNOBS
+        and "record-hoist" in sweep.KNOBS
+        and sweep.validate_requested_names(
+            ["record-hoist"], sweep.KNOBS, "--knobs"
+        )
+        == ("record-hoist",),
+        sweep.AUTOMATIC_KNOBS,
     )
 
     # An explicit filter is both narrow (only the requested knob runs) and a
