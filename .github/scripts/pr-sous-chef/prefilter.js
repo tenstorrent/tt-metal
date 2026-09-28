@@ -17,7 +17,9 @@
 const FLOW_LABEL = 'copilot-flow';
 // Applied by THIS script (best effort) together with the hand-off comment when a PR hits
 // the per-PR nudge cap. Human-visible, removable, and it keeps handed-off PRs out of the
-// search query.
+// search query. Its REMOVAL is the reset: the timestamp of the most recent `unlabeled`
+// event for this label on the PR is the baseline from which nudges are counted again
+// (see `nudgeBaseline` in run()).
 const HANDOFF_LABEL = 'copilot-flow-handoff';
 // Marker of the hand-off comment. It is written by this script directly through the REST
 // API, NOT through a safe output, because gh-aw's output sanitizer strips every HTML
@@ -146,8 +148,8 @@ async function run({ github, context, core }) {
   const identity = makeIdentity(process.env.SOUS_CHEF_LOGIN);
   const { isNudge, isHandoff } = identity;
   const counters = {
-    fetched: 0, filtered_checks_pending: 0, filtered_copilot_session_active: 0,
-    filtered_handed_off: 0, handed_off_now: 0, filtered_last_comment_from_sous_chef: 0,
+    fetched: 0, filtered_flow_label_missing: 0, filtered_checks_pending: 0, filtered_copilot_session_active: 0,
+    filtered_handed_off: 0, handed_off_now: 0, handoff_skipped_stale_state: 0, filtered_last_comment_from_sous_chef: 0,
     filtered_cooldown: 0, filtered_copilot_unassigned: 0, filtered_nothing_actionable: 0,
     filtered_error: 0, eligible: 0, resolvable_threads_deferred: 0,
     bot_threads_answered_but_unverified: 0
@@ -202,6 +204,10 @@ async function run({ github, context, core }) {
         checks.push(...(contexts?.nodes || []));
       }
       const labels = (pr.labels?.nodes || []).map(l => (l.name || '').toLowerCase());
+      // Filter 0 — opt-in label. The search index that produced the candidate list can lag
+      // behind the PR's real labels; the GraphQL read above is authoritative for THIS tick.
+      // A PR without `copilot-flow` is not ours (a maintainer removed it = kill switch).
+      if (!labels.includes(FLOW_LABEL)) { counters.filtered_flow_label_missing++; reasons[number] = `not labeled ${FLOW_LABEL} (search index was stale, or a maintainer opted the PR out)`; continue; }
 
       // Filter 1 — checks still running (young enough to be genuinely in flight).
       const pendingCutoff = now - PENDING_CHECK_MAX_AGE_MS;
@@ -220,7 +226,20 @@ async function run({ github, context, core }) {
       // latest copilot_work_* timeline event is copilot_work_started.
       const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: number, per_page: 100 });
       let session = 'none';
-      for (const ev of timeline) if (typeof ev.event === 'string' && ev.event.startsWith('copilot_work_')) session = ev.event;
+      // Nudge-count baseline (the documented RESET): a maintainer puts a handed-off PR back
+      // under Sous Chef by removing `copilot-flow-handoff`. Only nudges and hand-off comments
+      // posted AFTER the most recent such removal count; everything before it is history.
+      // Without this baseline the old nudge comments (which nobody deletes) would still
+      // satisfy the cap and the very next eligible tick would hand the PR off again. Same
+      // timeline read copilot-flow-ready.yaml uses for its own sticky opt-out.
+      let nudgeBaseline = 0;
+      for (const ev of timeline) {
+        if (typeof ev.event !== 'string') continue;
+        if (ev.event.startsWith('copilot_work_')) session = ev.event;
+        if (ev.event === 'unlabeled' && (ev.label?.name || '').toLowerCase() === HANDOFF_LABEL) {
+          nudgeBaseline = Math.max(nudgeBaseline, new Date(ev.created_at || 0).getTime());
+        }
+      }
       if (session === 'copilot_work_started') { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
 
       // ALL issue comments (REST, paginated, newest first). They are the persistence for
@@ -229,25 +248,47 @@ async function run({ github, context, core }) {
       // a fresh nudge cycle.
       const comments = (await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      const afterBaseline = (c) => new Date(c.created_at).getTime() > nudgeBaseline;
       // Filter 3 (new) — handed off to humans after the nudge cap: label OR trusted marker
-      // comment (either alone is enough; both are written together below).
-      if (labels.includes(HANDOFF_LABEL) || comments.some(isHandoff)) {
+      // comment newer than the baseline (either alone is enough; both are written together
+      // below). A hand-off comment from BEFORE the label was removed is the previous cycle's
+      // explanation and may stay on the PR as history.
+      if (labels.includes(HANDOFF_LABEL) || comments.some(c => isHandoff(c) && afterBaseline(c))) {
         counters.filtered_handed_off++; reasons[number] = `handed off to maintainers after ${MAX_NUDGES_PER_PR} nudges`; continue;
       }
 
       const conflicting = isConflicting(pr);
       const headDate = new Date(pr.commits?.nodes?.[0]?.commit?.committedDate || 0).getTime();
-      const nudges = comments.filter(isNudge);
+      const nudges = comments.filter(c => isNudge(c) && afterBaseline(c));
       const lastNudgeAt = nudges.length ? new Date(nudges[0].created_at).getTime() : null;
+      // Two different questions, decided in this order:
+      //   nudgeCapped — has this PR already received the maximum number of nudges (this
+      //                 cycle)? If so, it gets NO further nudge; the only remaining outcome
+      //                 is the hand-off below (or "nothing actionable").
+      //   Filter 4/5  — may ANOTHER nudge be posted right now?
+      // Filter 4 must therefore not apply to a capped PR: a 6th nudge that Copilot never
+      // answered (head unchanged) is precisely the state that has to reach the hand-off,
+      // and the old `continue` here left such PRs stuck forever — no 7th nudge, no
+      // hand-off, nothing visible. The cooldown (Filter 5) still applies: the hand-off is
+      // evaluated on the same schedule a 7th nudge would have been, so the last nudge gets
+      // the same 60 min to work as every earlier one.
+      const nudgeCapped = nudges.length >= MAX_NUDGES_PER_PR;
+      if (nudgeBaseline) core.info(`#${number}: ${HANDOFF_LABEL} was removed at ${new Date(nudgeBaseline).toISOString()}; counting ${nudges.length} nudge(s) since then`);
       // Filter 4 — upstream: never two actionable nudges in a row (except when conflicting).
       // tt-metal refinement: a nudge followed by a Copilot push that changed the head is a
       // NEW state (CI ran again on new code) and may be re-evaluated; only an unanswered
-      // nudge (head unchanged since) blocks.
-      if (comments.length && isNudge(comments[0]) && !conflicting && headDate <= new Date(comments[0].created_at).getTime()) {
+      // nudge (head unchanged since) blocks — and only one from THIS cycle: a nudge older
+      // than the reset baseline belongs to the previous, handed-off cycle, and the
+      // maintainer's label removal is itself the instruction to try again.
+      if (!nudgeCapped && comments.length && isNudge(comments[0]) && afterBaseline(comments[0]) && !conflicting && headDate <= new Date(comments[0].created_at).getTime()) {
         counters.filtered_last_comment_from_sous_chef++; reasons[number] = 'last comment is an unanswered sous-chef nudge (no push since)'; continue;
       }
-      // Filter 5 — cooldown since the last actionable nudge.
-      if (lastNudgeAt !== null && now - lastNudgeAt < COOLDOWN_MS) { counters.filtered_cooldown++; reasons[number] = 'inside the 60 min cooldown'; continue; }
+      // Filter 5 — cooldown since the last actionable nudge (also delays a hand-off).
+      if (lastNudgeAt !== null && now - lastNudgeAt < COOLDOWN_MS) {
+        counters.filtered_cooldown++;
+        reasons[number] = nudgeCapped ? 'nudge cap reached; hand-off waits for the 60 min cooldown after the last nudge' : 'inside the 60 min cooldown';
+        continue;
+      }
 
       // Context for the agent.
       const failedForCopilot = [];
@@ -331,7 +372,6 @@ async function run({ github, context, core }) {
       const unansweredForPrompt = unansweredAll.slice(0, MAX_THREADS_PER_PR).map(({ fix_verified, ...rest }) => rest);
 
       const zeroDiffStalled = (pr.changedFiles ?? -1) === 0 && now - new Date(pr.createdAt).getTime() >= ZERO_DIFF_AGE_MS;
-      const nudgeCapped = nudges.length >= MAX_NUDGES_PER_PR;
       // A mention only starts a session on a PR that is still ASSIGNED to Copilot (GitHub
       // docs); a maintainer who unassigned Copilot has taken the PR over.
       const copilotAssigned = (pr.assignees?.nodes || []).some(a => isCopilotCodingAgent(a?.login));
@@ -364,6 +404,25 @@ async function run({ github, context, core }) {
       // check above prevents a duplicate comment.
       if (needsNudge && nudgeCapped) {
         if (handoffsThisRun >= MAX_ELIGIBLE) { reasons[number] = 'nudge cap reached; hand-off deferred to the next run (per-run cap)'; continue; }
+        // These two writes go straight through REST, so gh-aw's `required-labels`
+        // enforcement (which re-reads labels right before the add-comment / add-labels
+        // handlers post) does not cover them. Apply the same rule by hand: a FRESH read of
+        // the PR immediately before writing, not the `labels` snapshot from the top of this
+        // iteration (several paginated calls ago, after other PRs' evaluations). If a
+        // maintainer removed `copilot-flow` in the meantime, the kill switch wins and
+        // nothing is posted; if another run already handed the PR off, or it was closed or
+        // converted to a draft, there is nothing to do either.
+        const fresh = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+        const freshLabels = (fresh?.labels || []).map(l => (l?.name || '').toLowerCase());
+        const staleReason = !freshLabels.includes(FLOW_LABEL) ? `${FLOW_LABEL} was removed before the hand-off could be posted (kill switch honoured)`
+          : freshLabels.includes(HANDOFF_LABEL) ? 'already handed off by another run'
+          : fresh?.state !== 'open' || fresh?.draft ? 'no longer open and non-draft at write time'
+          : null;
+        if (staleReason) {
+          counters.handoff_skipped_stale_state++; reasons[number] = `nudge cap reached; hand-off skipped: ${staleReason}`;
+          core.info(`#${number}: hand-off skipped: ${staleReason}`);
+          continue;
+        }
         const body = buildHandoffComment({ pr, nudgeCount: nudges.length, conflicting, zeroDiffStalled, failedForCopilot, unansweredAll, needsMaintainerApproval, runUrl, now });
         try {
           await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
@@ -372,8 +431,10 @@ async function run({ github, context, core }) {
             await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [HANDOFF_LABEL] });
           } catch (labelError) {
             // Label is best effort (it may not exist yet); the marker comment alone is
-            // sufficient for Filter 3.
-            core.warning(`#${number}: hand-off comment posted but label ${HANDOFF_LABEL} could not be applied: ${labelError.message}`);
+            // sufficient for Filter 3. But the label is also the documented RESET (its
+            // removal is the nudge-count baseline), so without it the PR can only be put
+            // back by deleting the comment, and its old nudges would then still count.
+            core.warning(`#${number}: hand-off comment posted but label ${HANDOFF_LABEL} could not be applied: ${labelError.message}. Create the label: without it maintainers cannot reset the nudge count for this PR.`);
           }
           counters.handed_off_now++; handoffsThisRun++;
           reasons[number] = `handed off to maintainers after ${nudges.length} nudges (this run)`;
@@ -477,7 +538,7 @@ function buildHandoffComment({ pr, nudgeCount, conflicting, zeroDiffStalled, fai
   if (unansweredAll.length > 10) lines.push(`- … and ${unansweredAll.length - 10} more unanswered review thread(s).`);
   for (const c of needsMaintainerApproval.slice(0, 5)) lines.push(`- Waiting for a maintainer to approve the run: ${c.url ? `[${c.name}](${c.url})` : c.name}.`);
   lines.push('',
-    `A maintainer should take the PR over, give Copilot direct guidance in a comment (an at-mention from a maintainer with write access starts a new session), or close it. To put the PR back under PR Sous Chef, remove the \`${HANDOFF_LABEL}\` label **and** delete this comment.`,
+    `A maintainer should take the PR over, give Copilot direct guidance in a comment (an at-mention from a maintainer with write access starts a new session), or close it. To put the PR back under PR Sous Chef, remove the \`${HANDOFF_LABEL}\` label: only nudges posted after that removal count toward the next cap of ${MAX_NUDGES_PER_PR}, so this comment can stay as history (deleting it is neither needed nor sufficient).`,
     '',
     `> 🍳 *Posted by the [PR Sous Chef](${runUrl}) pre-activation check — automated; no agent was involved in this decision.*`);
   return lines.join('\n');
@@ -487,7 +548,7 @@ module.exports = {
   run,
   // exported for prefilter.test.js
   FLOW_LABEL, HANDOFF_LABEL, HANDOFF_MARKER, WORKFLOW_ID, MAX_NUDGES_PER_PR, MAX_ELIGIBLE,
-  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO,
+  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, PRE_ACTIVATION_LOGIN,
   matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
   makeIdentity, verifyFix, buildHandoffComment
 };

@@ -52,7 +52,11 @@ on:
   # `pull-requests: write` is for the pre-activation script only (plain code, no agent):
   # after the per-PR nudge cap it posts the hand-off comment and applies
   # `copilot-flow-handoff` itself, deterministically, on the PR it just evaluated. Same
-  # pattern as issue-monster.md's retry checkpoint. The agent job stays read-only.
+  # pattern as issue-monster.md's retry checkpoint. Those two writes bypass gh-aw's
+  # safe-outputs layer, so the script applies the `required-labels` rule by hand: it
+  # re-reads the PR right before writing and posts nothing if `copilot-flow` is gone.
+  # Maintainers reset a handed-off PR by removing `copilot-flow-handoff`; only nudges
+  # posted after that removal count toward the next cap. The agent job stays read-only.
   permissions:
     pull-requests: write
     issues: read
