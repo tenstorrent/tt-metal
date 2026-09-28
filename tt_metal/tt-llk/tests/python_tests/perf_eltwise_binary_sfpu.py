@@ -1088,7 +1088,7 @@ _PAIRED_STOCK_STAGES = {
         ((11, -4), 12, (), ("ADD", (0, 1, 0))),
     ),
 }
-_PAIRED_GENERATED = {}
+_PAIRED_GENERATED = {"erf_bw": "backward_complete"}
 
 
 import torch

@@ -231,3 +231,7 @@
 #ifdef SFPU_OP_COPY_DEST_INCLUDE
 #include "api/compute/copy_dest_values.h"
 #endif
+
+#if TT_POLY_BACKWARD_ERF_BW_INCLUDE
+#include "api/compute/eltwise_unary/erf_bw_tt_poly_bf16.h"
+#endif
