@@ -272,6 +272,10 @@
 #include "api/compute/eltwise_unary/multigammaln_tt_poly_bf16.h"
 #endif
 
+#if TT_POLY_BACKWARD_RELU_BW_INCLUDE
+#include "api/compute/eltwise_unary/relu_bw_tt_poly_bf16.h"
+#endif
+
 #if TT_POLY_BACKWARD_SELU_BW_INCLUDE
 #include "api/compute/eltwise_unary/selu_bw_tt_poly_bf16.h"
 #endif
