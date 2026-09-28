@@ -91,8 +91,8 @@ python binary_stream_sweep.py --op binarypow \
   --runner-temp $RT --band-bits 26 --chip 0 --out <dir> [--idmap <tsv>]
 ```
 
-`lanemq_run_op.sh` (ONE op, run-to-completion-and-quit, resume-safe) + a Slurm
-`--array` submitter mirror the laneMK galaxy model when running on the exabox
-galaxies. The DIFF bands of a `DIVERGENT` verdict are narrowed by re-running that
+`SWEEP=binary bash run_op.sh <op>` (ONE op, run-to-completion-and-quit,
+resume-safe) + `run_op_array.sh` as the Slurm `--array` submitter are the galaxy
+model when running on the exabox galaxies. The DIFF bands of a `DIVERGENT` verdict are narrowed by re-running that
 band at a smaller `--band-bits`; a first-witness input is then sim-confirmed on the
 pinned instrument (`formal_equiv.py` / `SFPU_SRC_OVERRIDE`).
