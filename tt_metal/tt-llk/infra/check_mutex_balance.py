@@ -23,8 +23,10 @@ import os
 import re
 import sys
 
-ACQUIRE = re.compile(r"\b(?:t6_mutex_acquire|TTI?_ATGETM)\s*\(")
-RELEASE = re.compile(r"\b(?:t6_mutex_release|TTI?_ATRELM)\s*\(")
+# A call may carry template arguments before its `(`: `t6_mutex_acquire<mutex::REG_RMW>()`.
+_CALL = r"\s*(?:<[^;{}()]*>)?\s*\("
+ACQUIRE = re.compile(r"\b(?:t6_mutex_acquire|TTI?_ATGETM)" + _CALL)
+RELEASE = re.compile(r"\b(?:t6_mutex_release|TTI?_ATRELM)" + _CALL)
 # The wrapper definitions and the RAII guard's ctor/dtor each hold one half by construction.
 EXEMPT_DEFN = re.compile(
     r"\b(?:inline\s+void\s+)?t6_mutex_(?:acquire|release)\s*\(\s*const\b"
@@ -32,6 +34,40 @@ EXEMPT_DEFN = re.compile(
 GUARD_CLASS = re.compile(r"\b(?:class|struct)\b[^;{]*\bT6MutexLockGuard\b")
 # A brace opened by one of these declares a scope, not a function body.
 CONTAINER = re.compile(r"\b(?:namespace|class|struct|union|enum|extern)\b")
+_TEMPLATE = re.compile(r"\btemplate\s*<")
+# A constructor's member-initializer list: a `:` (not `::`) after the declarator's `)`.
+_CTOR_INIT = re.compile(r"\)\s*(?:noexcept\b[^:{]*)?:(?!:)")
+# The end of a lambda declarator: `[...](params) mutable -> T` right before its body.
+_LAMBDA_DECL = re.compile(
+    r"\]\s*(?:\((?:[^()]|\([^()]*\))*\))?\s*(?:(?:mutable|constexpr|noexcept)\s*)*(?:->[^{};]*)?$"
+)
+_PP_LINE = re.compile(r"(?m)^[ \t]*#(?:[^\n]*\\\n)*[^\n]*")
+
+
+def _scope_words(head):
+    """head without its template parameter lists and parenthesised text.
+
+    Only what is left says which scope a brace opens: `template <class T>` and an `enum`
+    parameter type name a container keyword without declaring one.
+    """
+    out, i, n, paren = [], 0, len(head), 0
+    while i < n:
+        m = _TEMPLATE.match(head, i) if paren == 0 else None
+        if m:
+            depth, i = 1, m.end()
+            while i < n and depth:
+                depth += {"<": 1, ">": -1}.get(head[i], 0)
+                i += 1
+            continue
+        c = head[i]
+        if c == "(":
+            paren += 1
+        elif c == ")":
+            paren = max(paren - 1, 0)
+        elif paren == 0:
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _blank_noncode(src):
@@ -48,6 +84,11 @@ def _blank_noncode(src):
         elif src.startswith("/*", i):
             j = src.find("*/", i + 2)
             j = n if j < 0 else j + 2
+        elif src[i] == "'" and i and src[i - 1].isalnum():
+            # a digit separator (`0x8000'0000`), not a character literal
+            out.append(src[i])
+            i += 1
+            continue
         elif src[i] in "\"'":
             q, j = src[i], i + 1
             while j < n and src[j] != q and src[j] != "\n":
@@ -64,7 +105,9 @@ def _blank_noncode(src):
 
 def _signature(lines, brace_line):
     """The declarator line for a body, which is what a reader recognises and the baseline keys on."""
-    if lines[brace_line].strip() != "{":
+    if (
+        lines[brace_line].strip().rstrip("\\").strip() != "{"
+    ):  # `{ \` inside a macro is bare too
         return brace_line
     sig = brace_line - 1
     while sig > 0:
@@ -83,7 +126,10 @@ def functions(src):
     `extern` brace opens a container; only a declarator carrying a parameter list opens a
     function. Every LLK header wraps its functions in `namespace ckernel`, so counting the
     namespace brace as a body would merge the whole file into one balance and let a leak in
-    one function cancel against a release in another.
+    one function cancel against a release in another. A keyword inside a template parameter
+    list or the parameter list (`template <class T>`, an `enum` parameter) does not make a
+    container, and a brace inside the declarator -- a `= {}` default argument, a member
+    brace-init `: m{0}` -- is part of the head; a lambda passed as an argument is a body.
 
     Keyed on position, not name: two overloads with the same name in one file would otherwise
     share a single balance count and mask each other.
@@ -98,27 +144,52 @@ def functions(src):
         if c == "\n":
             ln += 1
     line_of.append(ln)
+    # A preprocessor line's parentheses need not balance, so they never move `paren`; its
+    # braces still count, since a macro can define a whole function.
+    in_pp = bytearray(len(code))
+    for m in _PP_LINE.finditer(code):
+        in_pp[m.start() : m.end()] = b"\x01" * (m.end() - m.start())
 
-    stack, decl_start, fn = [], 0, None
+    stack, decl_start, fn, paren = [], 0, None, 0
     for k, c in enumerate(code):
-        if c == "{":
+        if c in "()" and in_pp[k]:
+            pass
+        elif c == "(":
+            paren += 1
+        elif c == ")":
+            paren = max(paren - 1, 0)
+        elif c == "{":
             head = code[decl_start:k]
-            if fn is None and "(" in head and not CONTAINER.search(head):
+            if fn is None and paren and _LAMBDA_DECL.search(head):
+                kind, fn = "fn", k  # a lambda passed as an argument at namespace scope
+            # A brace inside the declarator -- a `= {}` default argument or a member
+            # brace-init `: m{0}` -- is part of the head, not a body.
+            elif paren or (
+                fn is None and _CTOR_INIT.search(head) and re.search(r"[\w>]\s*$", head)
+            ):
+                kind = "declarator"
+            elif (
+                fn is None and "(" in head and not CONTAINER.search(_scope_words(head))
+            ):
                 kind, fn = "fn", k
             elif GUARD_CLASS.search(head):
                 kind = "guard"
             else:
                 kind = "other"
             stack.append(kind)
-            decl_start = k + 1
+            if kind != "declarator":
+                decl_start = k + 1
         elif c == "}":
             kind = stack.pop() if stack else "other"
-            decl_start = k + 1
+            if kind != "declarator":
+                decl_start = k + 1
             if kind == "fn" and fn is not None:
                 yield line_of[fn], line_of[k], code[fn : k + 1], "guard" in stack
                 fn = None
         elif c == ";":
             decl_start = k + 1
+            if fn is None:
+                paren = 0  # outside a body, no statement spans a `;`
 
 
 def scan(path):

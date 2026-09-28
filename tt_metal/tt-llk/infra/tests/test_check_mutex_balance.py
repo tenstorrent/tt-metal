@@ -5,6 +5,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "check_mutex_balance.py")
 LLK = os.path.normpath(os.path.join(HERE, "..", ".."))  # tt_metal/tt-llk
@@ -174,6 +176,131 @@ def test_guard_exemption_does_not_cover_the_rest_of_the_file(tmp_path):
     assert "_llk_pack_leaks_" in r.stdout, r.stdout
     # The guard's own ctor and dtor stay exempt, so the leak is the only finding.
     assert "1 function(s)" in r.stdout, r.stdout
+
+
+# Declarator shapes whose brace or keyword once hid the body from the check. `{acq}` is the
+# acquire, `{rel}` the release (empty in the leaking variant); `name` must be reported.
+SHAPES = {
+    "template_class_param": (
+        "_llk_tmpl_",
+        """
+        template <class T, typename std::enable_if<(sizeof(T) > 1), int>::type = 0>
+        inline void _llk_tmpl_(T x)
+        {{
+            {acq}
+            {rel}
+        }}
+        """,
+    ),
+    "enum_param": (
+        "_llk_enum_",
+        """
+        inline void _llk_enum_(enum Mode m)
+        {{
+            {acq}
+            {rel}
+        }}
+        """,
+    ),
+    "brace_default_argument": (
+        "_llk_dflt_",
+        """
+        struct Cfg {{ int a; }};
+        inline void _llk_dflt_(Cfg c = {{}}, int k = int{{3}})
+        {{
+            {acq}
+            {rel}
+        }}
+        """,
+    ),
+    "ctor_member_brace_init": (
+        "Guardless",
+        """
+        class Guardless
+        {{
+            int m;
+
+          public:
+            Guardless() : m{{0}}
+            {{
+                {acq}
+                {rel}
+            }}
+        }};
+        """,
+    ),
+    "template_argument_call": (
+        "_llk_targ_",
+        """
+        inline void _llk_targ_()
+        {{
+            t6_mutex_acquire<mutex::REG_RMW>();
+            {rel_t}
+        }}
+        """,
+    ),
+    "lambda_argument": (
+        "[](const std::uint32_t m)",
+        """
+        static constexpr auto _table_ = make_table<8>(
+            [](const std::uint32_t m) -> std::uint32_t
+            {{
+                {acq}
+                {rel}
+                return m;
+            }});
+        """,
+    ),
+    "macro_defined_function": (
+        "vector_##op",
+        """
+        #define DEFINE_VECTOR_OP(op) \\
+            inline void vector_##op() \\
+            {{ \\
+                {acq} \\
+                {rel} \\
+            }}
+        """,
+    ),
+    "digit_separator_before_body": (
+        "_llk_after_sep_",
+        """
+        #define PULSE (0x8000'0000)
+        constexpr int bits = 0b00'01;
+        inline void _llk_after_sep_()
+        {{
+            {acq}
+            {rel}
+        }}
+        """,
+    ),
+}
+
+
+def _shape(body, leak):
+    acq, rel = "t6_mutex_acquire(mutex::REG_RMW);", "t6_mutex_release(mutex::REG_RMW);"
+    rel_t = "t6_mutex_release<mutex::REG_RMW>();"
+    src = body.format(acq=acq, rel="" if leak else rel, rel_t="" if leak else rel_t)
+    return "namespace ckernel\n{\n" + textwrap.dedent(src) + "}\n"
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_declarator_shape_leak_is_flagged(tmp_path, shape):
+    name, body = SHAPES[shape]
+    p = tmp_path / f"{shape}.h"
+    p.write_text(_shape(body, leak=True))
+    r = run(p)
+    assert r.returncode == 1, f"{shape}: leak missed\n{p.read_text()}"
+    assert name in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_declarator_shape_balanced_is_clean(tmp_path, shape):
+    _, body = SHAPES[shape]
+    p = tmp_path / f"{shape}.h"
+    p.write_text(_shape(body, leak=False))
+    r = run(p)
+    assert r.returncode == 0, f"{shape}: false positive\n{r.stdout}"
 
 
 def test_wrapper_definitions_are_exempt():
