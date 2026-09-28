@@ -234,7 +234,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::S, kv, 2);
     add_cb(pcb::decay, Ct);
     add_cb(pcb::decay_exp, Ct);
-    add_cb(pcb::decayfac, Ct);
+    add_cb(pcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
     add_cb(pcb::lmask, cc);
     add_cb(pcb::Tinv, cc);
     add_cb(pcb::vbeta, cv);

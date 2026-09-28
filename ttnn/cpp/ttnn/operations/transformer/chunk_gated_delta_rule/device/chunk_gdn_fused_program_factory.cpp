@@ -201,7 +201,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(prod_set, fcb::S, kv, 2);
     add_cb(prod_set, fcb::decay, Ct);
     add_cb(prod_set, fcb::decay_exp, Ct);
-    add_cb(prod_set, fcb::decayfac, Ct);
+    add_cb(prod_set, fcb::decayfac, Ct + 1);  // + the dl = exp(g_sum) column tile
     add_cb(prod_set, fcb::lmask, cc);
     add_cb(prod_set, fcb::kbeta, ck);
     add_cb(prod_set, fcb::out, cv, 2, df_qkv);
