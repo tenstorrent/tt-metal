@@ -410,12 +410,13 @@ TEST(SlidingWindowWorkPlan, MultiHopGeometry) {
 // read exactly once, and each remote one from its hop's block at the offset that hop's sender wrote it.
 TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
     for (uint32_t ring : {4u, 8u}) {
-        for (uint32_t local : {8u, 16u}) {
+        // Include Gemma4's 6656/9984 chunks at CP8 and CP4, in tile units.
+        for (const auto& [local, chunk] :
+             std::vector<std::pair<uint32_t, uint32_t>>{{8, 4}, {16, 4}, {26, 2}, {39, 1}, {52, 4}, {78, 2}}) {
             const uint32_t group = ring * local;
             const uint32_t capacity = 3 * group;
-            for (uint32_t hops_wanted : {2u, 3u, 4u}) {
-                const uint32_t window = hops_wanted * local * 32;
-                const uint32_t halo = chunked_sliding_halo_tile_rows(window, 32, 4);
+            for (uint32_t window : {1024u, 2 * local * 32, 3 * local * 32, 4 * local * 32}) {
+                const uint32_t halo = chunked_sliding_halo_tile_rows(window, 32, chunk);
                 if (chunked_sliding_halo_hop_count(halo, local) > ring) {
                     continue;
                 }
@@ -434,24 +435,35 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                             }
                             const auto mapping = build_chunked_q_mapping(start, end, local, ring, device);
                             ASSERT_EQ(mapping.q_valid_tile_count, positions.size());
-                            for (uint32_t q = 0; q < local; q += 4) {
+                            for (uint32_t q = 0; q < local; q += chunk) {
                                 SCOPED_TRACE(
                                     ::testing::Message()
                                     << "ring=" << ring << " local=" << local << " start=" << start << " end=" << end
                                     << " device=" << device << " q=" << q << " window=" << window);
                                 const auto plan = build_sliding_q_work_plan(
-                                    q, 4, device, local, ring, window, 32, capacity / ring, 4, end, 0, &mapping);
+                                    q,
+                                    chunk,
+                                    device,
+                                    local,
+                                    ring,
+                                    window,
+                                    32,
+                                    capacity / ring,
+                                    chunk,
+                                    end,
+                                    0,
+                                    &mapping);
                                 ASSERT_TRUE(plan.is_valid);
                                 if (q >= positions.size()) {
                                     EXPECT_EQ(plan.total_k_chunk_count, 1u);
                                     continue;
                                 }
                                 std::set<std::pair<uint32_t, uint32_t>> expected, actual;
-                                for (uint32_t row = q; row < std::min<uint32_t>(q + 4, positions.size()); ++row) {
+                                for (uint32_t row = q; row < std::min<uint32_t>(q + chunk, positions.size()); ++row) {
                                     const uint32_t pos = positions[row];
                                     const uint32_t left = (window - 1 + 31) / 32;
                                     for (uint32_t k = pos > left ? pos - left : 0; k <= pos; ++k) {
-                                        expected.emplace(k / local % ring, (k / group * local + k % local) / 4);
+                                        expected.emplace(k / local % ring, (k / group * local + k % local) / chunk);
                                     }
                                 }
                                 for (uint32_t work = 0; work < plan.total_k_chunk_count; ++work) {
@@ -460,7 +472,7 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                                     if (ref.source_ring_id == device) {
                                         continue;
                                     }
-                                    const uint32_t compact = ref.compact_k_chunk * 4;
+                                    const uint32_t compact = ref.compact_k_chunk * chunk;
                                     ASSERT_LT(compact, halo);
                                     // The hop whose block holds this row, and what that hop's sender shipped.
                                     uint32_t hop = 1;
@@ -473,7 +485,7 @@ TEST(SlidingWindowWorkPlan, MultiHopQueriesCoverExactlyTheirCausalWindows) {
                                     EXPECT_EQ(
                                         sources.first_start_tile + compact -
                                             chunked_sliding_halo_hop_dest_row(halo, local, hop),
-                                        ref.source_k_chunk * 4);
+                                        ref.source_k_chunk * chunk);
                                 }
                                 EXPECT_EQ(actual, expected);
                             }

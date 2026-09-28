@@ -619,8 +619,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     if (args.has_sliding_window()) {
         const uint32_t window_size = args.sliding_window_size.value();
-        const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
-        const bool supported_k_chunk = k_chunk_size == 128;
+        // Smaller square blocks support tile-aligned slabs such as 832 and 1248 tokens
+        // (Gemma4 global prefill chunks 6656 and 9984 at CP8).
+        const bool supported_chunks = ((q_chunk_size == 64 || q_chunk_size == 128) && k_chunk_size == 128) ||
+                                      ((q_chunk_size == 32 || q_chunk_size == 64) && k_chunk_size == q_chunk_size);
         // These are the only ring sizes the chunked sliding halo is tested on. Extend the test matrix
         // (and SlidingQWorkPlan::max_halo_hops) before widening this allowlist.
         TT_FATAL(
@@ -664,8 +666,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             gathered_buffer_n,
             N_local_kv * args.ring_size);
         TT_FATAL(
-            supported_q_chunk && supported_k_chunk,
-            "Chunked sliding attention supports Q chunks 64/128 and K chunk 128, got Q={} K={}",
+            supported_chunks,
+            "Chunked sliding attention supports Q/K chunks 64/128, 128/128, 64/64, or 32/32, got Q={} K={}",
             q_chunk_size,
             k_chunk_size);
         TT_FATAL(args.is_causal, "Ring sliding-window attention is currently causal-only");

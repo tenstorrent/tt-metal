@@ -218,17 +218,24 @@ def global_ring_prefill_attention(
     return out
 
 
-def ring_sdpa_chunk_sizes(q_slab_tokens, sliding):
+def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, cp_degree):
     """(q_chunk_size, k_chunk_size) for the ring SDPA, chosen by the per-rank Q slab (prefill chunk / CP).
 
-    Sliding layers use q 128 / k 128; the sliding path accepts q in {64, 128} and k == 128, and k also sets
-    the halo granularity. Global layers use k 256 with a Q chunk that grows with the slab. Measured over a
+    Sliding layers use the largest of 128, 64, or 32 that divides the local slab for both Q and K;
+    K also sets the halo granularity. Global chunks 6656 and 9984 use explicit Q/K configurations.
+    Other global layers use k 256 with a Q chunk that grows with the slab. Measured over a
     256k prefill at CP8: q 32 at chunk 2048 (21.7 s, against 24.0 s at q 64 and 28.7 s at q 96), q 64 at
     chunk 4096 (14.1 s, against 17.4 s at q 32 and 16.2 s at q 96), and q 96 at chunk 8192 (11.1 s,
     against 12.8 s at q 64).
     """
     if sliding:
-        return 128, 128
+        chunk = next(c for c in (128, 64, 32) if q_slab_tokens % c == 0)
+        return chunk, chunk
+    global_chunk = q_slab_tokens * cp_degree
+    if global_chunk == 6656:
+        return 64, 320
+    if global_chunk == 9984:
+        return 96, 256
     if q_slab_tokens <= 256:
         return 32, 256
     if q_slab_tokens <= 512:
@@ -242,9 +249,8 @@ def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size
     The compute grid must exclude the CCL column that ``ccl_core_grid_offset``
     points at — ring_joint asserts the CCL and SDPA core sets are disjoint.
 
-    q/k chunk sizes are the ones the chunked sliding path accepts (q in {64,128},
-    k == 128); k_chunk also sets the halo granularity, since the halo is the
-    window rounded up to whole k chunks.
+    For sliding attention, k_chunk also sets the halo granularity, since the halo
+    is the window rounded up to whole k chunks.
     """
     grid = ccl_manager.compute_grid_size
     return ttnn.SDPAProgramConfig(
@@ -377,7 +383,7 @@ def _ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     if program_config is None:
-        _q_chunk, _k_chunk = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size))
+        _q_chunk, _k_chunk = ring_sdpa_chunk_sizes(tt_q.shape[-2], bool(sliding_window_size), mesh_config.cp_degree)
         program_config = ring_prefill_program_config(
             mesh_device,
             ccl_manager,

@@ -31,7 +31,7 @@ except ModuleNotFoundError:
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL_DTYPE = ttnn.bfloat16
-PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
+PREFILL_CHUNK_SIZES = (2048, 4096, 6656, 8192, 9984, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
@@ -133,6 +133,17 @@ def _cp_gather_torch(tensor, mesh_config):
     return torch.cat(rows, dim=-2)
 
 
+def _padded_prefill_length(context_len, chunk_size):
+    """Whole-chunk extent needed by fixed-shape trace inputs and chunk-major caches."""
+    return -(-context_len // chunk_size) * chunk_size
+
+
+def _pad_prefill_tokens(tokens, chunk_size):
+    """Pad only the final chunk; causal attention keeps padding out of real-token outputs."""
+    padding = _padded_prefill_length(tokens.shape[-1], chunk_size) - tokens.shape[-1]
+    return torch.nn.functional.pad(tokens, (0, padding)) if padding else tokens
+
+
 # ── Eager / traced execution ──────────────────────────────────────────────────
 
 
@@ -154,6 +165,9 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
         raise ValueError("This demo requires context parallel prefill")
     context_len = context_len or chunk_size
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
+    if max_seq_len < context_len:
+        raise ValueError("GEMMA4_MAX_SEQ_LEN must cover the requested context")
+    max_seq_len = _padded_prefill_length(max_seq_len, chunk_size)
 
     hf_config = Gemma4ModelArgs.load_hf_config(hf_model_id)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
@@ -194,11 +208,12 @@ def test_prefill_long_context_traced(
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    padded_context_len = _padded_prefill_length(context_len, chunk_size)
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, padded_context_len):
         pytest.skip(geometry_error)
 
     hf_model_id = _hf_model_id()
-    n_chunks = context_len // chunk_size
+    n_chunks = padded_context_len // chunk_size
     model_args, model, kv_cache = _build_prefill_model(
         mesh_config=mesh_config,
         hf_model_id=hf_model_id,
@@ -207,6 +222,11 @@ def test_prefill_long_context_traced(
     )
 
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
+    tokens_all = _pad_prefill_tokens(tokens_all, chunk_size)
+    logger.info(
+        f"[traced] context={context_len} chunk={chunk_size} chunks={n_chunks} "
+        f"padding={padded_context_len - context_len}"
+    )
 
     host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
@@ -300,6 +320,7 @@ def test_prefill_long_context_traced(
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
             out = out_ring
+            valid_tokens = min(chunk_size, context_len - chunk_start)
             # Reading every chunk's hidden states to host is a test artifact — a prefill
             # server leaves the KV cache on device and reads back only the last chunk,
             # whose final row seeds the first decode step. readback="final" measures that
@@ -307,13 +328,13 @@ def test_prefill_long_context_traced(
             # for finiteness instead of only the last.
             if readback_all or chunk_idx == n_chunks - 1:
                 t_rb = time.time()
-                hidden = _cp_gather_torch(out, mesh_config)
+                hidden = _cp_gather_torch(out, mesh_config)[..., :valid_tokens, :]
                 assert torch.isfinite(hidden).all(), f"chunk {chunk_idx} produced non-finite output"
                 readback_s += time.time() - t_rb
             # Report per-chunk latency and cumulative device and wall time.
             logger.info(
-                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk_size}) "
-                f"device={per_chunk[-1] * 1000:.1f}ms ({chunk_size / per_chunk[-1]:.0f} tok/s) | "
+                f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + valid_tokens}) "
+                f"device={per_chunk[-1] * 1000:.1f}ms ({valid_tokens / per_chunk[-1]:.0f} tok/s) | "
                 f"total device={sum(per_chunk):.1f}s wall={time.time() - t_run:.1f}s"
             )
         total_s = time.time() - t_run
@@ -382,9 +403,10 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
-    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, context_len):
+    padded_context_len = _padded_prefill_length(context_len, chunk_size)
+    if geometry_error := prefill_chunk_geometry_error(chunk_size, cp, padded_context_len):
         pytest.skip(geometry_error)
-    n_chunks = context_len // chunk_size
+    n_chunks = padded_context_len // chunk_size
     if chunk_idx != "all" and not 0 <= int(chunk_idx) < n_chunks:
         pytest.skip(f"chunk {chunk_idx} is outside the {n_chunks} chunks of {chunk_size} in {context_len} tokens")
 
@@ -401,6 +423,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         context_len=context_len,
     )
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size)
+    tokens_all = _pad_prefill_tokens(tokens_all, chunk_size)
 
     layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
@@ -554,10 +577,11 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                 logger.info(
                     f"[layer_perf_chunk] RESULT type={lt} chunk={idx} ring_depth={idx} "
                     f"kv_actual_global={chunk_start} measured_ms={measured_s * 1000:.2f} "
-                    f"tok_s={chunk_size / measured_s:.0f} signposts={sp_start},{sp_stop}"
+                    f"tok_s={min(chunk_size, context_len - chunk_start) / measured_s:.0f} signposts={sp_start},{sp_stop}"
                 )
 
         hidden = _cp_gather_torch(outs[layer_types[-1]], mesh_config)
+        hidden = hidden[..., : min(chunk_size, context_len - chunk_idxs[-1] * chunk_size), :]
     finally:
         for tid in traces.values():
             ttnn.release_trace(mesh_device, tid)
