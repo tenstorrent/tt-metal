@@ -258,8 +258,12 @@ class ParallelJob;
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id, Completion& completion) :
-        completion_(completion) {
+    NumaAwareExecutor(
+        ContextId context_id,
+        uint32_t physical_device_id,
+        Completion& completion,
+        std::chrono::nanoseconds active_spin = {}) :
+        completion_(completion), active_spin_(active_spin), spin_window_(active_spin) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { run(); });
@@ -304,11 +308,26 @@ public:
 private:
     void run();
 
+    void note_work_done() {
+        if (active_spin_.count() > 0) {
+            last_work_ = std::chrono::steady_clock::now();
+        }
+    }
+
     bool has_work() const { return !tasks_.empty() || job_.load(std::memory_order_seq_cst) != nullptr; }
 
     // Spin briefly so back-to-back tasks are picked up without entering the kernel, then park until a
     // producer publishes work or the executor shuts down.
     void wait_for_work() {
+        if (active_spin_.count() > 0) {
+            const auto deadline = last_work_ + spin_window_;
+            while (std::chrono::steady_clock::now() < deadline) {
+                if (has_work() || shutdown_.load(std::memory_order_relaxed)) {
+                    return;
+                }
+                ttsl::pause();
+            }
+        }
         if (spin_until([this] { return has_work(); })) {
             return;
         }
@@ -318,6 +337,14 @@ private:
             futex_wait(parked_, 1);
         }
         parked_.store(0, std::memory_order_relaxed);
+        // Work that comes back soon after the worker parked finds its core in a deep idle state, and the slow wake
+        // can keep stretching the gap to the next work past the spin window. So the next spin covers twice such a
+        // gap, up to MAX_SPIN_STRETCH times the configured window.
+        if (active_spin_.count() > 0) {
+            const auto max_window = MAX_SPIN_STRETCH * active_spin_;
+            const std::chrono::nanoseconds gap = std::chrono::steady_clock::now() - last_work_;
+            spin_window_ = gap < max_window ? std::clamp(2 * gap, active_spin_, max_window) : active_spin_;
+        }
     }
 
     TaskQueue tasks_;
@@ -326,6 +353,10 @@ private:
     alignas(64) std::atomic<uint32_t> parked_ = 0;
     std::atomic<bool> shutdown_ = false;
     alignas(64) std::atomic<ParallelJob*> job_ = nullptr;
+    static constexpr int MAX_SPIN_STRETCH = 8;
+    const std::chrono::nanoseconds active_spin_;
+    std::chrono::nanoseconds spin_window_;
+    std::chrono::steady_clock::time_point last_work_;
     std::exception_ptr stored_exception_;
 };
 
@@ -494,11 +525,13 @@ inline void NumaAwareExecutor::run() {
                 }
             }
             completion_.done();
+            note_work_done();
             continue;
         }
         if (job_.load(std::memory_order_relaxed) != nullptr) {
             if (auto* job = job_.exchange(nullptr, std::memory_order_acquire)) {
                 job->run_participant(this);
+                note_work_done();
             }
             continue;
         }
@@ -524,12 +557,15 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
+    DeviceBoundThreadPool(
+        ContextId context_id,
+        const std::vector<tt::tt_metal::IDevice*>& physical_devices,
+        std::chrono::microseconds active_spin = {}) :
         num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(
-                std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id(), completion_));
+                std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id(), completion_, active_spin));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
         }
     }
@@ -651,8 +687,10 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
+    ContextId context_id,
+    const std::vector<tt::tt_metal::IDevice*>& physical_devices,
+    std::chrono::microseconds active_spin) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, active_spin);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {

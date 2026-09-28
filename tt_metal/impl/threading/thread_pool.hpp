@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -41,8 +42,12 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 // API accepting the physical devices the pool will be bound to. The threads will be bound to CPU cores in a
 // NUMA aware manner (will be "closest" to the device it serves). Used for production data-paths.
 // All physical devices must belong to the same context ID.
+// A worker keeps polling for `active_spin` after finishing a task before it parks, so that back-to-back work does
+// not wait for it to wake up.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices);
+    ContextId context_id,
+    const std::vector<tt::tt_metal::IDevice*>& physical_devices,
+    std::chrono::microseconds active_spin = {});
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.
