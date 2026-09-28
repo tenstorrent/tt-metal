@@ -293,14 +293,20 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
-            bool is_batch_valid = false;
 #ifdef ARCH_QUASAR
-            // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so
-            // the reader-driven batch-skip handoff is not wired here. Treat every batch as valid: invalid
-            // batch slots are just padding, so processing them is correct (only wasteful) for the valid
-            // slots. Matches the existing !ARCH_QUASAR guard on the DM/reader side of this handoff.
-            is_batch_valid = true;
+            // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so the
+            // reader-driven batch-skip (is_batch_valid) handoff is not wired here. Batch sparsity is therefore
+            // unsupported on Quasar until that DM->TRISC handoff exists: reject it at compile time so a Quasar
+            // build with get_batch_from_reader=true fails loudly instead of deadlocking compute on input tiles
+            // the reader never pushes (its own !ARCH_QUASAR guard skips them) or consuming stale DFB contents.
+            // Mirrors the experimental Quasar bmm kernel.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader (batch sparsity) is unsupported on Quasar until the DM->TRISC "
+                "is_batch_valid mailbox handoff is implemented; do not enable it on Quasar.");
+            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
 #else
+            bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)

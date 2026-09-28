@@ -4972,11 +4972,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
+    // config_1xx applies on WH/BH; config_2xx on Quasar. Like the mcast-in0 path (see the in0/in1 sender
+    // configs earlier in this file), these mcast-in1 DM kernels drive their DFB credits EXPLICITLY
+    // (reserve_back/push_back / wait_front/pop_front), so leaving implicit-sync ON on Quasar adds an extra
+    // final-credit ACK -> tile-counter underflow. Opt every bound DFB out of implicit sync on Quasar.
     const auto in0_sender_hw_config = DataMovementHardwareConfig{
         .config_1xx =
             DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
+            },
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
             },
     };
     const auto in1_writer_hw_config = DataMovementHardwareConfig{
@@ -4984,6 +4992,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
             DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
+            },
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
             },
     };
 
