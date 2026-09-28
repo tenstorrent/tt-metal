@@ -36,17 +36,12 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t Vt = attrs.value_dim / tt::constants::TILE_WIDTH;
 
-    // State columns evolve independently, so each head's value columns split across as many cores as fit.
+    // One core per head. Splitting a head's value columns across cores re-reads the whole A block per core
+    // (DRAM-bound at 4 blocks: 137 us vs 78 us at 1 block for Galaxy SP8xTP4); at 1 or 2 blocks the kernel is
+    // bound by the step-to-step dependency chain instead.
     const auto grid = device.compute_with_storage_grid_size();
-    const uint32_t num_cores = grid.x * grid.y;
-    TT_FATAL(BH <= num_cores, "chain_affine_transforms: {} heads exceed {} compute cores", BH, num_cores);
-    uint32_t value_blocks = 1;
-    for (uint32_t candidate = Vt; candidate >= 1; --candidate) {
-        if (Vt % candidate == 0 && BH * candidate <= num_cores) {
-            value_blocks = candidate;
-            break;
-        }
-    }
+    TT_FATAL(BH <= grid.x * grid.y, "chain_affine_transforms: {} heads exceed {} compute cores", BH, grid.x * grid.y);
+    const uint32_t value_blocks = 1;
     const uint32_t Vc = Vt / value_blocks;
     const uint32_t workers = BH * value_blocks;
     const auto cores = tt::tt_metal::num_cores_to_corerangeset(workers, grid, /*row_wise=*/true);
