@@ -28,7 +28,9 @@ python ttnn/ttnn/bringup/fork_op.py <source op folder> --model <model> --task <t
 # e.g. ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch
 ```
 
-The source must be a C++ op folder with its own `CMakeLists.txt`. The script copies it and makes it a separate op:
+The source must be a C++ op folder. When it has no `CMakeLists.txt` of its own (it is a subfolder of a larger
+target, e.g. `transformer/sdpa` in `ttnn_op_transformer`), the script writes one for the fork. It copies the folder
+and makes it a separate op:
 - Namespaces: the op's C++ namespace moves under `ttnn::operations::bringup`. Every other namespace the copy declares
   (for example `ttnn::prim`, where device ops register their prim function) nests one level deeper, as `N::bringup`.
   Without this, the two copies clash at link time.
@@ -145,6 +147,7 @@ the fork and relinks ttnn. If a build dies halfway, run it again before reading 
 | `'ttnn/operations/...' file not found` | the target lost the source's `ttnn/cpp` include dir | `target_include_directories(<target> PRIVATE ${FixmeOpAPIDir})` (fork_op.py adds it) |
 | `use of undeclared identifier 'ccl'` (or another sibling namespace) | an unqualified lookup relied on the source's namespace | the fork must stay inside `ttnn::operations`; qualify the name fully |
 | `duplicate symbol` at link | the copy declares a namespace fork_op.py did not nest | nest it as `N::bringup` and qualify the references to its symbols |
+| `no member named 'X' in namespace 'ttnn::prim'` (or another nested namespace) | a relative qualification (`prim::X`, `transformer::X` from a sibling namespace) that the nesting did not rewrite | add the `::bringup` (`prim::bringup::X`); a type the fork shares with a sibling op (e.g. `SDPAProgramConfig`) goes back to the source's namespace |
 | `undefined symbol ... bringup::<op>` on `import ttnn` | a host `.cpp` is not in the fork's target | add it with `target_sources(<target> PRIVATE <file>)` |
 
 ## 5. Use it from the model
