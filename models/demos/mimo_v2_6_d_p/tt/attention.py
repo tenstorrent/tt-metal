@@ -4,15 +4,30 @@
 """MiMo-V2 full attention (chunked prefill) on a 1x4 mesh, TP by head, no CCL until o_proj.
 
 64 Q heads / 4 KV heads, QK head dim 192, V head dim 128, partial rotate-half RoPE on dims [0, 64) (theta 1e7),
-scale 192^-0.5, no sink. Chip r holds Q heads 16r..16r+15 and KV head r (GQA 16:1 inside the chip):
+scale 192^-0.5, no sink. Chip r holds Q heads 16r..16r+15 and KV head r (GQA 16:1 inside the chip). V at its real
+head dim 128 end to end (the default):
 
-    qkv   = x @ Wqkv_r                    fused per chip [H, 16*192 + 192 + 192]; the V rows are x attention_value_scale
-                                           and zero-padded 128 -> 192 so every head has one head dim (SDPA needs Dv == D)
-    q,k,v = nlp_create_qkv_heads          [1, 16, S, 192], [1, 1, S, 192], [1, 1, S, 192]
+    q     = x @ Wq_r                      [H, 16*192]
+    kv    = x @ Wkv_r                     [H, 1 * (192 + 128)], rows per KV head [k_h | v_h]; V rows x attention_value_scale
+    q_rot, q_pass = nlp_create_q_heads_split(q, 16, 64)     [1, 16, S, 64], [1, 16, S, 128] (the RoPE split for free)
+    k, v  = nlp_create_q_heads_split(kv, 1, 192)            [1, 1, S, 192], [1, 1, S, 128]
     q,k   = concat(rope(x[..., :64]), x[..., 64:])   cos/sin [1, 1, max_seq, 64] built once, sliced per chunk
-    cache[start:start+S] = k, v           paged_fill_cache into a paged-shaped cache, identity page table
-    sdpa  = SDPA causal (chunk 0) / chunked SDPA over cache[0:start+S] (later chunks), scale 192^-0.5
-    out   = all_reduce(concat_heads(sdpa) @ Wo_r)   row-parallel o_proj; Wo_r has zero rows for the 64 V pad dims
+    cache[start:start+S] = k, v           paged_fill_cache into paged-shaped caches (K 192 wide, V 128), identity page table
+    sdpa  = ttnn.bringup SDPA causal (chunk 0) / chunked SDPA over cache[0:start+S] (later chunks), scale 192^-0.5;
+            the fork takes V narrower than K and returns [1, 16, S, 128]
+    out   = all_reduce(concat_heads(sdpa) @ Wo_r)   row-parallel o_proj, K = 16*128 = 2048 per chip
+
+Head split, measured per chip at S 5120 (device us, 1 KV head / 2 KV heads, qkv matmul + head split + the Q RoPE
+split): one fused [q|k|v] matmul + nlp_create_qkv_heads + slice Q to [0:64] / [64:192] (the padded path) 3996 / 4278;
+the same + a slice of V to 128: 4001 / 4295; one fused unpadded matmul + two column slices + two
+nlp_create_q_heads_split 4022 / 4314; two matmuls (Q; per-head interleaved KV) + two nlp_create_q_heads_split
+3723 / 4131 (chosen: the Q matmul at N 3072 runs 3190 us against 3637 us for the fused N 3392/3456, the KV matmul
+345 / 722, and the Q heads come out already split for RoPE); three matmuls (Q, K, V) 3911 / 5366 (a permute per
+K/V for 2 heads).
+
+MIMO_V_PAD=1 restores the padded path: fused [H, 16*192 + 192 + 192] qkv with V zero-padded 128 -> 192,
+nlp_create_qkv_heads, V caches 192 wide, ttnn.transformer SDPA with V 192, and o_proj with zero rows for the 64 pad
+dims of every head (K 3072 per chip). It is read when the modules and caches are built.
 
 Adapted from models/demos/gemma4_a4b_d_p/tt/attention.py (TtGlobalAttention + TtKVCacheGlobal). The forward does no
 host transfer: RoPE tables and the page table live on the device and are sliced there per chunk.
@@ -53,6 +68,11 @@ SDPA_PRESETS = {
 # Profile sub-sections inside attention (qkv, rope, kv_write, kv_tail, sdpa, o_proj, ccl). signpost is a no-op unless
 # the bring-up profiler is enabled. MIMO_ATTN_SIGNPOSTS=0 makes attention one profile section again.
 ATTN_SIGNPOSTS = os.environ.get("MIMO_ATTN_SIGNPOSTS", "1") != "0"
+
+
+def v_pad_enabled() -> bool:
+    """MIMO_V_PAD=1: V zero-padded to the QK head dim (the path before ttnn.bringup SDPA took a narrow V)."""
+    return os.environ.get("MIMO_V_PAD", "0") == "1"
 
 
 def _sp(name: str) -> None:
@@ -111,11 +131,15 @@ def rope_tables(inv_freq: torch.Tensor, length: int) -> tuple[torch.Tensor, torc
     return emb.cos().float(), emb.sin().float()
 
 
-def _tp_qkv_o(mesh, wqkv: torch.Tensor, wo: torch.Tensor, dims, value_scale, dtype, q_scale: float = 1.0):
-    """Per-chip fused qkv [H, (nq + 2 nkv) * D] and row-parallel o_proj [nq * D, H] (device, sharded over chips).
-
-    Chip r holds Q heads nq*r.., KV heads nkv*r..; Q rows x q_scale; V rows x value_scale and zero-padded Dv -> D;
-    o_proj gets zero rows for the pad dims so the padded SDPA output feeds it unchanged."""
+def _tp_weights(
+    mesh, wqkv: torch.Tensor, wo: torch.Tensor, dims, value_scale, dtype, q_scale: float = 1.0, v_pad=False
+):
+    """Per-chip projection weights (device, sharded over chips); chip r holds Q heads nq*r.., KV heads nkv*r..; Q rows
+    x q_scale, V rows x value_scale. Returns (wq, wkv, wo):
+      * V at 128 (default): wq [H, nq * D], wkv [H, nkv * (D + Dv)] with rows per KV head [k_h | v_h], row-parallel
+        o_proj [nq * Dv, H];
+      * v_pad: wq = the fused [H, (nq + 2 nkv) * D] qkv with V zero-padded Dv -> D, wkv None, o_proj [nq * D, H] with
+        zero rows for the pad dims so the padded SDPA output feeds it unchanged."""
     n = NUM_CHIPS
     hq, hkv, d, dv = dims
     assert hq % n == 0 and hkv % n == 0
@@ -126,6 +150,25 @@ def _tp_qkv_o(mesh, wqkv: torch.Tensor, wo: torch.Tensor, dims, value_scale, dty
         wv = wv * value_scale
     if q_scale != 1.0:
         wq = wq * q_scale
+
+    def shard(t, dim):
+        return ttnn.from_torch(
+            t.to(torch.bfloat16),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        )
+
+    if not v_pad:
+        wk_h, wv_h = wk.reshape(hkv, d, H), wv.reshape(hkv, dv, H)
+        wkv = torch.cat([wk_h, wv_h], dim=1)  # [Hkv, D + Dv, H]: per head [k_h | v_h], KV heads in chip order
+        q_t = torch.stack([wq[r * nq * d : (r + 1) * nq * d].T for r in range(n)])  # [n, H, nq * D]
+        kv_t = torch.stack([wkv[r * nkv : (r + 1) * nkv].reshape(-1, H).T for r in range(n)])  # [n, H, nkv*(D+Dv)]
+        wo_t = wo.float().T.reshape(1, 1, hq * dv, -1)  # [1, 1, Hq * Dv, H], rows head-major like concat_heads
+        return shard(q_t[:, None], 0), shard(kv_t[:, None], 0), shard(wo_t, -2)
+
     wv_pad = torch.zeros(hkv, d, H)
     wv_pad[:, :dv] = wv.reshape(hkv, dv, H)
     wv_pad = wv_pad.reshape(hkv * d, H)
@@ -138,34 +181,24 @@ def _tp_qkv_o(mesh, wqkv: torch.Tensor, wo: torch.Tensor, dims, value_scale, dty
     wo_t = wo.float().T.reshape(hq, dv, -1)  # [Hq, Dv, H]
     wo_pad = torch.zeros(hq, d, wo_t.shape[-1])
     wo_pad[:, :dv] = wo_t
-
-    def shard(t, dim):
-        return ttnn.from_torch(
-            t.to(torch.bfloat16),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
-        )
-
-    return shard(torch.stack(fused)[:, None], 0), shard(wo_pad.reshape(1, 1, hq * d, -1), -2)
+    return shard(torch.stack(fused)[:, None], 0), None, shard(wo_pad.reshape(1, 1, hq * d, -1), -2)
 
 
 class TtKVCacheFull:
     """Full-length K and V for one full-attention layer, KV head r on chip r (4 heads, 4 chips).
 
-    Per chip a paged-shaped [max_seq / B, 1, B, D] tensor (bit-identical to a contiguous [1, 1, max_seq, D] cache with
-    one head), D = 192 for both K and V (V zero-padded from 128). The identity page table is resident; per-chunk slices
-    are cut on the device."""
+    Per chip a paged-shaped [max_seq / B, 1, B, W] tensor (bit-identical to a contiguous [1, 1, max_seq, W] cache with
+    one head), W = 192 for K and 128 for V (192, zero-padded, under MIMO_V_PAD=1). The identity page table is resident;
+    per-chunk slices are cut on the device."""
 
     def __init__(self, mesh, num_kv_heads: int, head_dim: int, v_head_dim: int, max_seq: int, dtype=ttnn.bfloat16):
         assert num_kv_heads == NUM_CHIPS
         self.max_seq = -(-max_seq // KV_BLOCK) * KV_BLOCK
         self.mesh, self.nkv, self.d, self.dv, self.dtype = mesh, num_kv_heads, head_dim, v_head_dim, dtype
         self.nb = self.max_seq // KV_BLOCK
-        z = torch.zeros(num_kv_heads, self.max_seq, head_dim)
-        self.k, self.v = self._dev(z), self._dev(z)
+        self.vw = head_dim if v_pad_enabled() else v_head_dim  # V width on the device
+        self.k = self._dev(torch.zeros(num_kv_heads, self.max_seq, head_dim))
+        self.v = self._dev(torch.zeros(num_kv_heads, self.max_seq, self.vw))
         self.page_table = ttnn.from_torch(
             torch.arange(self.nb, dtype=torch.int32)[None],
             dtype=ttnn.int32,
@@ -176,8 +209,8 @@ class TtKVCacheFull:
         self._chunk_pt = {}
 
     def _dev(self, t: torch.Tensor) -> ttnn.Tensor:
-        """Host [nkv, max_seq, D] -> device paged [nb, 1, B, D] per chip (chip r = head r)."""
-        paged = t.reshape(NUM_CHIPS, self.nb, KV_BLOCK, self.d).transpose(0, 1).contiguous()  # [nb, 4, B, D]
+        """Host [nkv, max_seq, W] -> device paged [nb, 1, B, W] per chip (chip r = head r)."""
+        paged = t.reshape(NUM_CHIPS, self.nb, KV_BLOCK, t.shape[-1]).transpose(0, 1).contiguous()  # [nb, 4, B, W]
         return ttnn.from_torch(
             paged.to(torch.bfloat16),
             dtype=self.dtype,
@@ -200,20 +233,20 @@ class TtKVCacheFull:
     def load_prefix(self, key: torch.Tensor, value: torch.Tensor, length: int) -> None:
         """Host key [nkv, >= length, 192], value [nkv, >= length, 128]: positions [0, length) copied, rest zero."""
 
-        def full(t):
-            f = torch.zeros(self.nkv, self.max_seq, self.d)
+        def full(t, w):
+            f = torch.zeros(self.nkv, self.max_seq, w)
             f[:, :length, : t.shape[-1]] = t[:, :length].float()
             return f
 
         ttnn.deallocate(self.k)
         ttnn.deallocate(self.v)
-        self.k, self.v = self._dev(full(key)), self._dev(full(value))
+        self.k, self.v = self._dev(full(key, self.d)), self._dev(full(value, self.vw))
 
     def to_torch(self, length: int) -> dict:
         def host(t, d):
             parts = ttnn.get_device_tensors(t)
-            heads = [ttnn.to_torch(parts[h]).float() for h in range(self.nkv)]  # each [nb, 1, B, D]
-            return torch.stack([p[:, 0].reshape(-1, self.d) for p in heads])[:, :length, :d]
+            heads = [ttnn.to_torch(parts[h]).float() for h in range(self.nkv)]  # each [nb, 1, B, W]
+            return torch.stack([p[:, 0].reshape(-1, p.shape[-1]) for p in heads])[:, :length, :d]
 
         return {"key": host(self.k, self.d), "value": host(self.v, self.dv)}
 
@@ -244,12 +277,14 @@ class TtFullAttention:
         hq, hkv, d, dv = dims
         assert hkv == n and hq % n == 0
         self.mesh, self.d, self.dv = mesh, d, dv
-        self.nq = hq // n
+        self.nq, self.nkv = hq // n, 1
         self.rope_dim = 2 * inv_freq.shape[0]
+        self.v_pad = v_pad_enabled()
+        self.vw = d if self.v_pad else dv
         # Rounded to fp32: the chunked SDPA binding takes scale as noconvert, and nanobind then rejects a Python float
         # that fp32 cannot hold exactly (192^-0.5 is not), with an "incompatible function arguments" TypeError.
         self.scale = float(torch.tensor(d**-0.5, dtype=torch.float32).item())
-        self.wqkv, self.wo = _tp_qkv_o(mesh, wqkv, wo, dims, value_scale, dtype)
+        self.wq, self.wkv, self.wo = _tp_weights(mesh, wqkv, wo, dims, value_scale, dtype, v_pad=self.v_pad)
         cos, sin = rope_tables(inv_freq, -(-max_seq // TILE) * TILE)
         self.cos = self._replicate(cos[None, None])
         self.sin = self._replicate(sin[None, None])
@@ -276,17 +311,67 @@ class TtFullAttention:
         )
 
     def _partial_rope(self, t, cos, sin):
-        """Rotate-half RoPE on dims [0, R) of t [1, h, S, D]; dims [R, D) pass through."""
-        _, h, s, d = t.shape
-        r = self.rope_dim
-        tr = ttnn.slice(t, [0, 0, 0, 0], [1, h, s, r])
-        tp = ttnn.slice(t, [0, 0, 0, r], [1, h, s, d])
+        """Rotate-half RoPE on dims [0, R) of t [1, h, S, D]; dims [R, D) pass through. t may also be the pair
+        (t[..., :R], t[..., R:]) already split (taken over and freed)."""
+        if isinstance(t, tuple):
+            tr, tp = t
+        else:
+            _, h, s, d = t.shape
+            r = self.rope_dim
+            tr = ttnn.slice(t, [0, 0, 0, 0], [1, h, s, r])
+            tp = ttnn.slice(t, [0, 0, 0, r], [1, h, s, d])
         rot = ttnn.experimental.rotary_embedding(tr, cos, sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tr)
         out = ttnn.concat([rot, tp], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(rot)
         ttnn.deallocate(tp)
         return out
+
+    def _qkv_rope(self, x, start: int, seq: int):
+        """x [1, 1, S, H] -> q [1, nq, S, D], k [1, nkv, S, D] (both post-RoPE), v [1, nkv, S, V width]."""
+        _sp("qkv")
+        if self.v_pad:
+            qkv = ttnn.linear(x, self.wq, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv,
+                num_heads=self.nq,
+                num_kv_heads=self.nkv,
+                transpose_k_heads=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(qkv)
+        else:
+            qp = ttnn.linear(x, self.wq, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kvp = ttnn.linear(x, self.wkv, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q = tuple(  # (q[..., :R], q[..., R:]): the RoPE split comes out of the head split
+                ttnn.experimental.nlp_create_q_heads_split(
+                    qp, num_heads=self.nq, split_head_dim=self.rope_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            )
+            k, v = ttnn.experimental.nlp_create_q_heads_split(
+                kvp, num_heads=self.nkv, split_head_dim=self.d, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(qp)
+            ttnn.deallocate(kvp)
+
+        _sp("rope")
+        r = self.rope_dim
+        cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, start + seq, r])
+        sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, start + seq, r])
+        qr = self._partial_rope(q, cos, sin)
+        if not isinstance(q, tuple):
+            ttnn.deallocate(q)
+        kr = self._partial_rope(k, cos, sin)
+        ttnn.deallocate(k)
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        return qr, kr, v
+
+    def _sdpa_ops(self):
+        """(scaled_dot_product_attention, chunked_scaled_dot_product_attention): the ttnn.bringup fork takes a V
+        narrower than K; MIMO_V_PAD=1 keeps the source ops (V padded to K's width)."""
+        m = ttnn.transformer if self.v_pad else ttnn.bringup
+        return m.scaled_dot_product_attention, m.chunked_scaled_dot_product_attention
 
     def _sdpa_program_config(self, seq: int, start: int):
         c = sdpa_settings()
@@ -301,28 +386,13 @@ class TtFullAttention:
     def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheFull, kv_sink=None) -> ttnn.Tensor:
         """x: replicated [1, 1, S, H] TILE (attn_norm output), queries at [start, start+S). Returns replicated
         [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S).
-        kv_sink(k, v), if given, also receives this chunk's per-chip K/V [1, 1, S, 192] (V padded)."""
+        kv_sink(k, v), if given, also receives this chunk's per-chip K [1, 1, S, 192] and V [1, 1, S, 128] (192,
+        zero-padded, under MIMO_V_PAD=1)."""
         seq = x.shape[-2]
         assert start % KV_BLOCK == 0 and seq % KV_BLOCK == 0 and start + seq <= self.max_seq
+        assert cache.vw == self.vw, f"KV cache V width {cache.vw} != attention's {self.vw} (MIMO_V_PAD changed?)"
 
-        _sp("qkv")
-        qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv, num_heads=self.nq, num_kv_heads=1, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(qkv)
-
-        _sp("rope")
-        r = self.rope_dim
-        cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, start + seq, r])
-        sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, start + seq, r])
-        qr = self._partial_rope(q, cos, sin)
-        ttnn.deallocate(q)
-        kr = self._partial_rope(k, cos, sin)
-        ttnn.deallocate(k)
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
-        q, k = qr, kr
+        q, k, v = self._qkv_rope(x, start, seq)
 
         _sp("kv_write")
         if kv_sink is not None:
@@ -333,8 +403,9 @@ class TtFullAttention:
 
         _sp("sdpa")
         prog = self._sdpa_program_config(seq, start)
+        sdpa, chunked_sdpa = self._sdpa_ops()
         if start == 0:
-            attn = ttnn.transformer.scaled_dot_product_attention(
+            attn = sdpa(
                 q,
                 k,
                 v,
@@ -344,7 +415,7 @@ class TtFullAttention:
                 compute_kernel_config=_sdpa_compute_config(),
             )
         else:
-            attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+            attn = chunked_sdpa(
                 q,
                 cache.k,
                 cache.v,
@@ -358,7 +429,7 @@ class TtFullAttention:
             ttnn.deallocate(t)
 
         _sp("o_proj")
-        a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*192]
+        a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*128]
         ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(a)
@@ -368,8 +439,9 @@ class TtFullAttention:
         return out
 
     def free(self):
-        for t in (self.wqkv, self.wo, self.cos, self.sin):
-            ttnn.deallocate(t)
+        for t in (self.wq, self.wkv, self.wo, self.cos, self.sin):
+            if t is not None:
+                ttnn.deallocate(t)
 
 
 # --------------------------------------------------------------------------------------
@@ -378,16 +450,17 @@ class TtFullAttention:
 
 
 class TtKVCacheSliding:
-    """Full-length K and V for one sliding layer: contiguous [1, 8, max_seq, D] sharded by head, [1, 2, max_seq, D] per
-    chip (KV heads 2r, 2r+1 on chip r), D = 192 for K and V (V zero-padded from 128). Written with fill_cache at the
-    chunk offset; the attention reads the previous window rows back with ttnn.slice."""
+    """Full-length K and V for one sliding layer: contiguous [1, 8, max_seq, W] sharded by head, [1, 2, max_seq, W] per
+    chip (KV heads 2r, 2r+1 on chip r), W = 192 for K and 128 for V (192, zero-padded, under MIMO_V_PAD=1). Written
+    with fill_cache at the chunk offset; the attention reads the previous window rows back with ttnn.slice."""
 
     def __init__(self, mesh, num_kv_heads: int, head_dim: int, v_head_dim: int, max_seq: int, dtype=ttnn.bfloat16):
         assert num_kv_heads % NUM_CHIPS == 0
         self.max_seq = -(-max_seq // TILE) * TILE
         self.mesh, self.nkv, self.d, self.dv, self.dtype = mesh, num_kv_heads, head_dim, v_head_dim, dtype
-        z = torch.zeros(1, num_kv_heads, self.max_seq, head_dim)
-        self.k, self.v = self._dev(z), self._dev(z)
+        self.vw = head_dim if v_pad_enabled() else v_head_dim  # V width on the device
+        self.k = self._dev(torch.zeros(1, num_kv_heads, self.max_seq, head_dim))
+        self.v = self._dev(torch.zeros(1, num_kv_heads, self.max_seq, self.vw))
 
     def _dev(self, t: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -402,18 +475,18 @@ class TtKVCacheSliding:
     def load_prefix(self, key: torch.Tensor, value: torch.Tensor, length: int) -> None:
         """Host key [nkv, >= length, 192], value [nkv, >= length, 128]: positions [0, length) copied, rest zero."""
 
-        def full(t):
-            f = torch.zeros(1, self.nkv, self.max_seq, self.d)
+        def full(t, w):
+            f = torch.zeros(1, self.nkv, self.max_seq, w)
             f[0, :, :length, : t.shape[-1]] = t[:, :length].float()
             return f
 
         ttnn.deallocate(self.k)
         ttnn.deallocate(self.v)
-        self.k, self.v = self._dev(full(key)), self._dev(full(value))
+        self.k, self.v = self._dev(full(key, self.d)), self._dev(full(value, self.vw))
 
     def to_torch(self, length: int) -> dict:
         def host(t, d):
-            parts = [ttnn.to_torch(x).float() for x in ttnn.get_device_tensors(t)]  # each [1, nkv/4, max_seq, D]
+            parts = [ttnn.to_torch(x).float() for x in ttnn.get_device_tensors(t)]  # each [1, nkv/4, max_seq, W]
             return torch.cat(parts, dim=1)[0, :, :length, :d]
 
         return {"key": host(self.k, self.d), "value": host(self.v, self.dv)}
@@ -427,16 +500,17 @@ class TtSlidingAttention(TtFullAttention):
     """MiMo-V2 sliding-window attention (window W = 128, key j visible to query i iff i - W < j <= i) with a per-head
     sink logit, TP by KV head: chip r holds Q heads 16r..16r+15 and KV heads 2r, 2r+1 (GQA 8:1 on the chip).
 
-        qkv   = x @ Wqkv_r                    [H, 16*192 + 2*192 + 2*192] (V x value_scale, padded 128 -> 192)
-        q,k,v = nlp_create_qkv_heads          [1, 16, S, 192], [1, 2, S, 192], [1, 2, S, 192]
+        q, kv = x @ Wq_r, x @ Wkv_r           [H, 16*192], [H, 2 * (192 + 128)] (V x value_scale), as TtFullAttention
+        q,k,v = nlp_create_q_heads_split x2   [1, 16, S, 64] + [1, 16, S, 128], [1, 2, S, 192], [1, 2, S, 128]
         q,k   = partial RoPE dims [0, 64), theta 1e4 (tables built once, sliced per chunk on the device)
         cache[start:start+S] = k, v           fill_cache at the chunk offset
         tail  = cache[start - T : start]      T = min(round_up(W, 32), start) rows read back on the device
-        sdpa  = SDPA(causal, sliding_window_size=W, attention_sink) over [tail | chunk]; Q front-padded by T rows
-                 (their outputs are dropped). Sink stored pre-divided by the scale: the kernel scales the sink logit,
+        sdpa  = ttnn.bringup SDPA(causal, sliding_window_size=W, attention_sink) over [tail | chunk], V 128; Q
+                 front-padded by T rows (their outputs are dropped). Sink stored pre-divided by the scale: the kernel scales the sink logit,
                  HF does not (as gpt_oss_d_p weights.py).
-        out   = all_reduce(concat_heads(sdpa[T:]) @ Wo_r)
+        out   = all_reduce(concat_heads(sdpa[T:]) @ Wo_r)   o_proj K 16*128 per chip
 
+    MIMO_V_PAD=1: the padded path as in TtFullAttention (V 192 everywhere, ttnn.transformer SDPA).
     Adapted from gemma4_a4b_d_p TtSlidingAttention (window tail concat) and gpt_oss_d_p (sinks)."""
 
     def __init__(
@@ -458,6 +532,8 @@ class TtSlidingAttention(TtFullAttention):
         self.mesh, self.d, self.dv, self.window = mesh, d, dv, int(window)
         self.nq, self.nkv = hq // n, hkv // n
         self.rope_dim = 2 * inv_freq.shape[0]
+        self.v_pad = v_pad_enabled()
+        self.vw = d if self.v_pad else dv
         # SDPA scale: a power of two, the rest folded into the Q rows. The kernel folds the sink as
         # exp((sink - max) * scale) with the scale truncated to bf16 (compute_streaming.hpp, scale_fp32 >> 16):
         # 192^-0.5 -> 0.07178 (-0.54%), and with the row max ~390 (unscaled) below the sink that shrinks the sink
@@ -465,7 +541,9 @@ class TtSlidingAttention(TtFullAttention):
         true_scale = d**-0.5
         self.scale = 2.0 ** math.floor(math.log2(true_scale))
         q_scale = true_scale / self.scale
-        self.wqkv, self.wo = _tp_qkv_o(mesh, wqkv, wo, dims, value_scale, dtype, q_scale=q_scale)
+        self.wq, self.wkv, self.wo = _tp_weights(
+            mesh, wqkv, wo, dims, value_scale, dtype, q_scale=q_scale, v_pad=self.v_pad
+        )
         self.sink = None
         if sink is not None:
             s = (sink.float() / self.scale).reshape(1, hq, 1, 1)
@@ -489,29 +567,14 @@ class TtSlidingAttention(TtFullAttention):
     def __call__(self, x: ttnn.Tensor, start: int, cache: TtKVCacheSliding, kv_sink=None) -> ttnn.Tensor:
         """x: replicated [1, 1, S, H] TILE (attn_norm output), queries at [start, start+S). Returns replicated
         [1, 1, S, H] (all-reduced). Writes this chunk's K/V into cache positions [start, start+S).
-        kv_sink(k, v), if given, also receives this chunk's per-chip K/V [1, 2, S, 192] (V padded)."""
+        kv_sink(k, v), if given, also receives this chunk's per-chip K [1, 2, S, 192] and V [1, 2, S, 128] (192,
+        zero-padded, under MIMO_V_PAD=1)."""
         seq = x.shape[-2]
-        D, nq, nkv = self.d, self.nq, self.nkv
+        D, VW, nq, nkv = self.d, self.vw, self.nq, self.nkv
         assert start % TILE == 0 and seq % TILE == 0 and start + seq <= min(self.max_seq, cache.max_seq)
+        assert cache.vw == VW, f"KV cache V width {cache.vw} != attention's {VW} (MIMO_V_PAD changed?)"
 
-        _sp("qkv")
-        qkv = ttnn.linear(x, self.wqkv, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            qkv, num_heads=nq, num_kv_heads=nkv, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(qkv)
-
-        _sp("rope")
-        r = self.rope_dim
-        cos = ttnn.slice(self.cos, [0, 0, start, 0], [1, 1, start + seq, r])
-        sin = ttnn.slice(self.sin, [0, 0, start, 0], [1, 1, start + seq, r])
-        qr = self._partial_rope(q, cos, sin)
-        ttnn.deallocate(q)
-        kr = self._partial_rope(k, cos, sin)
-        ttnn.deallocate(k)
-        ttnn.deallocate(cos)
-        ttnn.deallocate(sin)
-        q, k = qr, kr
+        q, k, v = self._qkv_rope(x, start, seq)
 
         _sp("kv_write")
         if kv_sink is not None:
@@ -523,7 +586,7 @@ class TtSlidingAttention(TtFullAttention):
         hist = min(-(-self.window // TILE) * TILE, start)
         if hist:
             k_tail = ttnn.slice(cache.k, [0, 0, start - hist, 0], [1, nkv, start, D])
-            v_tail = ttnn.slice(cache.v, [0, 0, start - hist, 0], [1, nkv, start, D])
+            v_tail = ttnn.slice(cache.v, [0, 0, start - hist, 0], [1, nkv, start, VW])
             if seq >= hist:
                 q_pad = ttnn.slice(q, [0, 0, 0, 0], [1, nq, hist, D])
             else:
@@ -537,7 +600,7 @@ class TtSlidingAttention(TtFullAttention):
             q_cat, k_cat, v_cat = q, k, v
 
         _sp("sliding_sdpa")
-        full = ttnn.transformer.scaled_dot_product_attention(
+        full = self._sdpa_ops()[0](
             q_cat,
             k_cat,
             v_cat,
@@ -551,13 +614,13 @@ class TtSlidingAttention(TtFullAttention):
         for t in (q_cat, k_cat, v_cat):
             ttnn.deallocate(t)
         if hist:
-            attn = ttnn.slice(full, [0, 0, hist, 0], [1, nq, hist + seq, D])
+            attn = ttnn.slice(full, [0, 0, hist, 0], [1, nq, hist + seq, VW])
             ttnn.deallocate(full)
         else:
             attn = full
 
         _sp("o_proj")
-        a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*192]
+        a = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, 1, S, 16*128]
         ttnn.deallocate(attn)
         o = ttnn.linear(a, self.wo, compute_kernel_config=_hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(a)
