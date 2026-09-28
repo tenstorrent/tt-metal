@@ -135,9 +135,16 @@ class TtLinearHead(LightweightModule):
     path. This head is 6564-wide on one device; none of that machinery
     applies, and instantiating it would build sharding infrastructure for a
     problem that does not exist here.
+
+    Logits come out fp32 by default: bf16 weights, fp32 accumulation, fp32 output. bf16 logits resolve steps of
+    0.03-0.06 at their magnitude, the size of the near-ties between the top two speech tokens. Teacher-forced token
+    accuracy against the PyTorch reference: 90.7 % with bf16 logits, 96.4 % with fp32, for about 0.3 ms per decode
+    step (docs/VALIDATION.md).
     """
 
-    def __init__(self, device, weight: torch.Tensor, bias: torch.Tensor, dtype=ttnn.bfloat16):
+    def __init__(
+        self, device, weight: torch.Tensor, bias: torch.Tensor, dtype=ttnn.bfloat16, logits_dtype=ttnn.float32
+    ):
         super().__init__()
         self.device = device
         self.weight = ttnn.from_torch(
@@ -146,9 +153,23 @@ class TtLinearHead(LightweightModule):
         self.bias = ttnn.from_torch(
             bias.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
+        self.logits_dtype = logits_dtype
+        self.compute_config = None
+        if logits_dtype == ttnn.float32:
+            self.compute_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.linear(x, self.weight, bias=self.bias)
+        if self.compute_config is None:
+            return ttnn.linear(x, self.weight, bias=self.bias)
+        return ttnn.linear(
+            x, self.weight, bias=self.bias, compute_kernel_config=self.compute_config, dtype=self.logits_dtype
+        )
 
 
 class TtQwen2LM:
@@ -173,6 +194,7 @@ class TtQwen2LM:
         seed: int = 0,
         cosyvoice_state_dict: dict | None = None,
         use_decode_trace: bool = False,
+        head_logits_dtype=ttnn.float32,
     ):
         self.args = args
         self.mesh_device = mesh_device
@@ -222,7 +244,9 @@ class TtQwen2LM:
 
         self.speech_embedding = TtSmallEmbedding(mesh_device, speech_embedding_weight, dtype=dtype)
         self.llm_embedding = TtSmallEmbedding(mesh_device, llm_embedding_weight, dtype=dtype)
-        self.llm_decoder = TtLinearHead(mesh_device, head_weight, head_bias, dtype=dtype)
+        self.llm_decoder = TtLinearHead(
+            mesh_device, head_weight, head_bias, dtype=dtype, logits_dtype=head_logits_dtype
+        )
 
         # -- RoPE: standard HF-style, matching Qwen2's own rope_theta/config.
         RopeSetupClass = HfRotarySetup if args.use_hf_rope else RotarySetup
@@ -683,6 +707,43 @@ class TtQwen2LM:
                     logits = self.logits_for_hidden(hidden)
                 pos += 1
             return out
+        finally:
+            if use_trace:
+                self.release_decode_trace()
+
+    def teacher_forced_topk(
+        self,
+        text_ids: torch.Tensor,
+        prompt_speech_ids: torch.Tensor | None,
+        forced: list[int],
+        *,
+        k: int = 5,
+        use_trace: bool | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The top-k of the logits along a FORCED token sequence, through `generate()`'s own path: the same prefill,
+        then one decode step per token (traced when `use_trace`), each fed `forced[i]` instead of a sample. Returns
+        `(indices, values)`, each `[len(forced) + 1, k]`: row 0 at the prefix's last position, row i+1 after forced
+        token i. Used to measure token accuracy against the PyTorch reference, teacher-forced
+        (tests/e2e/test_token_accuracy.py). Same context budget check as `generate()`."""
+        prefix = self.prefix_len(text_ids, prompt_speech_ids)
+        needed = required_max_seq_len(prefix, len(forced) + 1)
+        if needed > self.args.max_seq_len:
+            raise ValueError(f"teacher_forced_topk(): needs max_seq_len >= {needed}, have {self.args.max_seq_len}")
+        if use_trace is None:
+            use_trace = self.use_decode_trace
+        try:
+            hidden, pos = self.prefill(self.assemble_prefill_sequence(text_ids, prompt_speech_ids))
+            logits = self.logits_for_hidden(hidden)
+            rows = [logits.topk(k)]
+            for token in forced:
+                if use_trace:
+                    logits = self._decode_step_traced(int(token), pos)
+                else:
+                    hidden = self.decode_step(self.embed_speech_tokens_host(torch.tensor([[int(token)]])), pos)
+                    logits = self.logits_for_hidden(hidden)
+                pos += 1
+                rows.append(logits.topk(k))
+            return torch.stack([r.indices for r in rows]), torch.stack([r.values for r in rows])
         finally:
             if use_trace:
                 self.release_decode_trace()

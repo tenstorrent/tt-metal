@@ -7,7 +7,7 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
 | target (#54104) | stage | status | enforced in |
 |---|---|---|---|
 | RTF < 1.0, non-streaming whole-utterance synthesis | Stage 1 | **measured, not met on distinct utterances** (below); verdict not recorded yet | `tests/perf/test_pipeline_perf.py` |
-| token-level accuracy > 95 % against the PyTorch reference | Stage 1 | not measured yet (teacher-forced) | — |
+| token-level accuracy > 95 % against the PyTorch reference | Stage 1 | **met: 96.37 %**, teacher-forced over 1,349 positions, with the LLM's fp32-logit head (below); `Meets()` recorded | `tests/e2e/test_token_accuracy.py` |
 | WER < 5.0 | Stage 1 | **measured: corpus WER 0.68 % for TT and for the PyTorch reference** (below) | not by a test: `scripts/eval_wer_sim.py` runs in the reference venv |
 | speaker similarity > 0.60 | Stage 1 | **measured: 94.90 for TT, 95.21 for the reference** (WavLM-base-plus-sv cosine x 100; below) | same |
 | time-to-first-packet < 500 ms; RTF < 0.4 streaming | Stage 3 | streaming not built | — |
@@ -20,8 +20,9 @@ and every figure names its run. The bounty's numeric targets (tenstorrent/tt-met
   upstream frontend runs once in the reference venv ([`../scripts/prepare_inputs.py`](../scripts/prepare_inputs.py));
   the device side reads its `.npz` files.
 - **Model configuration:** `CosyVoice2Config.reported()` ([`../tt/pipeline.py`](../tt/pipeline.py)). The LLM is
-  bf16 with tt_transformers' default decoder precision (attention and KV cache bf16, MLP weights bfp8), the decode
-  trace is on, and sampling is RAS on the host, seed 1986. The flow is bf16, 10 Euler steps, eager (the CFM trace
+  bf16 with tt_transformers' default decoder precision (attention and KV cache bf16, MLP weights bfp8), and since
+  2026-09-28 an fp32-logit output head (bf16 weights, fp32 accumulation). The decode trace is on, and sampling is RAS
+  on the host, seed 1986. The flow is bf16, 10 Euler steps, eager (the CFM trace
   is off, see the module docstring). HiFT's decoder is fp32 and its F0 predictor and NSF source are fp32.
 - **Timing:** stage times are device-synchronized. `wall s` spans the whole `synthesize` call, text normalization
   included. RTF = wall / audio duration, **per utterance, over distinct utterances**: each corpus sentence is
@@ -135,6 +136,48 @@ calls 2–4.
   the shared decoder; the bf16 call then found it compiled. What bf16's 13–18 s does show is the first-sight cost of
   the F0 predictor and source path alone. This process also recompiled HiFT for lengths the demo had compiled (see
   above).
+
+## Token accuracy, teacher-forced (2026-09-27, 2026-09-28)
+
+`tests/e2e/test_token_accuracy.py`, CosyVoice1's method:
+- For each corpus case (the six LibriSpeech targets plus the parity sentence), the PyTorch reference's own generated
+  speech tokens are forced through TT's decode loop: prefill, then the traced decode, one step per token.
+- At each of the N + 1 positions, TT's top-1 is compared with the reference's
+  (`scripts/token_accuracy_reference.py` records the reference's top-5 along the same sequences).
+
+**The lever is the output head's logits, not the decoder.** bf16 logits, about 8 in magnitude, resolve steps of
+0.03–0.06. The reference's top two tokens are often closer than that: with bf16 logits, the 120 disagreements sat
+at a median reference margin of 0.047 nats. With bf16 weights but fp32 accumulation and fp32 logits, the head gets
+96.37 % (`CosyVoice2Config.llm_head_logits_dtype`, the pipeline's since 2026-09-28).
+
+| LLM head (the decoder layers are tt_transformers' default: attention bf16 at HiFi4, MLP bfp8 at HiFi2) | top-1 agreement | disagreements: reference margin, median / max | seconds per token |
+|---|---|---|---|
+| **fp32 logits: bf16 weights, HiFi4, fp32 accumulation (the pipeline's)** | **96.37 %** | 49: 0.023 / 0.104 | 0.0110 |
+| fp32 weights, HiFi4, fp32 accumulation, fp32 logits | 96.37 % | — | 0.0110 |
+| the same at HiFi3 | 96.22 % | — | 0.0110 |
+| bf16 logits (the pipeline's before 2026-09-28) | 90.66 % | — | 0.0107 |
+| bf16 logits, with every decoder weight bf16 at HiFi4 (09-27, max_seq_len 2,304) | 90.07 % | — | not comparable |
+
+- TT's top-1 is inside the reference's top-5 at every position, with either head (the test's own runs).
+- Seconds per token: `teacher_forced_topk` over the seven cases, prefill included, warm kernel cache, 2026-09-28.
+  The fp32 head costs about 0.3 ms per decode step.
+- **Near-ties make the figure sensitive to anything that reorders rounding.** The same bf16-logit head measured
+  91.10 % on 09-27 and 90.66 % after the LLM's `max_seq_len` went from 2,304 to 2,048 (a different KV-cache
+  size, so a different attention chunking).
+
+**The noise floor: the PyTorch reference against itself, bf16 vs fp32.** `token_accuracy_reference.py
+--precision ... --against <the fp32 run>`, on the same forced sequences:
+
+| the reference, run in | top-1 agreement with its fp32 run | disagreements: fp32 margin, median / max |
+|---|---|---|
+| bf16 throughout | 95.70 % | 58: 0.023 / 0.100 |
+| bf16, fp32 output head | 98.37 % | 22: 0.008 / 0.033 |
+
+- **So > 95 % is reachable in bf16, with almost no margin, and the head's precision is most of it.** An exact bf16
+  implementation of this model sits at 95.7 %.
+- TT with the fp32 head (96.37 %) disagrees about as often, and at the same margins, as a pure-bf16 PyTorch run.
+  The 2 points between it and the bf16 + fp32-head reference (98.37 %) are the TT decoder's own rounding, not
+  broken down further.
 
 ## Bucketing (2026-09-27)
 

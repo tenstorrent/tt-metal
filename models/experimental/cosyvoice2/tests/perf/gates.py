@@ -74,7 +74,12 @@ class Misses:
 # but not recorded yet. On distinct utterances it depends on whether each length's kernels are already compiled:
 # RTF 21-75 on a cold kernel cache, 2.0-2.9 with the kernels on disk, 0.39-0.56 for a length the process has already
 # run. No band is stable until lengths are bucketed and the buckets pre-warmed.
-WORMHOLE: dict = {}
+WORMHOLE: dict = {
+    # Teacher-forced top-1 over 1,349 positions of the corpus's seven cases (tests/e2e/test_token_accuracy.py):
+    # 96.37 % with the fp32-logit head (bf16 logits: 90.66 %). A bf16 PyTorch run of the same model reaches
+    # 95.70 %, or 98.37 % with an fp32 head.
+    "token_accuracy": Meets(),
+}
 EXPECTATIONS = {"wormhole": WORMHOLE}
 
 

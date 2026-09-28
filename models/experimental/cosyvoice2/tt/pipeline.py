@@ -112,6 +112,10 @@ class CosyVoice2Config:
     # (PCC ~0.49). The F0 predictor and NSF source default to fp32: bf16 roughly triples the F0 error (mean
     # |df| 0.70 vs 0.23 Hz over 931 voiced frames of real speech) and adds voiced/unvoiced flips.
     llm_dtype: str = "bfloat16"
+    # The LLM's output head: bf16 weights, fp32 accumulation and fp32 logits. bf16 logits flip near-ties between
+    # the top two speech tokens: teacher-forced token accuracy 90.7 % with them, 96.4 % with fp32 (Stage 1 asks
+    # for > 95 %), for about 0.3 ms per decode step (docs/VALIDATION.md).
+    llm_head_logits_dtype: str = "float32"
     flow_dtype: str = "bfloat16"
     hift_decoder_dtype: str = "float32"
     hift_source_dtype: str = "float32"
@@ -410,6 +414,7 @@ class CosyVoice2TTNN:
             dtype=getattr(ttnn, cfg.llm_dtype),
             cosyvoice_state_dict=llm_sd,
             use_decode_trace=cfg.llm_decode_trace,
+            head_logits_dtype=getattr(ttnn, cfg.llm_head_logits_dtype),
         )
         del llm_sd
 
