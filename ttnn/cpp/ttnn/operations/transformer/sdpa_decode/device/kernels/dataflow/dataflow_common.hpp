@@ -851,7 +851,7 @@ void read_kv_mask_chunks(
 #ifdef SPLIT_KV_NOC
     Noc v_noc(1 - noc_index);
 #else
-    Noc v_noc;
+    Noc& v_noc = noc;
 #endif
     CircularBuffer cb_k(cb_k_in);
     CircularBuffer cb_v(cb_v_in);

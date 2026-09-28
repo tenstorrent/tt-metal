@@ -777,6 +777,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         Sk_chunk_t,
         Skt);
     const bool kv_chains_possible = kv_chain_mode != 0;
+    // Every non causal program carries the chain semaphores, as on main, whether or not a chain forms.
+    const bool kv_chain_semaphores = !is_causal || kv_chains_possible;
     // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
     const uint32_t chain_heads_per_group = (NKH == NVH && NQH % NKH == 0) ? NQH / NKH : 1;
     // A third K/V slot lets the reader run one forwarded chunk further ahead of the writer; past k256 the
@@ -943,7 +945,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Causal chains only: the writer counts finished forwards here, the reader waits on it before reusing a slot.
     uint32_t fwd_done_semaphore_id = 0;
 
-    if (kv_chains_possible) {
+    if (kv_chain_semaphores) {
         sender_semaphore_id = 0;
         receiver_semaphore_id = 1;
         valid_semaphore_id = 2;
@@ -1212,7 +1214,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     // Semaphores for KV chain forwarding.
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2, fwd_done=3 (causal chains).
-    if (kv_chains_possible) {
+    if (kv_chain_semaphores) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sender_semaphore_id,
             .core_type = tt::CoreType::WORKER,
@@ -1815,10 +1817,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             reader_args.push_back(chain.next_core_q_chunks);
             reader_args.push_back(chain.mcast_num_dests);
             reader_args.push_back(chain.mcast_sender_wait);
-            reader_args.push_back(chain.prev_seg_global_start);
-            reader_args.push_back(chain.prev_seg_count);
-            reader_args.push_back(chain.next_seg_global_start);
-            reader_args.push_back(is_causal ? chain_heads_per_group : 1u);
         }
 
         // Global-Q tail (read by kernel after chain block when non-causal, immediately when causal).
@@ -1831,8 +1829,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
-        reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));
-        reader_args.push_back(block_map_stick_size);
+        // Feature tails, only for the programs that use them (read by the kernel behind the same flags).
+        if (use_mask_block_map) {
+            reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));
+            reader_args.push_back(block_map_stick_size);
+        }
+        if (kv_chain_mode >= 2) {
+            reader_args.push_back(chain.prev_seg_global_start);
+            reader_args.push_back(chain.prev_seg_count);
+            reader_args.push_back(chain.next_seg_global_start);
+            reader_args.push_back(chain_heads_per_group);
+        }
 
         reader_desc.emplace_runtime_args(core, reader_args);
 

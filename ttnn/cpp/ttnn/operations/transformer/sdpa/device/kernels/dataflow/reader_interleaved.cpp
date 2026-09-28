@@ -192,10 +192,6 @@ void kernel_main() {
         next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
         mcast_num_dests = get_arg_val<uint32_t>(argidx++);
         mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
-        prev_seg_global_start = get_arg_val<uint32_t>(argidx++);
-        prev_seg_count = get_arg_val<uint32_t>(argidx++);
-        next_seg_global_start = get_arg_val<uint32_t>(argidx++);
-        chain_heads_per_group = get_arg_val<uint32_t>(argidx++);
 
         if (is_chain_participant) {
             Semaphore<>(valid_semaphore_id).set(VALID);
@@ -224,11 +220,23 @@ void kernel_main() {
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
-    } else {
+    } else if constexpr (use_mask_block_map || causal_chain) {
         argidx += 4;
     }
-    const uint32_t block_map_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t block_map_stick_bytes = get_arg_val<uint32_t>(argidx++);
+    // Feature tails after the windowed slots, sent only when the feature is on (never both: chains need a plain
+    // K/V stream).
+    uint32_t block_map_addr = 0;
+    uint32_t block_map_stick_bytes = 0;
+    if constexpr (use_mask_block_map) {
+        block_map_addr = get_arg_val<uint32_t>(argidx++);
+        block_map_stick_bytes = get_arg_val<uint32_t>(argidx++);
+    }
+    if constexpr (causal_chain) {
+        prev_seg_global_start = get_arg_val<uint32_t>(argidx++);
+        prev_seg_count = get_arg_val<uint32_t>(argidx++);
+        next_seg_global_start = get_arg_val<uint32_t>(argidx++);
+        chain_heads_per_group = get_arg_val<uint32_t>(argidx++);
+    }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
