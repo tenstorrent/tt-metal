@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-MODEL="${1:-glm52}"
+MODEL="${1:-glm53}"
 CONFIG="${2:-sc4}"
 LEVELS="${3:-4}"
 
@@ -21,8 +21,8 @@ NUM_USERS=1
 PCC_THRESHOLD=0.85
 
 case "${MODEL}" in
-  glm52) ;;
-  *) echo "unknown model key '${MODEL}' (expected glm52 -- only GLM-5.2 ships MTP weights)" >&2; exit 2 ;;
+  glm53) ;;
+  *) echo "unknown model key '${MODEL}' (expected glm53 -- only GLM-5.3 ships MTP weights)" >&2; exit 2 ;;
 esac
 case "${CONFIG}" in
   sc1|sc4) ;;
@@ -37,10 +37,10 @@ NUM_LAYERS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["en
 MTP_LEVELS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"]["PREFILL_MTP_LEVELS"])' "${MANIFEST}")
 [ "${MTP_LEVELS}" = "${LEVELS}" ] || { echo "${MANIFEST} declares PREFILL_MTP_LEVELS=${MTP_LEVELS}, not ${LEVELS}" >&2; exit 2; }
 
-TRUNK_TRACE=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
-MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/models/deepseek-prefill-cache/glm-traces/mtp-glm52-55k}"
+TRUNK_TRACE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
+MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
 
-export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_mtp_prefill_runner_kv}"
+export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_mtp_prefill_runner_kv}"
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"

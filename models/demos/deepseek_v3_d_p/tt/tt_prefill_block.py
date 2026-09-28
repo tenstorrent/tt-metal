@@ -311,7 +311,7 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- Attention norm ---
-        use_glm52_l1_attn_norm = (
+        use_glm53_l1_attn_norm = (
             is_blackhole()
             and is_chunked
             and seq_len // mesh_device.shape[sp_axis] == 640
@@ -329,7 +329,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
-            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
+            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
         )
 
         # --- MLA ---
@@ -649,7 +649,7 @@ class TtPrefillBlock(LightweightModule):
             force_kv_only=kv_only,
         )
         kv_intermediates = None
-        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        mla_indices = None  # GLM-5.3 reuse: this layer's top-k indices (full layer) for downstream shared layers
         # A kv_only layer's MLA returns None (it fills the cache and stops before attention/output), so it
         # has nothing to unpack; the kv_only short-circuit below returns the matching (None, ...) arity.
         if not kv_only:

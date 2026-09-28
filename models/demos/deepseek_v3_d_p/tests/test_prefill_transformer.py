@@ -456,7 +456,7 @@ def run_model(
     # Sparse single-shot is folded onto the block-cyclic path, so (like chunked) it needs the caller-owned,
     # user-major layer-stacked indexer key cache [num_users*index_cache_layers, 1, T, D_idx]. Unlike the
     # per-layer KVPE cache, the indexer stride is the COMPACTED full-indexer count over the layers this
-    # instance builds — GLM-5.2 "shared" layers reuse a "full" layer's cache and get no slot of their own.
+    # instance builds — GLM-5.3 "shared" layers reuse a "full" layer's cache and get no slot of their own.
     # full_indexer_rank returns num_layers unchanged when there is no indexer_types map. Dense variants use
     # no index cache.
     tt_index_kv_cache = None
@@ -1099,7 +1099,7 @@ def test_kimi_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2", "glm_5_3"], indirect=True, ids=["glm51", "glm52", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,
@@ -1190,7 +1190,7 @@ def test_glm_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2", "glm_5_3"], indirect=True, ids=["glm51", "glm52", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
 @pytest.mark.timeout(0)
 def test_glm_build_ttnn_cache(
     variant,

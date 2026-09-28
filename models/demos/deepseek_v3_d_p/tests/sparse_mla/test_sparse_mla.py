@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.2 variants.
+"""Sparse MLA / DSA tests for the GLM-5.1 / GLM-5.3 variants.
 
 Dense MLA coverage lives in test_mla.py. This file keeps the sparse reference
 path separate while reusing the same TT execution helper and the production mesh
@@ -46,7 +46,7 @@ SPARSE_KVPE_PCC = 0.99
 # quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-SPARSE_VARIANTS = ["glm_5_1", "glm_5_2"]
+SPARSE_VARIANTS = ["glm_5_1", "glm_5_3"]
 
 
 def _collect_kvpe_cache(cache, mesh_device):
@@ -190,7 +190,7 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     """Block-cyclic indexer key cache, allocated OUTSIDE ttMLA (mirrors tt_kvpe_cache) and passed into
     ttMLA.forward(index_kv_cache=...) every call. BF8 (matches BF16 top-k within bf16 noise, half the memory).
 
-    Layer-slot count mirrors the serving adapter (glm_5_2.py allocate_kv_cache): the indexer strides the
+    Layer-slot count mirrors the serving adapter (glm_5_3.py allocate_kv_cache): the indexer strides the
     folded user-major cache by num_full_indexer_layers (only ``full`` layers own an index slot), so the
     cache must carry that many layer slots for update_padded_kv_cache's cache_batch % num_layers check to
     hold. Falls back to 1 when the config has no ``indexer_types`` (glm_5_1: every layer full,
@@ -807,7 +807,7 @@ def run_sparse_mla_rotated_case(
     sp = mesh_shape[sp_axis]
     tile = ttnn.TILE_SIZE
     chunk_local = chunk_size_global // sp
-    # GLM-5.2 KV dedup: caches striped over ALL sp*tp chips instead of TP-replicated. The QUERY sharding
+    # GLM-5.3 KV dedup: caches striped over ALL sp*tp chips instead of TP-replicated. The QUERY sharding
     # (and hence the rotation pattern fed to the model below) is unchanged -- only the cache layout and
     # its readback stride change, which is exactly the decoupling this case is meant to stress.
     kv_tp_axis = tp_axis  # the sparse path always dedups; there is no TP-replicated variant
@@ -1001,8 +1001,8 @@ def test_sparse_mla_accuracy_chunked(
     )
 
 
-# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
-SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+# GLM-5.3 indexer reuse: anchor cases for the reuse-capable variant only (others have no shared layers).
+SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_3" in c.id]
 
 
 @pytest.mark.parametrize(
@@ -1015,7 +1015,7 @@ SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 def test_sparse_mla_indexer_reuse_chunked(
     mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
+    """GLM-5.3 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
     weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit."""
     config = config_only
@@ -1117,10 +1117,10 @@ def test_sparse_mla_chunked(
     )
 
 
-# glm_5_2 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_2 is the
+# glm_5_3 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_3 is the
 # production-closest of the two (it also exercises DSA cross-layer indexer reuse). Cache format IS kept --
 # it changes the page layout the clamp addresses.
-SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_3" in c.id]
 
 
 @pytest.mark.parametrize(

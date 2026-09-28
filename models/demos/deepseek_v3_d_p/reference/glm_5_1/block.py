@@ -69,7 +69,7 @@ def glm_decoder_layer_reference(
             Exactly one must be given. The MoE uses GLM's own routing config (GLM51Config: 256 routed
             experts, single-group top-k n_group=topk_group=1, top-8, route_scale=2.5) — not DeepSeek's.
         indexer_topk: attend through another layer's top-k instead of this layer's, the CPU dual of
-            ttMLA's ``indexer_indices``. Needed by GLM-5.2's shared and MTP-iteration index reuse.
+            ttMLA's ``indexer_indices``. Needed by GLM-5.3's shared and MTP-iteration index reuse.
         return_indexer_topk: also return this layer's top-k [1, seq, index_topk], for a caller
             running a stack that has to feed the sharing layers behind it.
         mla_ref: a caller-owned ``SparseMLAReference`` to attend through instead of a fresh one.
