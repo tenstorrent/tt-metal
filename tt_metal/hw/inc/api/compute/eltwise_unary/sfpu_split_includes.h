@@ -260,6 +260,10 @@
 #include "api/compute/eltwise_unary/hardtanh_bw_tt_poly_bf16.h"
 #endif
 
+#if TT_POLY_BACKWARD_LEAKY_RELU_BW_INCLUDE
+#include "api/compute/eltwise_unary/leaky_relu_bw_tt_poly_bf16.h"
+#endif
+
 #if TT_POLY_BACKWARD_LOG_SIGMOID_BW_INCLUDE
 #include "api/compute/eltwise_unary/log_sigmoid_bw_tt_poly_bf16.h"
 #endif

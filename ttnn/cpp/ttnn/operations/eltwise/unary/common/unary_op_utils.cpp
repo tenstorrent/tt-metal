@@ -23,6 +23,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::TT_POLY_FACTOR_SOFTSHRINK_BW: return "TT_POLY_FACTOR_SOFTSHRINK_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW: return "TT_POLY_BACKWARD_SOFTPLUS_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW: return "TT_POLY_BACKWARD_LOG_SIGMOID_BW_INCLUDE";
+        case UnaryOpType::TT_POLY_BACKWARD_LEAKY_RELU_BW: return "TT_POLY_BACKWARD_LEAKY_RELU_BW_INCLUDE";
         case UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW: return "TT_POLY_FACTOR_HARDTANH_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_HARDSWISH_BW: return "TT_POLY_BACKWARD_HARDSWISH_BW_INCLUDE";
         case UnaryOpType::TT_POLY_BACKWARD_HARDSIGMOID_BW: return "TT_POLY_BACKWARD_HARDSIGMOID_BW_INCLUDE";
@@ -847,6 +848,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::TT_POLY_BACKWARD_SOFTPLUS_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_BACKWARD_LOG_SIGMOID_BW:
+            TT_THROW("Complete backward marker requires the selected binary factory");
+        case UnaryOpType::TT_POLY_BACKWARD_LEAKY_RELU_BW:
             TT_THROW("Complete backward marker requires the selected binary factory");
         case UnaryOpType::TT_POLY_FACTOR_HARDTANH_BW:
             TT_FATAL(input_dtype == DataType::BFLOAT16, "Selected factor requires BF16 input");
