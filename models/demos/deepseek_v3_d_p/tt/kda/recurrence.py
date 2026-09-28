@@ -249,12 +249,16 @@ def _distributed_prefix(
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
     compute_config: ttnn.DeviceComputeKernelConfig,
+    actual_start: ttnn.Tensor,
+    local_rows: int,
+    fused: bool = True,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
     Entry states are stored in chronological order; the selector maps the
     local physical rank to its entry while the carry advances in that order.
     Return local entry and the replicated final carry on each independent TP line.
+    ``fused`` applies the chain in one kernel; the op-by-op path is its bit-exact reference.
     """
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
@@ -279,6 +283,17 @@ def _distributed_prefix(
         cluster_axis=sequence_parallel_axis,
         memory_config=output_memory,
     )
+    if fused:
+        # One kernel applies the chronologically ordered transitions with the same FP32 matmul and add per step.
+        return ttnn.experimental.kda.chain_affine_transforms(
+            gathered,
+            ttnn.reshape(initial_state, (batch_heads, key_dim, value_dim)),
+            actual_start=actual_start,
+            local_rows=local_rows,
+            memory_config=output_memory,
+            compute_kernel_config=compute_config,
+            sequence_parallel_axis=sequence_parallel_axis,
+        )
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
@@ -451,6 +466,8 @@ def _partition_prefix(
         sequence_parallel_axis=sequence_parallel_axis,
         selections=selections,
         compute_config=compute_config.affine_prefix,
+        actual_start=actual_start,
+        local_rows=local_rows,
     )
 
 
