@@ -628,3 +628,13 @@ weights. Fair arithmetic error (vs the quantized reference, equal row-major inpu
 | flat, fp32 full-sync down | **1.1-2.5%** | **1.004-1.016** |
 With fp32 full-sync down (+1.7% time) flat is the most accurate of the three on every input. End to end (vs fp32) all
 ~19.6-21% (the bfp4 weights). No NaN / Inf anywhere.
+
+**fp32 full-sync down across M and TP shapes** (8 experts balanced, row-major x, pinned; kernel us, bf16 -> fp32full):
+| shape | M 32 | M 512 | M 2048 |
+|---|---|---|---|
+| MiMo 4096 x 2048 | 270.6 -> 271.3 (+0.3%) | 721.8 -> 718.3 (-0.5%) | 2297.8 -> 2333.6 (+1.6%) |
+| K2 7168 x 2048 (reader tails) | 472.6 -> 472.2 | 1051.3 -> 1060.0 (+0.8%) | 3636.5 -> 3634.9 |
+| K2 TP2 7168 x 1024 (3 subgrids, l1acc gate/up) | 263.8 -> 264.2 | 894.1 -> 881.2 | 2989.3 -> 2969.8 |
+| K2 TP4 7168 x 512 (2 subgrids) | 208.8 -> 208.6 | 509.6 -> 507.2 | 1799.9 -> 1796.3 |
+At most +1.6% (MiMo compute-bound, 5 down columns per core), within noise elsewhere; every run passes the harness's
+norm / PCC checks. Cheap enough to be the default.
