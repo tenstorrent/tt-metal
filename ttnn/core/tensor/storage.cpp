@@ -261,9 +261,11 @@ void DeviceStorage::deallocate() {
 }
 
 bool DeviceStorage::is_allocated() const {
-    if (!mesh_tensor_holder_->is_allocated() || !get_root_mesh_tensor()->is_allocated()) {
+    if (!mesh_tensor_holder_->is_allocated()) {
         return false;
     }
+    // Only retained views depend on their sources' allocation state; the chain ends at the root holder.
+    // Reinterpreted views keep reporting their own holder's state and expose the root via is_root_allocated().
     for (const MeshTensorHolder* source = mesh_tensor_holder_->retained_owner_.get(); source != nullptr;
          source = source->retained_owner_.get()) {
         if (!source->is_allocated()) {
