@@ -35,4 +35,4 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 3. **Multicast Inline Direct Write (ID: 507)**: Tests multicast direct write functionality using the non-stateful NoC API to broadcast writes from a single sender core to multiple receiver cores simultaneously. The receiver set is the largest rectangle of the compute grid that excludes the sender, and the test runs it for both address patterns (same destination vs different destinations with address stride). Each receiver core's memory is independently validated to ensure all multicast writes were delivered correctly with expected values. This test verifies the correctness of the multicast inline DW write primitive over the available subordinate cores.
 
 ## Quasar Notes
-The suite uses the Metal 2.0 `KernelSpec` / `DataMovementGen2Config` path, since `CreateKernel` rejects the Metal 1.0 `DataMovementConfig` path on Quasar.
+The suite uses the Metal 2.0 `KernelSpec` / `DataMovementHardwareConfig` path, since `CreateKernel` rejects the Metal 1.0 `DataMovementConfig` path on Quasar.

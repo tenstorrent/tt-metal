@@ -349,7 +349,13 @@ private:
                  {"common_rt_args_vals_offset", COMMON_RUNTIME_ARGS_VAL_OFFSET},
                  {"num_sems", static_cast<uint32_t>(sem_ids.size())}},
             // Implicit sync takes a transaction id per DFB from a pool of 24.
-            .hw_config = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_2xx =
+                        DataMovementHardwareConfig::DataMovement2XXConfig{
+                            .disable_dfb_implicit_sync_for_all = true,
+                        },
+                },
             .advanced_options =
                 KernelAdvancedOptions{
                     .num_runtime_varargs = static_cast<uint32_t>(unique_rt_args.size()),
@@ -366,7 +372,7 @@ private:
                 .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp"},
                 .num_threads = 1,
                 .dfb_bindings = consumer_bindings,
-                .hw_config = ComputeHardwareConfig{ComputeGen2Config{}},
+                .hw_config = ComputeHardwareConfig{},
             });
             work_unit_kernels.push_back(consumer_name);
         }

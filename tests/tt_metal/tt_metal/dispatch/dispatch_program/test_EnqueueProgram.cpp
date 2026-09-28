@@ -508,12 +508,9 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
         };
 
         const std::vector<KernelSpec> kernel_specs{
-            make_spec(
-                "rta_dm0", dm_defines0, num_runtime_args_dm0, DataMovementHardwareConfig{DataMovementGen2Config{}}),
-            make_spec(
-                "rta_dm1", dm_defines1, num_runtime_args_dm1, DataMovementHardwareConfig{DataMovementGen2Config{}}),
-            make_spec(
-                "rta_compute", compute_defines, num_runtime_args_compute, ComputeHardwareConfig{ComputeGen2Config{}})};
+            make_spec("rta_dm0", dm_defines0, num_runtime_args_dm0, DataMovementHardwareConfig{}),
+            make_spec("rta_dm1", dm_defines1, num_runtime_args_dm1, DataMovementHardwareConfig{}),
+            make_spec("rta_compute", compute_defines, num_runtime_args_compute, ComputeHardwareConfig{})};
 
         ProgramSpec spec{
             .name = "runtime_args",
@@ -679,11 +676,11 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                     .num_threads = 1,
                     .compiler_options = {.defines = std::move(defines)},
                     .hw_config =
-                        compute ? std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>{ComputeHardwareConfig{
-                                      ComputeGen2Config{}}}
-                                : std::variant<
-                                      DataMovementHardwareConfig,
-                                      ComputeHardwareConfig>{DataMovementHardwareConfig{DataMovementGen2Config{}}},
+                        compute
+                            ? std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>{ComputeHardwareConfig{}}
+                            : std::variant<
+                                  DataMovementHardwareConfig,
+                                  ComputeHardwareConfig>{DataMovementHardwareConfig{}},
                     .advanced_options =
                         KernelAdvancedOptions{
                             .num_runtime_varargs = num_args_per_range[r],
@@ -999,9 +996,9 @@ bool test_increment_runtime_args_sanity(
                 : std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg_2_0.cpp"};
         std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
         if (is_compute) {
-            hw_config = ComputeHardwareConfig{ComputeGen2Config{}};
+            hw_config = ComputeHardwareConfig{};
         } else {
-            hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+            hw_config = DataMovementHardwareConfig{};
         }
 
         std::vector<KernelSpec> kernel_specs;
@@ -1129,9 +1126,9 @@ Program make_gen2_program(
 
     std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
     if (processor_class == HalProcessorClassType::COMPUTE) {
-        hw_config = ComputeHardwareConfig{ComputeGen2Config{}};
+        hw_config = ComputeHardwareConfig{};
     } else {
-        hw_config = DataMovementHardwareConfig{DataMovementGen2Config{}};
+        hw_config = DataMovementHardwareConfig{};
     }
 
     KernelSpec kernel_spec{
@@ -2253,10 +2250,15 @@ Program make_gen2_random_program(
 
         std::variant<DataMovementHardwareConfig, ComputeHardwareConfig> hw_config;
         if (plan.is_compute) {
-            hw_config = ComputeHardwareConfig{ComputeGen2Config{}};
+            hw_config = ComputeHardwareConfig{};
         } else {
             // Implicit sync takes a transaction id per DFB from a pool of 24.
-            hw_config = DataMovementHardwareConfig{DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}};
+            hw_config = DataMovementHardwareConfig{
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            };
         }
 
         Group<KernelSpec::DFBBinding> dfb_bindings;
