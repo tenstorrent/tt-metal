@@ -297,7 +297,6 @@ KernelPlan make_kernel_plan(
     plan.ring_filled_sem = RingSemaphores::FILLED;
     plan.ring_freed_sem = RingSemaphores::FREED;
     plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
-    plan.ready_sem = sems.ready_gate();
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
@@ -504,7 +503,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             UntilizerPlan plan;
             plan.my_expert_base = chip_plan.my_expert_base;
             plan.expert_table_page_base = chip_plan.expert_table_page_base;
-            plan.ready_sem = chip_plan.ready_sem;
+            plan.ready_sem = sems.ready_gate();
             plan.my_index = j;
             plan.num_peers = static_cast<uint32_t>(groups[g].size());
             plan.control_addr = l1.unt_control;
