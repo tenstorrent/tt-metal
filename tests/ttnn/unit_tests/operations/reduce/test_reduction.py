@@ -1043,6 +1043,95 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, error_msg, 
         ), f"torch: {torch_result}, ttnn: {ttnn_result}"
 
 
+INT32_MIN = torch.iinfo(torch.int32).min
+INT32_MAX = torch.iinfo(torch.int32).max
+
+
+def _int32_order_edge_lanes() -> torch.Tensor:
+    """32 lanes x 32 values of Int32 ordering edge cases (see test_reduce_int32_max_min_order_edges)."""
+    g = torch.Generator().manual_seed(1)
+
+    def rep(*vals):
+        return [vals[i % len(vals)] for i in range(32)]
+
+    def one(value, fill, pos=17):
+        lane = [fill] * 32
+        lane[pos] = value
+        return lane
+
+    def rand(low, high):
+        return torch.randint(low, high, (32,), generator=g, dtype=torch.int64).tolist()
+
+    lanes = [
+        rep(INT32_MIN),
+        rep(INT32_MAX),
+        rep(0),
+        rep(-1),
+        rep(1),
+        rep(-5),
+        rep(7),
+        rep(INT32_MIN + 1),
+        rep(INT32_MIN, INT32_MAX),
+        rep(-1, 0),
+        rep(0, 1),
+        rep(-1, 1),
+        rep(INT32_MIN, -1),
+        rep(INT32_MIN, INT32_MIN + 1),
+        rep(INT32_MAX - 1, INT32_MAX),
+        rep(INT32_MIN, 0),
+        rep(INT32_MAX, 0),
+        rep(INT32_MIN + 1, INT32_MAX),
+        rep(INT32_MIN, INT32_MAX, -1, 0, 1),
+        one(INT32_MIN, 0),
+        one(INT32_MAX, 0),
+        one(-1, INT32_MIN),
+        one(0, -1),
+        one(1, -1),
+        one(-1, 1),
+        list(range(-16, 16)),
+        [(-1) ** k * (1 << (k % 31)) for k in range(32)],
+        [INT32_MIN + k * (1 << 27) for k in range(32)],
+        [INT32_MAX - k * (1 << 27) for k in range(32)],
+        rand(INT32_MIN, INT32_MAX),
+        rand(INT32_MIN, 0),
+        rand(0, INT32_MAX),
+    ]
+    return torch.tensor(lanes, dtype=torch.int64)
+
+
+@pytest.mark.parametrize("op", ["max", "min"])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("tiles", [1, 3])
+def test_reduce_int32_max_min_order_edges(device, op, dim, tiles):
+    """Int32 max/min over W (dim=-1) and H (dim=-2) must be exact on every Int32 ordering edge case.
+
+    Int32 max/min always run on the SFPU reduce, whose comparator (SFPSWAP) orders sign-magnitude
+    integers, not two's-complement; the kernel maps operands so INT32_MIN, the -1/0 boundary and
+    both-negative pairs order correctly. Every reduced lane here is one of those cases (an all-equal
+    lane, a lone extreme, {-1, 0}, {INT32_MIN, -1}, {INT32_MIN, INT32_MIN + 1}, full-range ramps and
+    random draws). With `tiles` > 1 the reduced axis spans several tiles, so the per-tile SFPU results
+    are folded across tiles first, and the lane values are permuted per tile so no tile is a copy.
+    """
+    lanes = _int32_order_edge_lanes()  # [lane, value]
+    torch.manual_seed(2)
+    blocks = [lanes[:, torch.randperm(32)] for _ in range(tiles)]
+    along = torch.cat(blocks, dim=1)  # [32 lanes, 32 * tiles values]
+    # Lane = row for a W reduce, lane = column for an H reduce.
+    torch_input = along if dim == -1 else along.t().contiguous()
+    torch_input = torch_input.reshape(1, 1, *torch_input.shape).to(torch.int32)
+    torch_output = getattr(torch, op)(torch_input, dim=dim, keepdim=True).values
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.int32)
+    tt_output = ttnn.to_torch(getattr(ttnn, op)(tt_input, dim=dim, keepdim=True))
+
+    assert tt_output.dtype == torch.int32
+    mismatch = torch.nonzero(tt_output != torch_output)
+    assert mismatch.numel() == 0, (
+        f"{op} dim={dim} tiles={tiles}: {mismatch.shape[0]} mismatched lanes; first: "
+        f"{[(tuple(i.tolist()), int(torch_output[tuple(i)]), int(tt_output[tuple(i)])) for i in mismatch[:8]]}"
+    )
+
+
 def test_reduce_int32_identity_scalar_is_not_lossy(device):
     """An Int32 reduce with scalar=1.0 must stay bit-exact above 2^24.
 
