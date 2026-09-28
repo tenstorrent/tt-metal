@@ -878,6 +878,10 @@ def all_gather_swiglu_prefill(
     """Fused all-gather + col-parallel gate/up matmul + SwiGLU for prefill (packing gate+up lets ff_norm's AG fuse in).
 
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
+    # all_gather_minimal_matmul_async does not validate in0's dtype and decodes a block-float one as
+    # noise (measured PCC 0.014 vs 0.999 on BH). The 27B's ff_norm hands bf8, so upcast before the gather.
+    if x.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        x = ttnn.typecast(x, ttnn.bfloat16)
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     num_links = 2
