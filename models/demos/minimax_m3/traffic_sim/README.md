@@ -126,21 +126,28 @@ Goodput in useful tok/s at p90 TTFT ≤ 10 s. "Today" = 16×[2,4] (or 32×[2,4])
 
 Greedy order: gain at the step the feature was added, followed by leave-one-out loss when removing it from the full stack.
 
-| tier | feature | 4gx today | 4gx roofline | 8gx today | 8gx roofline | scope |
+Complexity is a rough judgement of how much of the stack a feature touches:
+* **low**: one op or the scheduler, plus validation;
+* **med**: a new op or allocator, or changes across a few ops;
+* **high**: cross-cutting changes to the runtime, KV layout, several kernels and the scheduler.
+
+It is not a time estimate and has not been checked with the code owners.
+
+| tier | feature | 4gx today | 4gx roofline | 8gx today | 8gx roofline | complexity |
 |---|---|---|---|---|---|---|
-| P0 | slot lanes + paged pool | ×3.68 / ×8 | ×4.04 / ×5.6 | ×2.40 / ×6.3 | ×5.75 / ×6.6 | L |
-| P0 | host-DRAM KV tier (1 TB/gx) | ×1.65 / ×2.0 | ×2.02 / ×1.9 | ×1.63 / ×1.6 | ×1.51 / ×1.7 | L |
-| P0 | bounded dense gather (while lanes are 1M) | ×1.42 | ×1.00 | ×2.83 | ×1.00 | S |
-| P0 | index_k stored once (not ×TP) | ×1.32 / ×1.28 | ×1.31 / ×1.29 | ×1.20 / ×1.15 | ×1.27 / ×1.32 | S-M |
-| P1 | async stage handoff | ×1.09 / ×1.12 | ×1.18 / ×1.25 | ×1.22 / ×1.15 | ×1.38 / ×1.43 | S-M |
-| P1 | multi-request batching (8–16k budget) | ×1.09 / ×1.19 | ×1.17 / ×1.30 | ×1.07 / ×1.07 | ×1.07 / ×1.15 | L |
-| P1 | variable chunk (a2a KV write) | ×1.14 / ×1.04 | ×1.05 / ×1.05 | ×1.11 / ×1.02 | ×1.09 / ×1.02 | M-L |
-| P1 | index_k bf8 | ×1.11 / ×1.07 | ×1.14 / ×1.10 | ×1.03 / ×1.06 | ×1.08 / ×1.12 | S (PCC) |
-| P2 | shortest-first scheduling | ×1.03 | ×1.02 | ×1.05 | ×1.07 | S |
-| P2 | MSA SP-local indexer | ×1.01 | ×1.02 | ×1.01 | ×1.00 | M-L |
-| P2 | fused multi-user attention | ×1.00 | ×1.01 | ×1.00 | ×1.00 | L |
-| P2 | unaligned resume (subsumed by var) | ×1.00 (×1.07–1.12 before var) | ×1.00 | ×1.00 | ×1.00 | S |
-| P2 | variable-size lane arena | ×0.99 | ×1.02 | ×1.00 | ×1.00 | M |
+| P0 | slot lanes + paged pool | ×3.68 / ×8 | ×4.04 / ×5.6 | ×2.40 / ×6.3 | ×5.75 / ×6.6 | high |
+| P0 | host-DRAM KV tier (1 TB/gx) | ×1.65 / ×2.0 | ×2.02 / ×1.9 | ×1.63 / ×1.6 | ×1.51 / ×1.7 | high |
+| P0 | bounded dense gather (while lanes are 1M) | ×1.42 | ×1.00 | ×2.83 | ×1.00 | low |
+| P0 | index_k stored once (not ×TP) | ×1.32 / ×1.28 | ×1.31 / ×1.29 | ×1.20 / ×1.15 | ×1.27 / ×1.32 | med |
+| P1 | async stage handoff | ×1.09 / ×1.12 | ×1.18 / ×1.25 | ×1.22 / ×1.15 | ×1.38 / ×1.43 | med |
+| P1 | multi-request batching (8–16k budget) | ×1.09 / ×1.19 | ×1.17 / ×1.30 | ×1.07 / ×1.07 | ×1.07 / ×1.15 | high |
+| P1 | variable chunk (a2a KV write) | ×1.14 / ×1.04 | ×1.05 / ×1.05 | ×1.11 / ×1.02 | ×1.09 / ×1.02 | high |
+| P1 | index_k bf8 | ×1.11 / ×1.07 | ×1.14 / ×1.10 | ×1.03 / ×1.06 | ×1.08 / ×1.12 | low (PCC) |
+| P2 | shortest-first scheduling | ×1.03 | ×1.02 | ×1.05 | ×1.07 | low |
+| P2 | MSA SP-local indexer | ×1.01 | ×1.02 | ×1.01 | ×1.00 | high |
+| P2 | fused multi-user attention | ×1.00 | ×1.01 | ×1.00 | ×1.00 | high |
+| P2 | unaligned resume (subsumed by var) | ×1.00 (×1.07–1.12 before var) | ×1.00 | ×1.00 | ×1.00 | low |
+| P2 | variable-size lane arena | ×0.99 | ×1.02 | ×1.00 | ×1.00 | med |
 
 Takeaways:
 1. **On AgentX, KV capacity sets the throughput, not compute.** Even the best stacks reach only 30–65% of their own ∞-cache goodput.
@@ -167,7 +174,7 @@ Takeaways:
 
 ## Extending (notes for the next agent)
 
-* **New feature.** Add a knob to `DEFAULTS` in `sim_core.js`, use it in `roofTok` / `roofSeg` / `layerMs` (cost), `makePlan` (memory), or the scheduler (`formChunk`, `tryStart`). Then add a `FEATURES` entry in `study.js`, a control in `artifact/template.html` (`FIELDS`) and a scope line in `build_artifact.js` (`SCOPE`).
+* **New feature.** Add a knob to `DEFAULTS` in `sim_core.js`, use it in `roofTok` / `roofSeg` / `layerMs` (cost), `makePlan` (memory), or the scheduler (`formChunk`, `tryStart`). Then add a `FEATURES` entry in `study.js`, a control in `artifact/template.html` (`FIELDS`) and a complexity line in `build_artifact.js` (`SCOPE`).
 * **New hardware data.** Rerun `collect_calib.py`. It segments the timing CSVs per cell with `results_16stage.jsonl`. Then run `validate.js` and check the error summary before trusting a study.
 * **New corpus.** Rerun `prep_traffic.py`. hash_ids must stay prefix-chained and topologically increasing (checked on 19.6M block pairs).
 * `lib/pool.js` `summarize` and the copy in `artifact/template.html` must stay identical.

@@ -258,7 +258,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
           <li><b>LOO = loss if removed (leave-one-out).</b> Start with every feature on and turn only this one off. "×1.96" = goodput drops 1.96x without it. ×1.00 = it adds nothing once everything else is on. That is usually because another feature does the same job: bounded dense gather and variable-size lanes both remove the whole-slot scan, and variable chunk already includes unaligned resume.</li>
         </ul>
         <p>Columns: "4gx today" = 4 galaxies with today's kernels, "4gx roofline" = 4 galaxies with kernels at roofline targets, and the same for 8 galaxies (Method tab).</p>
-        <p><b>Tier</b> = the larger of the two numbers, maximised over the four scenarios: P0 ≥ 1.25x, P1 ≥ 1.07x, else P2. Scope is a rough single-engineer estimate.</p>
+        <p><b>Tier</b> = the larger of the two numbers, maximised over the four scenarios: P0 ≥ 1.25x, P1 ≥ 1.07x, else P2. Complexity is a rough low / med / high judgement of the implementation work (Method tab).</p>
       </div>
       <div class="tablewrap" id="prioTable"></div>
     </div>
@@ -362,7 +362,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <li><b>Stage, mesh, SP/TP, split, replicas.</b> See "Context". The <b>split</b> is how many layers each stage holds; "auto" balances the stages for a representative mix of cached lengths. <b>Replicas</b> divides the galaxies into independent pipelines, each with its own cache; sessions stick to one replica.</li>
       <li><b>Scenario labels.</b> "Today's kernels" = op-efficiency 0 (k0); "roofline kernels" = op-efficiency 1 (k1). See the section on kernels.</li>
       <li><b>Tiers.</b> P0 / P1 / P2 = priority from the study; the rule is in "How the study works".</li>
-      <li><b>Scope</b> (S / M / L). A rough single-engineer estimate: S ≈ up to 2 weeks, M ≈ 2-4 weeks, L ≈ 4-8 weeks. These are not validated with the code owners.</li>
+      <li><b>Complexity</b> (low / med / high). A rough judgement of how much of the stack a feature touches. <b>Low:</b> one op or the scheduler, plus validation. <b>Med:</b> a new op or allocator, or changes across a few ops. <b>High:</b> cross-cutting changes to the runtime, KV layout, several kernels and the scheduler. Not validated with the code owners.</li>
     </ul>
 
     <h2 id="m-traffic">Traffic replay</h2>
@@ -516,7 +516,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
       <li><b>Decode.</b> A fixed per-request speed. Decode-side capacity and KV migration to decode are not modelled.</li>
       <li><b>Extrapolation.</b> Batched chunks above 5120 tokens, meshes without a profile, and stage counts other than 16 are extrapolated. [4,2] stage costs come from a single-stage profile.</li>
       <li><b>Memory figures are approximate.</b> The 3 GB per-chip reserve and the activation-buffer estimate are approximations.</li>
-      <li><b>Scope estimates are rough</b> and not checked with the code owners.</li>
+      <li><b>Complexity bins are rough</b> and not checked with the code owners.</li>
     </ul>
 
     <h2 id="m-repro">Reproduce</h2>
@@ -828,9 +828,9 @@ function renderRoadmap() {
       const loss = l && l.goodput > 0 && S.full ? S.full.goodput / l.goodput : null;
       return `<td class="n">${gain ? '×' + gain.toFixed(2) + ` <span class="muted">#${gi}</span>` : '–'}</td><td class="n">${loss ? '×' + loss.toFixed(2) : '–'}</td>`;
     }).join('');
-    return { t, html: `<tr><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td>${esc(f.name)}${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span> <span class="small muted">${f.scope ? esc(f.scope[1]) : ''}</span></td><td class="small muted">${f.scope ? esc(f.scope[2]) : ''}</td></tr>` };
+    return { t, html: `<tr><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td>${esc(f.name)}${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span></td><td class="small muted">${f.scope ? esc(f.scope[1]) : ''}</td></tr>` };
   }).sort((a, b) => b.t.score - a.t.score);
-  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2" title="${esc(STUDY.scenarios[sk].label)}">${sk.replace(/^g(\d)_k0$/, "$1gx today").replace(/^g(\d)_k1$/, "$1gx roofline")}<br><span class="muted">G · LOO</span></th>`).join('')}<th>scope</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
+  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2" title="${esc(STUDY.scenarios[sk].label)}">${sk.replace(/^g(\d)_k0$/, "$1gx today").replace(/^g(\d)_k1$/, "$1gx roofline")}<br><span class="muted">G · LOO</span></th>`).join('')}<th>complexity</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
   $('scSeg').innerHTML = SCS.map((sk) => `<button type="button" data-sc="${sk}" aria-pressed="${sk === curSc}">${esc(STUDY.scenarios[sk].label)}</button>`).join('');
   $('scSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { curSc = b.dataset.sc; renderRoadmap(); }));
   const S = STUDY.scenarios[curSc];
@@ -853,7 +853,7 @@ function renderRoadmap() {
   const top = STUDY.features.map((f) => [f, tierOf(f.key)]).filter(([, t]) => t.tier === 'P0').map(([f]) => f.key);
   $('roadHead').innerHTML = `<h2>What moves goodput on AgentX</h2>
   <p>Goodput = useful tok/s with p90 TTFT ≤ ${STUDY.slo} s. Baseline → best configuration found: <b>4 galaxies</b> ${fmtK(g0.greedy[0].goodput)} → <b>${fmtK(g0.grid[0].goodput)}</b> with today's kernels, ${fmtK(g1.grid[0].goodput)} with roofline kernels; <b>8 galaxies</b> ${fmtK(h0.greedy[0].goodput)} → <b>${fmtK(h0.grid[0].goodput)}</b> today, ${fmtK(h1.grid[0].goodput)} with roofline kernels.</p>
-  <p>P0 features: ${top.map((k) => `<span class="pill p0">${esc(k)}</span>`).join(' ')}. The ordering, gains and scope are below; hover the orange ticks for the infinite-cache ceiling of each step.</p>
+  <p>P0 features: ${top.map((k) => `<span class="pill p0">${esc(k)}</span>`).join(' ')}. The ordering, gains and complexity are below; hover the orange ticks for the infinite-cache ceiling of each step.</p>
   <p>On AgentX traffic, KV-cache capacity limits throughput more than compute: even the best configurations reach only about a third to two thirds of their own infinite-cache goodput. The features that add effective KV capacity therefore come first: the paged pool, the host-DRAM tier and the index-cache layout. "Today's kernels" / "roofline kernels", greedy vs leave-one-out, tiers and scope are defined in the <a href="#method">Method</a> tab.</p>`;
 }
 
