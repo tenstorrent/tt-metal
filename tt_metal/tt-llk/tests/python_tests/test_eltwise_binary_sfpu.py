@@ -1962,6 +1962,14 @@ def _tt_poly_declared_log_sigmoid_bw(x):
     return _declared_derivative(x)
 
 
+def _tt_poly_declared_relu_bw(x):
+    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
+    result = np.zeros(raw.shape, dtype=np.uint32)
+    for first, stop, word in ((0, 1, 0), (1, 32641, 16256), (32641, 65536, 0)):
+        result[(raw >= first) & (raw < stop)] = word << 16
+    return result.view(np.float32).astype(np.float64)
+
+
 def _tt_poly_declared_selu_bw(x):
     def _declared_piece_0(x):
         exp = np.exp
@@ -2058,6 +2066,7 @@ def _tt_poly_declared_tanhshrink_bw(x):
         ("hardtanh_bw", True, _tt_poly_declared_hardtanh_bw, ()),
         ("leaky_relu_bw", False, _tt_poly_declared_leaky_relu_bw, ()),
         ("log_sigmoid_bw", False, _tt_poly_declared_log_sigmoid_bw, ()),
+        ("relu_bw", False, _tt_poly_declared_relu_bw, ()),
         ("selu_bw", False, _tt_poly_declared_selu_bw, (0.0,)),
         ("silu_bw", False, _tt_poly_declared_silu_bw, ()),
         ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
