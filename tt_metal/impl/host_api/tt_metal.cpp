@@ -992,7 +992,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 }
 
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
-    ZoneScoped;
     program.impl().compile(device, force_slow_dispatch);
 }
 

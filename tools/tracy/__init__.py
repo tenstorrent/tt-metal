@@ -35,7 +35,7 @@ from .common import (
 
 import tracy.tracy_state
 
-DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
+DEFAULT_CHILD_CALLS = ["ProgramImpl::compile", "HWCommandQueue_write_buffer"]
 
 
 def signpost(header, message=None):

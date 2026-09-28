@@ -177,7 +177,7 @@ DEBUG_FILTER='\| *DEBUG *\|'
 TRACY_OPTS=(-v -r -p)
 # Child calls: makes H2D/D2H buffer copies and program-cache misses show up as per-op columns, which
 # is the only way to tell "no host<->device movement" from "movement not measured".
-TRACY_OPTS+=(--child-functions "HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,CompileProgram")
+TRACY_OPTS+=(--child-functions "HWCommandQueue_write_buffer,HWCommandQueue_read_buffer,ProgramImpl::compile")
 [ "${NOC_TRACES:-0}" = "1" ] && TRACY_OPTS+=(--collect-noc-traces)
 
 run_cfg () {  # $1=label  $2=cache_tokens

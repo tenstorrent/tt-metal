@@ -530,10 +530,7 @@ bool Devices::launch_relay(
         }
         SetRuntimeArgs(*program, relay_id, relay.logical, rt);
 
-        {
-            ZoneScopedN("CompileProgram");
-            program->impl().compile(ctx.device, /*force_slow_dispatch=*/true);
-        }
+        program->impl().compile(ctx.device, /*force_slow_dispatch=*/true);
         slow_dispatch::WriteRuntimeArgsToDevice(*ctx.device, *program, /*force_slow_dispatch=*/true);
         slow_dispatch::LaunchProgramAsync(*ctx.device, *program, /*force_slow_dispatch=*/true);
 
