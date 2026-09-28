@@ -234,3 +234,15 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - `tt/model.py`: `build_attention` builds TtSlidingAttention for sliding layers (swa_rope_theta, sink bias); `new_kv_cache` returns TtKVCacheSliding for them. `hooks.py`: `DEVICE_STEPS["sliding_moe"] = {"attention"}`.
 - Gate: pcc 0.999912, rel 0.0134, first-128 rel 0.0116, norm ratio [0.9635, 1.0457], worst row 0.046; closer to window 128 (0.0128) than 127 (0.0161) / 129 (0.0146). Same numbers as the 1x4 prior's preset S.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attention.py`
+
+## S.sliding_moe.02.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_swap_sliding_moe_02_attention.py`. The golden is the same (layer 1,
+  s4096 chunk 1). Only the docstring header changed. Checks: pcc_swap_out >= 0.98 (gated). The test also asserts: block out finite, with rel L2 <= 0.01 over the
+  whole chunk and over the first 128 rows. attn_norm: rel <= 0.03, ratio [0.97, 1.03]. attention: rel <= 0.022 over the whole chunk and over the first 128 rows,
+  ratio [0.95, 1.08], worst row <= 0.08. attention vs the CPU attention on the same input: <= 0.015, and closer at window 128 than at 127 or 129.
+- BRINGUP_IMPL=reference: out 0.999996 / rel 0.0030, attention rel 0.0038, PASS. BRINGUP_IMPL=stub: FAIL (block out rel 0.0142 plus every step check).
+- Gate (2x2 device, TtRMSNorm + TtSlidingAttention, preset S): pcc_swap_out 0.999995, out rel 0.0032 / 0.0029; attn_norm rel 0.0029; attention rel 0.0193 /
+  first rows 0.0148, ratio [0.9739, 1.0652], worst row 0.065; vs CPU w128 0.0130, w127 0.0164, w129 0.0150. PASS, same as the 1x4 prior.
+  Margins are small: attention rel 0.0193 against a limit of 0.022, and the window-129 check passes by 0.002.
+  The first `FAIL pcc=0` lines come from the precompile collect pass.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_02_attention.py`
