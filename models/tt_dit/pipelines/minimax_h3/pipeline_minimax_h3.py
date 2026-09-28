@@ -80,7 +80,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
+from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch, pad_single
 from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, event_section, null_callback
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
@@ -2259,8 +2259,10 @@ class MiniMaxH3Pipeline:
                     landed == bucket
                 ), f"filler landed on {landed}, expected bucket {bucket} (vision_len {vision_len})"
                 embeds, _ = self.encode_prompt(prompt, keyframes=keyframes)
+                spec = embeds.spec
                 ttnn.deallocate(embeds)
 
+        self._warm_prompt_pad(spec, range(alignment, caps.prompt, alignment))
         self._warm_vision_merge(range(alignment, align_up(caps.prompt) + 1, alignment), sorted(tower_sizes))
         self._host_log(
             f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
@@ -2270,22 +2272,41 @@ class MiniMaxH3Pipeline:
         """Compile the yuv420 decode at every canvas a request can reach, strictly before trace capture.
 
         The post-decoder stitch and colour conversion bake the canvas width and height into their
-        kernels, and one decoder chunk per canvas reaches all of them.
+        kernels, and one decoder chunk per canvas reaches all of them. The gather stitch slices each
+        tile out of the wave by its slot, one program per slot, and the slots are shared by every
+        canvas: the first canvas whose chunks fill a wave exactly decodes a full wave, which reaches
+        every slot.
         """
-        ratio = self.vae_config.spatial_compression_ratio
+        config = self.vae_config
+        ratio = config.spatial_compression_ratio
         chunk_latents = self._vae.decode_unit_shape()[0]
+        wave_size = self.mesh_device.get_num_devices()
+        canvases = decodable_canvases()
+
+        def tiles_per_chunk(height: int, width: int) -> int:
+            (_, y_lengths, _), (_, x_lengths, _) = self._vae.decode_tile_grid(height // ratio, width // ratio)
+            return len(y_lengths) * len(x_lengths)
+
+        tiles = [tiles_per_chunk(*canvas) for canvas in canvases]
+        full = max(count for count in tiles if wave_size % count == 0)
+        full_canvas = canvases[tiles.index(full)]
+
         before = self.mesh_device.num_program_cache_entries()
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
-        for height, width in tqdm.tqdm(
-            decodable_canvases(),
+        for canvas in tqdm.tqdm(
+            canvases,
             desc="Warming VAE decode canvases",
             disable=not host,
             file=sys.stderr,
             bar_format=_TQDM_BAR_FORMAT,
         ):
-            latents = torch.zeros(1, self.vae_config.latent_channels, chunk_latents, height // ratio, width // ratio)
+            height, width = canvas
+            num_latents = chunk_latents
+            if canvas == full_canvas:
+                num_latents = config.tokens_chunk_size * (wave_size // full + 1) - config.token_drop
+            latents = torch.zeros(1, config.latent_channels, num_latents, height // ratio, width // ratio)
             self._vae.decode(latents, output_type="yuv420")
         self._host_log(f"VAE decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
@@ -2331,17 +2352,42 @@ class MiniMaxH3Pipeline:
                 assert (
                     embeds.shape[1] == pad_to
                 ), f"forced pad landed on {embeds.shape[1]}, expected presentation rung {pad_to}"
+            spec = embeds.spec
             ttnn.deallocate(embeds)
             # self._host_log(
             #     f"warmed prompt encoder for vision rung {vision_pad}: "
             #     f"+{self.mesh_device.num_program_cache_entries() - unit_before} programs"
             # )
 
+        self._warm_prompt_pad(spec, self.presentation_ladder)
         self._warm_vision_merge(self.presentation_ladder, self.vision_patch_ladder)
         self._host_log(
             f"ref2va prompt encoder envelope warmed: "
             f"+{self.mesh_device.num_program_cache_entries() - before} programs"
         )
+
+    def _warm_prompt_pad(self, spec: ttnn.TensorSpec, lengths: Sequence[int]) -> None:
+        """Compile the transformer's pad of the prompt to its cap at every padded prompt length in
+        `lengths`, strictly before trace capture.
+
+        `prepare_static_sources` pads before the token refiner and the pad program is keyed on its
+        input length, which the warmup generations do not visit exhaustively. `spec` is a real
+        encoder output's, so the warmed programs are the served ones; a length at the cap is not
+        padded.
+        """
+        cap = self.arena_caps.prompt
+        for length in lengths:
+            if length >= cap:
+                continue
+            rows = ttnn.allocate_tensor_on_device(
+                ttnn.Shape((1, 1, length, spec.shape[-1])),
+                spec.dtype,
+                spec.layout,
+                self.mesh_device,
+                spec.memory_config,
+            )
+            ttnn.deallocate(pad_single(rows, dim=2, back=cap - length))
+            ttnn.deallocate(rows)
 
     def _warm_vision_merge(self, seq_lens: Sequence[int], tower_sizes: Sequence[int]) -> None:
         """Compile the text encoder's `merge_vision` for every reachable `(sequence length, tower size)`
