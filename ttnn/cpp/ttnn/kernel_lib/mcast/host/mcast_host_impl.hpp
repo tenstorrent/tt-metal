@@ -5,6 +5,9 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
+#include <array>
+#include <tt-metalium/program.hpp>
+
 namespace ttnn::kernel_lib::host {
 
 // Indicates that no consumer-ready semaphore is configured.
@@ -142,7 +145,7 @@ private:
     McastConfig cfg_;
     mutable tt::tt_metal::CoreRangeSet receivers_;
     mutable tt::tt_metal::CoreRangeSet participating_;
-    mutable dataflow_kernel_lib::mcast_wire::FamilyMetadata layout_;
+    mutable dataflow_kernel_lib::mcast_wire::McastMetadata layout_;
     mutable dataflow_kernel_lib::mcast_wire::ArgumentMetadata generic_metadata_;
 };
 

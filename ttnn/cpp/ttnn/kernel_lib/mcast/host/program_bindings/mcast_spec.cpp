@@ -1,13 +1,21 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+// Attaches multicast to Metal 2.0 ProgramSpec using named semaphore bindings and compile-time/runtime metadata.
+// Validates kernel placement and names, populates run arguments, and supports absent channels.
+
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_spec_common.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <set>
+#include <string>
+#include <utility>
 #include <tt_stl/overloaded.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -244,7 +252,7 @@ void McastImpl::attach(
                     std::find(group->senders_.begin(), group->senders_.end(), node) != group->senders_.end();
                 TT_FATAL(
                     !(sender || chain) || spec_noc(kernel) == cfg_.noc,
-                    "Multicast sender/forwarder NoC differs from its family");
+                    "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
             auto entry = values.find(node);
             TT_FATAL(entry != values.end() || base == 0, "Missing caller runtime prefix for multicast attachment");

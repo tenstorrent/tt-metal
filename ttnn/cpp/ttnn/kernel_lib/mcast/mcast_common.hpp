@@ -10,7 +10,7 @@ namespace dataflow_kernel_lib {
 
 inline constexpr uint32_t MAX_MCAST_RECTANGLES = 3;
 
-// How a family delivers payloads after the host resolves its receiver-set policy.
+// How multicast delivers payloads after the host resolves the receiver-set policy.
 enum class TransferMode : uint32_t { Multicast = 0, ChainUnicast = 1 };
 
 // Flag is cleared between events; Counter is monotonic and uses absolute work rounds.
@@ -78,7 +78,7 @@ using SenderRuntimeArguments = SenderRuntimeArgumentsFor<1>;
 
 namespace mcast_wire {
 // Resource-neutral topology and protocol metadata shared by both argument frontends.
-struct FamilyMetadata {
+struct McastMetadata {
     uint32_t rotating_span = 0;
     uint32_t rectangle_capacity = 0;
     uint32_t ack_count = 0;
@@ -91,7 +91,7 @@ struct FamilyMetadata {
 
 constexpr uint32_t ABSENT = 0;
 // Low four bits of the compact CT control word. Reject both previous header formats.
-constexpr uint32_t FAMILY = 3;
+constexpr uint32_t WIRE_VERSION = 3;
 constexpr uint32_t NO_SENDER_ROUND = 0xFFFFFFFFu;
 constexpr uint32_t CAN_SEND = 1u << 0;
 constexpr uint32_t CAN_RECEIVE = 1u << 1;
@@ -113,7 +113,7 @@ struct SenderCoordinateMetadata {
 };
 
 struct ArgumentMetadata {
-    FamilyMetadata family;
+    McastMetadata mcast;
     KernelMetadata kernel;
     SenderCoordinateMetadata coordinates;
 };
@@ -178,13 +178,13 @@ struct RuntimeLayout {
     uint32_t words = 0;
 
     constexpr explicit RuntimeLayout(ArgumentMetadata metadata) {
-        const auto& family = metadata.family;
+        const auto& mcast = metadata.mcast;
         const auto& kernel = metadata.kernel;
         const auto& coordinates = metadata.coordinates;
         const bool sends = (kernel.capabilities & CAN_SEND) != 0;
         const bool receives = (kernel.capabilities & CAN_RECEIVE) != 0;
         roles = reserve(words, kernel.roles == DYNAMIC_ROLES);
-        if (transfer_mode(family.flags) == TransferMode::ChainUnicast) {
+        if (transfer_mode(mcast.flags) == TransferMode::ChainUnicast) {
             if (receives) {
                 coordinate_words = SENDER_COORD_WORDS;
                 sender_coordinates = reserve(words, true, coordinate_words);
@@ -192,21 +192,20 @@ struct RuntimeLayout {
             chain_neighbors = reserve(words, true, CHAIN_WORDS);
             return;
         }
-        sender_phase = reserve(words, sends && family.rotating_span != 0);
-        rectangle_count = reserve(words, sends && family.rectangle_capacity > 1);
-        ack = reserve(words, sends && (family.flags & PRE_HANDSHAKE) && family.ack_count == ACK_EQUALS_FANOUT);
+        sender_phase = reserve(words, sends && mcast.rotating_span != 0);
+        rectangle_count = reserve(words, sends && mcast.rectangle_capacity > 1);
+        ack = reserve(words, sends && (mcast.flags & PRE_HANDSHAKE) && mcast.ack_count == ACK_EQUALS_FANOUT);
         if (receives) {
             coordinate_words = coordinates.encoding == SenderCoordinateEncoding::ExplicitPairs
-                                   ? SENDER_COORD_WORDS * (family.rotating_span ? family.rotating_span : 1u)
+                                   ? SENDER_COORD_WORDS * (mcast.rotating_span ? mcast.rotating_span : 1u)
                                    : RANGE_WORDS * (coordinates.x_ranges + coordinates.y_ranges);
             sender_coordinates = reserve(words, true, coordinate_words);
         }
         if (sends) {
-            rectangle_bounds = reserve(rectangle_stride, family.sender_mcast_mode != SenderMcastMode::LocalCopy, 4);
-            rectangle_remote =
-                reserve(rectangle_stride, !(family.rectangle_capacity == 1 && family.remote_count_known));
-            rectangle_mode = reserve(rectangle_stride, family.sender_mcast_mode == SenderMcastMode::Unknown);
-            rectangles = reserve(words, true, family.rectangle_capacity * rectangle_stride);
+            rectangle_bounds = reserve(rectangle_stride, mcast.sender_mcast_mode != SenderMcastMode::LocalCopy, 4);
+            rectangle_remote = reserve(rectangle_stride, !(mcast.rectangle_capacity == 1 && mcast.remote_count_known));
+            rectangle_mode = reserve(rectangle_stride, mcast.sender_mcast_mode == SenderMcastMode::Unknown);
+            rectangles = reserve(words, true, mcast.rectangle_capacity * rectangle_stride);
         }
     }
 

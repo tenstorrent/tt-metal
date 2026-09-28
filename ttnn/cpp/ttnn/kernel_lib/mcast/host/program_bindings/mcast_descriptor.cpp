@@ -1,14 +1,19 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Attaches multicast semaphores and kernel arguments to ProgramDescriptor/KernelDescriptor objects.
+// Also appends arguments for Program-bound channels and marks absent descriptor channels.
+
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <set>
+#include <string>
+#include <utility>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "tt_metal/impl/buffers/semaphore.hpp"
 
 namespace ttnn::kernel_lib::host {
 using namespace tt::tt_metal;
@@ -97,7 +102,8 @@ void McastImpl::attach(
                 const bool sender =
                     std::find(group->senders_.begin(), group->senders_.end(), core) != group->senders_.end();
                 TT_FATAL(
-                    !(sender || chain) || noc == cfg_.noc, "Multicast sender/forwarder NoC differs from its family");
+                    !(sender || chain) || noc == cfg_.noc,
+                    "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
             auto entry = std::find_if(
                 kernel.runtime_args.begin(),

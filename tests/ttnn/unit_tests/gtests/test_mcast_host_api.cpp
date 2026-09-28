@@ -9,6 +9,7 @@
 #include <type_traits>
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -134,8 +135,8 @@ void expect_pattern(
                 const size_t phase = sender - senders[group].begin();
                 EXPECT_EQ(layout.sender_phase == wire::OMITTED ? 0u : words.at(layout.sender_phase), phase);
                 EXPECT_EQ(
-                    layout.ack == wire::OMITTED ? metadata.family.ack_count : words.at(layout.ack),
-                    (metadata.family.flags & wire::PRE_HANDSHAKE) ? acks[group][phase] : 0u);
+                    layout.ack == wire::OMITTED ? metadata.mcast.ack_count : words.at(layout.ack),
+                    (metadata.mcast.flags & wire::PRE_HANDSHAKE) ? acks[group][phase] : 0u);
                 // Independently enumerate the emitted worker destinations, not
                 // merely the frontend's participant list. Partial handshakes
                 // must not shrink the destination or add bounding-box holes.
@@ -276,14 +277,14 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
         {{1, 2}, {1, 0}});
     const auto snapshot = emitted(copy);
     EXPECT_EQ(snapshot.compile_time_args.at(1), 5u);
-    EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).family.ack_count, UINT32_MAX);
+    EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
     tt::tt_metal::Program program;
     copy.append_semaphores(program);
     std::vector<uint32_t> ct, first_rt, second_rt;
     copy.append_compile_time_args_to(ct);
     copy.append_runtime_args_to(first_rt, {0, 0});
     copy.append_runtime_args_to(second_rt, {3, 0});
-    EXPECT_EQ(test::emitted_metadata(ct, 0).family.ack_count, UINT32_MAX);
+    EXPECT_EQ(test::emitted_metadata(ct, 0).mcast.ack_count, UINT32_MAX);
     EXPECT_EQ(first_rt.at(2), 1u);  // Generic roles, phase, then per-sender ACK.
     EXPECT_EQ(second_rt.at(2), 2u);
 }
@@ -297,7 +298,7 @@ TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
     expect_pattern(default_acks, device_, {{{0, 0}, {1, 0}}}, {{{0, 0}, {1, 0}}}, {{1, 1}});
     Mcast disabled(*device_, McastConfig{.handshake = false}, receivers, 2);
     const auto snapshot = emitted(disabled);
-    EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).family.flags & 1u, 0u);
+    EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.flags & 1u, 0u);
     EXPECT_EQ(wire::CompileTimeLayout(snapshot.compile_time_args.front()).consumer_ready, wire::OMITTED);
     EXPECT_ANY_THROW((Mcast(*device_, McastConfig{.handshake = false, .handshake_cores = empty}, receivers, 2)));
 }
@@ -359,7 +360,7 @@ TEST_F(McastFixture, WrappedGroupsAndRectangleLimit) {
     expect_pattern(wrapped, device_, groups, {{{0, 0}}, {{1, 2}}}, {{8}, {8}});
     const auto snapshot = emitted(wrapped);
     const wire::RuntimeLayout layout(test::emitted_metadata(snapshot.compile_time_args, 0));
-    EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).family.rectangle_capacity, 3u);
+    EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.rectangle_capacity, 3u);
     for (const auto& [core, words] : snapshot.runtime_args) {
         if (core == CoreCoord{0, 0}) {
             EXPECT_EQ(words.at(layout.rectangle_count), 2u);
@@ -446,7 +447,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     EXPECT_EQ(
         wire::decode_compile_time_metadata(
             spec_kernel.advanced_options.compile_time_varargs.data() + spec_ct_base, false)
-            .family.ack_count,
+            .mcast.ack_count,
         UINT32_MAX);
     for (const auto& [core, words] : kernel.runtime_args) {
         EXPECT_EQ(args.kernel_run_args.front().advanced_options.runtime_varargs.get(core).value(), words);
@@ -535,7 +536,7 @@ TEST_F(McastFixture, OperationCommunicationFeasibility) {
                 McastExplicitSenderConfig{pattern.senders},
                 pattern.order);
             expect_pattern(channel, device_, pattern.receivers, pattern.senders, pattern.acks, noc);
-            const auto flags = test::emitted_metadata(emitted(channel, noc).compile_time_args, 0).family.flags;
+            const auto flags = test::emitted_metadata(emitted(channel, noc).compile_time_args, 0).mcast.flags;
             EXPECT_EQ(flags & 1u, pattern.handshake_enabled ? 1u : 0u);
             EXPECT_EQ(flags & 2u, pattern.signal == dataflow_kernel_lib::DataReadySignal::Counter ? 2u : 0u);
         }

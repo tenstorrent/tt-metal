@@ -89,7 +89,7 @@ typename McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyB
     } else {
         ASSERT(can_receive());
         if constexpr (transfer_mode == TransferMode::ChainUnicast) {
-            static_assert(sender_noc == noc_index, "Host family NoC does not match forwarding receiver kernel NoC");
+            static_assert(sender_noc == noc_index, "Host multicast NoC does not match forwarding receiver kernel NoC");
             return ReceiverPipeType(noc, chain_runtime_arguments());
         } else {
             return ReceiverPipeType(noc, Runtime::coordinates(runtime_layout.sender_coordinates));
@@ -115,7 +115,7 @@ McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, S
             return std::nullopt;
         }
         if constexpr (transfer_mode == TransferMode::ChainUnicast) {
-            static_assert(sender_noc == noc_index, "Host family NoC does not match forwarding receiver kernel NoC");
+            static_assert(sender_noc == noc_index, "Host multicast NoC does not match forwarding receiver kernel NoC");
             return std::optional<ReceiverPipeType>(std::in_place, noc, chain_runtime_arguments());
         } else {
             // Construct the owned coordinate table in the optional's final storage.
@@ -157,7 +157,7 @@ McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, S
                 Runtime::read(base + runtime_layout.rectangle_bounds + mcast_wire::EX),
                 Runtime::read(base + runtime_layout.rectangle_bounds + mcast_wire::EY)};
         }
-        rectangle.remote_count = single_rectangle && METADATA.family.remote_count_known
+        rectangle.remote_count = single_rectangle && METADATA.mcast.remote_count_known
                                      ? remote_count
                                      : Runtime::read(base + runtime_layout.rectangle_remote);
         rectangle.loopback_count = rectangle.remote_count + 1;

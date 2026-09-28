@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Resolves and validates multicast semaphore IDs, then allocates or adopts them in a regular Program.
+// Enforces Program binding ownership; the semaphore validation helpers also serve descriptor attachment.
+
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
 
 #include <algorithm>
@@ -18,7 +21,7 @@ void McastImpl::require_program_bound_() const {
 }
 
 void McastImpl::require_unbound_() const {
-    TT_FATAL(!bound_program_id_, "A Program-bound multicast family cannot use another attachment or legacy query path");
+    TT_FATAL(!bound_program_id_, "A Program-bound Mcast cannot use another attachment or legacy query path");
 }
 
 void McastImpl::validate_semaphores_present_and_zeroed_(
@@ -79,7 +82,7 @@ void McastImpl::append_semaphores(Program& program) {
     auto& impl = program.impl();
     TT_FATAL(!impl.created_from_spec(), "Multicast Program binding requires a regular Program");
     TT_FATAL(!impl.is_compiled(), "Cannot bind multicast semaphores to a compiled Program");
-    TT_FATAL(!bound_program_id_ || *bound_program_id_ == impl.get_id(), "Multicast family is bound to another Program");
+    TT_FATAL(!bound_program_id_ || *bound_program_id_ == impl.get_id(), "Mcast is bound to another Program");
 
     std::vector<SemaphoreDescriptor> existing;
     existing.reserve(impl.semaphores().size());

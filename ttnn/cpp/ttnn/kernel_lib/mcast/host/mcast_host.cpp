@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <tuple>
+#include <utility>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::kernel_lib::host {

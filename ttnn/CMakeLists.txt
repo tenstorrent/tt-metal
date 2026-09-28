@@ -7,9 +7,9 @@ include(sources.cmake)
 # Keep new helper backends from reshuffling unrelated unity translation units.
 set_source_files_properties(
     cpp/ttnn/kernel_lib/mcast/host/mcast_host.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_descriptor.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_spec.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_bindings/mcast_program.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_bindings/mcast_descriptor.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_bindings/mcast_spec.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             ON

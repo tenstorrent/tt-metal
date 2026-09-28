@@ -18,13 +18,13 @@ namespace dataflow_kernel_lib {
 // Construct McastArgs with the starting offsets of the host helper's compile-time and runtime arguments.
 // Sender kernels call sender(noc), receiver kernels call receiver(noc), and rotating receivers pass the
 // absolute work round to their receive operation. The returned pipe resolves to hardware multicast or
-// chain unicast from the family's wire arguments. A present sender must still call send() when
+// chain unicast from the multicast wire arguments. A present sender must still call send() when
 // `has_receivers` is false because that is the degenerate local-copy case; absence is represented by
 // `active == false`.
 //
 // Regular single-rectangle receiver sets always use TransferMode::Multicast. If at least one group in a
-// family has an irregular receiver set, the host's TransferMode selects either multiple
-// hardware multicasts or chain links for the whole family. Hardware-only kernels call receive(round).
+// channel has an irregular receiver set, the host's TransferMode selects either multiple
+// hardware multicasts or chain links for the whole channel. Hardware-only kernels call receive(round).
 // Kernels which may use either transport call receive_and_forward(dst_l1, size_bytes, round): chain
 // receivers relay the payload, while hardware multicast receivers ignore the destination and size.
 //
@@ -53,8 +53,10 @@ namespace dataflow_kernel_lib {
 //   configurable_receiver.receive_and_forward(dst_l1, size_bytes, round);
 namespace detail {
 
+// Always false, but dependent on metadata so static_assert fails only when
+// the corresponding sender() or receiver() member is instantiated.
 template <mcast_wire::ArgumentMetadata>
-static constexpr bool dependent_false = false;
+static constexpr bool always_false_for_metadata = false;
 
 // These sentinels only make the optional pipe surface well-formed for an absent
 // tagged block. The inactive specialization always returns empty optionals, so
@@ -113,22 +115,22 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
     // `has_receivers` indicates remote fan-out. Do not use it to suppress sender
     // work: a present zero-fan-out sender still calls send() to perform a degenerate local copy. The
     // per-core role metadata reports which pipe faces this kernel instance may construct and its phase.
-    static constexpr uint32_t has_receivers = METADATA.family.has_remote_receivers;
-    static constexpr uint32_t ack_count = METADATA.family.ack_count;
-    static constexpr uint32_t flags = METADATA.family.flags;
-    static constexpr uint32_t rotating_span = METADATA.family.rotating_span;
+    static constexpr uint32_t has_receivers = METADATA.mcast.has_remote_receivers;
+    static constexpr uint32_t ack_count = METADATA.mcast.ack_count;
+    static constexpr uint32_t flags = METADATA.mcast.flags;
+    static constexpr uint32_t rotating_span = METADATA.mcast.rotating_span;
 
     // Pipe behaviour lifted off the flags word (host-computed): the caller never spells these.
     static constexpr TransferMode transfer_mode = mcast_wire::transfer_mode(flags);
     static_assert(
         transfer_mode == TransferMode::Multicast || transfer_mode == TransferMode::ChainUnicast,
-        "Invalid family multicast mode");
+        "Invalid multicast transfer mode");
     static constexpr bool pre_handshake = (flags & mcast_wire::PRE_HANDSHAKE) != 0u;
     static constexpr DataReadySignal signal =
         (flags & mcast_wire::COUNTER_SIGNAL) != 0u ? DataReadySignal::Counter : DataReadySignal::Flag;
     static constexpr bool rotating = rotating_span > 0;
 
-    // Sender coord pairs this family carries: 1 for a fixed sender, rotating_span otherwise.
+    // Sender coord pairs this channel carries: 1 for a fixed sender, rotating_span otherwise.
     static constexpr uint32_t num_senders = rotating ? rotating_span : 1u;
     static_assert(
         METADATA.coordinates.encoding == mcast_wire::SenderCoordinateEncoding::ExplicitPairs ||
@@ -136,15 +138,15 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
              METADATA.coordinates.y_ranges > 0),
         "Compressed sender coordinates require nonempty axes and ranges");
 
-    static constexpr SenderMcastMode sender_mcast_mode = METADATA.family.sender_mcast_mode;
+    static constexpr SenderMcastMode sender_mcast_mode = METADATA.mcast.sender_mcast_mode;
     static_assert(
         mcast_wire::concrete(sender_mcast_mode) || sender_mcast_mode == SenderMcastMode::Unknown,
         "Invalid sender multicast mode");
-    static constexpr uint32_t remote_count = METADATA.family.uniform_remote_count;
+    static constexpr uint32_t remote_count = METADATA.mcast.uniform_remote_count;
     static constexpr uint32_t loopback_count = remote_count + 1;
     static constexpr uint8_t sender_noc = (flags & mcast_wire::NOC1) ? 1 : 0;
 
-    static constexpr uint32_t rectangle_capacity = METADATA.family.rectangle_capacity;
+    static constexpr uint32_t rectangle_capacity = METADATA.mcast.rectangle_capacity;
     static_assert(
         transfer_mode == TransferMode::ChainUnicast
             ? rectangle_capacity == 0
@@ -248,11 +250,12 @@ struct McastArgsImpl<false, METADATA, Runtime, DataReadyBinding, ConsumerReadyBi
     bool should_send(uint32_t) const { return false; }
 
     void sender(const Noc&) const {
-        static_assert(dependent_false<METADATA>, "No multicast on this core; a sender pipe cannot be built");
+        static_assert(always_false_for_metadata<METADATA>, "No multicast on this core; a sender pipe cannot be built");
     }
 
     void receiver(const Noc&) const {
-        static_assert(dependent_false<METADATA>, "No multicast on this core; a receiver pipe cannot be built");
+        static_assert(
+            always_false_for_metadata<METADATA>, "No multicast on this core; a receiver pipe cannot be built");
     }
 
     std::optional<InactiveSenderPipe> optional_sender(const Noc&) const { return std::nullopt; }
@@ -304,7 +307,7 @@ struct McastArgs : detail::McastArgsImpl<
                            detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>()}>> {
     static_assert(
         mcast_wire::valid_compile_time_control(get_compile_time_arg_val(CT_BASE)),
-        "Unsupported multicast wire tag; rebuild host and kernels for the unified family format");
+        "Unsupported multicast wire tag; rebuild host and kernels for the current wire format");
     static constexpr uint32_t next_compile_time_args_offset() {
         return CT_BASE + mcast_wire::CompileTimeLayout(get_compile_time_arg_val(CT_BASE)).words;
     }

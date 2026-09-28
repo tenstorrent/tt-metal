@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_impl.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <set>
+#include <utility>
+#include <tt-metalium/device.hpp>
 
 #include <tt_stl/assert.hpp>
 
@@ -463,7 +466,7 @@ void McastImpl::prepare_arguments_() const {
         const auto& state = group.prepared_state_();
         // Compare every sender turn across all groups; first_ack/first_remote persist between groups.
         // Uniform counts become shared compile-time constants; differing counts use runtime arguments.
-        // The kernel uses the fanout constants only when the family has one rectangle per group.
+        // The kernel uses the fanout constants only when multicast has one rectangle per group.
         for (size_t phase = 0; phase < group.num_senders(); ++phase) {
             const auto ack = state.acks[phase];
             const auto fanout = group.fanouts_[phase];
@@ -512,7 +515,7 @@ void McastImpl::prepare_arguments_() const {
     }
     prepared_arch_ = device_.get().arch();
     prepared_device_grid_ = device_.get().compute_with_storage_grid_size();
-    generic_metadata_ = {.family = layout_};
+    generic_metadata_ = {.mcast = layout_};
     if (transfer_mode == TransferMode::Multicast) {
         const auto candidate = groups_.front().prepared_state_().coordinate_metadata;
         if (std::all_of(groups_.begin(), groups_.end(), [&](const Group& group) {
@@ -542,7 +545,7 @@ wire::ArgumentMetadata McastImpl::argument_metadata_(const CoreRangeSet* placeme
     if (!placement || placement->empty()) {
         return generic_metadata_;
     }
-    wire::ArgumentMetadata metadata{.family = layout_};
+    wire::ArgumentMetadata metadata{.mcast = layout_};
     metadata.kernel.capabilities = 0;
     std::optional<uint32_t> first_roles;
     bool uniform_roles = true;

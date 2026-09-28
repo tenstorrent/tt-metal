@@ -319,11 +319,11 @@ void expect_helper_channel(
             continue;
         }
         EXPECT_TRUE(wire::valid_compile_time_control(control));
-        EXPECT_EQ(control & 15u, wire::FAMILY);
+        EXPECT_EQ(control & 15u, wire::WIRE_VERSION);
 
         const std::vector<uint32_t> words(ct.begin() + ct_base->second, ct.end());
         const auto metadata = wire::decode_compile_time_metadata(words, false);
-        EXPECT_NE(metadata.family.flags & wire::PRE_HANDSHAKE, 0u);
+        EXPECT_NE(metadata.mcast.flags & wire::PRE_HANDSHAKE, 0u);
         const bool can_send = (metadata.kernel.capabilities & wire::CAN_SEND) != 0;
         const bool can_receive = (metadata.kernel.capabilities & wire::CAN_RECEIVE) != 0;
         if (channel->second.receiver_only) {
@@ -333,7 +333,7 @@ void expect_helper_channel(
             EXPECT_TRUE(can_send);
         }
         const bool rotating = prefix == "in0" && c.in0_shard_grid.has_value();
-        EXPECT_EQ(metadata.family.rotating_span, rotating ? c.in0_rotating_span : 0u);
+        EXPECT_EQ(metadata.mcast.rotating_span, rotating ? c.in0_rotating_span : 0u);
 
         // Helper-owned semaphores, bound by the helper's accessor names.
         std::set<std::string> accessors;

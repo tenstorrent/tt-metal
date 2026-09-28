@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -14,15 +13,18 @@
 #include <variant>
 #include <vector>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+
+namespace tt::tt_metal {
+class IDevice;
+class Program;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental {
 struct ProgramSpec;

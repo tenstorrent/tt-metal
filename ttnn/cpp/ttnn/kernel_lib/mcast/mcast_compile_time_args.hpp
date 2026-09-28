@@ -27,28 +27,28 @@ constexpr Ack ack(uint32_t control) { return Ack((control >> ACK_SHIFT) & ACK_MA
 }  // namespace ct_control
 
 constexpr bool valid_compile_time_control(uint32_t control) {
-    return control == ABSENT || (control & ct_control::VERSION_MASK) == FAMILY;
+    return control == ABSENT || (control & ct_control::VERSION_MASK) == WIRE_VERSION;
 }
 
 // Canonicalize metadata that cannot affect this kernel's RT layout or pipe.
 // In particular, do not remove dynamic ACK words from RT when compressing CT.
 constexpr ArgumentMetadata compact_compile_time_metadata(ArgumentMetadata metadata) {
-    auto& family = metadata.family;
-    const bool chain = transfer_mode(family.flags) == TransferMode::ChainUnicast;
+    auto& mcast = metadata.mcast;
+    const bool chain = transfer_mode(mcast.flags) == TransferMode::ChainUnicast;
     const bool sends = (metadata.kernel.capabilities & CAN_SEND) != 0;
     const bool receives = (metadata.kernel.capabilities & CAN_RECEIVE) != 0;
-    if (chain || !sends || !(family.flags & PRE_HANDSHAKE)) {
-        family.ack_count = 0;
+    if (chain || !sends || !(mcast.flags & PRE_HANDSHAKE)) {
+        mcast.ack_count = 0;
     }
-    if (chain || !sends || family.rectangle_capacity != 1 || !family.remote_count_known) {
-        family.uniform_remote_count = 0;
-        family.remote_count_known = false;
+    if (chain || !sends || mcast.rectangle_capacity != 1 || !mcast.remote_count_known) {
+        mcast.uniform_remote_count = 0;
+        mcast.remote_count_known = false;
     }
     if (chain || !receives) {
         metadata.coordinates = {};
     }
     if (metadata.kernel.capabilities == 0) {
-        family.rotating_span = 0;
+        mcast.rotating_span = 0;
     }
     return metadata;
 }
@@ -56,32 +56,32 @@ constexpr ArgumentMetadata compact_compile_time_metadata(ArgumentMetadata metada
 constexpr uint32_t compile_time_control(ArgumentMetadata input) {
     using namespace ct_control;
     const auto metadata = compact_compile_time_metadata(input);
-    const auto& family = metadata.family;
+    const auto& mcast = metadata.mcast;
     const bool sends = (metadata.kernel.capabilities & CAN_SEND) != 0;
     const bool needs_ack =
-        sends && (family.flags & PRE_HANDSHAKE) && transfer_mode(family.flags) == TransferMode::Multicast;
-    const Ack ack_encoding = !needs_ack                              ? Ack::None
-                             : family.ack_count == ACK_EQUALS_FANOUT ? Ack::Runtime
-                             : family.remote_count_known && family.ack_count == family.uniform_remote_count
+        sends && (mcast.flags & PRE_HANDSHAKE) && transfer_mode(mcast.flags) == TransferMode::Multicast;
+    const Ack ack_encoding = !needs_ack                             ? Ack::None
+                             : mcast.ack_count == ACK_EQUALS_FANOUT ? Ack::Runtime
+                             : mcast.remote_count_known && mcast.ack_count == mcast.uniform_remote_count
                                  ? Ack::RemoteCount
                                  : Ack::Constant;
-    return FAMILY | (family.flags << FLAGS_SHIFT) | (family.has_remote_receivers ? HAS_RECEIVERS : 0u) |
-           (uint32_t(family.sender_mcast_mode) << MODE_SHIFT) | (family.rectangle_capacity << CAPACITY_SHIFT) |
+    return WIRE_VERSION | (mcast.flags << FLAGS_SHIFT) | (mcast.has_remote_receivers ? HAS_RECEIVERS : 0u) |
+           (uint32_t(mcast.sender_mcast_mode) << MODE_SHIFT) | (mcast.rectangle_capacity << CAPACITY_SHIFT) |
            (metadata.kernel.roles == DYNAMIC_ROLES ? DYNAMIC : metadata.kernel.roles << ROLES_SHIFT) |
            (metadata.kernel.capabilities << CAPABILITIES_SHIFT) |
            (uint32_t(metadata.coordinates.encoding) << COORD_ENCODING_SHIFT) |
-           (family.remote_count_known ? REMOTE_KNOWN : 0u) | (family.rotating_span ? ROTATING : 0u) |
+           (mcast.remote_count_known ? REMOTE_KNOWN : 0u) | (mcast.rotating_span ? ROTATING : 0u) |
            (uint32_t(ack_encoding) << ACK_SHIFT);
 }
 
 constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
     using namespace ct_control;
     ArgumentMetadata metadata;
-    metadata.family.flags = (control >> FLAGS_SHIFT) & FLAGS_MASK;
-    metadata.family.has_remote_receivers = (control & HAS_RECEIVERS) != 0;
-    metadata.family.sender_mcast_mode = SenderMcastMode((control >> MODE_SHIFT) & MODE_MASK);
-    metadata.family.rectangle_capacity = (control >> CAPACITY_SHIFT) & CAPACITY_MASK;
-    metadata.family.remote_count_known = (control & REMOTE_KNOWN) != 0;
+    metadata.mcast.flags = (control >> FLAGS_SHIFT) & FLAGS_MASK;
+    metadata.mcast.has_remote_receivers = (control & HAS_RECEIVERS) != 0;
+    metadata.mcast.sender_mcast_mode = SenderMcastMode((control >> MODE_SHIFT) & MODE_MASK);
+    metadata.mcast.rectangle_capacity = (control >> CAPACITY_SHIFT) & CAPACITY_MASK;
+    metadata.mcast.remote_count_known = (control & REMOTE_KNOWN) != 0;
     metadata.kernel.roles = (control & DYNAMIC) ? DYNAMIC_ROLES : (control >> ROLES_SHIFT) & ROLES_MASK;
     metadata.kernel.capabilities = (control >> CAPABILITIES_SHIFT) & CAPABILITIES_MASK;
     metadata.coordinates.encoding = SenderCoordinateEncoding((control >> COORD_ENCODING_SHIFT) & COORD_ENCODING_MASK);
@@ -101,14 +101,14 @@ struct CompileTimeLayout {
         const auto metadata = compile_time_control_metadata(control);
         if (semaphore_ids) {
             data_ready = words++;
-            if (metadata.family.flags & PRE_HANDSHAKE) {
+            if (metadata.mcast.flags & PRE_HANDSHAKE) {
                 consumer_ready = words++;
             }
-            if (transfer_mode(metadata.family.flags) == TransferMode::ChainUnicast) {
+            if (transfer_mode(metadata.mcast.flags) == TransferMode::ChainUnicast) {
                 signal_source = words++;
             }
         }
-        if (metadata.family.remote_count_known) {
+        if (metadata.mcast.remote_count_known) {
             remote_count = words++;
         }
         if (ct_control::ack(control) == ct_control::Ack::Constant) {
@@ -135,13 +135,13 @@ constexpr void encode_compile_time_metadata(Words& words, ArgumentMetadata input
     const CompileTimeLayout layout(control, semaphore_ids);
     words[0] = control;
     if (layout.remote_count != OMITTED) {
-        words[layout.remote_count] = metadata.family.uniform_remote_count;
+        words[layout.remote_count] = metadata.mcast.uniform_remote_count;
     }
     if (layout.ack_count != OMITTED) {
-        words[layout.ack_count] = metadata.family.ack_count;
+        words[layout.ack_count] = metadata.mcast.ack_count;
     }
     if (layout.rotating_span != OMITTED) {
-        words[layout.rotating_span] = metadata.family.rotating_span;
+        words[layout.rotating_span] = metadata.mcast.rotating_span;
     }
     if (layout.coordinates != OMITTED) {
         words[layout.coordinates] = metadata.coordinates.columns;
@@ -160,15 +160,15 @@ constexpr ArgumentMetadata decode_compile_time_metadata(const Words& words, bool
     auto metadata = compile_time_control_metadata(control);
     const CompileTimeLayout layout(control, semaphore_ids);
     if (layout.remote_count != OMITTED) {
-        metadata.family.uniform_remote_count = words[layout.remote_count];
+        metadata.mcast.uniform_remote_count = words[layout.remote_count];
     }
     const auto ack = ct_control::ack(control);
-    metadata.family.ack_count = ack == ct_control::Ack::Constant      ? words[layout.ack_count]
-                                : ack == ct_control::Ack::RemoteCount ? metadata.family.uniform_remote_count
-                                : ack == ct_control::Ack::Runtime     ? ACK_EQUALS_FANOUT
-                                                                      : 0u;
+    metadata.mcast.ack_count = ack == ct_control::Ack::Constant      ? words[layout.ack_count]
+                               : ack == ct_control::Ack::RemoteCount ? metadata.mcast.uniform_remote_count
+                               : ack == ct_control::Ack::Runtime     ? ACK_EQUALS_FANOUT
+                                                                     : 0u;
     if (layout.rotating_span != OMITTED) {
-        metadata.family.rotating_span = words[layout.rotating_span];
+        metadata.mcast.rotating_span = words[layout.rotating_span];
     }
     if (layout.coordinates != OMITTED) {
         metadata.coordinates.columns = words[layout.coordinates];
