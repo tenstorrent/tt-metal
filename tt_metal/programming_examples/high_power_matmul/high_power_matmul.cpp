@@ -78,38 +78,28 @@ static std::string format_time(std::chrono::system_clock::time_point tp) {
     return std::string(buffer);
 }
 
+// Lowest grid width swept. Below this the core count is too small for the split to be
+// meaningful, and the first interval's idle baseline is one-sided anyway.
+static constexpr uint32_t kMinGridX = 3;
+
+// The sweep walks the near-square band of the core array: for each width x, it runs the three
+// heights x-1, x and x+1, clipped to the device. That gives a dense ascending core-count series
+// while also pairing grids of equal core count but different aspect ratio (3x4 vs 4x3, 6x7 vs
+// 7x6, 8x7 vs 7x8), which is what separates a core-count effect from a NoC-shape one.
+//
+// Generated rather than listed so the band continues to whatever the device provides instead of
+// stopping where the smaller generation did. On a Wormhole n300 (8x7) this reproduces the
+// original fifteen-grid list exactly; on Blackhole's 11x10 it carries the same three-per-width
+// pattern up to the full array, where a hard-coded list previously jumped along the x,x-1
+// diagonal alone (7x7 -> 8x7 -> 9x8 -> 10x9 -> 11x10) and skipped every grid beside it.
 static std::vector<GridCandidate> build_test_grids(uint32_t max_x, uint32_t max_y) {
-    const std::vector<GridCandidate> requested = {
-        {3, 2},  // 6
-        {3, 3},  // 9
-        {3, 4},  // 12
-        {4, 3},  // 12
-        {4, 4},  // 16
-        {4, 5},  // 20
-        {5, 4},  // 25
-        {5, 5},  // 25
-        {5, 6},  // 30
-        {6, 5},  // 36
-        {6, 6},  // 36
-        {6, 7},  // 42
-        {7, 6},  // 42
-        {7, 7},  // 49
-        // Beyond a Wormhole-sized grid. Without these the sweep jumps straight from 7x7 (49
-        // cores) to the appended device maximum, which on Blackhole is 11x10 (110 cores) -- a
-        // gap that hides where power scaling starts to roll off. Each is filtered out below on
-        // devices too small to host it, so Wormhole (max 8x7) still produces exactly the same
-        // grid list as before: 8x7 is already its maximum, and 9x8 / 10x9 are dropped.
-        {8, 7},   // 56
-        {9, 8},   // 72
-        {10, 9},  // 90
-    };
-
     std::vector<GridCandidate> result;
-    result.reserve(requested.size() + 1);
 
-    for (const auto& g : requested) {
-        if (g.x <= max_x && g.y <= max_y) {
-            result.push_back(g);
+    for (uint32_t x = kMinGridX; x <= max_x; ++x) {
+        for (uint32_t y = x - 1; y <= x + 1; ++y) {
+            if (y >= 2 && y <= max_y) {
+                result.push_back({x, y});
+            }
         }
     }
 
