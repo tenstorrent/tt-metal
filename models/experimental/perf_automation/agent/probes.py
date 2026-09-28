@@ -574,11 +574,12 @@ PROFILING_ENV = {
 }
 
 
-def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path) -> list[str]:
+def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path, plugins=()) -> list[str]:
     """The raw profile_this command (C++ post-processing default) + -o.
 
     TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -r -p -o <out> -m pytest ... -sv
-    Run directly (never via profile_this.py: it swallows the exit code).
+    Run directly (never via profile_this.py: it swallows the exit code). `plugins` are pytest
+    plugin modules loaded into the profiled run (`-p <module>`).
     """
     cmd = [
         sys.executable,
@@ -593,8 +594,10 @@ def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path) -
         "pytest",
         "-o",
         "timeout=0",
-        perf_test,
     ]
+    for plugin in plugins:
+        cmd += ["-p", plugin]
+    cmd += [perf_test]
     if case:
         cmd += ["-k", case]
     cmd += ["-sv"]
@@ -1741,6 +1744,18 @@ def preflight_collect(
     return n
 
 
+def profiler_drain_plugin(tt_metal_root) -> str | None:
+    """The dotted name the profiled pytest imports agent/profiler_drain by, from where this tool sits
+    in the tree it profiles; None when the tool lives outside it (the run then goes without)."""
+    from . import profiler_drain
+
+    try:
+        rel = Path(profiler_drain.__file__).resolve().relative_to(Path(tt_metal_root).resolve())
+    except ValueError:
+        return None
+    return ".".join(rel.with_suffix("").parts)
+
+
 def make_run_profiled(
     tt_metal_root: str | os.PathLike[str],
     perf_test: str,
@@ -1820,7 +1835,10 @@ def make_run_profiled(
         except Exception as exc:  # noqa: BLE001 -- never let the gate stop the run
             _warn_thermal_inert("make_run_profiled", exc)
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
-        cmd = build_tracy_command(node_id, None, out_dir)
+        # Drain the profiler from the process's first op, not only inside the measured forward: see
+        # profiler_drain for the Galaxy run whose buffers were all full before the forward began.
+        _drain = profiler_drain_plugin(root)
+        cmd = build_tracy_command(node_id, None, out_dir, plugins=(_drain,) if _drain else ())
         support_count = int(env.get(_SUPPORT_COUNT_ENV) or 0)
         t_start = time.monotonic()
         partial_reason = None

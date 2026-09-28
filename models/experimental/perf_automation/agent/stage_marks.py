@@ -35,12 +35,11 @@ from __future__ import annotations
 # The seam names live in ONE module -- see stage_seams. A RELATIVE import resolves under both
 # names this package is imported by, so neither spelling has to be guarded.
 from . import stage_seams as _seams
+from .profiler_drain import ProfilerDrain, is_device
 
 import ast
-import os
 import re
 import sys
-import types
 
 _UNKNOWN = object()
 
@@ -78,71 +77,6 @@ def no_marks(why: str) -> None:
         file=sys.stderr,
         flush=True,
     )
-
-
-class _ProfilerDrain:
-    """Drain the device profiler while the marked pass runs, when a tracy run is profiling.
-
-    The pass runs every stage BEFORE the test's own op wrapper is installed, so nothing read the
-    profiler during it: WH Galaxy, 2026-09-28, the first attempt on a freshly reset board dropped
-    markers at all 11,520 sites (32 chips x 72 cores x 5 RISCs), each once, in the single read after
-    stage:vae_decode:end.
-    Same cadence as the test's wrapper (the env the profiling run carries), over every FastOperation
-    ttnn exposes, found by type the way the wrapper finds them; plus a read after every stage."""
-
-    def __init__(self, ttnn, device):
-        env = _profiling_env()
-        on = bool(env) and all(os.environ.get(k) == v for k, v in env.items())
-        self._ttnn, self._device, self._orig = ttnn, device, []
-        self._on = on and device is not None and callable(getattr(ttnn, "ReadDeviceProfiler", None))
-        try:
-            from .probes import PERF_FLUSH_EVERY_ENV
-
-            self._every = max(0, int(os.environ.get(PERF_FLUSH_EVERY_ENV) or 0))
-        except Exception:  # noqa: BLE001
-            self._every = 0
-
-    def read(self):
-        if self._on:
-            try:
-                self._ttnn.ReadDeviceProfiler(self._device)
-            except Exception:  # noqa: BLE001 -- e.g. inside a capture: the next read catches up
-                pass
-
-    def __enter__(self):
-        if not (self._on and self._every):
-            return self
-        count = [0]
-
-        def _draining(fn):
-            def inner(*a, **k):
-                r = fn(*a, **k)
-                count[0] += 1
-                if count[0] % self._every == 0:
-                    self.read()
-                return r
-
-            return inner
-
-        mods = [self._ttnn] + [
-            v
-            for v in vars(self._ttnn).values()
-            if isinstance(v, types.ModuleType) and v.__name__.startswith(self._ttnn.__name__ + ".")
-        ]
-        for mod in mods:
-            for n in dir(mod):
-                op = getattr(mod, n, None)
-                if type(op).__name__ == "FastOperation":
-                    self._orig.append((mod, n, op))
-                    setattr(mod, n, _draining(op))
-        return self
-
-    def __exit__(self, *exc):
-        for mod, n, op in reversed(self._orig):
-            setattr(mod, n, op)
-        self._orig = []
-        self.read()
-        return False
 
 
 def mark_stages(adapter, device) -> int:
@@ -183,7 +117,9 @@ def mark_stages(adapter, device) -> int:
         no_marks("the pipeline declares no stages after setup")
         return 0
     n = 0
-    with _ProfilerDrain(ttnn, device) as drain:
+    # The session-wide drain (profiler_drain, loaded into the profiled pytest) already reads every
+    # few ops; this adds a read after each stage, and wraps ops itself only when nothing else does.
+    with ProfilerDrain(ttnn, device) as drain:
         for st in stages:
             name = str(getattr(st, "name", "") or "").strip()
             step = getattr(st, "step", None)
@@ -432,7 +368,7 @@ def find_device_in_scope(scope: dict, pipe=None):
     without its name: a mesh answers get_num_devices(). The pipeline's own `device` attribute, when it
     keeps one, is the fallback."""
     for k, v in (scope or {}).items():
-        if not k.startswith("__") and callable(getattr(v, "get_num_devices", None)):
+        if not k.startswith("__") and is_device(v):
             return v
     return getattr(pipe, "device", None) if pipe is not None else None
 
