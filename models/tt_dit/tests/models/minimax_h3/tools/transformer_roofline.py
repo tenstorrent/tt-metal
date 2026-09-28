@@ -71,10 +71,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from minimax_h3_ops import (  # noqa: E402
     AGMM_OPS,
     M_15S_768P_16_9,
+    M_15S_768P_16_9_BY_SP,
     MEASURED_US_WH_15S,
     OPS_BY_NAME,
     SWEEP_USE_CASE_TO_OP,
     OpSpec,
+    ops_for,
     select_ops,
 )
 
@@ -934,6 +936,18 @@ CLASS_COLOR = {
     "other": "#8a8983",
 }
 CLASS_LABEL = {"compute": "compute-bound", "dram": "DRAM-bound", "fabric": "fabric-bound", "other": "measured only"}
+SURFACE = "#ffffff"  # the figures' background; tints are blended toward it explicitly rather than via alpha
+
+
+def tint(color: str, amount: float = 0.45, surface: str = SURFACE) -> str:
+    """`color` moved `amount` of the way toward `surface`: the "measured" bars are this tint of their class colour,
+    so the legend can show the same swatch, and the result does not depend on what the figure is drawn over."""
+    c = [int(color[k : k + 2], 16) for k in (1, 3, 5)]
+    b = [int(surface[k : k + 2], 16) for k in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * amount):02x}" for x, y in zip(c, b))
+
+
+MEASURED_TINT = {k: tint(v) for k, v in CLASS_COLOR.items()}
 # Op codes whose bound is one pass over their DRAM-resident bytes (`load_block_profile`), and their figure labels.
 DRAM_BOUND_NAMES = {
     "EmbeddingsDeviceOperation": "Embeddings (adaLN tables)",
@@ -1070,7 +1084,9 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
         )
         if code == "AllGatherMinimalMatmulAsyncOp":
             m_rows, k_g, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
-            op = {s.N: s for s in AGMM_OPS}.get(n, Op.adhoc(f"agmm N{n}", k_g, n, "?"))
+            # Name the AGMM by its per-device N at the ring size the profile ran (TP=8 halves every N of the TP=4
+            # registry), so the block figures read to_qkv / to_out / ff1 at either TP instead of "agmm N2688".
+            op = {s.N: s for s in ops_for(R, ops=AGMM_OPS)}.get(n, Op.adhoc(f"agmm N{n}", k_g, n, "?"))
             rl = roofline(m_rows, op, arch, fidelity, num_links=L)
             name, klass, tc, td, tf = f"AGMM {op.name}", rl.limiter, rl.t_compute, rl.t_dram, rl.t_fabric
             formula = f"AGMM roofline: 2·{m_rows}·{k_g}·{n} FLOP on {arch.ring_matmul_cores} cores; gather (R−1)·M·K_local·2B/(2·{L})"
@@ -1294,7 +1310,7 @@ def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, sou
     ys = list(range(len(rows)))
     for y, o in zip(ys, rows):
         c = CLASS_COLOR[o.klass]
-        ax.barh(y + 0.18, o.measured * 1e3, 0.34, color=c, alpha=0.55, zorder=3)
+        ax.barh(y + 0.18, o.measured * 1e3, 0.34, color=MEASURED_TINT[o.klass], zorder=3)
         note = f"{o.measured * 1e3:,.2f} ms measured"
         if o.ideal is not None:
             ax.barh(y - 0.18, o.ideal * 1e3, 0.34, color=c, zorder=3)
@@ -1308,7 +1324,7 @@ def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, sou
     handles = [
         Patch(color=CLASS_COLOR[k], label=CLASS_LABEL[k] + " (ideal, solid)") for k in ("compute", "dram", "fabric")
     ]
-    handles.append(Patch(color=INK_MUTED, alpha=0.55, label="measured (faded)"))
+    handles.append(Patch(color=MEASURED_TINT["compute"], label="measured (tint of its class colour)"))
     ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8)
     fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
     fig.text(0.01, 0.93, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
@@ -1367,7 +1383,7 @@ def fig_block_other(other: BlockOp, block_total: float, arch: Arch, fidelity: st
     ys = list(range(n))
     for y, o in zip(ys, rows):
         c = CLASS_COLOR[o.klass]
-        ax_bars.barh(y + 0.18, o.measured * 1e3, 0.34, color=c, alpha=0.55, zorder=3)
+        ax_bars.barh(y + 0.18, o.measured * 1e3, 0.34, color=MEASURED_TINT[o.klass], zorder=3)
         note = f"{o.measured * 1e3:,.3f} ms  ·  {100 * o.measured / other.measured:.0f}% of group, {100 * o.measured / block_total:.2f}% of block"
         if o.ideal is not None:
             ax_bars.barh(y - 0.18, o.ideal * 1e3, 0.34, color=c, zorder=3)
@@ -1387,8 +1403,8 @@ def fig_block_other(other: BlockOp, block_total: float, arch: Arch, fidelity: st
         if k in present
     ]
     if "other" in present:
-        handles.append(Patch(color=CLASS_COLOR["other"], alpha=0.55, label="no bound model (measured only)"))
-    handles.append(Patch(color=INK_MUTED, alpha=0.55, label="measured (faded)"))
+        handles.append(Patch(color=MEASURED_TINT["other"], label="no bound model (measured only)"))
+    handles.append(Patch(color=MEASURED_TINT["compute"], label="measured (tint of its class colour)"))
     handles.append(Line2D([], [], color=INK, ls=(0, (3, 2)), label="sum of ideals"))
     fig.legend(
         handles=handles,
@@ -1442,7 +1458,17 @@ def main() -> None:
     )
     p.add_argument("--links", type=int, default=None, help="override --arch's links per direction")
     p.add_argument(
-        "--M", type=int, default=M_15S_768P_16_9, help="rows per device (default 13664 = 15 s / 768P / 16:9 at SP=8)"
+        "--M",
+        type=int,
+        default=None,
+        help="rows per device (default: 13664 = 15 s / 768P / 16:9 at SP=8 for --tp 4, 27296 at SP=4 for --tp 8)",
+    )
+    p.add_argument(
+        "--tp",
+        type=int,
+        default=4,
+        choices=(4, 8),
+        help="TP factor (ring size) the block runs at; 8 rescales every op's per-device K_local / N from the TP=4 registry",
     )
     p.add_argument(
         "--ops",
@@ -1491,7 +1517,16 @@ def main() -> None:
         dram_bw = WH_DRAM_BW[args.dram]
     else:
         dram_bw = float(args.dram) * 1e9
-    main_arch = replace(base, dram_bw=dram_bw, num_links=args.links or base.num_links)
+    if args.M is None:
+        args.M = M_15S_768P_16_9_BY_SP[32 // args.tp]
+    main_arch = replace(base, dram_bw=dram_bw, num_links=args.links or base.num_links, ring_size=args.tp)
+    if args.tp != base.ring_size:
+        main_arch = replace(
+            main_arch,
+            name=main_arch.name.replace(
+                f"TP={base.ring_size} / SP={32 // base.ring_size}", f"TP={args.tp} / SP={32 // args.tp}"
+            ),
+        )
     others = [a for key, a in ARCHES.items() if key != args.arch]
     if args.no_bh:
         others = [a for a in others if a is not BH]
@@ -1501,7 +1536,7 @@ def main() -> None:
     if args.profile_csv is None and args.arch == "wh":
         args.profile_csv = DEFAULT_PROFILE_CSV
 
-    ops = select_ops(args.ops + (",ff2" if args.include_ff2 else ""))
+    ops = ops_for(args.tp, args.M, select_ops(args.ops + (",ff2" if args.include_ff2 else "")))
     measured: dict[str, float] = {}
     if not args.no_measured:
         # The registry's shipped-blocking numbers are the Wormhole 2026-09-17 baseline; other arches only have
@@ -1562,10 +1597,11 @@ def main() -> None:
         matplotlib.use("Agg")
         tag = f"M{args.M}"
         op_names = ", ".join(op.name for op in ops)
+        tp, sp = args.tp, 32 // args.tp
         shape_title = (
-            f"MiniMax-H3 transformer block, 15 s / 768P / 16:9 (M = {args.M} rows per device, TP = 4, SP = 8)"
-            if args.M == M_15S_768P_16_9
-            else f"MiniMax-H3 transformer block, M = {args.M} rows per device (TP = 4)"
+            f"MiniMax-H3 transformer block, 15 s / 768P / 16:9 (M = {args.M} rows per device, TP = {tp}, SP = {sp})"
+            if args.M == M_15S_768P_16_9_BY_SP[sp]
+            else f"MiniMax-H3 transformer block, M = {args.M} rows per device (TP = {tp})"
         )
         if args.no_measured or not measured:
             measured_note = "no measurement"

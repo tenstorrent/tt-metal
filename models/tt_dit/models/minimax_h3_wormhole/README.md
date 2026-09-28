@@ -33,6 +33,9 @@ Drop `MINIMAX_H3_DIT_FSDP=1` for the unsharded baseline.
 ### Headline
 
 DiT FSDP is the fix for the memory limits. Without it only 5 s fits; with it 10 s and 15 s run.
+(Measured in the `precomputed_adaln` era. Since `816841ddc93` the adaLN projections are resident and
+the unsharded TP=4 DiT no longer loads at all on 12 GB; see "DiT FSDP off" in Part 4 for the 2026-09-24
+re-measurement and the `adaln_tables` mode that makes TP=8 / SP=4 fit without FSDP.)
 
 | | DiT alloc/bank | free/bank | largest contig |
 |---|---|---|---|
@@ -746,6 +749,216 @@ weights over a 32-ring), so it was not pursued further. Evidence in `1x32_tp0_sp
 Two harness lessons, both cost time: run each configuration in its own pytest process behind a
 shell `timeout` (the hang wedges the process, not just the test), and do not gate a queued run on
 `pgrep -f <driver name>` -- the waiting shell's own command line matches, and it waits forever.
+
+### DiT FSDP off — what 15 s / 16:9 / 768P needs, and the `adaln_tables` mode (2026-09-24)
+
+Question: can 15 s run with `MINIMAX_H3_DIT_FSDP=0`? Measured with a per-op DRAM high-water probe (samples
+`ttnn.get_memory_view(mesh, DRAM)` after every op via `ttnn.register_post_operation_hook`, which needs
+`TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'` or it silently records nothing; with a
+block-table snapshot at denoise start and peak). Probe, drivers, logs and frame dumps:
+`~/h3_wormhole_results/fsdp_off_feasibility_2026-09-24/` on the run host. 3 steps = 2 forwards, enough because
+every persistent buffer is allocated in the first forward. Bank = 1021.2 MiB x 12 per chip.
+
+**Why the Part 1 "FSDP off: 799.5 MiB" row is stale.** `816841ddc93` (#57097) replaced the precomputed
+adaLN tables with resident adaLN projections: each block keeps its 2688 x 96768 bf16 `adaln_proj` weight
+(520 MB, TP-fractured, 130 MB/device at TP=4) on device and re-projects the three per-step slot levels every
+step. FSDP shards those too, so the FSDP-on numbers still hold; unsharded they are +541 MiB/bank at TP=4 and
+the DiT (796 matmul + 541 adaLN) no longer loads at any duration.
+
+| run | config | DiT FSDP | adaLN | resident at denoise start | denoise peak | outcome |
+|---|---|---|---|---|---|---|
+| A/C | TP4/SP8 (preset) | on | resident | 254.0 (DiT 180.6: matmul shards 99.6 + adaLN shards 67.7; audio decoder 42) | 511.9 (+257.8) | pass, 12014 ms/step |
+| B/E | TP8/SP4 | on | resident | 232.9 (DiT 173.6) | 523.2 (+290.2) | pass, 12256 ms/step |
+| D | TP8/SP4 | **off** | resident | 726.1 (DiT 666.8 = matmul 398 + **adaLN proj 258**) | OOM at 957 | block 0 of forward 0, 17 MB largest free block |
+| **F** | **TP8/SP4** | **off** | **tables** | **464.5 (DiT 405.3)** | **727.6 (+263.1)** | **pass, 12130 ms/step, output bit-identical to E** |
+| G | TP4/SP8 | off | tables | 879.0 (DiT 805.4) | OOM at 1000 | first K/V ring-gather buffer (392 MB) |
+
+Per-bank buffers that matter, from the block tables: the K/V ring-gather ping-pong pool (K and V share one
+2-buffer pool in `CCLManager.get_ag_ping_pong_buffer`) is 2 x 31.1 MiB at TP=4 (14 heads x 109312 x 128 bf16)
+and 2 x 15.6 at TP=8; the audio decoder (fp32, replicated) stays resident through the denoise at 42 MiB; at
+TP8/SP4 five full-hidden `[27296, 5376]` activations (23.3 MiB each) are live at the peak.
+
+**`adaln_tables`** (`MiniMaxH3Pipeline(adaln_tables=...)`, `MINIMAX_H3_ADALN_TABLES=0/1`; Wormhole only, the
+default whenever the DiT is unsharded there, refused on Blackhole): the blocks' `adaln_proj` weights stay in
+host memory (`ColParallelLinear(on_host=True)`). Once per request, `prepare_request_modulation` computes every
+step's `temb` at the per-step row count `forward` uses (the time embedder's fp32 matmul is not row-count
+invariant), concatenates them, and for each block stages the weight onto the device
+(`Parameter.staged_on_device`), projects the whole schedule in one matmul and keeps only the ROW_MAJOR
+`[steps * slots * 3, 6 * hidden_local]` table (3.6 MB/device/block at TP=8, 50 blocks = 15 MiB/bank). Each
+step's forward slices its 9 rows and builds the six interleaved-copy gather tables exactly as the resident
+path does, so the gathers, the `1 +` fold and everything downstream are unchanged -- run F's frames and audio
+are **exactly equal** to run E's (`compare_frames.py`: 188.9 M frame values, 0 differ). Cost: 4.0 s of
+preamble per request at TP8 (first request, includes program compiles; dominated by 50 x 65 MB weight
+uploads), against 600 s of denoise at 15 s. It saves the 0.58 ms/block adaLN matmul per step but the
+`ttnn.slice` replaces it, so per-step cost is a wash. Untraced only (the block slices a per-step table), which
+the Wormhole preset already is. The cache is shared with `resident_adaln` when FSDP is off (same tensors,
+different residency) and is `adaln_tables_fsdp` when FSDP is on.
+
+**Answer.** TP4/SP8 cannot run 15 s without FSDP on 12 GB even with the adaLN weights off device:
+796 MiB/bank of matmul weights + 258 of activations + 42 audio decoder is over the bank before fragmentation.
+TP8/SP4 with `adaln_tables` runs it with ~294 MiB/bank of headroom at the peak, bit-identical to the FSDP-on
+output, at 12130 ms/step (FSDP-on TP8/SP4 12256, the shipped TP4/SP8+FSDP 12014; one steady step each, so
+within noise of each other). Untuned TP=8 blockings (see the TP/SP sweep above) are the remaining perf lever
+on that configuration.
+
+**End to end, 50 steps (`test_parallel_sweep_minimax_h3.py`, H3_SWEEP_STEPS=50, seed 0, fox prompt, same host,
+2026-09-24).** Both configurations ran the full generation; the harness now logs `dit_fsdp` / `adaln_tables` /
+`coresident` and records CLIP and the mp4/wav (`~/h3_wormhole_results/fsdp_off_feasibility_2026-09-24/e2e_50steps/`).
+
+| config | DiT FSDP | adaLN | coresident | ms/fwd (49) | denoise | total | realtime | CLIP mean / min |
+|---|---|---|---|---|---|---|---|---|
+| shipped TP4/SP8 | on | resident | False | 12117 | 593.7 s | 635.5 s | 42.1x | 37.65 / 35.99 |
+| TP8/SP4 | **off** | tables | False | 12239 | 599.7 s | 640.1 s | 42.4x | 37.25 / 35.66 |
+
+Video PCC between the two 0.914, audio 0.973 -- the same regime as the TP/SP sweep's TP8-vs-TP4 comparison
+(0.907 / 0.972), i.e. the bf16 reduction order of TP=8 versus TP=4 after 49 steps, not the tables: at equal
+TP the tables path is bit-identical (run F vs E above). Both clear the 33.0 CLIP bar. The unsharded run is
++1.0% per forward against the shipped preset, and its adaLN table build was 2.6 s of the 3.6 s preamble.
+
+One hang on the way: the first 50-step attempt built the request `temb` with a device `ttnn.concat` of 49
+row-major `[1, 1, 3, 2688]` fp32 tensors and hung in the concat's reader/writer kernels on every core
+(triage `generated/tt-triage/triage.csv`, log `fsdpoff_tp8sp4_tables.HANG_concat.log`); three inputs (the
+3-step probe) had worked. The concat is now done on host, where fp32 round-trips losslessly. After the
+dispatch-timeout reset the fabric mapper refused the 4x8 once ("Logical mesh 0 failed to map"); a second
+`tt-smi -r` cleared it.
+
+**Resident adaLN with FSDP off (2026-09-25).** Run D above was ~60 MiB/bank short with the projections
+resident. Three residency fixes, all under `coresident=False` (so Blackhole is untouched), close that gap
+at TP8/SP4; none changes the output (frames and audio exactly equal to the FSDP-on run at 3 steps):
+
+1. **Audio decoder evicted for the denoise** (42 MiB/bank of replicated fp32). It is only read after the video
+   VAE, so it is now a coresident exclusion of the DiT and `_prepare_audio_decoder` reloads it from the cache
+   (~1 s) at the audio stage. This exposed a stale first-use cache in `Snake` / `SnakeBeta`: without
+   channel-TP their per-channel shard *is* the parameter tensor, so after an eviction the op was handed a
+   freed buffer ("Input Tensor is not allocated"); `deallocate_weights` now drops the cache.
+2. **`CCLManager.release_persistent_buffers()` before each DiT reload.** The ping-pong pools are keyed by
+   shape and never expire, so the init warmup (a 5 s request) left 99 MiB/bank behind for the 15 s request:
+   4 x 8.5 MiB gathered-input buffers, 2 x 11.3 and 2 x 5.7 MiB K/V pool entries, plus ~26 MiB of per-rung
+   state. The release recovers 74 of it; the per-rung state stays.
+
+| run | warmup | resident at denoise start | peak | contig free at peak | outcome |
+|---|---|---|---|---|---|
+| D | off | 726.1 | OOM at 957 | 17 MB | fails in block 0 |
+| H (audio evicted) | off | 682.5 | 944.8 | 63.6 MiB | pass, 12154 ms/step |
+| I (audio evicted) | on | 801.6 | OOM at 974 | 17 MB | fails in block 0 |
+| J (audio evicted + pool release) | on | 727.2 | **985.3** | **18.3 MiB** | pass, 12212 ms/step |
+
+End to end at 50 steps with the warmup on (the same harness as the table above): **12234 ms/fwd, 599.5 s
+denoise, 643.7 s total, CLIP 37.20 / min 35.40**, `coresident=False` in the record. That is 36 MiB/bank of
+nominal headroom at the peak and 18 MiB contiguous; a second sequence shape in the same process would eat
+it, so this configuration is serviceable for one working point and fragile beyond it. The tables mode
+(`adaln_tables`) runs the same point at 727.6 MiB/bank peak with ~290 of headroom.
+
+**Timing matrix, 50 steps, same host, seed 0 (2026-09-24/25).** Steady ms/step is the pipeline's own
+breakdown over 48 steps, excluding the first (compile) step; "gap" is `run` minus the four stage timers,
+i.e. the per-request DiT reload that `coresident=False` pays between the encoder and the denoise.
+
+| config | steady ms/step | preamble | denoise | encoder | VAE | audio | total | gap (DiT reload) | CLIP |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped TP4/SP8, FSDP on, resident adaLN | **12055** | 1.2 s | 593.7 s | 4.2 | 17.8 | 15.8 | **635.5 s** | 3.9 s | 37.65 |
+| TP8/SP4, FSDP on, resident adaLN | 12277 | 1.1 s | 604.5 s | 4.3 | 17.8 | 15.4 | 646.1 s | 4.0 s | 37.29 |
+| TP8/SP4, FSDP off, `adaln_tables` | 12130 | 3.6 s (tables 2.6) | 599.7 s | 4.2 | 17.2 | 14.8 | 640.1 s | 4.2 s | 37.25 |
+| TP8/SP4, FSDP off, resident adaLN, audio evicted | 12176 | 1.0 s | 599.5 s | 4.2 | 18.1 | 15.1 | 643.7 s | 6.8 s | 37.20 |
+| TP8/SP4, FSDP off, `adaln_fsdp` (adaLN projections SP-sharded, rest unsharded) | 12192 | 1.2 s | 600.4 s | 4.2 | 18.1 | 15.3 | 643.6 s | 5.7 s | 37.45 |
+
+Read at fixed TP8/SP4: FSDP costs 0.8% (resident) to 1.2% (tables) per step, in line with the 5.8%-of-block
+FSDP overhead partly hidden behind compute; the unsharded 8 GB/device DiT costs 3 s more per request to
+reload. Read at fixed FSDP-on: TP=8 costs 1.8% per step against the shipped TP=4 with untuned TP=8
+blockings. Net, the best FSDP-off configuration is 0.7% slower per request than the shipped preset.
+
+**`adaln_fsdp`** (`MiniMaxH3Pipeline(adaln_fsdp=True)`, `MINIMAX_H3_ADALN_FSDP=1`; Wormhole only, off by default)
+is the third placement for an unsharded DiT: only the blocks' `adaln_proj` take `fsdp_mesh_axis` (the SP axis),
+through the same gather path FSDP-on uses. Residency 258 -> 65 MiB/bank at TP=8; the per-step gather of the
+other three quarters (49 MB per block, ~1 ms on the ring) costs 16 ms/step over the resident path (0.13%),
+i.e. mostly hidden behind compute. Probe with the 5 s warmup on: denoise start 533.5 MiB/bank, peak 802.0,
+177 MiB contiguous left -- against the resident path's 985.3 / 18 MiB. Its 3-step output is exactly equal
+to FSDP-on. Cache subfolder `transformer_resident_adaln_adalnfsdp`.
+
+Output equality across the matrix: every 3-step pair within TP8/SP4 (FSDP on/off, tables/resident/
+`adaln_fsdp`) is exactly equal, frames and audio. Over 49 forwards the pipeline is **not run-to-run
+deterministic**: the FSDP-on TP8/SP4 run repeated unchanged (same seed, host, cache) gave CLIP 37.288 then
+37.293, and its correlation with the same tables and resident runs moved from 0.9997 to 0.9962 between the
+two repeats. So the 50-step PCCs between variants (tables/resident 0.9997-0.9962 against FSDP-on,
+`adaln_fsdp` 0.963 against both FSDP-on runs and 0.963-0.966 against the other two variants) sit inside a
+noise process whose size depends on how early the first divergence lands, and none of them is evidence of
+a per-path numeric difference; the 3-step exactness is. Where the nondeterminism enters (the async
+collectives are the obvious suspects) has not been isolated. The repeat also overwrote the first FSDP-on
+run's frame dump (same output directory), so the two FSDP-on runs could not be correlated directly. TP4 vs
+TP8 is the familiar 0.914-0.918 reduction-order regime.
+
+### The TP8 penalty was untuned matmuls: per-configuration block profiles and the TP8 blockings (2026-09-25)
+
+Host UF-EV-B11-GWH02 (all numbers here are same-host; B11 runs the same code ~6 ms/block faster than B12, so do not
+compare across the two). Raw CSVs, logs, sweep results and the running log: `~/h3_wormhole_results/block_profiles_2026-09-25/`
+(`RESULTS.md`). Tools: the block perf test (`test_transformer_minimax_h3.py::test_minimax_h3_transformer_block_perf`,
+now with `adaln_{resident,tables,fsdp}` and the TP8/SP4 rows `4x8sp0tp1nl4_ring_is_fsdp{0,1}` from `GALAXY_RING_PERF`),
+`block_device_busy.py` (union), `block_profile_stats.py compare/runs`, `transformer_roofline.py --tp 8` (new),
+`sweep_mm_block_sizes.py` on the new `wh_4x8_ring_tp8` device config.
+
+**Attribution.** One block, 15 s / 768P, device-busy union (mean over 32 devices; 2-3 runs each, spread <= 0.4 ms):
+
+| config | union ms | vs shipped | matches the 50-step e2e delta? |
+|---|---|---|---|
+| TP4/SP8, FSDP on, resident adaLN (shipped) | 229.8 | -- | -- |
+| TP4/SP8, FSDP off | 218.5 | -11.3 | (FSDP costs 11.3 ms/block at TP4) |
+| TP8/SP4, FSDP on | 234.4 | +4.6 | e2e +4.4 |
+| TP8/SP4, FSDP off, resident (#2/#6) | 232.2 | +2.4 | e2e +2.4 |
+| TP8/SP4, FSDP off, `adaln_tables` (#3) | 231.4 | +1.6 | e2e +1.5 |
+| TP8/SP4, FSDP off, `adaln_fsdp` (#7) | 233.2 | +3.4 | e2e +2.7 |
+
+The block explains the e2e to within 0.7 ms/block. Per op, TP8 vs TP4 (FSDP on): the three AGMMs +9.4 ms (to_qkv
+10.3 -> 14.2, to_out 7.4 -> 11.2, ff1 15.2 -> 16.7), ff2 +6.7 (8.3 fused at TP4 -> 8.1 unfused matmul + 6.2
+reduce-scatter + 0.6 addcmul at TP8), SDPA -1.3, FSDP-only ops -9.0 (half-size shards gathered over SP=4), adaLN
+projection -0.8. So TP8 costs **+16 ms/block of matmul**, masked to +4.6 by its cheaper FSDP gathers; with FSDP off
+on both sides (resident vs TP4 fsdp0) the whole +13.7 shows. The cause was that every M/K/N-keyed table
+(`grid_88_configs`, `grid_89_configs`, `fused_mmrs_configs`, `AGMM_BLOCK_SIZES`) held TP=4 shapes only: at TP8 the
+AGMMs ran the generic (8, 7, 8) fallback (to_out padding its 3 N tiles per core to 8), and ff2 never fused because
+`mmrs_config.has_mmrs_config` gated on K = 3584 = 14336 / 4. Not the ring: SDPA at ring 4 is 1.3 ms *faster*.
+
+**Sweeps and landing.** `sweep_mm_block_sizes.py` (new device config `wh_4x8_ring_tp8`, cluster axis 1; five
+M = 27296 rows), 112-304 combos each, all OK: fused ff2 (6, 2, 12) 11.47 ms; to_qkv (8, 7, 12) 10.95; to_out
+(16, 7, 3) sb(4, 1) 9.05; ff1 (10, 7, 10) 14.92; unfused ff2 (12, 14, 4) 7.16 (Linear-topology fallback). Landed
+in `utils/matmul.py` keyed on M = 27296, and the `has_mmrs_config` gate now accepts K in (3584, 1792) and asks
+`resolves_fused_mmrs_config` about the actual K.
+
+**After.** Same block profiles: `adaln_tables` 231.4 -> **224.1** ms/block (to_qkv 11.2, to_out 11.2, ff1 15.3,
+fused ff2 11.6), `adaln_fsdp` 233.2 -> 225.8, TP8 FSDP-on 234.7 -> 227.3. The FSDP-off `adaln_tables` block is now
+**5.7 ms (2.5%) faster than the shipped TP4/SP8 preset's**. to_out alone missed its sweep number: on 21 devices it
+runs 9.0-9.4 ms, on devices 11-19, 21 and 23 (two of the four column rings) 9.6-11.2, before and after; it is the
+fabric-bound AGMM at TP8 (K_local 896 with a quarter of the FLOPs), so a slow link on those rings is the suspect.
+Not pursued; ~2 ms/block if it is.
+
+**End to end** (50 steps, 15 s / 16:9, seed 0, the sweep harness's raw `per_forward_ms` = denoise / 49 -- the FSDP-off
+table above quotes "steady" figures ~110 ms/fwd lower, with the first step's compile excess removed):
+
+| config | per_fwd ms 09-24 | per_fwd ms 09-25, new blockings | request s 09-24 -> 09-25 | CLIP mean / min 09-25 |
+|---|---|---|---|---|
+| TP8/SP4, FSDP off, `adaln_tables` (#3) | 12239 | **11878 (-3.0%)** | 640.1 -> **623.5** | 37.45 / 35.57 |
+| TP8/SP4, FSDP on | 12341 | 11967 (-3.0%) | 646.2 -> 626.7 | 37.32 / 35.19 |
+| shipped TP4/SP8, FSDP on (code path unchanged) | 12117 | -- | 635.5 | 37.65 / 35.99 |
+
+The e2e saving (-361 ms/fwd = -7.4 ms/block) is the block saving (-7.3): nothing was hidden. #3 is now 2.0% faster
+per step and 12 s (1.9%) faster per request than the shipped preset, table build included; before this it was 1.0%
+and 0.7% slower. Numerics: 3-step frames before vs after the new blockings correlate at 0.9954 (audio 0.945 at
+absmax 0.01, i.e. noise), not bit-identical, as a bf16 reduction-order change must be; the 50-step frames correlate
+at 0.94-0.98 with the 09-24 TP8 runs, inside the nondeterminism regime described above (the two new runs correlate
+at 0.987 with each other), and CLIP stays in the 37.2-37.7 band. Per-op PCC against fp32 torch for each landed
+blocking: `transformer_op_mesh_bench.py --tp 8` (new flag), see RESULTS.md.
+
+**Rebased onto PR #57941 (2026-09-26).** The branch had diverged from `minimax_h3_wh_optimizations`; after replaying
+the adaLN commits and this change onto its head (f10b97e9848) and rebuilding, every block profile above repeats within
+0.2 ms per op, and the pipeline's own steady-state step times (48 steps after the first) are unchanged: `adaln_tables`
+11762 ms/step (11768 before the rebase), TP8 FSDP-on 11897 (11907), shipped TP4/SP8 12062. The first run of each
+configuration on the fresh build pays a 30-40 s first step (kernel JIT) and, for `adaln_tables`, a one-time DiT cache
+regeneration; the raw `per_forward_ms` of those runs is not comparable. A warm rerun of `adaln_tables` on the PR's base gives 11895 ms/fwd and 624.8 s per request (11878 / 623.5 before the
+rebase), CLIP 37.46 / 36.01. So on the PR's base #3 is 2.5% faster per step than the shipped preset and ~11 s
+faster per request.
+
+**Decision.** The Wormhole FSDP-off default stays `adaln_tables` (#3): fastest block of the three unsharded
+placements (1.7-1.9 ms/block ahead of `adaln_fsdp`, consistently), most DRAM headroom (728 MiB/bank peak vs 802),
+and its 2.6 s per-request table build is a wash against `adaln_fsdp`'s 2-3 s longer DiT reload. With the TP8
+blockings it is now faster per step than the shipped TP4/SP8 preset, so the remaining question is whether the
+shipped preset itself should move to TP8/SP4 -- the same TP8 tables apply with FSDP on (227.3 vs 229.8 ms/block).
 
 ### Open issues
 

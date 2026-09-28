@@ -189,6 +189,10 @@ class ColParallelLinear(Module):
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         pin_output_bf16=False,
+        # Keep the weight and bias in host memory (see `Parameter.on_host`); a caller stages them onto the
+        # device around each use with `Parameter.staged_on_device`. For a layer whose output is a small
+        # table that can be computed once per request rather than per step.
+        on_host=False,
     ):
         super().__init__()
 
@@ -237,14 +241,23 @@ class ColParallelLinear(Module):
             packer_l1_acc=True,
         )
 
+        if on_host and fsdp_mesh_axis is not None:
+            raise ValueError("on_host weights are staged whole per device; they cannot also be FSDP-sharded")
         self.weight = Parameter(
             total_shape=[self.in_features, self.out_features],
             mesh_axes=[fsdp_mesh_axis, mesh_axis],
             device=mesh_device,
             dtype=dtype,
+            on_host=on_host,
         )
         self.bias = (
-            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device, dtype=dtype)
+            Parameter(
+                total_shape=[1, self.out_features],
+                mesh_axes=[None, mesh_axis],
+                device=mesh_device,
+                dtype=dtype,
+                on_host=on_host,
+            )
             if bias
             else None
         )
@@ -722,9 +735,11 @@ class RowParallelLinear(Module):
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
             **mmrs_params,
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-            if use_l1_handoff
-            else self.mm_memory_config,
+            memory_config_mm=(
+                ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+                if use_l1_handoff
+                else self.mm_memory_config
+            ),
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,

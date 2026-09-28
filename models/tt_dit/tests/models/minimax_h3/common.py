@@ -196,6 +196,28 @@ GALAXY_RING = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
+# Perf-only rows: the Wormhole rows of `GALAXY_RING` plus the TP8/SP4 axes swap (`sp_axis=0, tp_axis=1`), the only
+# unsharded (DiT-FSDP-off) candidate on a 12 GB part (see minimax_h3_wormhole/fsdp_off_handoff.md). Kept out of
+# `GALAXY_RING` so the six PCC tests it feeds do not also grow TP8 variants.
+GALAXY_RING_PERF = pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        pytest.param(
+            (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, False, id="4x8sp1tp0nl4_ring_is_fsdp0", marks=_WH_ONLY
+        ),
+        pytest.param(
+            (4, 8), 1, 0, 4, _ring_4k, ttnn.Topology.Ring, True, id="4x8sp1tp0nl4_ring_is_fsdp1", marks=_WH_ONLY
+        ),
+        pytest.param(
+            (4, 8), 0, 1, 4, _ring_4k, ttnn.Topology.Ring, False, id="4x8sp0tp1nl4_ring_is_fsdp0", marks=_WH_ONLY
+        ),
+        pytest.param(
+            (4, 8), 0, 1, 4, _ring_4k, ttnn.Topology.Ring, True, id="4x8sp0tp1nl4_ring_is_fsdp1", marks=_WH_ONLY
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+
 REAL_BLOCK_CONFIG = dict(
     hidden_size=5376,
     num_attention_heads=56,

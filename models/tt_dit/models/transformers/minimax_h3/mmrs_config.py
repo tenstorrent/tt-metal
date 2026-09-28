@@ -46,9 +46,10 @@ import ttnn
 
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, resolves_fused_mmrs_config
 
-# ff2 per-device K = 14336 / tp 4 = 3584; N = 5376 is the full hidden size (the reduce-scatter
-# fractures it back to 1344 per device on the way out).
-_K = 3584
+# ff2 per-device K = 14336 / tp: 3584 at TP=4, 1792 at TP=8 (the Wormhole DiT-FSDP-off placement);
+# N = 5376 is the full hidden size (the reduce-scatter fractures it back to N / tp per device on the way out).
+_K = 3584  # the Blackhole-swept `_SWEPT_BLOCKINGS` are at this K only
+_KS = (3584, 1792)
 _N = 5376
 
 # Per-M entries for the Ms that have been swept at their own shape; any other M is left
@@ -96,15 +97,17 @@ def has_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> bool:
     `utils/matmul.py`: the 15 s M = 13664 shape, swept 2026-09-23); every other Wormhole M stays on
     the unfused path until it is swept the same way.
     """
-    if not (k == _K and n == _N and m % _TILE == 0):
+    if not (k in _KS and n == _N and m % _TILE == 0):
         return False
 
     # The swept blocking is not in the global table until `register_mmrs_config` installs it, so
     # anticipate it here; otherwise the gate would answer on the pre-registration state.
-    if m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
+    if k == _K and m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
         return True
 
-    return resolves_fused_mmrs_config(m, _K, _N, core_grid)
+    # Wormhole (and any other K): only a table entry at this exact (m, k, n) on this grid resolves.
+    # Until 2026-09-25 this asked about `_K` regardless of `k`, which is why TP=8 (K=1792) never fused.
+    return resolves_fused_mmrs_config(m, k, _N, core_grid)
 
 
 def register_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> None:
@@ -122,5 +125,5 @@ def register_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> N
     # The swept blocking hardcodes a 12x8 matmul grid, so it is only meaningful on the grid it was
     # swept on -- registering it under any other key would hand that device a blocking off the end
     # of its own core grid.
-    if m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
+    if k == _K and m in _SWEPT_BLOCKINGS and core_grid == _DEVICE_GRID:
         register_fused_mmrs_configs({core_grid: {(m, _K, _N): _SWEPT_BLOCKINGS[m]}})
