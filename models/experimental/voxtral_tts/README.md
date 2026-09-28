@@ -9,7 +9,9 @@ on Tenstorrent hardware. Text plus a named voice preset in, 24 kHz audio out. On
 
 ## Hardware
 
-- **Board:** Blackhole p150b (single chip)
+- **Board:** Blackhole p150b (single chip). Runs on both the full 13x10 compute grid and cards with
+  two Tensix columns fused off (11x10): the decode matmul grid is 11x7, bit-identical to the 12x6
+  it replaced. Check `tt-smi -s` `ENABLED_TENSIX_COL` if a device run fails on a grid assertion.
 
 Measured on this board: DRAM ceiling **367 GB/s**, per-op launch floor **~68 µs**. Those two
 together invert the Wormhole N150's economics — bytes are cheap and launches are expensive, so
@@ -127,7 +129,7 @@ pytest models/experimental/voxtral_tts/tests/pcc/test_model_teacher_forced_pcc.p
 
 # The traced frame loop -- the path that actually ships. Traced vs eager over FULL utterances:
 # all 15 prompts x 3 seeds to their natural [END_AUDIO], asserting the sweep crossed sdpa's
-# 512-position chunk boundary. ~10 min.
+# 512-position chunk boundary. ~9 min.
 pytest models/experimental/voxtral_tts/tests/test_traced_frame_loop.py
 
 # Request paths: a sequence of requests, not one in isolation
@@ -159,13 +161,13 @@ pytest models/experimental/voxtral_tts/tests/test_asr_calibration.py
 pytest models/experimental/voxtral_tts/tests/test_wer_languages.py
 pytest models/experimental/voxtral_tts/tests/test_wer_languages.py -k hindi   # one language
 
-# Naturalness per language (DistillMOS) against fixed per-language floors. Needs the isolated
-# MOS venv once -- tests/probes/mos_setup.sh -- and FAILS without it rather than skipping. ~20 min.
+# Naturalness per language (DistillMOS) against fixed per-language floors, set from a three-seed
+# spread. Needs the isolated MOS venv once -- tests/probes/mos_setup.sh -- and FAILS without it
+# rather than skipping. ~15 min.
 pytest models/experimental/voxtral_tts/tests/test_mos.py
 
 # All on-device tests are marked `slow`, at module level. `-m "not slow"` is the
-# host-only subset: 136 tests (+1 skipped until the MOS floors exist), ~50 s, no device and no
-# checkpoint needed.
+# host-only subset: ~140 tests, ~50 s, no device and no checkpoint needed.
 ```
 
 **Gate on real prompts, never random activations.** Random embeddings are off-manifold and read

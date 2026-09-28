@@ -72,7 +72,9 @@ _SDPA_PRG = ttnn.SDPAProgramConfig(
 # NOTES.md [gpt-26] -- DECODE matmul program configs, -4.24 ms/frame. DECODE ONLY: per_core_M=1
 # and fuse_batch=True assume one tile of rows, which prefill violates, so _mlp takes them as an
 # argument rather than reading module scope. activation="silu" never fused; fused_activation does.
-_MM_GRID = (12, 6)                    # 72 of the 130 cores; 13x10 measured 0.31 ms WORSE
+# NOTES.md [gpt-29] -- 11x7, not 6.52's 12x6: it fits the 11x10 p150b as well as the 13x10 one, and
+# every shape keeps 12x6's per_core_N, so the output is bit-identical. 13x10 measured 0.31 ms WORSE.
+_MM_GRID = (11, 7)
 
 
 def _mm1d(in0_block_w, per_core_n, activation=None):
@@ -86,7 +88,7 @@ def _mm1d(in0_block_w, per_core_n, activation=None):
         fused_activation=activation, mcast_in0=True)
 
 
-#                       in0_block_w   per_core_N = ceil(N_tiles / 72)
+#                       in0_block_w   per_core_N = ceil(N_tiles / 72) -- 12x6's split, kept on 11x7
 _PRG_QKV = _mm1d(2, 3)              # K=3072  N=6144   Nt=192
 _PRG_WO = _mm1d(4, 2)               # K=4096  N=3072   Nt= 96
 _PRG_W1 = _mm1d(2, 4, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU))   # K=3072 N=9216 Nt=288
@@ -111,6 +113,19 @@ _NORM_SHARD = ttnn.create_sharded_memory_config(
 _NORM_PRG = ttnn.LayerNormShardedMultiCoreProgramConfig(
     compute_with_storage_grid_size=_NORM_GRID, subblock_w=1, block_h=1,
     block_w=DIM // TILE // (_NORM_GRID[0] * _NORM_GRID[1]), inplace=False)
+
+
+def check_device_grid(device):
+    """Raise, naming the constant, if any hardcoded core grid does not fit this device. Without
+    it a smaller card fails deep inside the first matmul with a bare TT_FATAL. NOTES.md [gpt-29]."""
+    g = device.compute_with_storage_grid_size()
+    need = {"_MM_GRID": _MM_GRID, "_NORM_GRID": _NORM_GRID,
+            "_SDPA_PRG": (_SDPA_PRG.compute_with_storage_grid_size.x,
+                          _SDPA_PRG.compute_with_storage_grid_size.y)}
+    bad = {k: v for k, v in need.items() if v[0] > g.x or v[1] > g.y}
+    if bad:
+        raise RuntimeError(f"device compute grid is {g.x}x{g.y}; these do not fit: {bad}. "
+                           f"Check `tt-smi -s` ENABLED_TENSIX_COL (0x3fff = all 14 columns).")
 
 
 def sharded_norm(x, gamma, eps, mc):
@@ -160,6 +175,7 @@ class TtVoxtralGPT:
 
         See NOTES.md [gpt-09].
         """
+        check_device_grid(device)
         self.device = device
         self.dtype = DTYPE
         self.n_layers = n_layers
