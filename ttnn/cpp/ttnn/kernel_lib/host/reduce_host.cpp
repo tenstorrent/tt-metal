@@ -5,6 +5,7 @@
 #include "reduce_host.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -229,50 +230,54 @@ bool add_is_legal(
     return dim != ReduceOpDim::HW || !scalar_has_2d_partial;
 }
 
-// Blackhole P150b library-add/native crossover measurements, 2026-09-23.
-// BF16 input, FP32 output, both DEST accumulation modes; first sustained >1% win.
-// Dense sweeps refine HiFi2 ROW to 30 and HiFi4 ROW to 10; other entries use the
-// measured power-of-two grid. See reduce_accumulate/README.md for provenance.
-constexpr std::uint32_t LOFI_ROW_CUTOFF = 64;
-constexpr std::uint32_t LOFI_COL_CUTOFF = 32;
-constexpr std::uint32_t LOFI_SCALAR_CUTOFF = 16;
-constexpr std::uint32_t HIFI2_ROW_CUTOFF = 30;
-constexpr std::uint32_t HIFI2_COL_CUTOFF = 16;
-constexpr std::uint32_t HIFI2_SCALAR_CUTOFF = 8;
-constexpr std::uint32_t HIFI3_ROW_CUTOFF = 16;
-constexpr std::uint32_t HIFI3_COL_CUTOFF = 8;
-constexpr std::uint32_t HIFI3_SCALAR_CUTOFF = 8;
-constexpr std::uint32_t HIFI4_ROW_CUTOFF = 10;
-constexpr std::uint32_t HIFI4_COL_CUTOFF = 4;
-constexpr std::uint32_t HIFI4_SCALAR_CUTOFF = 4;
+struct AddCutoffs {
+    std::uint32_t row;
+    std::uint32_t col;
+    std::uint32_t scalar;
+};
 
-std::uint32_t add_threshold(ReduceOpDim dim, const ReduceHardwareConfig& hardware) {
-    const auto for_dim = [dim](std::uint32_t row, std::uint32_t col, std::uint32_t scalar) {
-        return dim == ReduceOpDim::W ? row : (dim == ReduceOpDim::H ? col : scalar);
-    };
-    if (hardware.arch == tt::ARCH::WORMHOLE_B0) {
-        // Wormhole B0 library-add/native measurements, 2026-09-24: BF16 input,
-        // FP32 output, both DEST modes. Conservative sustained >1% wins across
-        // repeated sweeps. See reduce_accumulate/README.md for provenance.
-        switch (hardware.math_fidelity) {
-            case tt::tt_metal::MathFidelity::LoFi: return for_dim(14, 52, 14);
-            case tt::tt_metal::MathFidelity::HiFi2: return for_dim(14, 52, 8);
-            case tt::tt_metal::MathFidelity::HiFi3: return for_dim(14, 12, 6);
-            case tt::tt_metal::MathFidelity::HiFi4: return for_dim(14, 7, 5);
-            default: TT_THROW("Reduce planner: unsupported math fidelity");
-        }
-    }
-    // Preserve the existing policy on architectures not covered by either sweep.
-    if (hardware.arch != tt::ARCH::BLACKHOLE) {
-        return dim == ReduceOpDim::W ? 4U : 8U;
-    }
-    switch (hardware.math_fidelity) {
-        case tt::tt_metal::MathFidelity::LoFi: return for_dim(LOFI_ROW_CUTOFF, LOFI_COL_CUTOFF, LOFI_SCALAR_CUTOFF);
-        case tt::tt_metal::MathFidelity::HiFi2: return for_dim(HIFI2_ROW_CUTOFF, HIFI2_COL_CUTOFF, HIFI2_SCALAR_CUTOFF);
-        case tt::tt_metal::MathFidelity::HiFi3: return for_dim(HIFI3_ROW_CUTOFF, HIFI3_COL_CUTOFF, HIFI3_SCALAR_CUTOFF);
-        case tt::tt_metal::MathFidelity::HiFi4: return for_dim(HIFI4_ROW_CUTOFF, HIFI4_COL_CUTOFF, HIFI4_SCALAR_CUTOFF);
+// Library-add/native crossovers indexed by math fidelity {LoFi, HiFi2, HiFi3, HiFi4}.
+// BF16 input, FP32 output, both DEST accumulation modes. See reduce_accumulate/README.md
+// for provenance.
+//
+// Blackhole P150b, 2026-09-23: first sustained >1% win. Dense sweeps refine HiFi2 ROW to
+// 30 and HiFi4 ROW to 10; other entries use the measured power-of-two grid.
+constexpr std::array<AddCutoffs, 4> BLACKHOLE_ADD_CUTOFFS{{
+    {.row = 64, .col = 32, .scalar = 16},
+    {.row = 30, .col = 16, .scalar = 8},
+    {.row = 16, .col = 8, .scalar = 8},
+    {.row = 10, .col = 4, .scalar = 4},
+}};
+// Wormhole B0, 2026-09-24: conservative sustained >1% wins across repeated sweeps.
+constexpr std::array<AddCutoffs, 4> WORMHOLE_ADD_CUTOFFS{{
+    {.row = 14, .col = 52, .scalar = 14},
+    {.row = 14, .col = 52, .scalar = 8},
+    {.row = 14, .col = 12, .scalar = 6},
+    {.row = 14, .col = 7, .scalar = 5},
+}};
+
+std::size_t fidelity_index(tt::tt_metal::MathFidelity fidelity) {
+    switch (fidelity) {
+        case tt::tt_metal::MathFidelity::LoFi: return 0;
+        case tt::tt_metal::MathFidelity::HiFi2: return 1;
+        case tt::tt_metal::MathFidelity::HiFi3: return 2;
+        case tt::tt_metal::MathFidelity::HiFi4: return 3;
         default: TT_THROW("Reduce planner: unsupported math fidelity");
     }
+}
+
+std::uint32_t add_threshold(ReduceOpDim dim, const ReduceHardwareConfig& hardware) {
+    const std::array<AddCutoffs, 4>* cutoffs = nullptr;
+    if (hardware.arch == tt::ARCH::BLACKHOLE) {
+        cutoffs = &BLACKHOLE_ADD_CUTOFFS;
+    } else if (hardware.arch == tt::ARCH::WORMHOLE_B0) {
+        cutoffs = &WORMHOLE_ADD_CUTOFFS;
+    } else {
+        // Preserve the existing policy on architectures not covered by either sweep.
+        return dim == ReduceOpDim::W ? 4U : 8U;
+    }
+    const auto& cutoff = (*cutoffs)[fidelity_index(hardware.math_fidelity)];
+    return dim == ReduceOpDim::W ? cutoff.row : (dim == ReduceOpDim::H ? cutoff.col : cutoff.scalar);
 }
 
 // Reduction-axis tile count as the two planning paths derive it, without planning. The sequence
