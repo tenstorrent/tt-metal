@@ -530,6 +530,7 @@ Transformer
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode
    ttnn.transformer.paged_scaled_dot_product_attention_decode
+   ttnn.transformer.prepare_sdpa_input
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
    ttnn.transformer.ring_mla
