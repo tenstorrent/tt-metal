@@ -12,6 +12,11 @@
 #endif
 #endif
 #if defined(TRISC_PACK) && !defined(TT_POLY_LLK_DISABLE)
+#if __has_include("ckernel_sfpu_relu6_bf16.h")
+#include "ckernel_sfpu_relu6_bf16.h"
+#endif
+#endif
+#if defined(TRISC_PACK) && !defined(TT_POLY_LLK_DISABLE)
 #if __has_include("ckernel_sfpu_relu_bf16.h")
 #include "ckernel_sfpu_relu_bf16.h"
 #endif
@@ -280,6 +285,66 @@ ALWI void relu_tt_poly_bf16_program_finish() {
 }
 
 #undef TT_POLY_RELU_BF16_ROUTE_ACTIVE
+
+#if !defined(TT_POLY_LLK_DISABLE) && ((defined(TT_POLY_RELU6_BF16_AVAILABLE)) && \
+                                      defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1)
+#define TT_POLY_RELU6_BF16_ROUTE_ACTIVE 1
+#else
+#define TT_POLY_RELU6_BF16_ROUTE_ACTIVE 0
+#endif
+
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void relu6_tt_poly_bf16_tile(uint32_t idst) {
+#if !TT_POLY_RELU6_BF16_ROUTE_ACTIVE
+    relu_max_tile(idst, 0x40c00000u);
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        relu_max_tile(idst, 0x40c00000u);
+    } else {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_relu6_tt_poly_bf16, (8 /* ITERATIONS */), idst, VectorMode::RC));
+    }
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void relu6_tt_poly_bf16_tile_init() {
+#if !TT_POLY_RELU6_BF16_ROUTE_ACTIVE
+    relu_max_tile_init();
+#else
+    if constexpr (DST_ACCUM_MODE) {
+        relu_max_tile_init();
+    } else {
+        relu_max_tile_init();
+        MATH(sfpu::init_relu6_tt_poly_bf16());
+    }
+#endif
+}
+
+/** Arm the selected packer clamp once, before the tile loop. */
+ALWI void relu6_tt_poly_bf16_program_init() {
+#if TT_POLY_RELU6_BF16_ROUTE_ACTIVE && defined(TRISC_PACK)
+    if constexpr (!(DST_ACCUM_MODE) && ttpoly_generated::Relu6Bf16Config::kRoute == 4u) {
+        if constexpr (ttpoly_generated::Relu6Bf16Config::kHasUpper) {
+            pack_relu_config(
+                ckernel::ReluConfig::max_threshold(ttpoly_generated::Relu6Bf16Config::kPackReluThresholdBits));
+        } else {
+            pack_relu_config(ckernel::ReluConfig::zero());
+        }
+    }
+#endif
+}
+
+/** Disarm the packer clamp after the final pack/release. */
+ALWI void relu6_tt_poly_bf16_program_finish() {
+#if TT_POLY_RELU6_BF16_ROUTE_ACTIVE && defined(TRISC_PACK)
+    if constexpr (!(DST_ACCUM_MODE) && ttpoly_generated::Relu6Bf16Config::kRoute == 4u) {
+        pack_relu_config(ckernel::ReluConfig::none());
+    }
+#endif
+}
+
+#undef TT_POLY_RELU6_BF16_ROUTE_ACTIVE
 
 #if !defined(TT_POLY_LLK_DISABLE) && ((defined(TT_POLY_RELU_MIN_BF16_AVAILABLE)) && \
                                       defined(TT_POLY_BF16_UNARY_CONTEXT) && TT_POLY_BF16_UNARY_CONTEXT == 1)

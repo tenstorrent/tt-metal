@@ -1193,6 +1193,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
         case UnaryOpType::RELU6:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"relu6_tt_poly_bf16_tile_init();", fmt::format("relu6_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
             if (input_dtype == DataType::UINT16) {
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};
             }
