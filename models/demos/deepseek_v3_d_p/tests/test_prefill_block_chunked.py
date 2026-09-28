@@ -140,9 +140,16 @@ def _load_trace_tensor(trace_dir: Path, layout: str, subdir: str, layer: int, ke
         return f.get_tensor(key)[:total_len].to(torch.float32)
 
 
+def _single_file_has_key(trace_dir: Path, subdir: str, layer: int, key: str) -> bool:
+    with safe_open(trace_dir / subdir / f"layer_{layer}.safetensors", framework="pt") as f:
+        return key in f.keys()
+
+
 def _load_optional(trace_dir: Path, layout: str, subdir: str, layer: int, key: str, total_len: int):
-    """None if a chunked_group_a_v1 capture never recorded this MLA intermediate; single_file always loads."""
-    if layout == "chunked_group_a_v1" and not _chunked_has_key(trace_dir, subdir, layer, key):
+    """None if the capture never recorded this MLA intermediate (e.g. the Mistral single_file golden
+    stores only decoder_output and kv_post_transform)."""
+    has_key = _chunked_has_key if layout == "chunked_group_a_v1" else _single_file_has_key
+    if not has_key(trace_dir, subdir, layer, key):
         logger.warning(f"golden lacks {key} -- skipping its comparison(s)")
         return None
     return _load_trace_tensor(trace_dir, layout, subdir, layer, key, total_len)
