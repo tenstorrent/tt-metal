@@ -733,7 +733,10 @@ class Qwen3TTSPipeline:
         watch = Stopwatch(self.device, strict=self.profile)
         started = time.time()
         for step in range(limit):
-            logits = ttnn.linear(last, self.codec_head)
+            # HiFi4, fp32 logits: ttnn's defaults cost 0.035-0.081 of sampling distance to fp32.
+            logits = ttnn.linear(
+                last, self.codec_head, compute_kernel_config=self.talker.compute_config, dtype=ttnn.float32
+            )
             row = ttnn.to_torch(logits).float().reshape(-1)
             ttnn.deallocate(logits)  # released before the next trace runs, or it aliases trace memory
             watch.split("codec_head")
