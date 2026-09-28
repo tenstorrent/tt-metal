@@ -246,3 +246,14 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
   Margins are small: attention rel 0.0193 against a limit of 0.022, and the window-129 check passes by 0.002.
   The first `FAIL pcc=0` lines come from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_sliding_moe_02_attention.py`
+
+## C.sliding_moe.attn_residual.test.1 (test role), 2026-09-28
+- Replaced the rendered test with the 1x4 prior's frozen `mimo_v2_6_d_p/tests/bringup/test_c_sliding_moe_attn_residual.py`. The golden is the same (layer 1).
+  Only the docstring header changed. The gated check is pcc_attn_residual_L01 >= 0.99. The test also asserts: output size, finite, rel L2 <= 0.01, per-token
+  norm ratio in [0.99, 1.01], and on delta = out - in: coefficient <delta, attn_out>/||attn_out||^2 in [0.95, 1.05] and ||delta - attn_out||/||attn_out|| <= 0.3.
+  Whole-output checks cannot see a dropped or half attn_out here (sink-dominated layer, see known issues).
+- BRINGUP_IMPL=reference: pcc 0.999997, rel 0.0024, ratio [0.9990, 1.0008], coef 1.0000, attn rel 0.0000, PASS. BRINGUP_IMPL=stub: pcc 0, FAIL.
+- Default gate: PASS already, because `device_component` serves the generic device residual add for any layer. Result: pcc 0.999996, rel 0.0029, ratio [0.9990, 1.0015],
+  coef 1.0200, attn rel 0.1554. The 1x4 prior's device run gave coef 1.0198. The 1.02 comes from bf16 output rounding correlated with the addend, with 0.03 of margin.
+  `DEVICE_STEPS["sliding_moe"]` still lists only attention. The implement step only needs to register the step there.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_sliding_moe_attn_residual.py`
