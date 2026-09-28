@@ -28,6 +28,19 @@ _SUPPORTED_MESHES = {
 _SUPPORTED_MESH_TEXT = "a Blackhole P300_X2 QB2 in a (1, 4) mesh or a Wormhole T3K in a (1, 8) mesh"
 
 
+def kv_head_owners(num_kv_heads, tp):
+    """Device index -> KV head index, or None when the heads shard evenly.
+
+    A head is the smallest unit attention can consume, so when there are fewer KV heads than
+    devices they share heads instead of splitting one. Callers replicate on the returned mapping.
+    """
+    if num_kv_heads >= tp:
+        return None
+    if tp % num_kv_heads:
+        raise ValueError(f"{tp} devices cannot share {num_kv_heads} KV heads evenly")
+    return [d // (tp // num_kv_heads) for d in range(tp)]
+
+
 def resolve_mesh_tp(mesh_device):
     """Tensor-parallel width for a qualified mesh; raises on any other hardware."""
     key = (
@@ -123,6 +136,9 @@ class Qwen38TPDecoder(Qwen38Decoder):
         self.topology = ttnn.Topology.Ring if self.policy.get("ring", False) else ttnn.Topology.Linear
         self.ccl = ccl if ccl is not None else TT_CCL(mesh_device)
         self.config = copy.deepcopy(hf_config)
+        # Every attention head count below is the PER-DEVICE count downstream: the KV cache shape,
+        # kv_width, and nlp_create_qkv_heads_decode all read them that way.
+        self.kv_replication = 1
         for name in (
             "num_attention_heads",
             "num_key_value_heads",
@@ -131,6 +147,16 @@ class Qwen38TPDecoder(Qwen38Decoder):
             "intermediate_size",
         ):
             value = getattr(hf_config, name)
+            if name == "num_key_value_heads" and value < self.TP:
+                # Fewer KV heads than devices: a head is the smallest unit attention can consume,
+                # so devices share one rather than splitting it. TP // value devices per head, and
+                # the GQA group (num_attention_heads // value) is a multiple of the per-device Q
+                # count, so a device's Q heads never span two KV heads.
+                assert (hf_config.num_attention_heads // value) % (hf_config.num_attention_heads // self.TP) == 0
+                # Raises here rather than mid-conversion if the sharing is uneven.
+                self.kv_replication = self.TP // len(set(kv_head_owners(value, self.TP)))
+                setattr(self.config, name, 1)
+                continue
             assert value % self.TP == 0, name
             setattr(self.config, name, value // self.TP)
         self.ckc = ttnn.WormholeComputeKernelConfig(
@@ -184,6 +210,14 @@ class Qwen38TPDecoder(Qwen38Decoder):
         def split(t, dim=0):
             return t.chunk(self.TP, dim=dim)
 
+        def split_kv(t):
+            """Per-device K/V shard, replicating whole heads when TP exceeds the KV head count."""
+            owners = kv_head_owners(hf_config.num_key_value_heads, self.TP)
+            if owners is None:
+                return split(t)
+            heads = t.chunk(hf_config.num_key_value_heads, dim=0)
+            return [heads[owner] for owner in owners]
+
         for name in ("input_layernorm", "post_attention_layernorm"):
             t = (state_dict[name + ".weight"].float() + 1).reshape(1, 1, -1)
             self.weights[name + ".weight"] = upload(t, dim=2 if self.sharded_residual else None)
@@ -201,7 +235,8 @@ class Qwen38TPDecoder(Qwen38Decoder):
             c = hf_config
             qg = state_dict["self_attn.q_proj.weight"].reshape(c.num_attention_heads, 2, c.head_dim, c.hidden_size)
             qs, gs = split(qg[:, 0].reshape(-1, c.hidden_size)), split(qg[:, 1].reshape(-1, c.hidden_size))
-            ks, vs = split(state_dict["self_attn.k_proj.weight"]), split(state_dict["self_attn.v_proj.weight"])
+            ks = split_kv(state_dict["self_attn.k_proj.weight"])
+            vs = split_kv(state_dict["self_attn.v_proj.weight"])
             weight("self_attn.qkvg", [torch.cat(p, dim=0) for p in zip(qs, ks, vs, gs)])
             if self.policy.get("split_attention", False):
                 weight("self_attn.split_qg", [torch.cat(p) for p in zip(qs, gs)])
