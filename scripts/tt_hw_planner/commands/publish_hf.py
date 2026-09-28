@@ -911,6 +911,82 @@ def _capture_vllm_provenance(args) -> None:
         print(f"  [publish-hf] provenance capture skipped: {e}")
 
 
+
+def _ensure_tt_model_serving_fixes(tt_model_bin) -> None:
+    """Make a source-built ({path}) matched-pair image build on ANY host by ensuring the local tt-model
+    launcher (tt_kernel/launchers.py) handles a staged vLLM/plugin source that has no .git:
+      (1) hand setuptools-scm a pretend version, and
+      (2) --constraint the validated lock so torch/transformers stay pinned while other deps resolve.
+    Idempotent + anchor-based; no-ops (with a hint to upstream the fix) if tt-model's layout changed.
+    This removes the last external dependency: publishHF works end-to-end with no manual tt-model edit."""
+    import subprocess
+    from pathlib import Path as _P
+    binp = _P(tt_model_bin)
+    py = binp.parent / "python"
+    if not py.is_file():
+        py = _P("python3")
+    try:
+        loc = subprocess.run(
+            [str(py), "-c", "import tt_kernel, os; print(os.path.dirname(tt_kernel.__file__))"],
+            capture_output=True, text=True).stdout.strip()
+    except Exception:
+        return
+    lf = _P(loc) / "launchers.py" if loc else None
+    if not lf or not lf.is_file():
+        return
+    try:
+        src = lf.read_text()
+    except Exception:
+        return
+    if "SETUPTOOLS_SCM_PRETEND_VERSION" in src:
+        return  # already patched (by us before, or upstream)
+    env = "SETUPTOOLS_SCM_PRETEND_VERSION=0.24.0 VCS_VERSIONING_PRETEND_VERSION=0.24.0 "
+    orig_vllm = (
+        '        if vllm.get("path"):\n'
+        '            return (\n'
+        '                [f\'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python" \'\n'
+        '                 f"{VLLM_CTX_DIR} --extra-index-url {self.PYTORCH_CPU_INDEX} "\n'
+        '                 f"--index-strategy unsafe-best-match"]\n'
+        '                + self._post_engine_lines(m, plugin)\n'
+        '            )'
+    )
+    new_vllm = (
+        '        if vllm.get("path"):\n'
+        '            constraint = "--constraint /ctx/requirements.lock " if rt.get("lock") else ""\n'
+        '            return ([\n'
+        '                \'' + env + '\'\n'
+        '                f\'VLLM_TARGET_DEVICE=empty uv pip install --python "$VENV/bin/python" {constraint}\'\n'
+        '                f"{VLLM_CTX_DIR} --extra-index-url {self.PYTORCH_CPU_INDEX} "\n'
+        '                f"--index-strategy unsafe-best-match"\n'
+        '            ] + self._post_engine_lines(m, plugin))'
+    )
+    orig_plugin = (
+        '            lines.append(\n'
+        '                f\'uv pip install --python "$VENV/bin/python" {PLUGIN_CTX_DIR}\'\n'
+        '            )'
+    )
+    new_plugin = (
+        '            lines.append(\n'
+        '                f\'' + env + 'uv pip install --python "$VENV/bin/python" {PLUGIN_CTX_DIR}\'\n'
+        '            )'
+    )
+    n = 0
+    if orig_vllm in src:
+        src = src.replace(orig_vllm, new_vllm, 1); n += 1
+    if orig_plugin in src:
+        src = src.replace(orig_plugin, new_plugin, 1); n += 1
+    if n:
+        try:
+            lf.write_text(src)
+            print(f"  [publish-hf] self-healed tt-model source-build launcher ({n} sites): {lf}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [publish-hf] could not patch tt-model launcher ({e}); apply the pretend-version + "
+                  "--constraint fix to tt_kernel/launchers.py manually")
+    else:
+        print("  [publish-hf] tt-model launcher layout unrecognized; if a {path} build fails on "
+              "setuptools-scm/torch, upstream the pretend-version + --constraint fix to tt-model")
+
+
 def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -> int:
     """Build + push a real v5.1 container bundle via tt-model (exactly like the published TT repos):
     generate tt-model.yaml, then `tt-model package --container` (2.5-4h OCI build) and `tt-model push`."""
@@ -1067,6 +1143,8 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     # the model's own branch, committed by the model owner (never on this tool branch). If the model's
     # working tree is committed on its branch before publishing, the image records a clean commit SHA;
     # otherwise tt-model honestly marks the SHA "dirty". The tool stays out of the model's git state.
+    if getattr(args, "vllm_path", None):
+        _ensure_tt_model_serving_fixes(ttm)  # self-heal the build launcher for source ({path}) builds
     pkg = [ttm, "package", "--container", str(yaml_path), "--out", out]
     print(f"  [publish-hf] building container (2.5-4h): {' '.join(pkg)}")
     rc = subprocess.run(pkg).returncode
