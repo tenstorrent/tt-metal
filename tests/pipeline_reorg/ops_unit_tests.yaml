@@ -114,6 +114,7 @@
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_head_dims.py
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_masks.py
     tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipe_blocking.py
+    tests/ttnn/unit_tests/operations/sdpa/test_sdpa_legacy_chunk_validation.py
   skus:
     bh_p100:
       timeout: 45  # + op-selected blocking (~3 min; its two-device cases skip on one card)
