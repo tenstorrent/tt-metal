@@ -143,7 +143,7 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn);
 #endif
-#ifdef MASK_PADDED_DATA
+#if defined(MASK_PADDED_DATA) && !defined(FUSED_SCALE_MASK)
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
 #endif
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
