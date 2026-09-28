@@ -1394,6 +1394,7 @@ _TT_POLY_FP32_DEST = {
     "erf": (),
     "erfc": (),
     "erfinv": (),
+    "exp": (),
     "exp2": (),
     "expm1": (),
     "gelu": (),
@@ -1427,6 +1428,7 @@ _TT_POLY_COPY_REBASE = {}
 _TT_POLY_PRECISION_SPLIT = ("erfinv",)
 _TT_POLY_ADAPTER_OPERATIONS = {
     "asinh": "asinh",
+    "exp": "exp",
     "gelu": "gelu",
     "hardmish": "hardmish",
     "hardswish": "hardswish",
@@ -1570,6 +1572,7 @@ _GENERATED_UNARY_CASES = [
     (MathOperation.Erf, "erf", True, True, 32, "None", "ckernel_sfpu_erf.h"),
     (MathOperation.Erfc, "erfc", True, True, 32, "None", "ckernel_sfpu_erfc.h"),
     (MathOperation.Erfinv, "erfinv", True, True, 8, "RC", "ckernel_sfpu_erfinv.h"),
+    (MathOperation.Exp, "exp", True, True, 32, "None", "ckernel_sfpu_exp.h"),
     (MathOperation.Exp2, "exp2", True, True, 32, "None", "ckernel_sfpu_exp2.h"),
     (MathOperation.Expm1, "expm1", False, False, 32, "None", "ckernel_sfpu_expm1.h"),
     (MathOperation.Gelu, "gelu", False, False, 32, "None", "ckernel_sfpu_gelu.h"),
@@ -1769,6 +1772,10 @@ def _tt_poly_reference_asinh(x):
 
 def _tt_poly_reference_erfinv(x):
     return getattr(importlib.import_module("torch"), "erfinv")(x.double(), **{})
+
+
+def _tt_poly_reference_exp(x):
+    return getattr(importlib.import_module("torch"), "exp")(x.double(), **{})
 
 
 def _tt_poly_reference_gelu(x):
@@ -1990,6 +1997,12 @@ _TT_POLY_FORWARD_REFERENCES = {
         (16255, 49023),
         (),
     ),
+    "exp": (
+        _tt_poly_reference_exp,
+        ((0, 1), (128, 17074), (32768, 32769), (32896, 65408)),
+        (17073, 49838, 49839, 49840),
+        (),
+    ),
     "gelu": (
         _tt_poly_reference_gelu,
         ((0, 1), (128, 32640), (32768, 32769), (32896, 65408)),
@@ -2142,6 +2155,7 @@ _TT_POLY_PERF_OPERATIONS = (
     "erf",
     "erfc",
     "erfinv",
+    "exp",
     "exp2",
     "expm1",
     "gelu",
@@ -2400,6 +2414,7 @@ _TT_POLY_SCALAR_PERF_OPERATIONS = (
     "erf",
     "erfc",
     "erfinv",
+    "exp",
     "exp2",
     "expm1",
     "gelu",

@@ -1050,3 +1050,24 @@ void exp_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH) || defined(TRISC_PACK) || defined(LLK_TRISC_PACK)) && \
+    !defined(TT_POLY_LLK_DISABLE)
+#include "ckernel_sfpu_exp_bf16.h"
+#define TT_POLY_EXP_BF16_AVAILABLE 1
+#endif
+
+namespace ckernel::sfpu {
+
+#if (defined(TRISC_MATH) || defined(LLK_TRISC_MATH)) && !defined(TT_POLY_LLK_DISABLE)
+template <int ITERATIONS = 8>
+inline void calculate_exp_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::calculate_exp2<ttpoly_generated::ExpBf16Config, ITERATIONS>();
+}
+template <auto...>
+inline void init_exp_tt_poly_bf16() {
+    ckernel::sfpu::ttpoly::init_exp2<ttpoly_generated::ExpBf16Config>();
+}
+#endif
+
+}  // namespace ckernel::sfpu
