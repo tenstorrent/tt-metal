@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -287,7 +288,38 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        const auto policy = operations::transformer::sdpa::detail::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        TT_FATAL(
+            !is_causal && !is_balanced && !attention_sink && !sliding_window_size && !circular_kv_cache &&
+                !kv_cache_batch_idx && !kv_actual_isl && !slot_id && !kv_actual_isl_tensor,
+            "Named ring recipes currently require noncausal attention without indexed/cache/window/sink features");
+        TT_FATAL(
+            input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
+                input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
+            "Named ring recipes require matching Q/K/V head dims");
+        operations::transformer::sdpa::detail::validate_recipe_geometry(
+            operations::transformer::sdpa::detail::RecipeOp::Ring,
+            policy,
+            program_config.q_chunk_size,
+            program_config.k_chunk_size,
+            input_tensor_q.logical_shape()[3]);
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
+            "Named ring recipes require BF16 Q and matching KV types");
+        TT_FATAL(
+            is_cross || input_tensor_q.logical_shape()[2] == input_tensor_k.logical_shape()[2],
+            "Named ring recipes do not yet support chunked prefill; use is_cross for noncausal cross attention");
+        // Read only by the op perf model; the recipe kernels fix their own fidelities.
+        compute_kernel_config = BlackholeComputeKernelConfig{
+            .math_fidelity = policy.pv_fidelity,
+            .math_approx_mode = true,
+            .fp32_dest_acc_en = policy.fp32_destination,
+        };
+    }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -354,7 +386,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sliding_window_size,
         circular_kv_cache,
         logical_n_tensor,
-        logical_l_tensor);
+        logical_l_tensor,
+        precision);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -449,7 +482,33 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
-    const uint32_t num_buffers_per_channel) {
+    const uint32_t num_buffers_per_channel,
+    std::optional<SDPAPrecision> precision) {
+    if (precision) {
+        // resolve_recipe_policy rejects an explicit compute_kernel_config, exp_approx_mode=False, a
+        // non-default scale; the recipe owns those numerical decisions.
+        const auto policy = operations::transformer::sdpa::detail::resolve_recipe_policy(
+            input_tensor_q, input_tensor_k, *precision, scale, compute_kernel_config, program_config);
+        TT_FATAL(
+            input_tensor_k.logical_shape()[3] == input_tensor_q.logical_shape()[3] &&
+                input_tensor_v.logical_shape()[3] == input_tensor_q.logical_shape()[3],
+            "Named exp ring recipes require matching Q/K/V head dims");
+        operations::transformer::sdpa::detail::validate_recipe_geometry(
+            operations::transformer::sdpa::detail::RecipeOp::ExpRing,
+            policy,
+            program_config.q_chunk_size,
+            program_config.k_chunk_size,
+            input_tensor_q.logical_shape()[3]);
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == input_tensor_v.dtype(),
+            "Named exp ring recipes require BF16 Q and matching KV types");
+        // Read only by the op perf model; the recipe kernels fix their own fidelities.
+        compute_kernel_config = BlackholeComputeKernelConfig{
+            .math_fidelity = policy.pv_fidelity,
+            .math_approx_mode = true,
+            .fp32_dest_acc_en = policy.fp32_destination,
+        };
+    }
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -490,7 +549,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         compute_kernel_config,
         num_workers_per_link,
         num_buffers_per_channel,
-        logical_n_tensor);
+        logical_n_tensor,
+        precision);
     return {
         output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
