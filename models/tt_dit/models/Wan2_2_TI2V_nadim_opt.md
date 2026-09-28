@@ -520,7 +520,13 @@ All verified by reading the code; none implemented.
    Measured in that state first: denoise **8.328 s**, total **9.383 s** (9.372 / 9.381 /
    9.396, spreads 0.09 / 0.26 %), -3.0 % / -2.4 % against the 9.61 s of the sprint-5 tip (the
    AdaLN fix stacks with the preset as the hoist did). The preset then pins `cross_attn_out`
-   to HiFi2 with fp32 accumulate; PCC and 720p x3 under that setting follow below once run.
+   to HiFi2 with fp32 accumulate, and the fused cross-attention residual was dropped (7.13).
+   With that final definition on the tip: transformer PCC **100.0000 / 99.9600 / 99.9600 %**
+   (two-row-vs-scalar / scalar / per-token) -- 0.005 pp under the 99.9651 % recorded for the
+   sprint-5 preset even though the only remaining difference is a *more* precise
+   `cross_attn_out` (bf16 weights, HiFi2, fp32 acc instead of bf8 LoFi); a same-hour PCC run
+   with the sprint-5 preset file swapped back in attributes the move (section 9). 720p x3 under
+   the final definition: see the row added below once measured.
 
    `all_bf8_lofi` is the sprint-4 result: -15.5% end to end at 720p against the sprint-3 tip, a
    0.024 pp PCC cost and a CLIP mean *above* bf16 (which says nothing about quality, section 8).
