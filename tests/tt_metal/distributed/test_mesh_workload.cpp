@@ -224,6 +224,32 @@ TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsEmptyWorkload) {
     EXPECT_THROW(experimental::program_preparation::prepare(workload, mesh_device_.get()), std::exception);
 }
 
+TEST_F(MeshWorkloadTestSuite, ProgramPreparationRejectsReuseOnAnotherMeshDevice) {
+    const MeshShape parent_shape = mesh_device_->shape();
+    std::optional<MeshShape> sub_shape;
+    if (parent_shape.dims() == 2 && parent_shape[1] % 2 == 0) {
+        sub_shape = MeshShape(parent_shape[0], parent_shape[1] / 2);
+    } else if (parent_shape.dims() == 2 && parent_shape[0] % 2 == 0) {
+        sub_shape = MeshShape(parent_shape[0] / 2, parent_shape[1]);
+    }
+    if (!sub_shape.has_value()) {
+        GTEST_SKIP() << "Mesh shape is not evenly splittable into two submeshes";
+    }
+    auto submeshes = mesh_device_->create_submeshes(*sub_shape);
+    ASSERT_EQ(submeshes.size(), 2u);
+
+    Program program = CreateProgram();
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", CoreCoord{0, 0}, ComputeConfig{});
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(*sub_shape), std::move(program));
+
+    experimental::program_preparation::prepare(workload, submeshes[0].get());
+
+    // Finalized offsets and binary sizes belong to the first submesh; reusing them elsewhere must fail.
+    EXPECT_THROW(experimental::program_preparation::prepare(workload, submeshes[1].get()), std::exception);
+    EXPECT_NO_THROW(experimental::program_preparation::prepare(workload, submeshes[0].get()));
+}
+
 // A worker still reading its kernel config must not have that config overwritten, including on devices left out of the
 // workloads that follow. The host holds one device's worker while other devices run enough workloads to wrap the
 // mesh-wide config ring back onto the held worker's region.
