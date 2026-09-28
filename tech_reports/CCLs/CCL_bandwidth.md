@@ -214,18 +214,18 @@ Moving the tensors from DRAM into L1 does not change collective bandwidth. In ou
 
 ### Kernel time
 
-`N` is the number of devices and `input_bytes` the size of the tensor each device passes in. The first two terms are the startup latency, fitted over lines of two, four and eight devices. A ring keeps the line's constant, with its cost per hop set from the eight-device ring, the only ring measured. Where a collective switches algorithm on a ring at these sizes, as `reduce_scatter` does, that cost also reflects the change. The last term is the bytes through the busiest link over the peak rate they reach on eight devices. "Within" gives the typical and the worst miss against every size measured on eight devices. The worst lands in the ramp.
+`N` is the number of devices and `input_bytes` the size of the tensor each device passes in. The first two terms are the startup latency, fitted over lines of two, four and eight devices. A ring keeps the line's constant, with its cost per hop set from the eight-device ring, the only ring measured. The last term is the bytes through the busiest link over the peak rate they reach on eight devices. "Within" gives the typical and the worst miss against every size measured on eight devices. The worst lands in the ramp.
 
 | Collective | Topology | Wormhole | Blackhole |
 | --- | --- | --- | --- |
-| `all_gather` | line | pending | 3.7 µs + 1.3 µs × (N−1) + (N−1) × input_bytes ÷ 48 GB/s, within 3–11% |
-| | ring | pending | 3.7 µs + 1.6 µs × N/2 + (N−1) × input_bytes ÷ 95 GB/s, within 10–22% |
-| `reduce_scatter` | line | pending | 1.3 µs + 3.0 µs × (N−1) + (N−1)/N × input_bytes ÷ 40 GB/s, within 2–13% |
-| | ring | pending | 1.3 µs + 2.1 µs × N/2 + (N−1)/N × input_bytes ÷ 82 GB/s, within 9–43% |
-| `all_reduce` | line | pending | 4.4 µs + 4.4 µs × (N−1) + 2(N−1)/N × input_bytes ÷ 44 GB/s, within 3–12% |
-| | ring | pending | 4.4 µs + 3.9 µs × N/2 + 2(N−1)/N × input_bytes ÷ 86 GB/s, within 8–30% |
-| `all_to_all` | line | pending | 1.8 µs + 1.4 µs × (N−1) + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 33 GB/s, within 6–21% |
-| | ring | pending | 1.8 µs + 2.2 µs × N/2 + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 68 GB/s, within 1–14% |
+| `all_gather` | line | 4.5 µs + 1.9 µs × (N−1) + (N−1) × input_bytes ÷ 11.8 GB/s, within 0–9% | 3.7 µs + 1.3 µs × (N−1) + (N−1) × input_bytes ÷ 48 GB/s, within 3–11% |
+| | ring | 4.5 µs + 2.5 µs × N/2 + (N−1) × input_bytes ÷ 20.8 GB/s, within 1–19% | 3.7 µs + 1.6 µs × N/2 + (N−1) × input_bytes ÷ 95 GB/s, within 10–22% |
+| `reduce_scatter` | line | 3.2 µs + 4.0 µs × (N−1) + (N−1)/N × input_bytes ÷ 11.1 GB/s, within 3–16% | 1.3 µs + 3.0 µs × (N−1) + (N−1)/N × input_bytes ÷ 40 GB/s, within 2–13% |
+| | ring | 3.2 µs + 3.1 µs × N/2 + (N−1)/N × input_bytes ÷ 16.7 GB/s, within 2–58% | 1.3 µs + 2.1 µs × N/2 + (N−1)/N × input_bytes ÷ 82 GB/s, within 9–43% |
+| `all_reduce` | line | 9.1 µs + 5.8 µs × (N−1) + 2(N−1)/N × input_bytes ÷ 10.9 GB/s, within 4–12% | 4.4 µs + 4.4 µs × (N−1) + 2(N−1)/N × input_bytes ÷ 44 GB/s, within 3–12% |
+| | ring | 9.1 µs + 5.3 µs × N/2 + 2(N−1)/N × input_bytes ÷ 18.4 GB/s, within 3–47% | 4.4 µs + 3.9 µs × N/2 + 2(N−1)/N × input_bytes ÷ 86 GB/s, within 8–30% |
+| `all_to_all` | line | 3.0 µs + 2.1 µs × (N−1) + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 7.6 GB/s, within 2–28% | 1.8 µs + 1.4 µs × (N−1) + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 33 GB/s, within 6–21% |
+| | ring | 3.0 µs + 3.4 µs × N/2 + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 16.5 GB/s, within 0–12% | 1.8 µs + 2.2 µs × N/2 + ⌊N/2⌋⌈N/2⌉/N × input_bytes ÷ 68 GB/s, within 1–14% |
 
 ## Interpreting the curve
 
@@ -237,9 +237,9 @@ Poor packet fill produces a flat plateau instead. At a given fill, neither data 
 
 In our data, every curve keeps falling as size shrinks, and none of them flatten. Hence per-invocation cost sets the small-size behavior, not packet fill.
 
-**The ramp.** Fixed costs amortize as the payload grows. In our data, the floor-plus-ceiling model predicts `all_gather` on a line within about 5% at every size, on both machines. `reduce_scatter` runs slower than `all_gather`'s model: up to 35% at large sizes, and up to 90% at small sizes on a line. On a line, it passes data through a worker at every hop, which adds and forwards it. So each hop costs about twice as much as in `all_gather`.
+**The ramp.** Fixed costs amortize as the payload grows. In our data, the floor-plus-ceiling model predicts `all_gather` on a line within about 2% at typical sizes, and within 13% in the ramp, on both machines. `reduce_scatter` runs slower than `all_gather`'s model: up to 35% at large sizes, and up to 90% at small sizes on a line. On a line, it passes data through a worker at every hop, which adds and forwards it. So each hop costs about twice as much as in `all_gather`.
 
-**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics that differ by collective and topology, so bandwidth should be piecewise. In our data, ring `reduce_scatter` dips at 512 KiB and jumps at 1 MiB. Up to 512 KiB per device it uses a one-shot direct algorithm, which sends about 2.3× the bytes.
+**Steps in the ramp.** Worker cores per link and synchronization granularity are chosen by size-thresholded heuristics, so bandwidth can step or dip where a threshold sits.
 
 **The asymptote.** Fixed costs are negligible here. In our data, on Wormhole, lines flatten at 84–94% of line rate, close to the payload ceiling, and rings at 66–83%. On Blackhole topology makes no difference: lines reach 66–96% and rings 68–95%. L1 versus DRAM rules out memory hierarchy, which leaves the transfer pipeline: packet fill, worker count, and how well the implementation keeps the link fed.
 
