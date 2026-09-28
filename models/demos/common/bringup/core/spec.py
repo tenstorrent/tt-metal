@@ -190,6 +190,21 @@ class Spec:
         sel = set(self.layers())
         return next(i for i in parse_layers(info["layers"], self.num_layers) if i in sel)
 
+    def state_names(self, layer: int) -> list[str]:
+        """State tensor names of one layer: ``state.by_block_type[<its block type>]`` if given, else ``state.tensors``
+        (models whose layer types carry different state, e.g. an MLA latent cache on some layers and a linear-attention
+        recurrent state on others)."""
+        by_bt = self.get("state.by_block_type") or {}
+        if by_bt:
+            return list(by_bt.get(self.block_type_of(layer), []))
+        return list(self.get("state.tensors") or [])
+
+    @property
+    def state_fixed(self) -> list[str]:
+        """State tensors that do not grow along the sequence (recurrent state, conv tail): the state at position p
+        cannot be sliced out of the final state, so goldens store a snapshot at every chunk start tests need."""
+        return list(self.get("state.fixed") or [])
+
     def rung(self, name: str) -> dict:
         for r in self.data.get("ladder", []):
             if r["name"] == name:
@@ -283,4 +298,15 @@ class Spec:
             errs.append(f"hf.parity_seq {parity} must exceed the sliding window {window}, or HF parity never tests it")
         if not self.get("state.tensors"):
             errs.append("state.tensors must list the per-layer state tensor names (e.g. [key, value])")
+        names = set(self.get("state.tensors") or [])
+        by_bt = self.get("state.by_block_type") or {}
+        for bt, ns in by_bt.items():
+            if bt not in self.data["block_types"]:
+                errs.append(f"state.by_block_type: {bt} is not a block type")
+            elif set(ns or []) - names:
+                errs.append(f"state.by_block_type.{bt}: {sorted(set(ns) - names)} not in state.tensors")
+        if by_bt and set(self.data["block_types"]) - set(by_bt):
+            errs.append(f"state.by_block_type misses block types {sorted(set(self.data['block_types']) - set(by_bt))}")
+        if set(self.state_fixed) - names:
+            errs.append(f"state.fixed: {sorted(set(self.state_fixed) - names)} not in state.tensors")
         return errs

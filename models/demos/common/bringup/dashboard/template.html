@@ -720,7 +720,7 @@ function prior(){
       if (!P.layers.length && !P.gate.length) return `<div class="empty">No accuracy metrics on either side yet</div>`;
       return tbl("Per-layer PCC", "Layer output against the golden, per device run (ladder rungs and perf runs), matching task ids.",
           head("Task / layer") + "<tbody>" + grouped(P.layers, "task", r => `L${r.layer} ${esc(D.layer_types[r.layer] || "")}`, pcc, dp) + "</tbody>") +
-        tbl("Gate metrics", "Other accuracy metrics of matching tasks: end-to-end and chunk output, state (KV) PCC, top-k, reference parity.",
+        tbl("Gate metrics", "Other accuracy metrics of matching tasks: end-to-end and chunk output, state PCC, top-k, reference parity.",
           head("Task / metric") + "<tbody>" + grouped(P.gate.filter(r => !minor(r)), "task", r => esc(r.metric), pcc, dp) + "</tbody>") +
         (P.gate.some(minor) ? `<details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Component and swap PCC (${P.gate.filter(minor).length})</summary>` +
           tbl("", "", head("Task / metric") + "<tbody>" + grouped(P.gate.filter(minor), "task", r => esc(r.metric), pcc, dp) + "</tbody>") + "</details>" : ""); }},
