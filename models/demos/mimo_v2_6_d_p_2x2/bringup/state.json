@@ -4211,6 +4211,25 @@
   "started": "2026-09-28T07:50:53",
   "status": "PASS"
  },
+ "X.2": {
+  "attempts": 0,
+  "duration_s": 1.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T07:51:51"
+   }
+  ],
+  "last_run": "2026-09-28T07:51:51",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/X.2.log",
+  "metrics": {
+   "opportunities_listed": 12
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T07:51:49",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T04:27:18",
