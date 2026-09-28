@@ -59,23 +59,66 @@ inline void init_typecast() {
 
 // Load one SFPU pass worth of rows from Dest as VTYPE (vFloat for floats, vSMag/vInt for ints —
 // ints load as sign-magnitude int32, and unsigned sources zero-extend so the sign-mag view stays
-// non-negative). The raw load builtin is used directly (rather than sfpi::dst_reg[].mode<>())
-// because the DataLayout abstraction has no encoding for UInt8 (sfpmem 0b1011) and no 8-bit Dest
-// operator on Quasar; the _sfpu_sfpmem_type_<FMT>() selector covers every typecast endpoint. The
-// load uses ADDR_MOD_7 (all-zeroes, no increment) — the paired store advances Dest via ADDR_MOD_6.
-// TODO: once DataLayout gains Int8/UInt8, load via sfpi::dst_reg[0].mode<...>() instead of the raw builtin.
+// non-negative).
 template <typename VTYPE, DataFormat FMT>
 inline VTYPE _typecast_load_() {
-    return VTYPE(__builtin_rvtt_sfpload(0 /* dest_reg */, _sfpu_sfpmem_type_<FMT>(), ADDR_MOD_7));
+    if constexpr (
+        FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
+        FMT == DataFormat::Tf32) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Float16     ? sfpi::DataLayout::F16a
+                                    : FMT == DataFormat::Float16_b ? sfpi::DataLayout::F16b
+                                    : FMT == DataFormat::Float32 || FMT == DataFormat::Tf32
+                                        ? sfpi::DataLayout::F32
+            : sfpi::DataLayout::None;  // Invalid, compile error
+        return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<layout> ()));
+    } else if constexpr (FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32   ? sfpi::DataLayout::SM32
+                                    : FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16
+                                    : FMT == DataFormat::Int8  ? sfpi::DataLayout::SM8
+            : sfpi::DataLayout::None;
+        return sfpi::as<VTYPE>(sfpi::vSMag(sfpi::dst_reg[0].mode<layout> ()));
+    } else if constexpr (FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8) {
+                                   constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16  ? sfpi::DataLayout::U16
+                                    : FMT == DataFormat::UInt8 ? sfpi::DataLayout::U8
+                                       : sfpi::DataLayout::None;
+        return sfpi::as<VTYPE>(sfpi::vUInt(sfpi::dst_reg[0].mode<layout> ()));
+    } else {
+        // No dedicated SFPU mode (fp8, MX block formats, 4-bit ints): fall back to the implied/
+        // default register-file format. Matches the runtime overload's default case.
+        return sfpi::as<VTYPE>(sfpi::vFloat(sfpi::dst_reg[0].mode<sfpi::DataLayout::FSrcB> ()));
+    }
 }
 
 // ADDR_MOD_6 post-increments Dest by one SFPU pass (SFP_ROWS), so the store both writes the result
 // and advances to the next pair of rows — replacing the per-iteration _incr_counters_. Requires
 // init_typecast to have programmed ADDR_MOD_6.
-// TODO: once DataLayout gains Int8/UInt8, store via sfpi::dst_reg[0].mode<...>() instead of the raw builtin.
 template <DataFormat FMT, typename TYPE>
 inline void _typecast_store_(TYPE value) {
-    __builtin_rvtt_sfpstore(value.get(), 0 /* dest_reg */, _sfpu_sfpmem_type_<FMT>(), ADDR_MOD_6);
+    if constexpr (
+        FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32 ||
+        FMT == DataFormat::Tf32) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Float16     ? sfpi::DataLayout::F16a
+                                    : FMT == DataFormat::Float16_b ? sfpi::DataLayout::F16b
+                                    : FMT == DataFormat::Float32 || FMT == DataFormat::Tf32
+                                        ? sfpi::DataLayout::F32
+            : sfpi::DataLayout::None;  // Invalid, compile error
+        sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(value);
+    } else if constexpr (FMT == DataFormat::Int32 || FMT == DataFormat::Int16 || FMT == DataFormat::Int8) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::Int32   ? sfpi::DataLayout::SM32
+                                    : FMT == DataFormat::Int16 ? sfpi::DataLayout::SM16
+                                    : FMT == DataFormat::Int8  ? sfpi::DataLayout::SM8
+            : sfpi::DataLayout::None;
+        sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vSMag>(value);
+    } else if constexpr (FMT == DataFormat::UInt16 || FMT == DataFormat::UInt8) {
+        constexpr sfpi::DataLayout layout = FMT == DataFormat::UInt16  ? sfpi::DataLayout::U16
+                                    : FMT == DataFormat::UInt8 ? sfpi::DataLayout::U8
+            : sfpi::DataLayout::None;
+        sfpi::dst_reg[0].mode<layout>(ADDR_MOD_6) = sfpi::as<sfpi::vUInt>(value);
+    } else {
+        // No dedicated SFPU mode (fp8, MX block formats, 4-bit ints): fall back to the implied/
+        // default register-file format. Matches the runtime overload's default case.
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::FSrcB>(ADDR_MOD_6) = sfpi::as<sfpi::vFloat>(value);
+    }
 }
 
 // fp32 -> fp16 narrow, picking the fp16a/fp16b variant from the destination format. Round-nearest-
