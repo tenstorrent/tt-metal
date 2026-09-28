@@ -94,8 +94,9 @@ struct MaxUtilConfig {
     uint32_t eth_dram_buffer_addr = 0;  // DRAM src base address for ETH streaming
     uint32_t eth_pages_per_bank = 0;    // pages per bank read per iteration
     uint32_t eth_l1_staging_addr = 0;   // ETH L1 unreserved base (first 16 bytes = timing scratch)
-    // DRAM read transaction size.  Larger values saturate bandwidth better.
-    uint32_t eth_page_size = 1024;  // 1KB found to be optimal for BH
+    // DRAM read transaction size. Larger values generally amortize NOC command
+    // overhead better; Blackhole supports bursts up to 16 KiB.
+    uint32_t eth_page_size = 1024;
     // ETH loop count: 8x fewer loops than compute to match kernel duration.
     uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
 
@@ -172,6 +173,28 @@ static uint32_t get_dram_utilization_pct() {
     return 100;
 }
 
+/// Reads MAX_UTIL_DRAM_PAGE_SIZE_BYTES from the environment; defaults to 1024.
+/// Valid values are power-of-two NOC burst sizes in [512, 16384].
+static uint32_t get_dram_page_size_bytes() {
+    constexpr uint32_t default_page_size = 1024;
+    const char* env = std::getenv("MAX_UTIL_DRAM_PAGE_SIZE_BYTES");
+    if (env != nullptr) {
+        try {
+            int val = std::stoi(env);
+            if (val >= 512 && val <= 16384 && (val & (val - 1)) == 0) {
+                return static_cast<uint32_t>(val);
+            }
+        } catch (...) {
+        }
+        log_warning(
+            LogTest,
+            "MAX_UTIL_DRAM_PAGE_SIZE_BYTES='{}' is not a power of two in [512, 16384] – using default of {}",
+            env,
+            default_page_size);
+    }
+    return default_page_size;
+}
+
 /// Reads MAX_UTIL_SUPER_SYNC from the environment.
 /// Any non-empty value other than "0" or "false" enables super-sync.
 /// Defaults to false.
@@ -202,6 +225,7 @@ static MaxUtilConfig full_grid_config(
     cfg.num_slow_wl_loops = num_slow_wl_loops;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
     cfg.eth_dram_util_pct = get_dram_utilization_pct();
+    cfg.eth_page_size = get_dram_page_size_bytes();
     cfg.super_sync = super_sync;
     return cfg;
 }
@@ -829,8 +853,13 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
             auto eth_kernel = CreateKernel(
                 program, "tests/didt/max_util_workload/kernels/eth_dram_reader.cpp", CoreRangeSet(eth_ranges), eth_cfg);
 
-            for (const auto& [core, bank_id] : assignments) {
-                SetRuntimeArgs(program, eth_kernel, core, {cfg.eth_dram_buffer_addr, cfg.eth_l1_staging_addr, bank_id});
+            for (uint32_t stream = 0; stream < assignments.size(); ++stream) {
+                const auto& [core, bank_id] = assignments[stream];
+                // Spread concurrent read requests across VCs, matching the
+                // DRAM bandwidth microbenchmark's contention-avoidance strategy.
+                const uint32_t read_vc = stream & 0x3;
+                SetRuntimeArgs(
+                    program, eth_kernel, core, {cfg.eth_dram_buffer_addr, cfg.eth_l1_staging_addr, bank_id, read_vc});
             }
 
             log_info(

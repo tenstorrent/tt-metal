@@ -17,10 +17,11 @@
 //   3: noc_wait_cycles   – cycles to busy-wait between consecutive NOC page issues;
 //                          0 = no throttle (maximum DRAM utilization)
 //
-// Runtime args (indices 0..2):
+// Runtime args (indices 0..3):
 //   0: dram_src_addr       – base DRAM buffer address (interleaved across banks)
 //   1: eth_l1_staging_addr – ETH L1 unreserved base; first 16 bytes hold timing output
 //   2: bank_id             – which DRAM bank this core is assigned to
+//   3: read_vc             – static NOC request VC for this stream
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -35,6 +36,7 @@ void kernel_main() {
     const uint32_t dram_src_addr = get_arg_val<uint32_t>(0);
     const uint32_t eth_l1_staging_addr = get_arg_val<uint32_t>(1);
     const uint32_t bank_id = get_arg_val<uint32_t>(2);
+    const uint32_t read_vc = get_arg_val<uint32_t>(3);
 
     // Timing output occupies the first 16 bytes; data staging starts after.
     volatile tt_l1_ptr uint32_t* timing_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_staging_addr);
@@ -46,14 +48,14 @@ void kernel_main() {
 
     // Set stateful-packet read state once for the assigned bank and page size;
     // the state only needs to be re-set if the source NOC address changes.
-    noc_async_read_one_packet_set_state(bank_noc_base, page_size_bytes);
+    noc_async_read_one_packet_set_state<true>(bank_noc_base, page_size_bytes, read_vc);
 
     uint64_t t0 = eth_read_wall_clock();
 
     for (uint32_t iter = 0; iter < num_loops; iter++) {
         uint32_t dst = l1_data_addr;
         for (uint32_t p = 0; p < pages_per_bank; p++) {
-            noc_async_read_one_packet_with_state(bank_noc_base + p * page_size_bytes, dst);
+            noc_async_read_one_packet_with_state<true, true>(bank_noc_base + p * page_size_bytes, dst, read_vc);
             dst += page_size_bytes;
 
             // Throttle DRAM utilization by busy-waiting between NOC issue commands.
