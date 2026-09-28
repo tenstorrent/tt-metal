@@ -616,3 +616,62 @@ def test_softsign_bf16_compiled_contract(device):
     assert_bfloat16_compiled_contract(
         host, result, _reference, _real_domain_mask, _raw_to_reference_input(), _NUMERIC_TERMINALS
     )
+
+
+@pytest.mark.skipif(
+    not (is_blackhole() or is_wormhole_b0()), reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0"
+)
+def test_tanhshrink_bf16_compiled_contract(device):
+    import importlib
+    import numpy as np
+
+    _RAW_TO_REFERENCE_INPUT_BY_ARCH = {
+        "blackhole": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "pos_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "pos_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "pos_inf",
+            "neg_nan": "pos_inf",
+        },
+        "wormhole_b0": {
+            "pos_zero": "pos_zero",
+            "neg_zero": "neg_zero",
+            "pos_subnormal": "pos_zero",
+            "neg_subnormal": "neg_zero",
+            "finite_other": "finite_other",
+            "pos_inf": "pos_inf",
+            "neg_inf": "neg_inf",
+            "pos_nan": "nan",
+            "neg_nan": "nan",
+        },
+    }
+
+    def _raw_to_reference_input():
+        if is_blackhole():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["blackhole"]
+        if is_wormhole_b0():
+            return _RAW_TO_REFERENCE_INPUT_BY_ARCH["wormhole_b0"]
+        raise AssertionError("no compiled ingress contract for current architecture")
+
+    def _declared_forward(x):
+        'Cancellation-free tanhshrink golden (odd series below |x| = 1e-3).\n\n    This is THE canonical stable tanhshrink form, referenced from\n    ``activations/tanhshrink.json`` via ``"golden_impl":\n    "tanhshrink_odd_series"``. fp64 ``x - tanh(x)`` is exactly 0 below\n    |x| ~ 1.3e-8 (true value x^3/3) and bleeds relative accuracy below\n    |x| ~ 1e-3; the odd series has relative error ~7e-17 at the crossover.\n    The fp32 mirror in\n    ``deployment/generic_lut_activation/activation_reference.hpp`` uses the\n    same series with an fp32-appropriate crossover (0.1); keep the two in\n    sync when touching either.'
+        x = np.asarray(x, dtype=np.float64)
+        x2 = x * x
+        series = x * x2 * (1.0 / 3.0 + x2 * (-2.0 / 15.0 + x2 * (17.0 / 315.0)))
+        return np.where(np.abs(x) < 0.001, series, x - np.tanh(x))
+
+    def _reference(values):
+        return torch.from_numpy(_declared_forward(values.numpy()))
+
+    def _real_domain_mask(values):
+        return np.ones(values.shape, dtype=bool)
+
+    host = generate_all_bfloat16_bitpatterns()
+    assert host.numel() == 65536
+    device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.tanhshrink(device_input, **{})).to(torch.bfloat16)
+    assert_bfloat16_compiled_contract(host, result, _reference, _real_domain_mask, _raw_to_reference_input(), ((), ()))
