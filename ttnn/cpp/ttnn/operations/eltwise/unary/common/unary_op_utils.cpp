@@ -845,6 +845,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("rsqrt_tile<RsqrtMode::{1}>({0});", idst, param0_raw ? "Fast" : "Default")};
         }
         case UnaryOpType::SQRT: {
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0_raw == 0) {
+                return {"sqrt_tt_poly_bf16_tile_init();", fmt::format("sqrt_tt_poly_bf16_tile<false>({});", idst)};
+            }
+#endif
+
             return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};
         }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
@@ -1085,7 +1091,13 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             return {"lez_tile_init();", fmt::format("        lez_tile({});", idst)};
 
-        case UnaryOpType::SQRT: return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
+        case UnaryOpType::SQRT:
+#if !defined(TT_POLY_LLK_DISABLE)
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"sqrt_tt_poly_bf16_tile_init();", fmt::format("sqrt_tt_poly_bf16_tile({});", idst)};
+            }
+#endif
+            return {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)};
         case UnaryOpType::RSQRT: return {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)};
         case UnaryOpType::CBRT:
 #if !defined(TT_POLY_LLK_DISABLE)

@@ -411,6 +411,17 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 #if !defined(TT_POLY_LLK_DISABLE)
     if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
         !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
+        ops_chain[0].type() == UnaryOpType::SQRT &&
+        (unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "sqrt_tt_poly_bf16_tile_init();" ||
+         unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "sqrt_tt_poly_bf16_tile_init<false>();") &&
+        (input.device()->arch() == tt::ARCH::BLACKHOLE || input.device()->arch() == tt::ARCH::WORMHOLE_B0)) {
+        unary_defines["TT_POLY_BF16_UNARY_CONTEXT"] = "1";
+        unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "sqrt_tt_poly_bf16_program_init();";
+    }
+#endif
+#if !defined(TT_POLY_LLK_DISABLE)
+    if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
+        !operation_attributes.fp32_dest_acc_en && !operation_attributes.preserve_fp32_precision &&
         ops_chain[0].type() == UnaryOpType::SOFTSIGN &&
         (unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "softsign_tt_poly_bf16_tile_init();" ||
          unary_defines.at("SFPU_OP_CHAIN_0_INIT_0") == "softsign_tt_poly_bf16_tile_init<false>();") &&
