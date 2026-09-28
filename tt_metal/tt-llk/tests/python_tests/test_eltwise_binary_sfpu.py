@@ -1946,6 +1946,14 @@ def _tt_poly_declared_hardtanh_bw(x):
     return result.astype(np.float64) * 1.0
 
 
+def _tt_poly_declared_leaky_relu_bw(x):
+    raw = np.asarray(x, dtype=np.float32).view(np.uint32) >> 16
+    result = np.zeros(raw.shape, dtype=np.uint32)
+    for first, stop, word in ((0, 1, 15396), (1, 32641, 16256), (32641, 65536, 15396)):
+        result[(raw >= first) & (raw < stop)] = word << 16
+    return result.view(np.float32).astype(np.float64)
+
+
 def _tt_poly_declared_log_sigmoid_bw(x):
     def _declared_derivative(x):
         exp = np.exp
@@ -2003,6 +2011,7 @@ def _tt_poly_declared_tanhshrink_bw(x):
         ("hardsigmoid_bw", False, _tt_poly_declared_hardsigmoid_bw, ()),
         ("hardswish_bw", False, _tt_poly_declared_hardswish_bw, (-3.0, -1.5, 3.0)),
         ("hardtanh_bw", True, _tt_poly_declared_hardtanh_bw, ()),
+        ("leaky_relu_bw", False, _tt_poly_declared_leaky_relu_bw, ()),
         ("log_sigmoid_bw", False, _tt_poly_declared_log_sigmoid_bw, ()),
         ("softplus_bw", False, _tt_poly_declared_softplus_bw, ()),
         ("softshrink_bw", True, _tt_poly_declared_softshrink_bw, ()),

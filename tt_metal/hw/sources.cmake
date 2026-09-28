@@ -442,4 +442,5 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
     inc/api/compute/eltwise_unary/hardswish_tt_poly_bf16.h
+    inc/api/compute/eltwise_unary/leaky_relu_bw_tt_poly_bf16.h
 )
