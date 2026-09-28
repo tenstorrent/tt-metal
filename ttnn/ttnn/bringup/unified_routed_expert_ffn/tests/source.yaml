@@ -1,0 +1,49 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.unified_routed_expert_moe), run in place against this
+# fork (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". Every test reaches the op through TtRoutedExpert
+# (models/demos/deepseek_v3_d_p/tt/moe/tt_routed_expert.py), which looks it up by name at call time.
+#
+# The enum: the fork binds its own ttnn.bringup.RoutedExpertActivation (it adds GeluTanh), and the op rejects the
+# original type. The original enum cannot be swapped, because the same tests and TtRoutedExpert hand it to original
+# ops too (moe_fused_swiglu in the hybrid split, routed_expert_ffn) and compare against it in their checks. So the
+# swap keeps it and wraps the fork op instead: convert_enums maps an original-enum argument to the fork enum's member
+# of the same name, at the fork op only. With high_precision off (the default, which no upstream test sets), the fork
+# runs the source's program for the source's four activations.
+#
+# All but one entry are single-chip (the op is Blackhole-only, and its nightly tests run one chip, one expert, or a few
+# experts on one chip). The one multi-device entry is the 2x2 fabric2d mesh of the weight-cache test.
+#
+# Excluded: the perf files (test_single_routed_expert_perf.py, test_routed_expert_crossover_perf.py: device-profiler
+# timing, no check); the rest of the exhaustive ISL sweeps (72 + 72 cases of the same two models; a few counts are
+# kept) and of the K3 token sweep (all SituGlu at one shape); test_ttnn_moe.py and the MoE block/model tests (the
+# whole MoE block); test_moe_fused_swiglu.py (another op, moe_fused_swiglu, which the hybrid entry still reaches).
+# Not covered: the fork's two changes (GeluTanh, high_precision=True), since no upstream test has them; the fork's own
+# tests/test_unified_routed_expert_ffn.py covers them (the model cases).
+#
+# Baseline 103/103 on both the original and the fork, no gaps. Recording took about 8.5 minutes, one entry at a time;
+# a check (fork only, warm) about 3 minutes.
+upstream_sha: 8d964822541a8846daf5d221ff531df4069f3635
+swap:
+  ttnn.experimental.deepseek_prefill.unified_routed_expert_moe:
+    op: ttnn.bringup.unified_routed_expert_moe
+    convert_enums:
+      ttnn.RoutedExpertActivation: ttnn.bringup.RoutedExpertActivation
+tests:
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_swigluoai_routed_expert.py
+    why: "activations vs a torch reference, 1 chip 1 expert: clamped SwiGluOai (the clamp exercised) at 128 and 1k tokens and at MiniMax-M3 shapes up to 4k, Silu unchanged, SwiGluOai run-to-run determinism; the host-only enum check (on the original enum)"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_bias.py
+    why: "gate/up/down expert biases, 1 chip: gpt-oss SwiGluOai and Kimi K3 SituGlu at 128 and 1k tokens, 4 experts with different counts (per-expert bias wiring, count bounding), program-cache hits that must patch bias, activation, routing and weight addresses, ClampedSiluGlu + bias rejected by TtRoutedExpert, the host-only reference smoke test"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py
+    k: "test_single_routed_expert_functional and (isl-251 or isl-3001)"
+    why: "Silu, 1 chip 1 expert, 5120-row buffer with ragged active counts 251 and 3001: 7 model shapes (dsv3, minimax_m27, glm_51, dsv4_pro, dsv4_flash, gptoss_120b, kimi_k2_7), ROW_MAJOR bf16 and TILE bf8 x"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py
+    k: "test_single_routed_expert_isl_sweep and kimi_k2_7 and (isl-0 or isl-128 or isl-5120)"
+    why: "count-aware sparsity at the ends of the range (0, 128 and all 5120 active), kimi_k2_7 shape, ROW_MAJOR and TILE x, interleaved and DRAM ND-sharded weights"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py
+    k: "test_single_routed_expert_k3_saturated or test_single_routed_expert_dsv4_clamped or (test_single_routed_expert_k3_sweep and (t32 or t5120))"
+    why: "the capped activations: Kimi K3 SituGlu at 32 and 5120 tokens and saturated (bf8 and bf4 weights, cap fractions checked), DeepSeek-V4 pro/flash ClampedSiluGlu partial and deep saturation, ROW_MAJOR and TILE x"
+  - path: tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_routed_expert_hybrid.py
+    k: "test_tt_routed_expert_hybrid_functional or (test_tt_routed_expert_hybrid_isl_sweep and w_ndshard and (t0- or t1024 or t2048))"
+    why: "the hybrid split (counts <= the model's threshold, 320 for glm_51 and kimi_k2_7, to moe_fused_swiglu, which stays the original; the rest to this op via min_active_tokens): 251 fused, 768/1024/2048/3001 on this op, 0 on neither; ROW_MAJOR and TILE x (the TILE composite input is a clone), interleaved and ND-sharded weights"
+  - path: models/demos/deepseek_v3_d_p/tests/cache/test_routed_expert_cache.py
+    why: "the op on a 4-chip EP mesh (fabric2d 2x2, 64 experts, 16 per chip, dispatched buffer): weights vs cold vs warm weight cache give the same output; plus the host-only dtype-aware cache check"

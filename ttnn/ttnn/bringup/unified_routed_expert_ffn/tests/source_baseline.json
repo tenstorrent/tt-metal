@@ -1,0 +1,417 @@
+{
+ "upstream_sha": "8d964822541a8846daf5d221ff531df4069f3635",
+ "tests": {
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_routed_expert_activation_enum_exposed": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_silu_routed_expert_unchanged[silicon_arch_name=blackhole-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_swigluoai_routed_expert[silicon_arch_name=blackhole-single-chip-t128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_swigluoai_routed_expert[silicon_arch_name=blackhole-single-chip-t1k]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_swigluoai_routed_expert_deterministic[silicon_arch_name=blackhole-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_swigluoai_routed_expert_m3_shapes[silicon_arch_name=blackhole-single-chip-t128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_swigluoai_routed_expert_m3_shapes[silicon_arch_name=blackhole-single-chip-t1k]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_swigluoai_routed_expert::test_swigluoai_routed_expert_m3_shapes[silicon_arch_name=blackhole-single-chip-t4k]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_clamped_silu_glu_biases_rejected[silicon_arch_name=blackhole-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_gptoss_bias_cache_hit[silicon_arch_name=blackhole-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_gptoss_bias_multi_expert[silicon_arch_name=blackhole-single-chip-e4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_gptoss_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_gptoss_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t1k]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_gptoss_bias_torch_reference_smoke": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_gptoss_routed_expert_cache_bindings[silicon_arch_name=blackhole-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_situglu_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_bias::test_situglu_bias_routed_expert[silicon_arch_name=blackhole-single-chip-t1k]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-dsv3-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-dsv3-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-dsv4_flash-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-dsv4_flash-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-dsv4_pro-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-dsv4_pro-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-glm_51-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-glm_51-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-gptoss_120b-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-gptoss_120b-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-kimi_k2_7-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-kimi_k2_7-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-minimax_m27-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_rm-minimax_m27-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-dsv3-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-dsv3-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-dsv4_flash-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-dsv4_flash-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-dsv4_pro-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-dsv4_pro-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-glm_51-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-glm_51-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-gptoss_120b-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-gptoss_120b-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-kimi_k2_7-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-kimi_k2_7-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-minimax_m27-isl-251]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_functional[silicon_arch_name=blackhole-x_tile-minimax_m27-isl-3001]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_interleaved-x_rm-kimi_k2_7-isl-0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_interleaved-x_rm-kimi_k2_7-isl-128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_interleaved-x_rm-kimi_k2_7-isl-5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_interleaved-x_tile-kimi_k2_7-isl-0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_interleaved-x_tile-kimi_k2_7-isl-128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_interleaved-x_tile-kimi_k2_7-isl-5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-kimi_k2_7-isl-0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-kimi_k2_7-isl-128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-kimi_k2_7-isl-5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-kimi_k2_7-isl-0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-kimi_k2_7-isl-128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-kimi_k2_7-isl-5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_rm-flash_deep-bf4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_rm-flash_deep-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_rm-flash_partial-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_rm-pro_deep-bf4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_rm-pro_deep-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_rm-pro_partial-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_tile-flash_deep-bf4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_tile-flash_deep-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_tile-flash_partial-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_tile-pro_deep-bf4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_tile-pro_deep-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_dsv4_clamped[silicon_arch_name=blackhole-x_tile-pro_partial-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_saturated[silicon_arch_name=blackhole-sat_deep-bf4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_saturated[silicon_arch_name=blackhole-sat_deep-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_saturated[silicon_arch_name=blackhole-sat_partial-bf4]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_saturated[silicon_arch_name=blackhole-sat_partial-bf8]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_sweep[silicon_arch_name=blackhole-x_rm-t32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_sweep[silicon_arch_name=blackhole-x_rm-t5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_sweep[silicon_arch_name=blackhole-x_tile-t32]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert::test_single_routed_expert_k3_sweep[silicon_arch_name=blackhole-x_tile-t5120]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_rm-glm_51-t251-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_rm-glm_51-t3001-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_rm-glm_51-t768-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_rm-kimi_k2_7-t251-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_rm-kimi_k2_7-t3001-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_rm-kimi_k2_7-t768-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_tile-glm_51-t251-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_tile-glm_51-t3001-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_tile-glm_51-t768-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_tile-kimi_k2_7-t251-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_tile-kimi_k2_7-t3001-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_functional[silicon_arch_name=blackhole-x_tile-kimi_k2_7-t768-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-glm_51-t0-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-glm_51-t1024-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-glm_51-t2048-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-kimi_k2_7-t0-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-kimi_k2_7-t1024-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_rm-kimi_k2_7-t2048-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-glm_51-t0-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-glm_51-t1024-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-glm_51-t2048-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-kimi_k2_7-t0-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-kimi_k2_7-t1024-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_routed_expert_hybrid::test_tt_routed_expert_hybrid_isl_sweep[silicon_arch_name=blackhole-w_ndshard-x_tile-kimi_k2_7-t2048-single-chip]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.cache.test_routed_expert_cache::test_routed_expert_check_cache_complete_is_dtype_aware": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "models.demos.deepseek_v3_d_p.tests.cache.test_routed_expert_cache::test_routed_expert_weights_cold_warm_cache[blackhole-fabric2d-2x2]": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}

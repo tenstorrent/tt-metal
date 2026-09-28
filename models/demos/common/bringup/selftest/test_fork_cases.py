@@ -78,6 +78,48 @@ def test_source_swap_points_the_original_name_at_the_fork(monkeypatch):
     assert orig_mod.op == "original"
 
 
+def test_source_swap_converts_enum_arguments_at_the_fork_op(monkeypatch):
+    """A swap entry with convert_enums wraps the fork op: original-enum arguments become the fork enum's same-named
+    members; the original enum itself stays in place for the other original ops."""
+    import enum
+    import sys
+    import types
+
+    from models.demos.common.bringup.testing import fork_source as S
+
+    class Orig(enum.Enum):
+        A = 0
+        B = 1
+
+    class Fork(enum.Enum):
+        A = 0
+        B = 1
+        C = 2
+
+    orig_mod = types.ModuleType("fakepkg_eorig")
+    orig_mod.op, orig_mod.Act = (lambda *a, **k: "original"), Orig
+    fork_mod = types.ModuleType("fakepkg_efork")
+    fork_mod.Act = Fork
+
+    def fork_op(x, activation=Fork.A, other=None):
+        assert isinstance(activation, Fork), activation
+        return (x, activation, other)
+
+    fork_mod.op = fork_op
+    monkeypatch.setitem(sys.modules, "fakepkg_eorig", orig_mod)
+    monkeypatch.setitem(sys.modules, "fakepkg_efork", fork_mod)
+    spec = {"op": "fakepkg_efork.op", "convert_enums": {"fakepkg_eorig.Act": "fakepkg_efork.Act"}}
+    monkeypatch.setenv(S.ENV, json.dumps({"fakepkg_eorig.op": spec}))
+    S.pytest_configure(None)
+    try:
+        assert orig_mod.Act is Orig
+        assert orig_mod.op(1, activation=Orig.B, other="z") == (1, Fork.B, "z")
+        assert orig_mod.op(Orig.B) == (Fork.B, Fork.A, None)  # positional too
+    finally:
+        S.pytest_unconfigure(None)
+    assert orig_mod.op() == "original"
+
+
 def test_source_outcomes_from_junit(tmp_path):
     from models.demos.common.bringup.testing import fork_source as S
 
