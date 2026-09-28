@@ -93,10 +93,40 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
-inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// The three lowest residual-polynomial coefficients of the build's fit, which softplus_init parks in
+// vConstFloatPrgm0/1/2 for calculate_softplus (this kernel runs no reciprocal, so Prgm0 is free).
+#ifdef INP_FLOAT32
+constexpr float SOFTPLUS_PRGM_C0 = SOFTPLUS_POLY_C0;
+constexpr float SOFTPLUS_PRGM_C1 = SOFTPLUS_POLY_C1;
+constexpr float SOFTPLUS_PRGM_C2 = SOFTPLUS_POLY_C2;
+#else
+constexpr float SOFTPLUS_PRGM_C0 = SOFTPLUS_BF16_POLY_C0;
+constexpr float SOFTPLUS_PRGM_C1 = SOFTPLUS_BF16_POLY_C1;
+constexpr float SOFTPLUS_PRGM_C2 = SOFTPLUS_BF16_POLY_C2;
+#endif
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
+inline void softplus_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstFloatPrgm0 = SOFTPLUS_PRGM_C0;
+    sfpi::vConstFloatPrgm1 = SOFTPLUS_PRGM_C1;
+    sfpi::vConstFloatPrgm2 = SOFTPLUS_PRGM_C2;
+}
+
+// One row. The scalars and the polynomial's three lowest coefficients are supplied by the caller: for
+// calculate_softplus the scalars are sfpi::vFloats built once before its loop (a runtime float used per row
+// otherwise costs RISC-built SFPLOADIs on every row) and the coefficients are vConstFloatPrgm0/1/2 from
+// softplus_init; the SDPA fused kernel passes plain floats and literals and is unchanged. Identical
+// arithmetic either way (sfpi 7.83.0 never hoists a loop-invariant literal by itself).
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    typename B,
+    typename BR,
+    typename T,
+    typename C0,
+    typename C1,
+    typename C2>
+inline void calculate_softplus_body(B beta, BR beta_reciprocal, T threshold, C0 c0, C1 c1, C2 c2) {
     sfpi::vFloat val = sfpi::dst_reg[0];
     sfpi::vFloat t = beta * val;
 
@@ -108,9 +138,9 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // FP32: f(a) via degree-8 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
             a,
-            SOFTPLUS_POLY_C0,
-            SOFTPLUS_POLY_C1,
-            SOFTPLUS_POLY_C2,
+            c0,
+            c1,
+            c2,
             SOFTPLUS_POLY_C3,
             SOFTPLUS_POLY_C4,
             SOFTPLUS_POLY_C5,
@@ -129,14 +159,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 #else
         // BF16: f(a) via degree-6 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
-            a,
-            SOFTPLUS_BF16_POLY_C0,
-            SOFTPLUS_BF16_POLY_C1,
-            SOFTPLUS_BF16_POLY_C2,
-            SOFTPLUS_BF16_POLY_C3,
-            SOFTPLUS_BF16_POLY_C4,
-            SOFTPLUS_BF16_POLY_C5,
-            SOFTPLUS_BF16_POLY_C6);
+            a, c0, c1, c2, SOFTPLUS_BF16_POLY_C3, SOFTPLUS_BF16_POLY_C4, SOFTPLUS_BF16_POLY_C5, SOFTPLUS_BF16_POLY_C6);
 
         // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
         // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
@@ -161,13 +184,23 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     v_endif;
 }
 
+// Self-contained row: every constant a literal, the scalars plain floats (used by the SDPA fused kernel).
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
+    calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(
+        beta, beta_reciprocal, threshold, SOFTPLUS_PRGM_C0, SOFTPLUS_PRGM_C1, SOFTPLUS_PRGM_C2);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
-    const float beta = Converter::as_float(param0);
-    const float beta_reciprocal = Converter::as_float(param1);
-    const float threshold = Converter::as_float(param2);
+    // The three runtime scalars, converted to vectors once and kept in LRegs (per row they would each be
+    // RISC-built SFPLOADIs); the polynomial's lowest coefficients come from Prgm0/1/2 (softplus_init).
+    sfpi::vFloat beta = Converter::as_float(param0);
+    sfpi::vFloat beta_reciprocal = Converter::as_float(param1);
+    sfpi::vFloat threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
+        calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(
+            beta, beta_reciprocal, threshold, sfpi::vConstFloatPrgm0, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2);
         sfpi::dst_reg++;
     }
 }
