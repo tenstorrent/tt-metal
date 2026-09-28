@@ -185,3 +185,14 @@ Prior bring-up: mimo_v2_6_d_p (mesh 1x4); goldens and CPU reference shared. Appe
 - The default gate (2x2) already passes because the device residual module exists: PCC 0.999997, rel 0.0028, ratio [1.0003, 1.0023], coef 1.0020,
   mlp term rel 0.0038. The first `FAIL pcc=0` line comes from the precompile collect pass.
 - Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_mlp_residual.py`
+
+## S.full_dense.06.test.1 (test role), 2026-09-28
+- Replaced the rendered swap test with this run's reviewed swap 05 plus mlp_residual, following the 1x4 prior's frozen swap 06:
+  mlp_residual vs golden rel <= 0.01, ratio [0.99, 1.01], first 128 rows; vs CPU on the same device h_mid/mlp_out rel <= 0.01, ratio
+  [0.99, 1.01], worst row <= 0.02. The addend check now runs for both residuals: attn_out in h_mid - in and mlp_out in out - h_mid,
+  coef [0.95, 1.05], rel <= 0.3. Metric names changed from attn_coef_swap_h_mid to addend_coef_swap_{h_mid,out}. These are informational
+  only.
+- BRINGUP_IMPL=reference: out 0.999999 / rel 0.0017, PASS. BRINGUP_IMPL=stub: FAIL.
+- Device gate (2x2): pcc_swap_out 0.999992, out rel 0.0059, ratio [1.0017, 1.0085] (limit 1.01), mlp_residual vs CPU rel 0.0019,
+  mlp_out coef 1.0020, PASS. The device error accumulates as a small upward norm bias: h_mid max 1.0084, out max 1.0085.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_06_mlp_residual.py`
