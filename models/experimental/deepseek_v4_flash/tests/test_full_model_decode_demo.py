@@ -467,7 +467,8 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                 if decode_tokens % 64 == 0:
                     logger.info(
                         f"decode throughput: {decode_tokens / decode_time:.2f} tok/s "
-                        f"({decode_tokens} tokens in {decode_time:.2f}s)"
+                        f"({decode_tokens} tokens in {decode_time:.2f}s), "
+                        f"lightning indexer: {'used' if model._index_sparse_step(pos) else 'not used'} (pos {pos})"
                     )
                     decode_tokens = 0
                     decode_time = 0.0
