@@ -59,9 +59,12 @@ def sample(logits, seen=(), temperature=0.9, top_k=50, top_p=1.0, penalty=1.0, g
 
     if top_p is not None and top_p < 1.0:
         ordered, order = torch.sort(logits, descending=True)
-        cumulative = torch.softmax(ordered, dim=-1).cumsum(dim=-1)
-        # Keep the first token whose cumulative mass crosses top_p, as upstream does.
-        drop = cumulative - torch.softmax(ordered, dim=-1) >= top_p
+        ordered_probabilities = torch.softmax(ordered, dim=-1)
+        cumulative = ordered_probabilities.cumsum(dim=-1)
+        # Keep the first token whose cumulative mass crosses top_p, as upstream does, and always
+        # the most likely one: transformers' min_tokens_to_keep=1, which makes top_p=0 greedy.
+        drop = cumulative - ordered_probabilities >= top_p
+        drop[0] = False
         logits[order[drop]] = -float("inf")
 
     probabilities = torch.softmax(logits, dim=-1)
