@@ -4163,6 +4163,54 @@
   "started": "2026-09-28T06:41:27",
   "status": "PASS"
  },
+ "X.1": {
+  "attempts": 0,
+  "duration_s": 54.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-28T07:51:47"
+   }
+  ],
+  "last_run": "2026-09-28T07:51:47",
+  "log": "/localdev/dnijemcevic/bringup/mimo_v2_6_d_p_2x2/runs/run1/logs/X.1.log",
+  "metrics": {
+   "chunk_len": 5120,
+   "chunk_start": 51200,
+   "chunk_wall_ms": 279.3,
+   "device_model_hybrid": 0,
+   "device_ms_attention": 124.09,
+   "device_ms_attention_ccl": 7.16,
+   "device_ms_attention_kv_tail": 0.88,
+   "device_ms_attention_kv_write": 0.19,
+   "device_ms_attention_o_proj": 14.18,
+   "device_ms_attention_qkv": 24.0,
+   "device_ms_attention_rope": 2.19,
+   "device_ms_attention_sdpa": 73.5,
+   "device_ms_attention_sliding_sdpa": 2.0,
+   "device_ms_attn_norm": 0.22,
+   "device_ms_attn_residual": 2.52,
+   "device_ms_chip0": 277.9,
+   "device_ms_chip1": 278.09,
+   "device_ms_chip2": 278.22,
+   "device_ms_chip3": 278.11,
+   "device_ms_experts": 135.92,
+   "device_ms_ffn_norm": 0.0,
+   "device_ms_ffn_residual": 1.95,
+   "device_ms_mlp": 6.32,
+   "device_ms_mlp_residual": 0.42,
+   "device_ms_router": 7.09,
+   "device_ms_total": 278.53,
+   "host_overhead_ms": 0.7,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9984311765739958,
+   "profiled_programs": 1404
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-28T07:50:53",
+  "status": "PASS"
+ },
  "_run": {
   "branch": "dnijemcevic/ernie45_prefill",
   "created": "2026-09-28T04:27:18",
