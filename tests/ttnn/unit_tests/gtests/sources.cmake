@@ -35,6 +35,8 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_launch_operation.cpp
     test_layernorm_stats_selector.cpp
     test_matmul.cpp
+    test_mcast_lowering.cpp
+    test_mcast_host_api.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_program_cache_l1.cpp
