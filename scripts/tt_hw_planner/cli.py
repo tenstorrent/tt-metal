@@ -11690,6 +11690,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     pph.add_argument("--plugin-ref", dest="plugin_ref", help="vllm-tt-plugin git ref (default: main)")
     pph.add_argument("--vllm-version", dest="vllm_version", help="vLLM version (default: 0.24.0)")
     pph.add_argument(
+        "--vllm-path", dest="vllm_path", help="local vLLM source tree to build in the image (matched-pair serving)"
+    )
+    pph.add_argument(
+        "--plugin-path", dest="plugin_path", help="local vllm-tt-plugin checkout to install (matched in-tree plugin)"
+    )
+    pph.add_argument(
         "--extra-models-dir",
         dest="extra_models_dir",
         help="dir the plugin scans for vllm_metadata.json (under source.code)",

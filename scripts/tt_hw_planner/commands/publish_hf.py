@@ -83,11 +83,28 @@ def _write_tt_model_yaml(
     extra_models_dir: str,
     commit: str | None,
     lock: str | None = None,
+    vllm_path: str | None = None,
+    plugin_path: str | None = None,
 ) -> None:
     """Emit a schema-5.1 tt-model.yaml describing how to build+serve this optimized model as a
     v5.1 container package. Fields the run can't provide (the vLLM adapter dir, plugin) are stated
     as sane defaults/overrides; `tt-model package --container` resolves and validates the rest."""
     a, hw, mesh = _BOX_TARGET.get(box or "", ("blackhole", "p300x2", "P300x2"))
+    _batch = state.get("batch")
+    serve_max = _batch or 32
+    serve_maxlen = None
+    try:
+        _bm = Path(checkout) / extra_models_dir / slug / "vllm_metadata.json"
+        if _bm.is_file():
+            _md = json.loads(_bm.read_text())
+            _mv = _md.get("max_num_seqs")
+            if isinstance(_mv, int) and _mv > 0:
+                serve_max = _mv
+            _ml = _md.get("max_model_len")
+            if isinstance(_ml, int) and _ml > 0:
+                serve_maxlen = _ml
+    except Exception:
+        pass
     arch = arch or a
     hardware = hardware or hw
     mesh_device = mesh_device or mesh
@@ -124,8 +141,12 @@ def _write_tt_model_yaml(
         '  python: "3.12"',
         "",
         "runtime:",
-        f'  vllm: {{version: "{vllm_version}"}}',
-        f"  plugin: {{repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: {plugin_ref}}}",
+        (f"  vllm: {{path: {vllm_path}}}" if vllm_path else f'  vllm: {{version: "{vllm_version}"}}'),
+        (
+            f"  plugin: {{path: {plugin_path}}}"
+            if plugin_path
+            else f"  plugin: {{repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: {plugin_ref}}}"
+        ),
         f"  extra_models_dir: {extra_models_dir}",
         # runtime.lock is optional; only emit it when a real requirements.lock is provided, else the
         # build fails resolving a path that doesn't exist. Deps resolve live without it.
@@ -134,7 +155,8 @@ def _write_tt_model_yaml(
         "serve:",
         "  port: 8000",
         "  block_size: 64",
-        f"  max_num_seqs: {batch or 32}",
+        f"  max_num_seqs: {serve_max}",
+        *([f"  max_model_len: {serve_maxlen}"] if serve_maxlen else []),
         f"  hardware: {hardware}",
         f"  mesh_device: {mesh_device}",
         "  env:",
@@ -754,6 +776,141 @@ def _checkout_of(demo_dir: Path) -> Path:
     return Path(demo_dir).resolve().parents[2]
 
 
+def _adapter_is_working(bundle_dir) -> bool:
+    """True when the bundle already ships a REAL generator, not the scaffolded stub: an adapter.py that
+    implements initialize_vllm_model + prefill_forward + decode_forward and carries no TODO(author)
+    placeholder. Lets a hand-written adapter for ANY arch publish as servable, and stops a republish
+    from re-stubbing over it."""
+    from pathlib import Path as _P
+
+    try:
+        ap = _P(bundle_dir) / "adapter.py"
+        meta = _P(bundle_dir) / "vllm_metadata.json"
+        if not ap.is_file() or not meta.is_file():
+            return False
+        src = ap.read_text()
+    except Exception:
+        return False
+    if any(t not in src for t in ("def initialize_vllm_model", "def prefill_forward", "def decode_forward")):
+        return False
+    return "TODO(author)" not in src
+
+
+def _git_info(path):
+    """(commit_sha, origin_url) for a git checkout, or (None, None). Never raises."""
+    import subprocess
+
+    def g(*a):
+        try:
+            return subprocess.run(["git", "-C", str(path), *a], capture_output=True, text=True).stdout.strip()
+        except Exception:
+            return ""
+
+    return (g("rev-parse", "HEAD") or None, g("remote", "get-url", "origin") or None)
+
+
+def _discover_serving_stack():
+    """Find a matched vLLM + in-tree-plugin serving stack on this host WITHOUT hardcoding a path or
+    commit: scan bounded locations for a git checkout of the Tenstorrent vLLM carrying
+    plugins/vllm-tt-plugin in-tree. Returns (vllm_path, plugin_path, commit, remote) or None."""
+    import glob
+    import os
+
+    home = os.path.expanduser("~")
+    seen = set()
+    for root in [home] + sorted(glob.glob("/home/*")):
+        for depth in ("vllm", "*/vllm", "*/*/vllm"):
+            for vroot in glob.glob(os.path.join(root, depth)):
+                if vroot in seen:
+                    continue
+                seen.add(vroot)
+                plugin = os.path.join(vroot, "plugins", "vllm-tt-plugin")
+                if not os.path.isdir(plugin):
+                    continue
+                commit, remote = _git_info(vroot)
+                if commit and remote and "vllm" in remote.lower():
+                    return (vroot, plugin, commit, remote)
+    return None
+
+
+def _auto_constraint_file(checkout):
+    """Write a minimal pip CONSTRAINT pinning the versions the model was validated against (torch,
+    transformers, tokenizers) discovered from the checkout's python env, so a source-built vLLM cannot
+    pull a torch/transformers that mismatches the ttnn modules or the model code. Returns path or None."""
+    import subprocess
+    import tempfile
+    from pathlib import Path as _P
+
+    py = str(_P(checkout) / "python_env" / "bin" / "python")
+    if not _P(py).is_file():
+        py = "python3"
+
+    def ver(pkg):
+        try:
+            return (
+                subprocess.run(
+                    [py, "-c", f"import importlib.metadata as m; print(m.version('{pkg}'))"],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                or None
+            )
+        except Exception:
+            return None
+
+    pins = []
+    for pkg in ("torch", "transformers", "tokenizers"):
+        v = ver(pkg)
+        if v:
+            pins.append(f"{pkg}=={v.split('+')[0]}")
+    if not pins:
+        return None
+    f = _P(tempfile.mkdtemp(prefix="ttpub_constraint_")) / "constraint.lock"
+    f.write_text("\n".join(pins) + "\n")
+    return str(f)
+
+
+def _capture_vllm_provenance(args) -> None:
+    """When a servable image was built from an auto-discovered local vLLM checkout, tt-model records
+    'a local checkout — commit not published'. Replace it with the real PUBLIC commit we discovered so
+    the card is reproducible-from-source. Card text only; never raises."""
+    disc = getattr(args, "_discovered_vllm", None)
+    if not disc:
+        return
+    commit, remote = disc
+    try:
+        import re
+        from huggingface_hub import HfApi, hf_hub_download
+
+        tok = _hf_token(args)
+        api = HfApi(token=tok)
+        lp = hf_hub_download(repo_id=args.repo, filename="README.md", repo_type="model", token=tok, force_download=True)
+        s2 = open(lp).read()
+        orig = s2
+        url = remote.rstrip("/")
+        if url.endswith(".git"):
+            url = url[:-4]
+        link = f"[`{commit[:9]}`]({url}/commit/{commit})"
+        s2 = re.sub(r"\|\s*vLLM\s*\|.*\|", f"| vLLM | {link} — {url} |", s2, count=1)
+        s2 = re.sub(
+            r"\|\s*vllm-tt-plugin\s*\|.*\|",
+            f"| vllm-tt-plugin | in-tree `plugins/vllm-tt-plugin` of {url} {link} |",
+            s2,
+            count=1,
+        )
+        if s2 != orig:
+            api.upload_file(
+                path_or_fileobj=s2.encode(),
+                path_in_repo="README.md",
+                repo_id=args.repo,
+                repo_type="model",
+                commit_message="Provenance: record public vLLM commit + in-tree plugin",
+            )
+            print(f"  [publish-hf] provenance recorded: {url} @ {commit[:9]}")
+    except Exception as e:
+        print(f"  [publish-hf] provenance capture skipped: {e}")
+
+
 def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -> int:
     """Build + push a real v5.1 container bundle via tt-model (exactly like the published TT repos):
     generate tt-model.yaml, then `tt-model package --container` (2.5-4h OCI build) and `tt-model push`."""
@@ -808,11 +965,32 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     # Servability is decided by the architecture: a plugin built-in (stock generator) serves; a novel
     # arch gets a scaffolded stub and is NOT servable until an adapter is written. Drives honest card
     # labeling below — the tool never claims a stub package can serve.
+    bundle_dir = Path(checkout) / extra / slug
+    adapter_ready = _adapter_is_working(bundle_dir)
     servable = True
-    if arch_det:
+    if arch_det and not adapter_ready:
         _base_cls, _is_stub_arch = _pick_base_generator(arch_det, mtype)
         servable = not _is_stub_arch
-    if arch_det and not getattr(args, "no_scaffold", False):
+    if adapter_ready:
+        print(f"  [publish-hf] real vLLM adapter detected: {bundle_dir}  (servable — preserved, not scaffolded)")
+        if getattr(args, "container", False) and not getattr(args, "vllm_path", None):
+            disc = _discover_serving_stack()
+            if disc:
+                vpath, ppath, vcommit, vremote = disc
+                args.vllm_path, args.plugin_path = vpath, ppath
+                args._discovered_vllm = (vcommit, vremote)
+                print(f"  [publish-hf] auto serving stack: {vremote} @ {vcommit[:9]} (in-tree plugin) — {vpath}")
+                if not getattr(args, "lock", None):
+                    cf = _auto_constraint_file(checkout)
+                    if cf:
+                        args.lock = cf
+                        print(f"  [publish-hf] auto constraint (validated torch/transformers/tokenizers): {cf}")
+            else:
+                print(
+                    "  [publish-hf] no local matched vLLM checkout found to auto-build a servable image; "
+                    "pass --vllm-path/--plugin-path."
+                )
+    elif arch_det and not getattr(args, "no_scaffold", False):
         created, is_stub, bpath = _scaffold_vllm_bundle(
             checkout, extra, arch_det, mtype, getattr(args, "weights", None), slug
         )
@@ -843,6 +1021,8 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         extra_models_dir=extra,
         commit=commit,
         lock=getattr(args, "lock", None),
+        vllm_path=getattr(args, "vllm_path", None),
+        plugin_path=getattr(args, "plugin_path", None),
     )
     print(f"  [publish-hf] tt-model.yaml -> {yaml_path}")
     print("  " + "-" * 60)
@@ -940,6 +1120,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         return 4
     print(f"  [publish-hf] published container bundle: https://huggingface.co/{args.repo}")
     _tidy_provenance_note(args)  # keep the published card's provenance clean/professional
+    _capture_vllm_provenance(args)  # record the real public vLLM commit when we auto-discovered the stack
     if not servable:
         # Never claim a stub package serves — say so plainly, and give the REAL way to run it.
         _upload_card_section(args, _SERVE_STATUS_TITLE, _SERVE_STATUS_STUB)
