@@ -339,7 +339,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
     const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
-    const uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
+    // Non-MLA: V's own head dim, which may be narrower than K's (bring-up fork; the kernels already handle
+    // vDHt < DHt, as MLA uses them). With V as wide as K this is DHt, as before. A paged-cache geometry override
+    // addresses the cache with Q's head dim (its validation requires K and V of equal width), so it keeps DHt.
+    const uint32_t vDHt = use_mla
+                              ? head_dim_v / TILE_WIDTH
+                              : (operation_attributes.paged_cache_geometry.active() ? DHt : v_shape[3] / TILE_WIDTH);
 
     const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / TILE_HEIGHT);
     const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / TILE_HEIGHT);
@@ -605,7 +610,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                                                       block_size_t,
                                                       page_table_stick_size,
                                                       static_cast<uint32_t>(use_attention_sink),
-                                                      static_cast<uint32_t>(use_mla),
+                                                      // The reader addresses V at its own width (vDHt) only
+                                                      // under this flag; its only other use is the K/V overlap
+                                                      // (gated by arg 24), so a narrower non-MLA V sets it too.
+                                                      // Unchanged (= use_mla) when vDHt == DHt.
+                                                      static_cast<uint32_t>(use_mla || vDHt != DHt),
                                                       static_cast<uint32_t>(mla_kv_overlap),
                                                       qk_out_subblock_h,
                                                       sliding_window_size.value_or(0),
