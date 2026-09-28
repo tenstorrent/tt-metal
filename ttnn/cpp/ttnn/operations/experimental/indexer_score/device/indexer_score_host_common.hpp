@@ -17,9 +17,9 @@
 #include <tt-metalium/constants.hpp>   // tt::constants::TILE_WIDTH
 #include <tt-metalium/core_coord.hpp>  // CoreCoord
 
-#include "ttnn/distributed/types.hpp"                // ttnn::MeshCoordinate
-#include "ttnn/operations/ccl/ccl_common.hpp"        // get_linearized_index_from_physical_coord
-#include "indexer_score_device_operation_types.hpp"  // operation_attributes_t, Tensor
+#include "ttnn/distributed/types.hpp"                 // ttnn::MeshCoordinate
+#include "ttnn/operations/ccl/ccl_common.hpp"         // get_linearized_index_from_physical_coord
+#include "indexer_score_device_operation_types.hpp"   // operation_attributes_t, Tensor
 #include "kernels/indexer_score_causal_geometry.hpp"  // shared host/device causal closed form
 
 namespace ttnn::operations::experimental::indexer_score::program {
@@ -57,37 +57,23 @@ inline DsaQkBatching dsa_qk_batching(uint32_t subblock_basis, uint32_t QC, uint3
     return {qk_batch_heads, qk_col_batch};
 }
 
-// Q/W row multicast bounding box for a schedule row: the horizontal rect spanning the used columns (py is
-// constant along the row) and the diagonal sender column. Identical geometry in both factories (the banded
-// schedule is shared), so it lives here to keep them from drifting.
-struct QMcastBBox {
-    uint32_t xs, xe, py, diag_col;
-    CoreCoord sender;
-};
-inline QMcastBBox q_mcast_bbox(const std::vector<std::vector<CoreCoord>>& phys, uint32_t row, uint32_t cols_used) {
-    uint32_t xs = static_cast<uint32_t>(phys[row][0].x), xe = xs;
-    for (uint32_t col = 0; col < cols_used; ++col) {
-        xs = std::min<uint32_t>(xs, static_cast<uint32_t>(phys[row][col].x));
-        xe = std::max<uint32_t>(xe, static_cast<uint32_t>(phys[row][col].x));
+// Shared physical axis tables preserve harvested/non-contiguous coordinates.
+// Both readers reconstruct identical row/column multicast geometry from them.
+template <typename Args>
+inline void append_multicast_axes(Args& args, const std::vector<std::vector<CoreCoord>>& phys) {
+    for (const auto& row : phys) {
+        for (uint32_t col = 0; col < row.size(); ++col) {
+            TT_FATAL(
+                row[col].x == phys[0][col].x && row[col].y == row[0].y,
+                "indexer_score multicast requires a Cartesian physical worker mapping");
+        }
     }
-    const uint32_t diag_col = std::min<uint32_t>(row, cols_used - 1);  // diagonal sender column
-    return {xs, xe, static_cast<uint32_t>(phys[row][0].y), diag_col, phys[row][diag_col]};
-}
-
-// K column multicast bounding box for a (block, col): the vertical rect spanning only the block's group_rows
-// rows (px is constant down the column) and the block-top sender. Identical geometry in both factories.
-struct KMcastBBox {
-    uint32_t ys, ye, px;
-    CoreCoord sender;
-};
-inline KMcastBBox k_mcast_bbox(
-    const std::vector<std::vector<CoreCoord>>& phys, uint32_t block_base, uint32_t col, uint32_t group_rows) {
-    uint32_t ys = static_cast<uint32_t>(phys[block_base][col].y), ye = ys;
-    for (uint32_t row = block_base; row < block_base + group_rows; ++row) {
-        ys = std::min<uint32_t>(ys, static_cast<uint32_t>(phys[row][col].y));
-        ye = std::max<uint32_t>(ye, static_cast<uint32_t>(phys[row][col].y));
+    for (const auto& core : phys[0]) {
+        args.push_back(static_cast<uint32_t>(core.x));
     }
-    return {ys, ye, static_cast<uint32_t>(phys[block_base][col].x), phys[block_base][col]};
+    for (const auto& row : phys) {
+        args.push_back(static_cast<uint32_t>(row[0].y));
+    }
 }
 
 // Per-device causal geometry for the block-cyclic slab layout, all in tiles. The global chunk

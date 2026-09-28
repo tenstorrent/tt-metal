@@ -153,6 +153,7 @@ $ROOT_DIR/tests/sfpi/include
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc
 -I$ROOT_DIR/$ARCH_LLK_ROOT/common/inc/sfpu
 -I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib
+-I$ROOT_DIR/$ARCH_LLK_ROOT/llk_lib/hal
 -I$ROOT_DIR/tests/helpers/include
 -I$METAL_DIR/tt_metal/hw/inc/
 EOF

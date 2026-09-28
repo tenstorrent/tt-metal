@@ -398,7 +398,15 @@ def slice_sampling_params(sampling_params: SamplingParams, rows: Sequence[int]) 
     def slice_value(value: Any, name: str) -> Any:
         normalized = _host_value(value)
         if not _is_sequence(normalized):
-            return normalized
+            # A scalar describes every selected row, exactly like a one-entry sequence below: the
+            # decode runtime hands the result to prepare_sampling_params, which counts active rows
+            # from the temperature field, and then places one row per selected slot. Leaving the
+            # scalar as-is described a single request for a multi-slot decode ("expected 1
+            # destination slots, got 32", #55953). ``None`` stays ``None`` (field not set) and a
+            # scalar seed stays request-owned rather than being handed to sibling rows.
+            if normalized is None or name == "seed":
+                return normalized
+            return [normalized for _ in selected]
         values = list(normalized)
         if not values:
             raise ValueError(f"sampling_params.{name} cannot be empty")

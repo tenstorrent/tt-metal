@@ -8,14 +8,14 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "eltwise_utils_common.hpp"
 
 // Reads `per_core_block_size` tiles from cb_pre, runs the per-operand activation chain
 // on each tile in DST, and writes the results into cb_post — i.e. produces the
 // "activated" input that the downstream binary op consumes. cb_out is passed in only
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
-// data format on the way out. SFPU variant: no unpacker srca reconfigure is needed —
-// the downstream binary SFPU op uses copy_tile_to_dst_init_short_with_dt to switch
-// formats itself.
+// data format on the way out. SrcA switches from and returns to the physical-LHS
+// format established by startup and restored at the end of each binary chunk.
 template <typename ActivationFn>
 ALWI void preprocess_sfpu_impl(
     DataflowBuffer cb_pre,
@@ -25,6 +25,7 @@ ALWI void preprocess_sfpu_impl(
     ActivationFn&& process_activations) {
     using namespace ckernel;
 
+    reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_CB, /*new*/ cb_pre.get_id());
     pack_reconfig_data_format(/*old*/ cb_out.get_id(), /*new*/ cb_post.get_id());
 
     cb_pre.wait_front(per_core_block_size);
@@ -47,6 +48,7 @@ ALWI void preprocess_sfpu_impl(
     cb_pre.pop_front(per_core_block_size);
     cb_post.push_back(per_core_block_size);
 
+    reconfig_data_format_srca(/*old*/ cb_pre.get_id(), /*new*/ QSR_BINARY_SRCA_FORMAT_CB);
     pack_reconfig_data_format(/*old*/ cb_post.get_id(), /*new*/ cb_out.get_id());
 }
 

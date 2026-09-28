@@ -1,7 +1,7 @@
 # This file defines the test matrix for the Galaxy e2e tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
-#   id: Stable slug for workflow_dispatch / jq filtering (must match pipeline-select-galaxy).
+#   id: Stable slug for workflow_dispatch / jq filtering (must match galaxy-tests).
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run for the test.
 #   skus: A mapping of SKU names to their configuration.
@@ -23,6 +23,7 @@
       timeout: 30
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: galaxy-fabric-2d-torus-nightly
   name: Galaxy Fabric 2D Torus Nightly Tests
@@ -34,6 +35,37 @@
       timeout: 45
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
+
+# Single BH galaxy 2x2 inter-mesh torus repro for #56298: four 2x2 RING/LINE stages ring-connected on
+# one galaxy. The test config is topology-agnostic -- the MGD is what fixes the 2x2 shape -- so both
+# entries below reuse the generic multi-mesh sanity config (test_fabric_multi_mesh_sanity_common.yaml),
+# whose Torus XY inter-/intra-mesh neighbor-exchange (and mesh/all-to-all) cases exercise the deadlock
+# path. Same config, two MGDs: the -z entry routes the inter-mesh links over Z (assign_z_direction);
+# the -nonz entry routes them over the normal N/S/E/W routers. Checks the torus fabric does not hang/starve.
+- id: galaxy-fabric-2x2-torus-z
+  name: Galaxy Fabric 2x2 multi-mesh sanity (inter-mesh over Z)
+  cmd: |
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+  skus:
+    bh_galaxy:
+      timeout: 15
+      mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
+
+- id: galaxy-fabric-2x2-torus-nonz
+  name: Galaxy Fabric 2x2 multi-mesh sanity (inter-mesh over N/S/E/W)
+  cmd: |
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml
+  skus:
+    bh_galaxy:
+      timeout: 15
+      mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
 
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
@@ -49,6 +81,7 @@
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x4_2x4_3_mesh.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: galaxy-fabric-multi-mesh-2x8-2x4s
   name: Galaxy Fabric Multi-mesh 2x8 and 2x4s stability tests
@@ -64,6 +97,7 @@
       mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_2x8_2x4_3_mesh.textproto
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 # Blackhole Galaxy e2e tests
 - id: bh-galaxy-fabric-torus-stability
@@ -74,6 +108,7 @@
       timeout: 20
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
 
 - id: bh-galaxy-socket-pipeline
   name: BH Galaxy Socket Pipeline Single Galaxy
@@ -85,3 +120,19 @@
       timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
+
+# BH galaxy is the only Blackhole SKU in CI whose firmware bundle clears the DRAM-programmable-cores
+# floor (19.12.0.0), so it is the only place these tests run instead of skipping. Single-device
+# suites: they cover the DRAM-core/GCB/prefetcher path itself, not multi-device sharding.
+- id: bh-galaxy-tensor-prefetcher
+  name: BH Galaxy tensor prefetcher unit tests
+  cmd: |
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_validator.py
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_tensor_large.py
+  skus:
+    bh_galaxy:
+      timeout: 8
+  owner_id: U07R05K4WGJ # John Bauman
+  team: ttnn
+  budget_type: e2e

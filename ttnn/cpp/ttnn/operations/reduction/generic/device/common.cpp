@@ -17,6 +17,12 @@
 #include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
+namespace {
+// tt::datum_size throws for block-float rather than returning a size. Bfp8_b is the only
+// block-float format the op admits, so it is the only one that reaches here.
+bool block_float_format(tt::DataFormat df) { return df == tt::DataFormat::Bfp8_b; }
+}  // namespace
+
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
@@ -49,10 +55,10 @@ RmPlan make_rm_plan(
         plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
     }
 
-    // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
-    // so the unpacked-format byte sizes are always well-defined here.
-    plan.src_datum_size = tt::datum_size(src_cb_data_format);
-    plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
+    // Block-float has no per-datum size. RM staging and the writer stride never see it here:
+    // RM input is BF16/FP32, and block-float output is TILE-only.
+    plan.src_datum_size = block_float_format(src_cb_data_format) ? 0 : tt::datum_size(src_cb_data_format);
+    plan.dst_datum_size = block_float_format(dst_cb_data_format) ? 0 : tt::datum_size(dst_cb_data_format);
     plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
     // One CB page = one logical RM row (chunk-wide). The compute kernel uses
     // compute_kernel_lib::tilize, whose asymmetric mode requires one input page per row so each
@@ -91,13 +97,12 @@ void validate_rm_preconditions(
 }
 
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, uint32_t num_h_slices, uint32_t slice_Ht) {
+    const RmPlan& plan, uint32_t num_h_slices, uint32_t slice_Ht) {
     // Both reduce dims get the same set. Only the reader's REDUCE_COL (H) branch reads H_logical and
     // the H-axis-split geometry (num_h_slices / slice_Ht), but a compile-time arg is free on the
     // path that ignores it, and the name has to exist in every build of the source: name lookup in
     // the discarded `if constexpr` branch happens regardless of the condition.
     return {
-        {"scaler_bits", scaler_bits},
         {"W_logical", plan.W_logical},
         {"elem_bytes", plan.src_datum_size},
         {"padding_identity_bits", plan.padding_identity_bits},
@@ -128,13 +133,12 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_writer_ct_args(
 }
 
 tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args(
-    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
+    const RmPlan& plan, uint32_t Ht_arg, bool fp32_sfpu_reduce) {
     return {
         {"Ht", Ht_arg},
         {"Wt", plan.Wt},
         // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
         {"NC", 1u},
-        {"post_mul_scaler_bits", post_mul_scaler_bits},
         {"wt_tiles_per_chunk", plan.wt_tiles_per_chunk},
         {"ht_tiles_per_chunk", plan.ht_tiles_per_chunk},
         // enable_fp32_sfpu: route Float32 through the SFPU (full fp32) instead of the FPU (tf32)

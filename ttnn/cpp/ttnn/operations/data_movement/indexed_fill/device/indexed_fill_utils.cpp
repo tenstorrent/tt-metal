@@ -90,6 +90,15 @@ bool is_native_indexed_fill_sharding(
         return false;
     }
 
+    // The native path always enumerates workers row-major and assigns `my_batch_id = i`
+    // directly to the i-th worker, but the actual buffer/shard-to-core mapping follows the
+    // shard's orientation. A COL_MAJOR grid would therefore write each logical batch to the
+    // wrong output core on a multi-row grid; fall back to the generic path in that case.
+    if (in_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
     // One batch per core: shard grid must cover exactly B = padded_shape()[0] cores,
     // and each shard must hold exactly H*W rows (= one whole batch slab).
     const auto& padded = input_a_spec.padded_shape();
@@ -151,6 +160,37 @@ bool is_shard_local_indexed_fill(
         return false;
     }
 
+    // The shard-local kernel derives each core's shard/column index from its row-major
+    // position `i` in create_program_artifacts()'s core list (corerange_to_cores(..., row_wise
+    // = true)), which only matches the tensor's actual shard-to-core assignment when the shard
+    // is ROW_MAJOR-oriented. A COL_MAJOR shard would read/write the wrong shard on multi-row /
+    // multi-column grids, so fall back to the generic path in that case instead.
+    if (a_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
+    if (layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The factory's shard_row = i / shard_n_x and cx = i % shard_n_x only match
+        // corerange_to_cores(row_wise = true) when the shard grid is a full rectangle.
+        // (WIDTH_SHARDED needs no such check: cx = i holds for any grid shape.)
+        if (a_shard.grid.num_cores() != a_shard.grid.bounding_box().size()) {
+            return false;
+        }
+
+        // The kernel gives each shard row B / n_y batches, so an indivisible B has no valid
+        // per-core batch count.
+        const auto& padded = input_a_spec.padded_shape();
+        if (padded.rank() < 1) {
+            return false;
+        }
+        const uint32_t B = padded[0];
+        const uint32_t n_y = a_shard.grid.bounding_box().grid_size().y;
+        if (n_y == 0 || B % n_y != 0) {
+            return false;
+        }
+    }
+
     // input_b: must be interleaved OR the same WIDTH_SHARDED layout (same grid, same shard
     // width). Direct L1 arithmetic works for WIDTH_SHARDED because every core has all `b`
     // input_b batches locally, so `replace_src` (a global index in [0, b)) always resolves
@@ -178,6 +218,9 @@ bool is_shard_local_indexed_fill(
             return false;
         }
         if (b_mem.shard_spec()->shape[1] != a_shard.shape[1]) {
+            return false;
+        }
+        if (b_mem.shard_spec()->orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
             return false;
         }
     }

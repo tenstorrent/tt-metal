@@ -129,10 +129,22 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    bool single_reader_stream) {
     uint32_t multi_buffering_factor = 2;
-    bool split_reader = true;
+    bool split_reader = !single_reader_stream;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
+    const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
+    TT_FATAL(!(is_quasar && split_reader), "split reader is not supported on Quasar");
+    // SPMD threads per cluster: symmetric STRIDED pairs reader thread i with compute thread i into
+    // private (DM, NEO) lanes; Gen1 stays 1. Any per-core stick count is legal — the reader deals
+    // sticks round-robin and each compute lane derives its own share, so remainders just shorten
+    // tail lanes. TILE output stays single-lane (deliberate gap): its 32-stick tilize accumulation
+    // and DFB_FAST_TILIZE entry count are not lane-aware.
+    const bool tiled_output = output_layout == Layout::TILE;
+    // One SPMD thread per Tensix engine; a Quasar cluster has 4 NEOs.
+    constexpr uint32_t kQuasarNeosPerCluster = 4;
+    const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? kQuasarNeosPerCluster : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)
@@ -182,6 +194,7 @@ FactoryParameters get_factory_parameters(
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
         .split_reader = split_reader,
+        .num_threads_per_cluster = num_threads_per_cluster,
         .nbytes = nbytes,
         .index_nbytes = index_nbytes,
         .data_format = data_format,
@@ -203,7 +216,7 @@ uint32_t PoolCBSizes::local_cb_total() const {
     if (has_second_scalar_cb) {
         total += scalar_cb_pagesize * scalar_cb_npages;
     }
-    total += clear_value_cb_size;
+    total += clear_value_cb_size * clear_value_cb_npages;
     total += in_cb_pagesize * in_cb_npages;
     if (has_split_reader) {
         total += in_cb_pagesize * in_cb_npages;
@@ -239,11 +252,12 @@ PoolCBSizes calculate_pool_cb_sizes(
 
     // Scalar CB (coefficient of reduce)
     sizes.scalar_cb_pagesize = tt::tile_size(params.data_format);
-    sizes.scalar_cb_npages = params.multi_buffering_factor;
+    sizes.scalar_cb_npages = std::max(params.multi_buffering_factor, params.num_threads_per_cluster);
     sizes.has_second_scalar_cb = params.is_avg_pool && params.split_reader && !one_scalar_per_core;
 
     // Clear value CB (-inf for maxpool, 0 for avgpool)
     sizes.clear_value_cb_size = tt::tile_size(params.data_format);
+    sizes.clear_value_cb_npages = params.num_threads_per_cluster;
 
     // Input CB
     uint32_t in_cb_sz = 0;
@@ -256,7 +270,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     sizes.in_cb_raw_size = in_cb_sz;
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
     sizes.in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    sizes.in_cb_npages = params.multi_buffering_factor;
+    sizes.in_cb_npages = params.multi_buffering_factor * params.num_threads_per_cluster;
     sizes.has_split_reader = params.split_reader;
 
     // MPWI CBs (return_indices temporaries)
@@ -369,7 +383,9 @@ pool_op_l1_usage calculate_L1_usage(
         return_indices,
         in_h,
         in_w,
-        output_layout);
+        output_layout,
+        // Quasar runs a single reader stream (split reader is unsupported there); mirror the factory.
+        /*single_reader_stream=*/tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);

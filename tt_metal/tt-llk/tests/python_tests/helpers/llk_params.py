@@ -167,13 +167,6 @@ class MathOperation(Enum):
     # Legacy LUT variant of tanh'(x): 1 - tanh(x)^2 with tanh from the piecewise
     # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
     TanhDerivativeLut = OpSpec("tanh_derivative_lut", MathOpType.SFPU_UNARY)
-    # Legacy-compat rsqrt (reciprocal-root method); distinct kernel path from the
-    # accurate Rsqrt (which uses legacy_compat=false).
-    RsqrtCompat = OpSpec("rsqrt_compat", MathOpType.SFPU_UNARY)
-    # Legacy-compat reciprocal (exponent-difference method); distinct kernel path from
-    # the accurate Reciprocal (which uses legacy_compat=false). This is the path the
-    # Compute API's recip_tile() reaches by default, so it is the one production runs.
-    ReciprocalCompat = OpSpec("reciprocal_compat", MathOpType.SFPU_UNARY)
     # Component-wise expm1 shared helper (used by ELU/CELU/SELU); distinct from the
     # standalone Expm1 kernel.
     Expm1Cw = OpSpec("expm1_cw", MathOpType.SFPU_UNARY)
@@ -232,6 +225,7 @@ class MathOperation(Enum):
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
+    TopKDefuse = OpSpec("topk_defuse", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
@@ -273,6 +267,7 @@ class MathOperation(Enum):
     SfpuRsubInt32 = OpSpec("RSUB_INT32", MathOpType.SFPU_BINARY)
     SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
+    SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
@@ -599,6 +594,17 @@ class StableSort(Enum):
         return str(self.value).lower()
 
 
+class FusedSort(Enum):
+    """Fused-key stable topk: [bf16|u16] packed keys sorted by the unstable network."""
+
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
 class Mailboxes(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
@@ -778,8 +784,9 @@ class ReluConfig(Enum):
 class SdpaOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa.h the sfpu_sdpa test drives."""
 
-    RecipLegacy = 0  # calculate_recip_first_column<true>, _reciprocal_compat_
-    RecipIter = 1  # calculate_recip_first_column<false>, sfpu_reciprocal_iter
+    RecipIter = (
+        1  # calculate_recip_first_column<is_fp32_dest_acc_en>, sfpu_reciprocal_iter
+    )
     ExpAccurate = 2  # calculate_exponential_first_column<true,  scale>
     ExpPoly = 3  # calculate_exponential_first_column<false, scale>
     Softplus = 4  # calculate_softplus_first_column
@@ -789,7 +796,7 @@ class SdpaOp(Enum):
 class SdpaFwOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa_fw.h the sfpu_sdpa_fw test drives."""
 
-    Recip = 0  # calculate_recip_first_column, sfpu_reciprocal_iter<2> or <1> plus bf16 round
+    Recip = 0  # calculate_sdpa_fw_recip_first_column, sfpu_reciprocal_iter<2> or <1> plus bf16 round
     Exp = 1  # calculate_exponential_first_column<scale>, _ckernel_sfpu_exp_accurate_
 
 

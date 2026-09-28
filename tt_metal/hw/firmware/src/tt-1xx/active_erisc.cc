@@ -205,6 +205,7 @@ int __attribute__((noinline)) main(void) {
 
     disable_interrupts();
     update_next_link_status_check_timestamp();
+    aerisc_ptp_trace_entry();
 
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
@@ -262,6 +263,7 @@ int __attribute__((noinline)) main(void) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
+                aerisc_ptp_trace_exit();
                 return 0;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||

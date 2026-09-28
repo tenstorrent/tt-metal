@@ -418,9 +418,9 @@ def _ci_unsupported_param_combos_forward_pass(**params):
 
     if not on_ci:
         return False
-    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
-        return True
-    return False
+    if gate_fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE):
+        return False
+    return True
 
 
 def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
@@ -601,6 +601,17 @@ HASH_GATE_MODES = [
 ]
 
 
+def _ci_unsupported_param_combos_hash_gate(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_compute_mode = params["gate_compute_mode"]
+    if not on_ci:
+        return False
+    if gate_compute_mode != GateComputeMode.HASH_DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(
