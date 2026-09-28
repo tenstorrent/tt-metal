@@ -241,6 +241,8 @@ class Qwen36DecoderLayer:
         path used. The DistributedNorm wrapper (TP>1) mirrors tt_transformers
         decoder.py and handles the fractured->replicated transition.
         """
+        from models.demos.blackhole.qwen36.tt.tp_common import n_enabled
+
         norm = RMSNorm(
             device=mesh_device,
             dim=args.dim,
@@ -249,6 +251,10 @@ class Qwen36DecoderLayer:
             state_dict_prefix=f"layers.{layer_num}.",
             weight_cache_path=tensor_cache_path,
             weight_dtype=ttnn.bfloat16,
+            # N GAMMA_L1 (QWEN36_N_GAMMA_L1, default 0): gamma in L1 interleaved instead of DRAM
+            # (placement only, bit-exact). Applies to attention_norm and ffn_norm only (the two
+            # norms _m5_add_norm reads); the final norm and the FA q/k norms are built elsewhere.
+            weight_memory_config=ttnn.L1_MEMORY_CONFIG if n_enabled("GAMMA_L1") else ttnn.DRAM_MEMORY_CONFIG,
             add_unit_offset=True,
             eps=args.norm_eps,
             **(

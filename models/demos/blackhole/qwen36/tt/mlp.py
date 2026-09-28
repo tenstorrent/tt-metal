@@ -15,19 +15,22 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b
+    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b (1 device: bfloat8_b with QWEN36_F_MLP_GU_BF8=1)
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
+    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b (1 device: bfloat8_b with QWEN36_F_MLP_GU_BF8=1)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight: prepare_for_fused_swiglu tile-pair interleave, then (tp>1)
     column-parallel shard on the 2N dim so each device holds its interleaved slice.
 
     tp=1 (single-device prefill fused-swiglu minimal_matmul) skips the mesh_mapper: the
     single-device caller's `mesh` is a plain ttnn.Device (ttnn.CreateDevice), not a MeshDevice,
-    and shard_tensor_to_mesh_mapper requires a MeshDevice."""
+    and shard_tensor_to_mesh_mapper requires a MeshDevice.
+
+    dtype: bfloat4_b (default); the single-device caller passes tpc.mlp_gate_up_dtype()
+    (bfloat8_b with QWEN36_F_MLP_GU_BF8=1)."""
     import torch
 
     from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
@@ -43,7 +46,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     return ttnn.as_tensor(
         gate_w,
         preprocess=pack,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1) if tp > 1 else None,
         layout=ttnn.TILE_LAYOUT,
@@ -156,6 +159,14 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
+    # gate/up: bfloat4_b (bandwidth; default); bfloat8_b with QWEN36_F_MLP_GU_BF8=1 (accuracy item, tp_common
+    # F flags). down: bfloat8_b (accuracy). as_tensor puts the dtype in the cache file name, so each dtype has
+    # its own cache files. (Imported by name: the tp > 1 branch's local `tpc` import makes `tpc` a local of this
+    # whole function, unbound on this path.)
+    from models.demos.blackhole.qwen36.tt.tp_common import mlp_gate_up_dtype
+
+    gu_dtype = mlp_gate_up_dtype()
+
     # Prefill-only packed [gate|up] weight for the single-device fused-swiglu minimal_matmul
     # (T>512; see Qwen36MLP.forward). w1/w3 stay for decode and T<=512 prefill. New cache name --
     # tile-pair-interleaved layout is incompatible with the plain w1/w3 cache.
@@ -166,16 +177,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             mesh_device,
             1,
             str(tensor_cache_path / "mlp.w_gate_up_swiglu_1dev.weight") if tensor_cache_path else None,
+            dtype=gu_dtype,
         )
         if use_gateup_agmm
         else None
     )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", gu_dtype),
         w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w3=load("up_proj", gu_dtype),
         w_gate_up=wgu,
     )
 
@@ -238,8 +249,8 @@ class Qwen36MLP:
     _I3_GU_IN0_GRID = (8, 8)
 
     def _build_i3_fused_gate_up(self, mesh_device):
-        """[gate | up] decode weight [dim, 2*hidden] bfp4, DRAM width-sharded, from the loaded w1/w3
-        (device concat of whole tiles: the same bfp4 tiles as w1/w3). Returns (weight, in0_memcfg,
+        """[gate | up] decode weight [dim, 2*hidden] bfp4 (bfp8 with QWEN36_F_MLP_GU_BF8=1), DRAM width-sharded,
+        from the loaded w1/w3 (device concat of whole tiles: the same tiles as w1/w3). Returns (weight, in0_memcfg,
         progcfg, hidden) or None when the shape is not the swept one (dim 2048, hidden 6144)."""
         w1, w3 = self.weights.w1, self.weights.w3
         k, hidden = int(w1.shape[-2]), int(w1.shape[-1])

@@ -468,6 +468,52 @@ def m5_enabled(item):
     return m5_value(item) != "0"
 
 
+# --- F flags (2026-09-26; single device; accuracy items, analysis_50ms/FINAL) -----------------------------------
+# Each item has its own env flag QWEN36_F_<ITEM>; "0" (default) keeps the current code path exactly.
+#   MLP_GU_BF8  One device only (tt/mlp.py load_mlp_weights): the MLP gate/up weights are bfloat8_b instead of
+#               bfloat4_b -- the decode w1 / w3 and the prefill packed [gate|up] w_gate_up of the fused-SwiGLU
+#               minimal_matmul (down stays bfloat8_b). Numerics change (D4: the bfp4 gate/up weights are a
+#               secondary contributor to the long-context KL). The matmul configs stay the same (the fused-SwiGLU
+#               minimal_matmul 7/8/16 in1 CB grows from 147,456 to 278,528 B per core); the weight-cache files are
+#               new ones (ttnn.as_tensor puts the dtype in the file name). TP (tp > 1) keeps bfloat4_b.
+F_FLAG_DEFAULTS = {"MLP_GU_BF8": "0"}
+
+
+def f_value(item):
+    """Raw value of the F item flag (a key of F_FLAG_DEFAULTS): env QWEN36_F_<item>."""
+    return os.environ.get("QWEN36_F_" + item, F_FLAG_DEFAULTS[item])
+
+
+def f_enabled(item):
+    """True if the F item is enabled: env QWEN36_F_<item> != "0"."""
+    return f_value(item) != "0"
+
+
+def mlp_gate_up_dtype():
+    """Single-device MLP gate/up weight dtype: bfloat8_b with QWEN36_F_MLP_GU_BF8=1, else bfloat4_b (default)."""
+    return ttnn.bfloat8_b if f_enabled("MLP_GU_BF8") else ttnn.bfloat4_b
+
+
+# --- N flags (2026-09-28; norm weight placement) -----------------------------------------------
+# Each item has its own env flag QWEN36_N_<ITEM>; "0" (default) keeps the current code path exactly.
+#   GAMMA_L1  layer.py's _make_norm (attention_norm / ffn_norm, the two norms _m5_add_norm reads):
+#             the RMSNorm gamma (ROW_MAJOR [1,1,dim/32,32] bf16) in L1 interleaved instead of DRAM.
+#             Placement only (bit-exact); standalone P2_NORM measurement: -1.3 us/call of 92 calls.
+#             The tensor is created at layer load (RMSNorm.__init__), before trace capture. The final
+#             norm and the FA q/k norms are built elsewhere and are not affected by this flag.
+N_FLAG_DEFAULTS = {"GAMMA_L1": "0"}
+
+
+def n_value(item):
+    """Raw value of the N item flag (a key of N_FLAG_DEFAULTS): env QWEN36_N_<item>."""
+    return os.environ.get("QWEN36_N_" + item, N_FLAG_DEFAULTS[item])
+
+
+def n_enabled(item):
+    """True if the N item is enabled: env QWEN36_N_<item> != "0"."""
+    return n_value(item) != "0"
+
+
 # --- I-3 integration flags (2026-09-25; single device, single-user decode; plan_0925 task I-3) ------
 # Decode matmul configs and LM-head variants measured best by the T4 decode sweep (plan_0925/T2
 # analyze_decode.py) and re-checked by plan_0925/I3/op_probe.py (bit-exactness vs the current call on

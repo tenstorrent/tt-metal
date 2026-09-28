@@ -366,6 +366,12 @@ ALL_QWEN_FLAG_DEFAULTS = {
         "I-3: MLP decode gate|up as one DRAM-sharded matmul + slices + silu*mul (numerics change); 0=2 matmuls",
     ),
     "QWEN36_I3_MLP_PROGCFG": ("1", "I-3: MLP decode gate/up 1D 13x4 bw4 pcN4 progcfg (bit-exact); 0=13x3 bw8 pcN5"),
+    # F item flags (tt/tp_common.py F_FLAG_DEFAULTS; read via tp_common.f_value); 0 = current path.
+    "QWEN36_F_MLP_GU_BF8": (
+        "0",
+        "F: single device, MLP gate/up weights (decode w1/w3 + prefill packed w_gate_up) bfloat8_b (numerics change, "
+        "new weight-cache files); 0=bfloat4_b",
+    ),
     # INT-4 SDPA flags (ttnn_gated_attention.py; need upstream PR #57395 + the T3d chunked K/V chains in the op).
     "QWEN36_I4_SDPA_EXP_COMPAT": (
         "1",
@@ -966,6 +972,9 @@ def main():
     # I-3 item flags, effective raw values (QWEN36_I3_<item>, default in tp_common.I3_FLAG_DEFAULTS).
     i3_flags = {item: _tp_common.i3_value(item) for item in _tp_common.I3_FLAG_DEFAULTS}
     print(f"  i3_flags (effective): {i3_flags}")
+    # F item flags, effective raw values (QWEN36_F_<item>, default in tp_common.F_FLAG_DEFAULTS).
+    f_flags = {item: _tp_common.f_value(item) for item in _tp_common.F_FLAG_DEFAULTS}
+    print(f"  f_flags (effective): {f_flags}")
 
     # --demo-prompt ignores --isl for prompt content (it's always the demo's 2642-token traced_4k
     # prompt) but still needs a KV-cache budget big enough to hold it -- size against
@@ -1235,6 +1244,7 @@ def main():
                 "m5_flags": m5_flags,
                 "i4_flags": i4_flags,
                 "i3_flags": i3_flags,
+                "f_flags": f_flags,
                 "trace_guard": trace_guard,
                 "gdn_decode_fused": gdn_decode_fused,
                 "gdn_decode_fused_layers": gdn_fused_layers,
