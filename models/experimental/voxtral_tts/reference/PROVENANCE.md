@@ -77,7 +77,7 @@ vocabulary, since the embedding table is 131072 wide.
 **One dependency beyond torch:** `regex`. tekken's split pattern uses Unicode property classes
 (`\p{L}`, `\p{Lu}`, `\p{N}`, `\p{M}`) which stdlib `re` cannot parse at all. Approximating them
 with ASCII classes tokenizes English identically and then silently diverges on anything
-accented, so the dependency is the honest choice. `scripts/dump_prompt_ids.py` (which does need
+accented, so the dependency is the honest choice. `dump_prompt_ids.py` (bringup repo, `voxtral_tts/tools/`; it does need
 mistral-common) is retained only for regenerating the fixture and for byte-for-byte replay.
 
 `voxtral_common_ref.py` holds what all three share: the safetensors reader, the config constants,
@@ -183,7 +183,7 @@ No `vllm`, `vllm_omni`, `mistral_common`, `transformers`, `einops`, `safetensors
   ~1500 frames (~120 s) rather than 605 codes. Also tekken is far denser — 139 text tokens for
   the paragraph that cost XTTS 391.
 - **Numerical vs upstream: DONE — 30/30 checks pass.** Harness and setup in
-  `scripts/upstream_compare/`. This is the gate the XTTS-v2 references cleared against coqui.
+  `upstream_compare/` in the bringup repo's `voxtral_tts/tools/`. This is the gate the XTTS-v2 references cleared against coqui.
 
   Block 1 vs **`mistral_inference`** (Mistral's own reference, reads the same
   consolidated/params.json format) — 12/12:

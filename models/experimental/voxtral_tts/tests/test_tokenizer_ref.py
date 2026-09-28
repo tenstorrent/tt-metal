@@ -7,7 +7,7 @@ The gate that matters is EXACT TOKEN-ID EQUALITY with `mistral_common`. `prompt_
 vendors 15 ground-truth prompts produced by mistral_common 1.11.7's `encode_speech_request`
 (English, French, German, Spanish, Italian, Portuguese, Hindi, Arabic, digits, symbols, emoji,
 tabs/newlines, and a 125-word paragraph, across 10 different voices), so these tests run without
-mistral_common installed. Regenerate with scripts/dump_prompt_ids.py-style code if the upstream
+mistral_common installed. Regenerate with the bringup repo's tools/dump_prompt_ids.py if the upstream
 template ever changes — a diff here means our prompt no longer matches the real one.
 
 Needs tekken.json (14 MB, downloaded with the checkpoint); skips cleanly without it.

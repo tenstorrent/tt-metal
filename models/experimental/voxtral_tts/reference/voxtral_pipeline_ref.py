@@ -28,7 +28,8 @@ produced by mistral_common's `encode_speech_request` is:
     [35] <text ids> [35]
     [25] begin_audio    <- generation starts after this
 
-so `--prompt-ids` takes a JSON dump of `tokenized.tokens` (see `scripts/dump_prompt_ids.py`).
+so `--prompt-ids` takes a JSON dump of `tokenized.tokens` (see `dump_prompt_ids.py` in the bringup
+repo's `voxtral_tts/tools/`).
 The only thing this pipeline needs from the tokenizer is that rule: every `audio_token_id`
 position consumes one row of the preset, everything else is a `tok_embeddings` lookup.
 
@@ -113,7 +114,7 @@ def build_inputs_embeds(ids, voice, w):
     assert n == voice.shape[0], (
         f"prompt has {n} audio placeholders but the preset has {voice.shape[0]} rows. The count is "
         f"voice-specific — re-dump the prompt for THIS voice:\n"
-        f"    <venv>/bin/python models/experimental/voxtral_tts/scripts/dump_prompt_ids.py "
+        f"    <venv>/bin/python dump_prompt_ids.py "  # bringup repo, voxtral_tts/tools/
         f"--text '...' --voice <name>"
     )
     embeds = w["tok_embeddings"][ids.clamp(min=0)].clone()  # [P, 3072]

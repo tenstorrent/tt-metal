@@ -4,32 +4,32 @@
 """Naturalness, per language, as a pytest gate against fixed floors.
 
 WER says whether the words are right and nothing about whether the audio sounds human. MOS was the
-only naturalness signal on this branch, and it lived only in `scripts/quality_report.py`, which
-compares one tagged run against another -- so a plain test run said nothing about how the audio
-sounds, and with no first run recorded the per-language check had nothing to compare against and
-could not fail. This is the absolute version: fixed per-language floors, committed here.
+only naturalness signal on this branch, and it lived only in the quality report (now in the bringup
+repo's `voxtral_tts/tools/`), which compares one tagged run against another -- so a plain test run
+said nothing about how the audio sounds. This is the absolute version: fixed per-language floors.
 
 The predictor is DistillMOS, which needs torchaudio, which breaks transformers in the main venv
-(BUG-6) -- so it runs in `/tmp/mosvenv` in a subprocess, exactly as the report runs it. Generation
-also runs as a subprocess (`scripts/generate_language_set.py`), so the clips scored here are the
-ones the report scores: 20 voices x their language's sentences of ~20 words and up.
+(BUG-6) -- so `tests/mos_score.py` runs in `/tmp/mosvenv` as a subprocess. The clips come from
+`write_language_set` below, which the report's generator also calls, so both score the same set: 20
+voices x their language's sentences of ~20 words and up.
 
 A MISSING VENV FAILS, it does not skip. A skip reads as a pass in a summary, and this box's
 environment evaporates (graphviz and /tmp/mosvenv both need reinstalling after a reset), which is
-exactly how a gate goes quiet. Run `tests/probes/mos_setup.sh` once.
+exactly how a gate goes quiet. Run `tests/mos_setup.sh` once.
 
 The floors are set from the measured SEED spread, not from one draw: a numerics change reshuffles
 every trajectory the way a new seed does, so a floor tighter than the seed spread fails healthy
 builds. See MOS_FLOOR.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_mos.py      # ~20 min, device + CPU
+    pytest -svv models/experimental/voxtral_tts/tests/test_mos.py      # ~15 min, device + CPU
 """
 
 import json
+import math
 import os
 import subprocess
-import sys
+import wave
 
 import pytest
 
@@ -40,9 +40,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL = os.path.dirname(HERE)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(MODEL)))
 MOSVENV = "/tmp/mosvenv/bin/python"
-GENERATE = os.path.join(MODEL, "scripts", "generate_language_set.py")
-SCORE = os.path.join(HERE, "probes", "mos_perlang.py")
+SCORE = os.path.join(HERE, "mos_score.py")
 SEED = 0
+MIN_WORDS = 19          # the shortest medium-band sentence; below this MOS is noise (STATUS 6.7)
 
 # Per-language floor on the MEAN MOS of that language's clips, and a floor for any single clip (a
 # mean over twelve clips barely moves when one turns to noise).
@@ -93,7 +93,7 @@ def _env():
 def _need_mosvenv():
     if not os.path.exists(MOSVENV):
         pytest.fail(f"{MOSVENV} is missing, so MOS cannot be scored. Run "
-                    f"models/experimental/voxtral_tts/tests/probes/mos_setup.sh once. This fails "
+                    f"models/experimental/voxtral_tts/tests/mos_setup.sh once. This fails "
                     f"rather than skipping on purpose: a skipped naturalness gate reads as a pass.")
 
 
@@ -108,15 +108,65 @@ def _score(clip_dir):
                          f"{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
 
 
+def _frame_budget(text):
+    """A CAP, not a cost: generation stops on [END_AUDIO]. ~18 chars/s at 12.5 frames/s, x2.2."""
+    return max(320, int(math.ceil(len(text) / 18.0 * 12.5 * 2.2)))
+
+
+def _save_wav(wav, path, sr=24000):
+    import torch
+
+    x = (wav.reshape(-1).clamp(-1, 1) * 32767).to(torch.int16).numpy()
+    with wave.open(path, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(sr)
+        f.writeframes(x.tobytes())
+
+
+def write_language_set(pipe, out, seed=SEED, langs=None, verbose=False):
+    """One clip per (language, voice, sentence of >= MIN_WORDS words) into `out`, plus manifest.json
+    carrying the language label, so the scorer -- which runs in the MOS venv and cannot import ttnn
+    -- needs no model knowledge. The bringup repo's generate_language_set.py is a CLI over this."""
+    from models.experimental.voxtral_tts.tests.reference_helpers import all_voices, corpus_embeds
+    from models.experimental.voxtral_tts.tests.sentence_corpus import lang_of, wer_band
+
+    os.makedirs(out, exist_ok=True)
+    rows = []
+    for lang in sorted(langs or WER_SENTENCES):
+        texts = [t for b in ("medium", "long") for t in wer_band(lang, b) if len(t.split()) >= MIN_WORDS]
+        for voice in [v for v in all_voices() if lang_of(v) == lang]:
+            for i, text in enumerate(texts):
+                pipe.backbone.reset()
+                frames, _, _ = pipe.generate(corpus_embeds(text, voice, pipe.wb),
+                                             max_frames=_frame_budget(text), seed=seed, verbose=False)
+                name = f"{lang}_{voice}_s{i}.wav"
+                _save_wav(pipe.decode(frames), os.path.join(out, name))
+                rows.append({"file": name, "lang": lang, "voice": voice, "sentence": i,
+                             "words": len(text.split()), "frames": int(frames.shape[0]),
+                             "seconds": round(frames.shape[0] / 12.5, 2)})
+                if verbose:
+                    print(f"  {lang}/{voice} s{i}: {frames.shape[0]} frames -> {name}", flush=True)
+    json.dump(rows, open(os.path.join(out, "manifest.json"), "w"), indent=1)
+    return rows
+
+
 @pytest.fixture(scope="module")
 def scored(tmp_path_factory):
     """Generate the per-language set on the device, then score it. One pass for the whole module."""
+    ttnn = pytest.importorskip("ttnn")
+    from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import TtVoxtralPipeline, open_device
+
     _need_mosvenv()
     out = str(tmp_path_factory.mktemp("mos_lang"))
-    g = subprocess.run([sys.executable, GENERATE, "--out", out, "--seed", str(SEED)], cwd=REPO,
-                       env=_env(), capture_output=True, text=True, timeout=5400)
-    assert g.returncode == 0 and os.path.exists(os.path.join(out, "manifest.json")), (
-        f"generate_language_set.py failed (exit {g.returncode}):\n{g.stdout[-2000:]}\n{g.stderr[-2000:]}")
+    dev = open_device()
+    try:
+        pipe = TtVoxtralPipeline(dev)
+        pipe.warmup(verbose=False)
+        write_language_set(pipe, out)
+        pipe.close()
+    finally:
+        ttnn.close_device(dev)
     return _score(out)
 
 

@@ -3,8 +3,8 @@
 
 """The WER recogniser, calibrated on known audio before it is trusted to gate anything.
 
-test_wer.py and test_wer_languages.py's metric tests prove the SCORING on typed text. Neither feeds
-real audio through Whisper, so two failures this branch has actually had would pass both:
+test_wer_languages.py's metric tests prove the SCORING on typed text. They do not feed
+real audio through Whisper, so two failures this branch has actually had would pass them:
 
   * the 30 s truncation (BUG-13) -- Whisper cuts audio at 30 s unless asked for long form, and that
     made word-perfect long utterances score 0.245 and look like the model losing the thread;
@@ -20,19 +20,20 @@ right answer is known:
   long form    a 39 s clip that must transcribe to its last word -- and, as a control, must NOT when
                long form is switched off, so the branch that fixes BUG-13 is proven load-bearing
 
-The known-good clips are the fp32 CPU REFERENCE's output (scripts/make_asr_calibration_fixture.py),
+The known-good clips are the fp32 CPU REFERENCE's output (make_asr_calibration_fixture.py in the
+bringup repo's voxtral_tts/tools/),
 stored as codes and decoded here by the fp32 codec: the instrument is calibrated on audio that does
 not depend on the device it will later judge. Whisper is greedy and on CPU, so every score here is
 deterministic and the bounds are set from measured values with margin, not guessed.
 
-The quality report's own scorer (scripts/score_quality_set_scipy.py, whisper-base.en with its own
-long-form chunking) gates wer_longform on English, so it gets the same English checks.
+The quality report's own scorer (whisper-base.en, its own long-form chunking) lives in the bringup
+repo's voxtral_tts/tools/ with the report, and gets the same English checks there
+(tools/test_score_quality_set.py).
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_asr_calibration.py      # ~5 min, CPU
 """
 
-import importlib.util
 import os
 
 import pytest
@@ -50,7 +51,6 @@ from models.experimental.voxtral_tts.tests.test_wer_languages import (  # noqa: 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURE = os.path.join(HERE, "asr_calibration_fixture.pt")
-SCORER = os.path.join(os.path.dirname(HERE), "scripts", "score_quality_set_scipy.py")
 SAMPLES_PER_FRAME = 1920
 
 # Bounds, from the measured scores of these exact clips (deterministic -- see the module docstring).
@@ -204,49 +204,3 @@ def test_long_clip_truncates_without_long_form(clips, asr):
     print(f"\n  en_long, long form OFF: WER {w:.4f}, tail present {_tail_present(c['text'], hyp)}")
     assert _tail_present(c["text"], hyp) == 0, "long form OFF still reached the end -- no truncation"
     assert w >= 0.10, f"truncation cost only {w:.4f}; expected the post-30 s words as deletions"
-
-
-# ------------------------------------------------------------------------------ the report's scorer
-
-@pytest.fixture(scope="module")
-def report_scorer():
-    spec = importlib.util.spec_from_file_location("_scorer", SCORER)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _report_score(sc, wav, text, tmp_path, name):
-    """Run the quality report's transcribe_one on a wav written exactly as the generator writes it."""
-    import wave
-
-    path = str(tmp_path / f"{name}.wav")
-    x = (wav.clamp(-1, 1) * 32767).to(torch.int16).numpy()
-    with wave.open(path, "wb") as f:
-        f.setnchannels(1)
-        f.setsampwidth(2)
-        f.setframerate(OUTPUT_SR)
-        f.writeframes(x.tobytes())
-    hyp, _ = sc.transcribe_one({"text": text, "wav": path, "audio_s": wav.shape[0] / OUTPUT_SR})
-    errs, n = sc.wer(text, hyp)
-    return errs / max(n, 1), hyp
-
-
-@pytest.mark.parametrize("key", ["en_medium", "en_long"])
-def test_report_scorer_on_known_good(clips, report_scorer, tmp_path, key):
-    """wer_longform is scored by this path, and its long cases are ~36 s, so it needs the same proof."""
-    c, wav = clips[key]
-    w, hyp = _report_score(report_scorer, wav, c["text"], tmp_path, key)
-    print(f"\n  report scorer {key}: WER {w:.4f}, tail present {_tail_present(c['text'], hyp)}")
-    assert w <= GOOD_MAX[key], f"report scorer: known-good {key} scored {w:.4f}: {hyp!r}"
-    assert _tail_present(c["text"], hyp) == TAIL_WORDS, f"report scorer stops short: ...{hyp[-120:]!r}"
-
-
-def test_report_scorer_on_known_bad(clips, report_scorer, tmp_path):
-    c, wav = clips["en_medium"]
-    w_sil, _ = _report_score(report_scorer, torch.zeros(8 * OUTPUT_SR), c["text"], tmp_path, "sil")
-    w_cut, hyp = _report_score(report_scorer, wav[: int(wav.shape[0] * CUT_KEEP)], c["text"],
-                               tmp_path, "cut")
-    print(f"\n  report scorer: silence {w_sil:.4f}, cut tail {w_cut:.4f}")
-    assert w_sil >= COLLAPSE, f"report scorer: silence scored {w_sil:.4f}"
-    assert w_cut >= CUT_MIN, f"report scorer: cut tail scored {w_cut:.4f}: {hyp!r}"

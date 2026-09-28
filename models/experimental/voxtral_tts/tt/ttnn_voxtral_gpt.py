@@ -72,9 +72,7 @@ _SDPA_PRG = ttnn.SDPAProgramConfig(
 # NOTES.md [gpt-26] -- DECODE matmul program configs, -4.24 ms/frame. DECODE ONLY: per_core_M=1
 # and fuse_batch=True assume one tile of rows, which prefill violates, so _mlp takes them as an
 # argument rather than reading module scope. activation="silu" never fused; fused_activation does.
-# NOTES.md [gpt-29] -- 11x7, not 6.52's 12x6: it fits the 11x10 p150b as well as the 13x10 one, and
-# every shape keeps 12x6's per_core_N, so the output is bit-identical. 13x10 measured 0.31 ms WORSE.
-_MM_GRID = (11, 7)
+_MM_GRID = (11, 7)                    # fits 11x10 and 13x10; 12x6's per_core_N, bit-exact. [gpt-29]
 
 
 def _mm1d(in0_block_w, per_core_n, activation=None):

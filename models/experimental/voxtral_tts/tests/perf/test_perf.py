@@ -8,7 +8,8 @@ request onward. `decode_ms_per_frame` includes the one-time trace capture, so sh
 higher; the per-frame ceiling is therefore asserted on the long case.
 
 Ceilings are loose smoke checks. This runs on a shared card, and the regression detector is the
-paired comparison `scripts/quality_report.py --compare` performs against measured noise floors.
+paired comparison the bringup repo's `tools/quality_report.py --compare` performs against
+measured noise floors.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/perf/test_perf.py
