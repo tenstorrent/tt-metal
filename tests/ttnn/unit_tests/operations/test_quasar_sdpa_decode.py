@@ -129,14 +129,24 @@ def _skip_if_small(mesh_device):
 
 
 def _run_paged(
-    mesh_device, cur_pos, max_cores_per_head_batch=16, k_chunk_size=0, grid_xy=None, nq=N_Q_HEADS, nkv=N_KV_HEADS
+    mesh_device,
+    cur_pos,
+    max_cores_per_head_batch=16,
+    k_chunk_size=0,
+    grid_xy=None,
+    nq=N_Q_HEADS,
+    nkv=N_KV_HEADS,
+    q_interleaved=False,
 ):
     """Paged flash-decode SDPA at the llama shapes. num_cores_per_head is grid-derived (8x4 / 8 KV heads = 4),
     so a multi-core TREE reduction is configured; whether it actually runs (and deadlocks on Quasar) depends
     on k_num_chunks>1 (children get K data). max_cores_per_head_batch=1 collapses to 1 core/head (no tree).
     grid_xy overrides the program-config compute grid (the e2e clamps it to 2 nodes). nq/nkv override the head
     counts -- nkv=1 tests the ATOMIC UNIT of the 'split into per-kv-head SDPAs' idea (1 kv-head -> 1 core, the
-    config that maps like the passing 8x4-1/head case; if this passes on a small grid, the split fits 2 cores)."""
+    config that maps like the passing 8x4-1/head case; if this passes on a small grid, the split fits 2 cores).
+    q_interleaved=True builds q as DRAM-INTERLEAVED instead of HEIGHT-SHARDED -- exercising the reader's
+    interleaved-q gather path (is_q_sharded=false), which the passing sharded tests never touch. use_half_tile
+    (num_q_heads<=16 && causal && bf16) makes the interleaved path critical: pair with nq<=16 to hit half-tiles."""
     if grid_xy is None:
         _skip_if_small(mesh_device)
     else:
@@ -152,7 +162,19 @@ def _run_paged(
     page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).reshape(1, MAX_NUM_BLOCKS).repeat(batch, 1)
     cur_pos_t = torch.full((batch,), cur_pos, dtype=torch.int32)
 
-    q_t = _q_height_sharded(q, mesh_device, batch)
+    if q_interleaved:
+        # DRAM-interleaved q: for a tile-aligned nq (>=32) tilize the full q directly; for a sub-tile nq
+        # (<32, which host-tilize rejects) build a tile-aligned q then device-slice the head axis -- the exact
+        # tensor the naive device-slice split produces.
+        if nq % BLOCK_SIZE == 0:
+            q_t = _tile_bf16_dram(q, mesh_device)
+        else:
+            q_full = torch.randn(1, batch, BLOCK_SIZE, HEAD_DIM, dtype=torch.bfloat16)
+            q_full[:, :, :nq, :] = q
+            q_full_t = _tile_bf16_dram(q_full, mesh_device)
+            q_t = ttnn.slice(q_full_t, [0, 0, 0, 0], [1, batch, nq, HEAD_DIM])
+    else:
+        q_t = _q_height_sharded(q, mesh_device, batch)
     k_t = _tile_bf16_dram(keys, mesh_device)
     v_t = _tile_bf16_dram(values, mesh_device)
     pt_t = _int32_rm_dram(page_table, mesh_device)
@@ -275,14 +297,24 @@ def _torch_gqa_decode(q, keys, values, cur_pos, scale):
 
 
 def _run_split(mesh_device, num_cores):
-    """Split the 8-kv-head decode SDPA into per-group calls that each map ONE kv-head per core, so no core ever
-    owns >1 kv-head (the config that HANGS on Quasar -- see test_paged_sdpa_decode_single_kv_head). The full
-    tensors are built once (DRAM-interleaved TILE); each group is carved out ON DEVICE with ttnn.slice (q sliced
-    on the head axis, k/v on the kv-head axis) so we never host-tilize a sub-tile q height (that FATALs). Each
-    group runs paged decode SDPA with grid (num_cores,1), max_cores_per_head_batch=1 (no tree reduction), then
-    the group outputs are concatenated back on the head axis.
-      - num_cores=1: group size 1 -> 8 sequential calls, 1 kv-head on 1 core.
-      - num_cores=2: group size 2 -> 4 sequential calls, 2 kv-heads on 2 cores (still 1 kv-head/core).
+    """Split the 8-kv-head decode SDPA into 8 single-kv-head calls, EACH reusing the exact validated config from
+    test_paged_sdpa_decode_single_kv_head (full 32-head HEIGHT-SHARDED q + 1 kv-head, max_cores_per_head_batch=1),
+    so no core ever owns >1 kv-head (the config that HANGS on Quasar).
+
+    Why full-q (32 heads) and not the group's 4 heads? Two unvalidated paths sink the naive slice:
+      (1) a sub-tile q height (4 or 8 heads) can't be host-tilized (tilize needs height %32) and slicing a tiled
+          q on the head axis to sub-tile is fragile; and
+      (2) the DRAM-INTERLEAVED-q reader path is unported on Quasar -- feeding interleaved q (nq=4) tripped a
+          compute unpack assert (Neo0TRISC0, sdpa_flash_decode.cpp), while the height-sharded path passes.
+    Passing the FULL 32-head height-sharded q with ONE kv-head keeps the op on the validated sharded path:
+    nkv=1 -> every q-head attends that one kv-head; we KEEP only this head's rows [h*qpk:(h+1)*qpk]. This is the
+    same q the e2e already has (create_qkv_heads emits height-sharded [32,64]); only k/v are sliced, on the
+    NON-tiled kv-head axis (dim 1). Cost: ~8x compute per call (compute 32 heads, keep 4) -- fine for bring-up.
+
+      - num_cores=1: grid (1,1) -- 1 kv-head on 1 core (2nd core unused). 8 calls.
+      - num_cores=2: grid (2,1) -- 1 kv-head still on 1 core, 2nd idle (the passing single_kv_head[2node] config);
+        proves the split RUNS on a 2-core device. True 2-heads-on-2-cores needs 1 kv-head/core with a 2-head q,
+        which is the sub-tile-q path above (unported) -- so we keep 1 kv-head/call.
     Validates finiteness AND PCC vs a torch GQA reference."""
     dev = mesh_device.compute_with_storage_grid_size()
     if int(dev.x) < num_cores:
@@ -291,8 +323,6 @@ def _run_split(mesh_device, num_cores):
     batch = 1
     nq, nkv = N_Q_HEADS, N_KV_HEADS
     qpk = nq // nkv  # 4 q-heads per kv-head
-    gs = min(num_cores, nkv)  # kv-heads per call = cores (1 kv-head/core)
-    assert nkv % gs == 0, f"nkv={nkv} must split into groups of {gs}"
     cur_pos = 200
 
     torch.manual_seed(0)
@@ -302,29 +332,27 @@ def _run_split(mesh_device, num_cores):
     page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).reshape(1, MAX_NUM_BLOCKS).repeat(batch, 1)
     cur_pos_t = torch.full((batch,), cur_pos, dtype=torch.int32)
 
-    # q DRAM-interleaved TILE (the op accepts DRAM-interleaved Q, not just height-sharded -- so we can device-slice
-    # the head axis without a host tilize of a sub-tile height).
-    q_t = _tile_bf16_dram(q, mesh_device)
+    # Full 32-head q as HEIGHT-SHARDED L1 (the validated path); k/v DRAM-interleaved (op requires k/v in DRAM).
+    q_t = _q_height_sharded(q, mesh_device, batch)
     k_t = _tile_bf16_dram(keys, mesh_device)
     v_t = _tile_bf16_dram(values, mesh_device)
     pt_t = _int32_rm_dram(page_table, mesh_device)
     cp_t = _int32_rm_dram(cur_pos_t, mesh_device)
 
     logger.info(
-        f"[sdpa-repro] SPLIT decode: nq={nq} nkv={nkv} qpk={qpk} group_size={gs} "
-        f"({nkv // gs} calls) grid {num_cores}x1 max_cores=1 cur_pos={cur_pos}"
+        f"[sdpa-repro] SPLIT decode: nq={nq} nkv={nkv} qpk={qpk} -> {nkv} single-kv-head calls "
+        f"grid {num_cores}x1 max_cores=1 cur_pos={cur_pos} (full-q sharded, keep {qpk} rows/call)"
     )
 
-    group_outs = []
-    for g0 in range(0, nkv, gs):
-        # q-heads [g0*qpk : (g0+gs)*qpk] on the head axis (dim 2); kv-heads [g0 : g0+gs] on the kv-head axis (dim 1).
-        q_g = ttnn.slice(q_t, [0, 0, g0 * qpk, 0], [1, batch, (g0 + gs) * qpk, HEAD_DIM])
-        k_g = ttnn.slice(k_t, [0, g0, 0, 0], [MAX_NUM_BLOCKS, g0 + gs, BLOCK_SIZE, HEAD_DIM])
-        v_g = ttnn.slice(v_t, [0, g0, 0, 0], [MAX_NUM_BLOCKS, g0 + gs, BLOCK_SIZE, HEAD_DIM])
-        out_g = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
-            q_g,
-            k_g,
-            v_g,
+    kept = []
+    for h in range(nkv):
+        # One kv-head: slice k/v on the kv-head axis (dim 1) -> [MAX_NUM_BLOCKS, 1, BLOCK_SIZE, HEAD_DIM].
+        k_h = ttnn.slice(k_t, [0, h, 0, 0], [MAX_NUM_BLOCKS, h + 1, BLOCK_SIZE, HEAD_DIM])
+        v_h = ttnn.slice(v_t, [0, h, 0, 0], [MAX_NUM_BLOCKS, h + 1, BLOCK_SIZE, HEAD_DIM])
+        out_h = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
+            q_t,
+            k_h,
+            v_h,
             page_table_tensor=pt_t,
             cur_pos_tensor=cp_t,
             scale=SCALE,
@@ -335,18 +363,11 @@ def _run_split(mesh_device, num_cores):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.synchronize_device(mesh_device)
-        group_outs.append(out_g)
-        logger.info(f"[sdpa-repro] SPLIT group kv[{g0}:{g0 + gs}] done")
+        o_h = ttnn.to_torch(out_h).reshape(-1, HEAD_DIM)  # [nq(=32), hd]; every q-head vs this kv-head
+        kept.append(o_h[h * qpk : (h + 1) * qpk])  # keep only the qpk heads that belong to kv-head h
+        logger.info(f"[sdpa-repro] SPLIT kv-head {h} done")
 
-    # Concatenate the per-group outputs back along the q-head axis (dim 2).
-    try:
-        out = ttnn.concat(group_outs, dim=2)
-        o = ttnn.to_torch(out)
-    except (RuntimeError, AttributeError) as e:
-        logger.info(f"[sdpa-repro] device concat unavailable ({e}); concatenating on host")
-        o = torch.cat([ttnn.to_torch(g) for g in group_outs], dim=2)
-
-    o = o.reshape(-1, HEAD_DIM)[:nq]  # [nq, hd]
+    o = torch.cat(kept, dim=0)  # [nq, hd]
     ref = _torch_gqa_decode(q, keys, values, cur_pos, SCALE)
     pcc = _pcc(o, ref)
     logger.info(f"[sdpa-repro] SPLIT out shape {tuple(o.shape)} finite={torch.isfinite(o).all().item()} PCC={pcc:.5f}")
@@ -357,11 +378,51 @@ def _run_split(mesh_device, num_cores):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("num_cores", [1, 2], ids=["1core", "2core"])
 def test_paged_sdpa_decode_split(mesh_device, num_cores):
-    """Per-kv-head SPLIT of the decode SDPA (the e2e fix for a 2-core Quasar device). Runs nkv/num_cores
-    sequential paged-decode calls, each mapping exactly 1 kv-head per core (the ONLY config that doesn't hang),
-    then concatenates. 1core = 8 calls (1 kv-head each); 2core = 4 calls (2 kv-heads, 1/core). If these PASS,
-    the e2e decode SDPA can run on device via this split instead of the host fallback."""
+    """Per-kv-head SPLIT of the decode SDPA (the e2e fix for a 2-core Quasar device). Runs 8 single-kv-head
+    paged-decode calls (full-q height-sharded + 1 kv-head each, the validated no-hang config), keeps each head's
+    qpk output rows, and concatenates. 1core = grid (1,1); 2core = grid (2,1) (proves it runs on a 2-core
+    device). If these PASS, the e2e decode SDPA can run on device via this split instead of the host fallback."""
     _run_split(mesh_device, num_cores)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.xfail(
+    reason="DEFERRED: half-tile q unpack (use_half_tile, num_q_heads<=16) emits UNPACR_FACE src_face_idx=2 "
+    "face_count=1, which ttsim does not implement (qsr_execute_unpacr_face UnimplementedFunctionality) -- a "
+    "SIM-side gap, not a kernel edit. File a ttsim ticket (cf. UNPACR_STRIDE / partial-face). The e2e does NOT "
+    "need this path: its per-kv-head split passes FULL 32-head q (use_half_tile=FALSE). Un-xfail when ttsim adds "
+    "the op. strict=False so a fixed sim flips this to XPASS.",
+    strict=False,
+)
+@pytest.mark.parametrize(
+    "nq",
+    [N_Q_HEADS, 16, 4],
+    ids=["fulltile", "halftile16", "halftile4"],
+)
+def test_paged_sdpa_decode_interleaved_q(mesh_device, nq):
+    """PORT TARGET (deferred -- ttsim gap, see xfail): exercise the decode-SDPA reader's DRAM-INTERLEAVED-q
+    gather path (is_q_sharded=false), which the passing sharded tests never touch and which the naive
+    per-kv-head split hit -> compute unpack assert (Neo0TRISC0, sdpa_flash_decode.cpp). nkv=1, grid (1,1),
+    max_cores=1, multi-chunk.
+
+    Two variables separated by nq (use_half_tile = causal && num_q_heads<=16 && bf16):
+      - fulltile  (nq=32): use_half_tile=FALSE. Isolates the interleaved reader for FULL 32x32 tiles.
+      - halftile16(nq=16): use_half_tile=TRUE, tile-aligned nq (no device slice). Isolates HALF-tiles alone.
+      - halftile4 (nq=4):  use_half_tile=TRUE + sub-tile nq via device slice (the naive-split tensor).
+    The half-tile variants trip a ttsim UnimplementedFunctionality (UNPACR_FACE src_face_idx=2) before any
+    reader fix can be validated, so the whole path is xfail'd pending sim support. Reader-side note for when the
+    sim lands: dataflow_common.hpp read_q interleaved branch reads full q_tile_bytes with no half-tile stride,
+    unlike the sharded branch (~L539-550) -- that likely also needs porting once half-tile unpack works."""
+    _run_paged(
+        mesh_device,
+        cur_pos=200,
+        max_cores_per_head_batch=1,
+        k_chunk_size=BLOCK_SIZE,
+        grid_xy=(1, 1),
+        nq=nq,
+        nkv=1,
+        q_interleaved=True,
+    )
 
 
 def test_non_paged_sdpa_decode(mesh_device):

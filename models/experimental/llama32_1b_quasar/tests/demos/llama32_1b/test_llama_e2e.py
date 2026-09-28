@@ -978,6 +978,94 @@ def _install_quasar_host_sdpa(monkeypatch):
                 logger.warning(f"[llama-e2e][quasar] could not patch {name} for host SDPA ({e})")
 
 
+def _install_quasar_device_sdpa_split(monkeypatch, mesh_device):
+    """Run the Quasar decode SDPA ON DEVICE via a per-kv-head split (replaces the host fallback).
+
+    The full 8-kv-head decode flash-decode HANGS on the sim once k_num_chunks>1 whenever a core owns >1 kv-head
+    (cross-core tree reduction / multi-chunk lazy-softmax). It PASSES when exactly 1 kv-head maps to a core
+    (tests/.../test_quasar_sdpa_decode.py::test_paged_sdpa_decode_split, validated 1- AND 2-core). So split the
+    op into `nkv` single-kv-head calls: pass the FULL 32-head HEIGHT-SHARDED q (which create_qkv_heads already
+    produces -- keeps the op on the validated sharded-q path; the DRAM-INTERLEAVED-q reader is unported on
+    Quasar and trips a compute unpack assert) together with ONE kv-head (k/v sliced on the non-tiled kv-head
+    axis, dim 1). With nkv=1 every q-head attends that kv-head; keep only the qpk heads that belong to it, then
+    reassemble the [1,B,nq,hd] output. The attention math (QK^T, softmax, AV) runs in the device flash-decode
+    kernels; assembly is attempted on device (slice+concat) and falls back to a host stitch. Single-device only;
+    any failure falls back to `orig`. MUST be installed AFTER _install_quasar_sdpa_single_core so `orig` already
+    clamps the program_config to single-core + emulator grid. ~nkv x compute per token (compute 32 heads, keep
+    qpk) -- a bring-up cost, not a device limit."""
+    import torch as _torch
+
+    tr = getattr(getattr(ttnn.experimental, "quasar", None), "transformer", None)
+    if tr is None:
+        logger.warning("[llama-e2e][quasar] no experimental.quasar.transformer; device SDPA split skipped")
+        return
+
+    def _upload_dram(out_t, dev):
+        rm = ttnn.from_torch(
+            out_t.to(_torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(dev),
+        )
+        qtil = getattr(getattr(ttnn.experimental, "quasar", None), "tilize", None)
+        return (qtil or ttnn.tilize)(rm, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+
+    def _split_decode(orig, q, k, v, args, kwargs):
+        dev = q.device()
+        qs, ks, vs = q.shape, k.shape, v.shape
+        nq, nkv = int(qs[2]), int(ks[1])
+        if nkv <= 1 or nq % nkv != 0:
+            # Nothing to split (already 1 kv-head, or non-GQA); let orig (single-core) handle it.
+            return orig(q, k, v, *args, **kwargs)
+        qpk = nq // nkv  # q-heads per kv-head
+        outs = []
+        for h in range(nkv):
+            # One kv-head: slice k/v on the kv-head axis (dim 1) -- NOT a tiled dim, so no sub-tile issue.
+            k_h = ttnn.slice(k, [0, h, 0, 0], [int(ks[0]), h + 1, int(ks[2]), int(ks[3])])
+            v_h = ttnn.slice(v, [0, h, 0, 0], [int(vs[0]), h + 1, int(vs[2]), int(vs[3])])
+            outs.append(orig(q, k_h, v_h, *args, **kwargs))
+        # Reassemble: head block h of the output comes from outs[h] (all q-heads vs kv-head h), rows
+        # [h*qpk:(h+1)*qpk]. Try device slice+concat; fall back to a host stitch (a tiled sub-tile slice on the
+        # head axis is fragile on device).
+        try:
+            slabs = []
+            for h in range(nkv):
+                os_ = outs[h].shape
+                slabs.append(
+                    ttnn.slice(outs[h], [0, 0, h * qpk, 0], [int(os_[0]), int(os_[1]), (h + 1) * qpk, int(os_[3])])
+                )
+            out = ttnn.concat(slabs, dim=2)
+            logger.warning(f"[llama-e2e][quasar] device SDPA split (on device) nkv={nkv} qpk={qpk}")
+            return out
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] device SDPA-split device assembly failed ({e}); host-stitching")
+            kept = [ttnn.to_torch(outs[h])[:, :, h * qpk : (h + 1) * qpk, :] for h in range(nkv)]
+            return _upload_dram(_torch.cat(kept, dim=2), dev)
+
+    def _wrap(orig):
+        def _f(q, k, v, *args, **kwargs):
+            try:
+                dev = q.device()
+                if dev is None or dev.get_num_devices() != 1:
+                    return orig(q, k, v, *args, **kwargs)
+                return _split_decode(orig, q, k, v, args, kwargs)
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] device SDPA split failed ({e}); falling back to device op")
+                return orig(q, k, v, *args, **kwargs)
+
+        return _f
+
+    for name in ("paged_scaled_dot_product_attention_decode", "scaled_dot_product_attention_decode"):
+        orig = getattr(tr, name, None)
+        if orig is not None:
+            try:
+                monkeypatch.setattr(tr, name, _wrap(orig))
+            except Exception as e:
+                logger.warning(f"[llama-e2e][quasar] could not patch {name} for device SDPA split ({e})")
+
+
 def _install_quasar_force_interleaved(monkeypatch, mesh_device):
     """Force OVERSIZED sharded memory configs to DRAM-interleaved on Quasar; keep device-fitting shards.
 
@@ -1197,9 +1285,10 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
 
         # LLAMA_QSR_DEVICE_ATTN=1 (default): run compute ON DEVICE (matmul, create_qkv_heads, RoPE, prefill
         # SDPA); all confirmed working on device 2026-09-26. =0: the fully host-sided path that passed e2e --
-        # kept as a fallback. DECODE SDPA runs on HOST in BOTH modes (the multi-chunk k_num_chunks>1 path hangs
-        # on device even single-core + alias=0). Embedding also stays HOST either way (~525MB table upload is a
-        # sim-perf tax, not a device limit; unlike bf8_b which is genuinely unsupported). ON-DEVICE MODE
+        # kept as a fallback. DECODE SDPA now runs ON DEVICE too (per-kv-head split, below;
+        # LLAMA_QSR_DEVICE_DECODE_SDPA=0 restores the host fallback). Embedding stays HOST either way (~525MB
+        # table upload is a sim-perf tax, not a device limit; unlike bf8_b which is genuinely unsupported).
+        # ON-DEVICE MODE
         # REQUIRES `TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0` in the pytest env (clears the tile-counter
         # underflow that forced host matmul); matmul + prefill SDPA device paths are validated standalone
         # (test_quasar_qkv_matmul_dfb.py, test_quasar_sdpa_prefill.py). bf16 substitutes for bf8_b.
@@ -1233,15 +1322,21 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         _install_quasar_update_cache_reshard(monkeypatch)
         # Clamp the PREFILL SDPA grid (model pins 8x8=64 cores) to the device so it runs ON DEVICE.
         _install_quasar_prefill_sdpa_grid(monkeypatch, mesh_device)
-        # Decode SDPA single-core config (no tree reduction) -- the fallback config under host SDPA.
+        # Decode SDPA single-core config (no tree reduction) -- clamps each SDPA call to 1 core/head + emulator
+        # grid. Required by BOTH the device-split and the host fallback below (the split calls the clamped op).
         _install_quasar_sdpa_single_core(monkeypatch, mesh_device)
-        # Decode SDPA on the HOST in BOTH modes. Single-core + alias=0 clears the tree deadlock AND the
-        # tile-counter underflow, and PASSES standalone at cur_pos=64 (k_num_chunks=1). But the e2e decodes at
-        # cur_pos~512 -> k_num_chunks>1 -> the multi-chunk lazy-softmax path, which HANGS on device even
-        # single-core + alias=0 (2026-09-26 device run: SdpaDecode launched, device stuck, no op progress).
-        # Prefill SDPA (scaled_dot_product_attention, on device) is NOT wrapped by this -- only the decode ops.
-        # So: everything on device EXCEPT decode SDPA (host, multi-chunk device bug) + embedding (host, perf).
-        _install_quasar_host_sdpa(monkeypatch)
+        # Decode SDPA ON DEVICE via a per-kv-head split (LLAMA_QSR_DEVICE_DECODE_SDPA=1, default). The full
+        # 8-kv-head flash-decode HANGS on the sim once k_num_chunks>1 whenever a core owns >1 kv-head (tree
+        # reduction / multi-chunk lazy-softmax). Splitting into nkv single-kv-head calls (full-q sharded + 1
+        # kv-head each) keeps every call on the validated no-hang config -- validated standalone 1- and 2-core
+        # (test_quasar_sdpa_decode.py::test_paged_sdpa_decode_split). =0 restores the host fallback (torch GQA),
+        # which sidesteps the device flash-decode entirely. So now everything runs ON DEVICE except embedding
+        # (host, ~525MB-table perf choice).
+        device_decode_sdpa = device_attn and os.environ.get("LLAMA_QSR_DEVICE_DECODE_SDPA", "1") == "1"
+        if device_decode_sdpa:
+            _install_quasar_device_sdpa_split(monkeypatch, mesh_device)
+        else:
+            _install_quasar_host_sdpa(monkeypatch)
         # Route eltwise add/mul/multiply/subtract to the Quasar-native ops: mainline binary_ng is Gen1-only
         # (DataMovementKernel FATAL on Quasar). Keeps residual adds + MLP gate mul on device.
         _install_quasar_eltwise(monkeypatch)
