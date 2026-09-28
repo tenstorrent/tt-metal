@@ -130,6 +130,13 @@ uint32_t tile_size(DataType dtype) {
     return tt::tile_size(output_data_format);
 }
 
+bool is_data_type_supported(DataType dtype, tt::ARCH arch) {
+    if (dtype == DataType::INVALID) {
+        return false;
+    }
+    return tt::is_data_format_supported(datatype_to_dataformat_converter(dtype), arch);
+}
+
 }  // namespace tt::tt_metal
 
 auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, format_context& ctx) const

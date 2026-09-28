@@ -149,6 +149,7 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
         {0, DataType::BFLOAT16},
         {2, DataType::FLOAT32},
         {16, DataType::UINT32},
+        {17, DataType::INT8},
     };
 
     std::map<uint8_t, tt::DataFormat> data_format_spec;
@@ -163,6 +164,68 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
     EXPECT_EQ(config_via_data_format.total_size(), cb_config.page_size);
     EXPECT_EQ(config_via_data_type.total_size(), cb_config.page_size);
     EXPECT_EQ(config_via_data_format.data_formats(), config_via_data_type.data_formats());
+    // INT8 uses the plain converter; only kernels with their own sign handling want cb_dataformat_for (UInt8).
+    EXPECT_EQ(config_via_data_type.data_formats()[17], tt::DataFormat::Int8);
+}
+
+TEST_F(MeshDeviceFixture, TestCircularBufferConfigBufferConstructorWithDataTypeMatchesDataFormat) {
+    CBConfig cb_config;
+    for (auto& device : this->devices_) {
+        auto l1_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = cb_config.page_size},
+            {.page_size = cb_config.page_size, .buffer_type = tt::tt_metal::BufferType::L1},
+            device.get());
+        const Buffer& buffer = *l1_buffer->get_reference_buffer();
+
+        CircularBufferConfig config_via_data_format(
+            cb_config.page_size, {{0, tt::DataFormat::Float16_b}, {16, tt::DataFormat::Int8}}, buffer);
+        CircularBufferConfig config_via_data_type(
+            cb_config.page_size, {{0, DataType::BFLOAT16}, {16, DataType::INT8}}, buffer);
+
+        EXPECT_EQ(config_via_data_format, config_via_data_type);
+        EXPECT_EQ(config_via_data_type.globally_allocated_address(), buffer.address());
+    }
+}
+
+TEST_F(MeshDeviceFixture, TestCircularBufferBuilderSetDataFormatWithDataType) {
+    CBConfig cb_config;
+
+    CircularBufferConfig config_via_data_format(cb_config.page_size);
+    config_via_data_format.index(0).set_data_format(tt::DataFormat::Bfp8_b).set_page_size(cb_config.page_size);
+    config_via_data_format.remote_index(31).set_data_format(tt::DataFormat::Int8).set_page_size(cb_config.page_size);
+
+    CircularBufferConfig config_via_data_type(cb_config.page_size);
+    config_via_data_type.index(0).set_data_format(DataType::BFLOAT8_B).set_page_size(cb_config.page_size);
+    config_via_data_type.remote_index(31).set_data_format(DataType::INT8).set_page_size(cb_config.page_size);
+
+    EXPECT_EQ(config_via_data_format, config_via_data_type);
+    EXPECT_EQ(config_via_data_type.data_formats()[0], tt::DataFormat::Bfp8_b);
+}
+
+TEST_F(MeshDeviceFixture, TestTileGetTileSizeWithDataTypeMatchesDataFormat) {
+    constexpr DataType kDataTypes[] = {
+        DataType::BFLOAT16,
+        DataType::FLOAT32,
+        DataType::UINT32,
+        DataType::BFLOAT8_B,
+        DataType::BFLOAT4_B,
+        DataType::UINT8,
+        DataType::UINT16,
+        DataType::INT32,
+        DataType::FP8_E4M3,
+        DataType::INT8,
+    };
+    const std::array<std::array<uint32_t, 2>, 4> kTileShapes = {{{32, 32}, {16, 32}, {32, 16}, {16, 16}}};
+
+    for (const auto& shape : kTileShapes) {
+        const Tile tile(shape);
+        for (DataType dtype : kDataTypes) {
+            EXPECT_EQ(tile.get_tile_size(dtype), tile.get_tile_size(datatype_to_dataformat_converter(dtype)))
+                << "DataType=" << dtype << ", tile=" << shape[0] << "x" << shape[1];
+        }
+    }
+    EXPECT_LT(Tile({16, 16}).get_tile_size(DataType::BFLOAT16), Tile().get_tile_size(DataType::BFLOAT16));
+    EXPECT_ANY_THROW((void)Tile().get_tile_size(DataType::INVALID));
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
