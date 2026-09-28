@@ -284,21 +284,21 @@ def _distributed_prefix(
         # Keep chronological slots until the final device-indexed entry selection.
         entry_states.append(carry)
         selected = selections.select_affine_transform(gathered, step, memory_config=working_memory)
-        transported_a = ttnn.slice(
+        # Precision boundary: BF16 collective payload is restored for FP32 carry math. The widening is
+        # exact, so casting the packed pair once before splitting it matches casting each half.
+        selected = ttnn.typecast(selected, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
+        a_for_carry = ttnn.slice(
             selected,
             (0, 0, 0, 0),
             (1, batch_heads, key_dim, key_dim),
             memory_config=working_memory,
         )
-        transported_b = ttnn.slice(
+        b_for_carry = ttnn.slice(
             selected,
             (0, 0, 0, key_dim),
             (1, batch_heads, key_dim, key_dim + value_dim),
             memory_config=working_memory,
         )
-        # Precision boundary: BF16 collective payload is restored for FP32 carry math.
-        a_for_carry = ttnn.typecast(transported_a, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
-        b_for_carry = ttnn.typecast(transported_b, KDA_RECURRENT_STATE_DTYPE, memory_config=working_memory)
         carry = ttnn.matmul(
             a_for_carry,
             carry,
