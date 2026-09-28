@@ -721,12 +721,35 @@ halves at 1.7B, since the codec is the same at both sizes. The rest of the suite
 layout, tokenizer, sampler, the prompt builders, the pipeline, generation stops, streaming) is
 not in CI; run it by hand as above.
 
-Timeouts are the time with an empty kernel cache, watcher on, plus 20%:
+The e2e legs (`tests/pipeline_reorg/models_e2e_tests.yaml`) run `tests/e2e/test_e2e.py` on
+the CustomVoice release, watcher off, and report through benchmark payloads checked against
+`models/model_targets.yaml`:
+
+- **accuracy**, top-1 and top-5 by teacher forcing: the device is fed the frames the CPU
+  reference sampled (`tests/e2e/reference_outputs/`, from `tests/e2e/generate_reference.py`)
+  and scored at every codebook of every frame on whether its argmax, or its top five, holds
+  the reference's argmax;
+- **determinism**, the same seed twice giving the same frames and audio, asserted in the test;
+- **perf**, warm, at batch 1: the time to the first frame as time-to-token, frames per second
+  as tokens/s/user.
+
+On one N150:
+
+| size | top-1 | top-5 | first frame | frames/s |
+|---|---|---|---|---|
+| 1.7B | 86.20% | 99.86% | 0.10 s | 20.3 |
+| 0.6B | 86.99% | 99.92% | 0.10 s | 22.9 |
+
+The targets stay TODO until a CI run on each SKU gives runner numbers.
+
+Timeouts are the time with an empty kernel cache plus 20%, the unit legs with the watcher on:
 
 | leg | N150 cold | `wh_n150` | `bh_p150` |
 |---|---|---|---|
 | 1.7B unit | 8.6 min | 11 | 8 |
 | 0.6B unit | 3.2 min | 4 | 3 |
+| 1.7B e2e | 2.2 min | 3 | 3 |
+| 0.6B e2e | 1.9 min | 3 | 3 |
 
 The Blackhole timeouts scale the N150 time by 0.74, the ratio the previous full legs measured
 on one Blackhole chip. A first run that downloads the checkpoints into the shared cache takes
