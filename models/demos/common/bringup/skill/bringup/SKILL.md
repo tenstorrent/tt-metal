@@ -76,12 +76,13 @@ the dashboards. Classify every failure before acting, and log every intervention
 | the input or data (implausible accuracy, degenerate generations) | stop, show the evidence, ask the person |
 | an approval point (plan, performance picks) | bring the person the plan or list; record their decision with `$B approve` |
 | an agent needs something its step does not allow (a shared file, a wider path, a framework change) | decide yourself (below) |
+| a task became DEFERRED (the agent requested an op from op-gen) | review the evidence like a gate commit; accept it and tell the owner in one line, or reject it as cheating (below); section 5 |
 
 ### Decide; do not ask
 
 You are the overseer. Use your judgement and keep the run moving; the person does not want to be asked for routine
 permissions. Ask the person only for: the intake spec, the plan, the performance picks, a board reset, a push or PR,
-and evidence that the model or its data is wrong (implausible accuracy, degenerate output). Everything else (an agent
+an op request's approval and the op-gen launch (section 5), and evidence that the model or its data is wrong (implausible accuracy, degenerate output). Everything else (an agent
 needing a shared file, a wider allowed path, a framework fix, a rerun, a retry after a stop) you decide, do, log in
 supervision.md, and report in one line.
 
@@ -91,7 +92,10 @@ the gate commit (`git show --stat`, then the parts that matter), not only the ve
 - special-cases the test: recognizes the golden input or layer, hard-codes outputs, or reads the golden inside the model;
 - hides CPU work in a device module (torch math in a forward, a host round-trip per chunk, per-call constant rebuilds);
 - silences the problem instead of fixing it (a try/except that swallows it, a fallback path only the test takes);
-- fakes an interface (attributes set only to get past a check, e.g. an MLA field on a non-MLA model).
+- fakes an interface (attributes set only to get past a check, e.g. an MLA field on a non-MLA model);
+- defers a step to op-gen (task DEFERRED, a commit "(deferred to op-gen: <op>)") on thin evidence, or when a TTNN op,
+  a composition or a fork clearly does the job. Review every deferral like a gate commit: read request.yaml's
+  evidence and check it yourself (the repo map, a grep for the op).
 Accept it if the change is the honest fix, even when it touches shared code: a generic hook in the engine, a new
 branch for a new layout, a fix in a shared op with its own test. To reject: pause, revert the gate commit
 (`git revert`), add one bullet to the model's findings saying what was wrong and what the honest fix is, then
@@ -124,9 +128,29 @@ A run takes hours and dozens of gates; the supervising session must not fill its
   is, what is pending, open decisions), and tell the person to continue in a fresh session with `/bringup` and "report
   on <model>"; a new session picks up from the files, not from memory.
 
-## 5. Resume, rerun, fork
+## 5. Deferred steps and op-gen
+
+An implement agent may defer a component step TTNN has no proper op for: it writes `<bringup_dir>/op_requests/<op>/`
+(request.yaml with the evidence, op_prompt.txt, feature_spec.py, reference.py, bind.py), the task becomes DEFERRED, the
+step stays on the CPU bridge and the run goes on ("complete with N deferred" at the end). Launching op-gen is always the
+owner's call; you never launch it and never push without asking. The owner will not type command names: map what they
+say to the commands and drive the flow yourself.
+
+| The owner says | You do |
+|---|---|
+| "approve the pooling request", "the X spec looks fine", "go ahead with that op" | `$B approve op-request <op>`, then `$B op-export <op>` right away; tell them the next steps it printed (submodule commit, gitlink bump, push, the `run_eval.py` command). Do the commits if they want; ask before any push; the launch is theirs |
+| "what's pending", "what did the agents ask for" | `$B op-requests`, then one short paragraph per request: the op, which model step, why TTNN lacks it, the shapes, where the files are |
+| "op-gen finished X (and Y) at <path or run>", "the codegen came up with these ops, retry" | find the generated `ttnn/ttnn/operations/<op>/` folders (from the eval run's logs or clone; ask for the path only if you cannot find it), `$B op-ready <ops> --from <folder(s)>`, then `orchestrator resume`; report which tasks rerun |
+| "use shape X", "the math is wrong: ..." | edit the request files yourself between agent steps (pause the orchestrator if one runs), `python -m models.demos.common.bringup.plan.op_request refresh <dir>` after a shape or placement change, rerun `... check <dir>`, and ask for approval again: an edit voids it |
+
+Unprompted: when a task becomes DEFERRED, review it (above), then tell the owner in one line with the request folder.
+In every status report and at the end of the run, list the pending requests with their status (draft, approved,
+exported, delivered), so the owner never has to remember them. Log each approval, export and delivery in supervision.md.
+
+## 6. Resume, rerun, fork
 
 - `python -m models.demos.common.bringup.orchestrator resume --spec <spec>` (after a stop, a pause, or a fix).
-- `$B approve plan|perf --spec <spec>`; `$B status --spec <spec>`.
-- `$B rerun --from <id> --spec <spec>`; `$B fork --from <id> --name <run> --spec <spec>`;
+- `$B approve plan|perf --spec <spec>`; `$B status --spec <spec>` (DEFERRED tasks are listed with their op requests).
+- `$B rerun --from <id> --spec <spec>` (a deferred task downstream stays DEFERRED; name it to redo it);
+  `$B fork --from <id> --name <run> --spec <spec>`;
   `$B compare --spec <specA> --other <specB>`.

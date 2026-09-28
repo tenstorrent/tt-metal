@@ -20,7 +20,8 @@ python -m models.demos.common.bringup.orchestrator run --spec <spec>
 ```
 
 The orchestrator stops with exit 3 when a person is needed (approve the plan, pick performance items) and exit 1 when a
-task is STOPPED after the implementer and the debugger both failed three times. `orchestrator resume` continues.
+task is STOPPED after the implementer and the debugger both failed three times. `orchestrator resume` continues. A run
+whose only unfinished tasks are DEFERRED ends with exit 0, "complete with N deferred" (below).
 
 ## Steps and task ids
 
@@ -31,10 +32,29 @@ task is STOPPED after the implementer and the debugger both failed three times. 
 | goldens | G.<rung> | script | manifest with content hash, every layer and chunk |
 | box | B.1 | script | mesh opens, collectives exact |
 | plan | PL.0 ledger, PL.1 plan | agent (plan role) + person | memory computed from the checkpoint fits per-chip DRAM, every step mapped, approved |
-| implement | C.<block>.<step>, S.<block>.<nn> | agent (test role, freeze, implement role) | frozen component test, then the swap order |
+| implement | C.<block>.<step>, S.<block>.<nn> | agent (test role, freeze, implement role) | frozen component test, then the swap order; a C task may end DEFERRED (op request accepted by the checker) |
 | integrate | L.<rung> | script (fix agent on failure) | per-layer trail, state, final hidden, top-5 |
 | contract | K.1 | agent (contract role) | engine API: layout, table, ack timing, engine input, producer read-back |
 | perf | X.1 profile, X.2 opportunities, picked items | script + person | warm profile; each pick: faster and every accuracy gate still passes |
+
+## Steps TTNN has no op for (F46)
+
+An implement agent that finds no proper TTNN op for a component step (no op, no composition, no fork fits) may defer it
+to the op code generator (op-gen, `tt_metal/third_party/tt_ops_code_gen`); the plan may also tag it `OPGEN` in
+components.yaml. The agent writes `<bringup_dir>/op_requests/<op>/` (`plan/op_request.py new`: request.yaml with the
+evidence, op_prompt.txt, feature_spec.py, reference.py, bind.py); when its gate fails and `plan/op_request.py check`
+passes, the task becomes DEFERRED: dependents run, the step stays on the CPU reference, and a device model calls it
+through `testing/cpu_bridge.py`, whose transfers are not `host_transfers_per_layer` (metrics `deferred_cpu_steps`,
+`deferred_cpu_ms`). A rejected request is a failed attempt. Launching op-gen is always the owner's call:
+
+```bash
+$B op-requests --spec <spec>                                  # requests and their status
+$B approve op-request <op> --spec <spec>                      # the owner's approval (an edit voids it)
+$B op-export <op> --spec <spec>                               # prompt + golden suite into the op-gen tree; prints the
+                                                              # next steps (submodule commit, gitlink, push, run_eval.py)
+$B op-ready <op> [<op> ...] --from <clone>/ttnn/ttnn/operations --spec <spec>   # ttnn.bringup.<op>, tasks reset
+python -m models.demos.common.bringup.orchestrator resume --spec <spec>
+```
 
 ## Layout
 
@@ -44,7 +64,7 @@ task is STOPPED after the implementer and the debugger both failed three times. 
 | `reference/` | reference interface and block-graph runner, HF parity, chunked check, golden generator and reader |
 | `testing/` | component and swap tests, ladder, serving contract, profiler, test templates |
 | `tests/` | generic pytest entry points (box, ladder, contract, profile); they read `BRINGUP_SPEC` |
-| `plan/` | memory check, components map, approvals, ledger generator, opportunity list |
+| `plan/` | memory check, components map, approvals, ledger generator, opportunity list, op requests and their export |
 | `intake/` | checkpoint check |
 | `knowledge/` | repo map and known issues every agent reads first, and their format check |
 | `orchestrator.py`, `agents/`, `briefs/` | the run loop, the agent definition (passed with `--agents`), brief templates |
