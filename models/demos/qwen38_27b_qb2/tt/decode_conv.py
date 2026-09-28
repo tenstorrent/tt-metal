@@ -4,6 +4,34 @@
 
 import ttnn
 
+_qkv_causal_conv1d_silu = ttnn.experimental.kda.qkv_causal_conv1d_silu
+_supports_runtime_offsets = "actual_start" in (_qkv_causal_conv1d_silu.__doc__ or "")
+
+
+if _supports_runtime_offsets:
+
+    def qkv_conv_compat(row_qkv, history, taps, widths, actual_start):
+        return _qkv_causal_conv1d_silu(
+            row_qkv,
+            history,
+            *taps,
+            *widths,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
+            actual_start=actual_start,
+            predecessor_carry=history,
+        )
+
+else:
+
+    def qkv_conv_compat(row_qkv, history, taps, widths, actual_start):
+        return _qkv_causal_conv1d_silu(
+            row_qkv,
+            history,
+            *taps,
+            *widths,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
+        )
+
 
 def make_actual_start(device):
     """Allocate the replicated zero chronology metadata required for non-SP execution."""
@@ -31,14 +59,12 @@ def packed_decode_conv(row_qkv, history, taps, widths, actual_start):
     batch, _, channels = row_qkv.shape
     joined = ttnn.concat([history, row_qkv[:, :1, :]], dim=1)
     joined = ttnn.reshape(joined, [1, batch * 4, channels])
-    outputs = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+    outputs = qkv_conv_compat(
         joined,
         history[:1],
-        *taps,
-        *widths,
-        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
-        actual_start=actual_start,
-        predecessor_carry=history[:1],
+        taps,
+        widths,
+        actual_start,
     )
     result = []
     for output, width in zip(outputs, widths):
