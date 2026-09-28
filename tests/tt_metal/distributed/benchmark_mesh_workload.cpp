@@ -13,6 +13,8 @@
 
 #include <benchmark/benchmark.h>
 
+#include <sys/resource.h>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -117,6 +119,12 @@ std::vector<MeshCoordinateRange> split_mesh(uint32_t max_devices_per_program) {
     return ranges;
 }
 
+double process_cpu_seconds() {
+    rusage ru{};
+    getrusage(RUSAGE_SELF, &ru);
+    return ru.ru_utime.tv_sec + (ru.ru_utime.tv_usec * 1e-6) + ru.ru_stime.tv_sec + (ru.ru_stime.tv_usec * 1e-6);
+}
+
 double percentile(std::vector<double> v, double p) {
     auto idx = std::min(v.size() - 1, static_cast<size_t>(std::lround(p * (v.size() - 1))));
     std::nth_element(v.begin(), v.begin() + idx, v.end());
@@ -152,6 +160,8 @@ void BM_EnqueueMeshWorkload(benchmark::State& state, const WorkloadShape& shape)
     const auto cq_id = static_cast<uint8_t>(cq.id());
     std::vector<double> call_us, bytes_per_device;
     uint32_t next = 0;
+    const double cpu_before = process_cpu_seconds();
+    const auto wall_before = std::chrono::steady_clock::now();
     ProgramId runtime_id = 1;
     for ([[maybe_unused]] auto _ : state) {
         auto& workload = *workloads[next++ % NUM_WORKLOADS];
@@ -170,8 +180,12 @@ void BM_EnqueueMeshWorkload(benchmark::State& state, const WorkloadShape& shape)
             bytes_per_device.push_back(wptr_after - wptr_before);
         }
     }
+    const double cpu_s = process_cpu_seconds() - cpu_before;
+    const double wall_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_before).count();
     Finish(cq);
 
+    // Host CPU the whole process used while the calls ran, including any thread pool workers polling for work.
+    state.counters["process_cpu_cores"] = cpu_s / wall_s;
     state.counters["p50_us"] = percentile(call_us, 0.5);
     state.counters["p99_us"] = percentile(call_us, 0.99);
     state.counters["programs"] = static_cast<double>(ranges.size());
