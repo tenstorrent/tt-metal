@@ -13,7 +13,9 @@ reference: |
   quantized storage, or too big for host RAM in bf16), write `hf_model(spec, num_layers)` in hooks.py: the HF modeling
   code with the checkpoint's weights dequantized exactly as the checkpoint defines them; `num_layers=None` means the
   full model (the HF sanity gate: smoke and next-token accuracy), so keep what does not fit packed and dequantize it
-  when it runs.
+  when it runs. For a layer subset, task R.4 trims the checkpoint once R.2 passes (only layers up to the last subset
+  layer stay; mixed shards become `subset-<shard>`): read every tensor through `model.safetensors.index.json`, never
+  by a shard file name.
 plan: |
   Role: plan. Map every component to TTNN and shard the model over the $mesh mesh ($chips chips, $dram GB each). Write
   `$bringup_dir/plan.yaml` (schema in `models/demos/common/bringup/plan/memory.py`), `$bringup_dir/plan.md`, and

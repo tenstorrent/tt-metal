@@ -52,6 +52,9 @@ GB = 2**30
 def checkpoint_tensors(hf_dir: str | Path) -> dict[str, list[int]]:
     """Name -> shape of every tensor, read from the safetensors headers only (no tensor data is loaded)."""
     hf_dir = Path(hf_dir)
+    trimmed = hf_dir / "bringup_trim.json"  # F47: a trimmed checkpoint keeps the whole model's map
+    if trimmed.exists():
+        return dict(json.loads(trimmed.read_text())["tensors"])
     files = sorted(hf_dir.glob("*.safetensors"))
     if not files:
         raise FileNotFoundError(f"no .safetensors files in {hf_dir}")

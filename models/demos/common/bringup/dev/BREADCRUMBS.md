@@ -533,3 +533,25 @@ Drive this ledger with
 - Also: `stage_paths` skips a task path that is an empty folder (git add refused it; hit by a deferral with no code
   yet), and knowledge/repo_map.md lost a brace path the format check rejected (the one selftest failing before F46).
 - Selftests: 155 passed + 1 failing before, 192 passed after (test_opgen.py adds 36).
+
+## F47 (2026-09-28): trim a layer subset's checkpoint after the HF sanity
+Owner (Hy4 intake): the whole checkpoint of a layer-subset bring-up is needed only for the one-time HF sanity (smoke
+"Paris", accuracy floor); afterwards the unneeded weights should go. Hy4 Preview is 1.56 TB for 6 of 78 layers.
+- `intake/trim_checkpoint.py`, ledger task R.4 (step intake, scripted, deps R.2: the sanity has passed, at R.1 or at
+  R.2 with custom_loader, and the reference's parity too). Only when the spec owns its checkpoint (no `prior`), the
+  kept prefix stops before the last layer or `checkpoint.trim_drop` names tensors, and `checkpoint.trim` is not false.
+  Keeps layers 0..K-1, K = max(last subset layer + 1, hf.parity_layers) (the reference runs the layers before a
+  subset layer), and every non-layer tensor except trim_drop globs. Layer match `(^|.)layers.<n>.`, so
+  `mtp_layers.0` is a non-layer tensor unless dropped by glob.
+- Shards: only-kept stays, only-dropped is deleted (and its download metadata), mixed is rewritten as
+  `subset-<shard>` and verified byte for byte (uint8 views, NaN-safe) before the original goes. The index lists only
+  kept tensors (metadata kept, e.g. MiMo's tp_size); the original is `model.safetensors.index.full.json`.
+- `bringup_trim.json` in the checkpoint dir, written before anything is removed: the full tensor map, the sanity
+  metrics, keep_layers. `plan.memory.checkpoint_tensors` returns that map (checkpoint gate and plan memory still see
+  the whole model); `check_hf_sanity` replays the recorded metrics (revision still read live, records `replayed`), so
+  R.1 and R.2 still rerun. trim_checkpoint.main re-checks the sanity metrics itself (ledger_gen.sanity_metrics, now
+  shared) and refuses to trim if they do not pass. Resumable: a truncated subset file is rewritten.
+- Reference brief: read every tensor through the index, never by shard file name.
+- The MiMo checkpoint was trimmed by hand the same way before this existed (160 -> 20 GB, commit 023405b50b0).
+- Selftests: 192 -> 198 (test_trim.py adds 6; test_hf_sanity_records_revision_and_accuracy needed the marker lookup
+  guarded like the revision lookup).

@@ -7,6 +7,7 @@
 
 Task ids by pipeline step:
     R.1 checkpoint   R.2 HF parity   R.3 chunked + graph replay         (reference)
+    R.4              trim a layer subset's checkpoint after the sanity   (intake, F47)
     G.<rung>         one golden per rung that owns its golden            (goldens)
     B.1              box: mesh opens, collectives work                   (box)
     PL.1             plan fits DRAM, components mapped, ledger valid, approved   (plan)
@@ -26,6 +27,7 @@ import argparse
 import torch
 import yaml
 
+from models.demos.common.bringup.intake import trim_checkpoint
 from models.demos.common.bringup.reference.golden import load_spec, rung_dir
 from models.demos.common.bringup.testing.harness import DEFAULT_THRESHOLDS
 from models.demos.common.bringup.testing.templates import component_test_path, swap_test_path
@@ -41,6 +43,15 @@ def thr(spec, key: str) -> str:
 
 def rel(spec, p) -> str:
     return str(p.relative_to(spec.repo))
+
+
+def sanity_metrics(spec) -> dict:
+    """The HF sanity gate: pinned revision, usage-example smoke, next-token accuracy floor (R.1, or R.2 with F39)."""
+    return {
+        "revision_ok": "== 1",
+        "text_top1_acc": f">= {spec.get('text.min_top1', 0.4)}",
+        **({"smoke_ok": "== 1"} if spec.get("intake.smoke") else {}),
+    }
 
 
 def generate(spec, ref=None, early: bool = False) -> dict:
@@ -71,11 +82,7 @@ def generate(spec, ref=None, early: bool = False) -> dict:
     # HF sanity (revision, usage-example smoke, accuracy floor) runs at R.1 on the stock HF loader. A checkpoint the
     # stock loader cannot run on this host (custom quantized storage, too big for RAM in bf16) sets hf.custom_loader:
     # the checks then move into R.2's gate, after the reference agent has written hooks.hf_model (F39).
-    sanity = {
-        "revision_ok": "== 1",
-        "text_top1_acc": f">= {spec.get('text.min_top1', 0.4)}",
-        **({"smoke_ok": "== 1"} if spec.get("intake.smoke") else {}),
-    }
+    sanity = sanity_metrics(spec)
     late = bool(spec.get("hf.custom_loader"))
     add(
         "R.1",
@@ -127,6 +134,18 @@ def generate(spec, ref=None, early: bool = False) -> dict:
         },
         paths=ref_paths,
     )
+    if trim_checkpoint.applies(spec):
+        # F47: a layer subset needs the whole checkpoint only for the HF sanity; once it and the parity passed, the
+        # layers no later step reads are removed (bringup_trim.json keeps the full tensor map and the sanity metrics).
+        k = trim_checkpoint.keep_layers(spec)
+        add(
+            "R.4",
+            f"Trim the checkpoint to layers 0-{k - 1} (the whole model was needed only for the HF sanity)",
+            "intake",
+            ["R.2"],
+            f"{PY}.intake.trim_checkpoint",
+            {"trim_done": "== 1", "trim_verify_errors": "== 0", "trim_freed_gb": ">= 0"},
+        )
     prev = "R.3"
     golden_task = {}
     for r in ladder:
