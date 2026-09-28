@@ -1100,6 +1100,7 @@ _PAIRED_GENERATED = {
     "softplus_bw": "backward_complete",
     "softshrink_bw": "backward_where_factor",
     "softsign_bw": "backward_complete",
+    "tanhshrink_bw": "backward_complete",
 }
 
 
