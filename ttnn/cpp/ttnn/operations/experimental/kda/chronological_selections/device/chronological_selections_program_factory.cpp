@@ -18,14 +18,18 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
     const auto& out = outputs[0].mesh_tensor();
     const KernelSpecName kernel{"derive"};
     const ScratchpadSpecName scratch{"scratch"};
-    const TensorParamName sn{"actual_start"}, on{"output"};
+    const TensorParamName sn{"actual_start"}, en{"actual_end"}, on{"output"};
     KernelSpec reader{
         .unique_id = kernel,
         .source = "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/derive.cpp",
         .scratchpad_bindings = {{scratch, "scratch"}},
         .tensor_bindings = {{sn, "actual_start"}, {on, "output"}},
-        .compile_time_args = {{"BH", a.batch_heads}, {"K", a.key_dim}, {"V", a.value_dim}},
-        .hw_config = ttnn::create_reader_datamovement_config(actual_start.device().arch()),
+        .compile_time_args =
+            {{"has_actual_end", uint32_t(in.actual_end.has_value())},
+             {"BH", a.batch_heads},
+             {"K", a.key_dim},
+             {"V", a.value_dim}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     ProgramSpec spec{
         .name = "kda_chronological_selections",
@@ -39,6 +43,13 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
     };
     ProgramRunArgs run;
     run.tensor_args = {{sn, actual_start}, {on, out}};
+    // Leave actual_end unbound when absent; the kernel resolves it with get_token_if_present.
+    if (in.actual_end) {
+        const auto& actual_end = in.actual_end->mesh_tensor();
+        spec.tensor_parameters.push_back({.unique_id = en, .spec = actual_end.tensor_spec()});
+        spec.kernels[0].tensor_bindings.push_back({en, "actual_end"});
+        run.tensor_args.emplace(en, actual_end);
+    }
     return kda_factory_detail::chronology_workload(
         {.spec = std::move(spec), .run_params = std::move(run)},
         tensor_coords,

@@ -132,10 +132,16 @@ m2::KernelSpec make_dm_kernel(const std::string& name, const std::string& source
         .num_threads = num_threads,
     };
     if (is_quasar_arch()) {
-        kernel.hw_config = m2::DataMovementGen2Config{};
+        kernel.hw_config = m2::DataMovementHardwareConfig{};
     } else {
         TT_FATAL(num_threads == 1, "Non-Quasar PrefetcherPipe tests only support 1 DM thread");
-        kernel.hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        kernel.hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::NOC_0,
+                },
+        };
     }
     return kernel;
 }
@@ -147,10 +153,10 @@ m2::KernelSpec make_compute_kernel(const std::string& name, const std::string& s
         .num_threads = num_threads,
     };
     if (is_quasar_arch()) {
-        kernel.hw_config = m2::ComputeGen2Config{};
+        kernel.hw_config = m2::ComputeHardwareConfig{};
     } else {
         TT_FATAL(num_threads == 1, "Non-Quasar PrefetcherPipe tests only support 1 compute thread");
-        kernel.hw_config = m2::ComputeGen1Config{};
+        kernel.hw_config = m2::ComputeHardwareConfig{};
     }
     return kernel;
 }

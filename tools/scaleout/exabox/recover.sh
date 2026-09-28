@@ -53,6 +53,8 @@ Optional:
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before recovery (see minimum versions in utils/host_utils.sh)
     --skip-mpi-stress-test                  Skip the MPI packet stress test run before recovery
+    --skip-cross-host-port-down             Skip quiescing cross-host Ethernet ports before each reset
+                                            (required for non-Blackhole systems)
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
     --mpi-if <interface>                    Network interface for MPI TCP transport
@@ -131,7 +133,7 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260922-17-g86b55b92d0d"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20260925-49-g78b5458946e"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 MAX_RETRAINS=5
@@ -141,6 +143,7 @@ SKIP_RESET=false
 SKIP_VALIDATION=false
 SKIP_VERSION_CHECK=false
 SKIP_MPI_STRESS_TEST=false
+SKIP_CROSS_HOST_PORT_DOWN=false
 SEND_TRAFFIC=true
 CHECK=false
 MPI_IF=""
@@ -288,6 +291,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_MPI_STRESS_TEST=true
             shift
             ;;
+        --skip-cross-host-port-down)
+            SKIP_CROSS_HOST_PORT_DOWN=true
+            shift
+            ;;
         --no-send-traffic)
             SEND_TRAFFIC=false
             shift
@@ -369,6 +376,12 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             read -ra _extra <<< "$2"
+            for _a in "${_extra[@]}"; do
+                if [[ "$_a" == "--cross-host-port-down" || "$_a" == "--cross-host-port-down="* ]]; then
+                    echo "Error: --cross-host-port-down is not allowed in --validation-args; it is handled automatically before each reset (disable with --skip-cross-host-port-down)."
+                    exit 1
+                fi
+            done
             VALIDATION_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
@@ -535,6 +548,34 @@ for _darg in "${DOCKER_EXTRA_ARGS[@]}"; do
     DOCKER_ARG_FLAGS+=(--docker-arg "$_darg")
 done
 
+# Quiesce all expected cross-host Ethernet ports (from the FSD) before a reset. Mirrors the
+# run_cluster_validation launcher below (docker keyed on -n "$DOCKER_IMAGE"), just swapping the
+# validation args for --cross-host-port-down, which makes the binary port-down and exit.
+run_cross_host_port_down() {
+    if [[ -n "$DOCKER_IMAGE" ]]; then
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            --volume /data/scaleout_configs \
+            "${DOCKER_ARG_FLAGS[@]}" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            ./build/tools/scaleout/run_cluster_validation \
+            "${DESCRIPTOR_ARGS[@]}" \
+            --cross-host-port-down
+    else
+        local _bin_cmd
+        _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
+            "${DESCRIPTOR_ARGS[@]}" \
+            --cross-host-port-down)
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; h=\$(hostname); $_bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done"
+    fi
+}
+
 # Print summary
 echo "=========================================="
 echo "Cluster recovery"
@@ -565,6 +606,7 @@ echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
+echo "Skip cross-host port down: $SKIP_CROSS_HOST_PORT_DOWN"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
 echo "Invocation: ${EXABOX_RECOVER_HELPER:-direct}"
@@ -738,34 +780,76 @@ echo "=========================================="
 # regenerate descriptors from evidence produced by the current (latest post-reset) attempt.
 rm -f "$UNRETRAINABLE_YAML"
 
-# Step 1: tt-smi reset
+# Step 0.9: bring down all expected cross-host Ethernet ports before the reset. This quiesces the
+# whole cross-host fabric (including links that failed to train) so the reset does not race an
+# active training walkdown. A failure runs a cleanup glx_reset and retries port-down once;
+# validation runs only if port-down and the following reset both succeed.
+PORT_DOWN_EXIT=0
 RESET_EXIT=0
-if [[ "$SKIP_RESET" == false ]]; then
-    echo "Running tt-smi -glx_reset..."
-    # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
-    # failure retries the attempt instead of aborting the whole script.
-    if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
-
-    if [[ $RESET_EXIT -ne 0 ]]; then
-        echo ""
-        echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+if [[ "$SKIP_RESET" == false && "$SKIP_CROSS_HOST_PORT_DOWN" == false ]]; then
+    echo "Bringing down cross-host Ethernet ports before reset..."
+    if run_cross_host_port_down; then
+        echo "Cross-host Ethernet ports are down on all hosts."
     else
-        echo ""
-        echo "Sleeping ${SLEEP_DURATION}s..."
-        sleep "$SLEEP_DURATION"
+        PORT_DOWN_EXIT=$?
+        echo "WARNING: cross-host port down FAILED (exit code $PORT_DOWN_EXIT); running cleanup reset then retrying port down."
+        echo "Running tt-smi -glx_reset (cleanup after failed port down)..."
+        if run_glx_reset "$HOSTS"; then
+            RESET_EXIT=0
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+            echo "Retrying cross-host Ethernet port down..."
+            if run_cross_host_port_down; then
+                echo "Cross-host Ethernet ports are down on all hosts."
+                PORT_DOWN_EXIT=0
+            else
+                PORT_DOWN_EXIT=$?
+                echo "WARNING: retry cross-host port down FAILED (exit code $PORT_DOWN_EXIT); skipping validation."
+            fi
+        else
+            RESET_EXIT=$?
+            echo "Cleanup reset failed on one or more hosts (exit code $RESET_EXIT); skipping port-down retry and validation."
+        fi
+    fi
+    echo ""
+fi
+
+# Step 1: tt-smi reset after a successful (or skipped) port-down. Skipped when port-down
+# still failed after retry, or when the cleanup reset already failed.
+if [[ "$SKIP_RESET" == false ]]; then
+    if [[ $PORT_DOWN_EXIT -eq 0 && $RESET_EXIT -eq 0 ]]; then
+        echo "Running tt-smi -glx_reset..."
+        # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
+        # failure retries the attempt instead of aborting the whole script.
+        if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
+
+        if [[ $RESET_EXIT -ne 0 ]]; then
+            echo ""
+            echo "Reset failed on one or more hosts (exit code $RESET_EXIT)."
+        else
+            echo ""
+            echo "Sleeping ${SLEEP_DURATION}s..."
+            sleep "$SLEEP_DURATION"
+        fi
     fi
 else
     echo "Skipping tt-smi reset (--skip-reset)"
 fi
 
 # Step 2: Cluster validation
-# VALIDATION_EXIT carries the whole attempt's outcome: a failed reset short-circuits validation and
-# fails the attempt so the outer loop retries (or the script exits non-zero once attempts run out).
+# VALIDATION_EXIT carries the whole attempt's outcome: a failed port-down or reset
+# short-circuits validation and fails the attempt so the outer loop retries (or the
+# script exits non-zero once attempts run out).
 VALIDATION_EXIT=0
 if [[ $RESET_EXIT -ne 0 ]]; then
     echo ""
     echo "Skipping validation because reset failed on this attempt."
     VALIDATION_EXIT=$RESET_EXIT
+elif [[ $PORT_DOWN_EXIT -ne 0 ]]; then
+    echo ""
+    echo "Skipping validation because port down failed on this attempt."
+    VALIDATION_EXIT=$PORT_DOWN_EXIT
 elif [[ "$SKIP_VALIDATION" == false ]]; then
     VALIDATION_ARGS=("${DESCRIPTOR_ARGS[@]}")
     if [[ "$SEND_TRAFFIC" == true ]]; then

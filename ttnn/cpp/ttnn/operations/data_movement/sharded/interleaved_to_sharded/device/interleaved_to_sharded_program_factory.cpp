@@ -193,8 +193,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         // The reader drives its `in` DFB with explicit reserve_back/push_back (and does many sub-tile
         // stick reads), so opt every bound DFB out of Gen2 implicit-sync credit accounting; the flag is
         // ignored on Gen1. Matches the sibling sharded_to_interleaved factory.
-        .hw_config = ttnn::create_reader_datamovement_config(
-            input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (is_tile) {
         reader.source =
@@ -245,8 +244,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             }},
         // The writer drains its `out` DFB with explicit wait_front/pop_front, so opt out of Gen2
         // implicit-sync credit accounting (ignored on Gen1), matching sharded_to_interleaved.
-        .hw_config = ttnn::create_writer_datamovement_config(
-            input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (dst_is_dram) {
         writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}};
@@ -309,11 +307,11 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                  }},
             .runtime_arg_schema = {.runtime_arg_names = {"per_core_tile_cnt"}},
             // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
-            // Metal 2.0 Gen1 compute defaults match those field for field (HiFi4; math_approx_mode
+            // Metal 2.0 ComputeHardwareConfig defaults match those field for field (HiFi4; math_approx_mode
             // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
-            // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
+            // false; dst_full_sync_en false = double_buffer_dest true), so an all-default config
             // reproduces the legacy settings exactly.
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+            .hw_config = ComputeHardwareConfig{},
         });
         work_unit_kernels.push_back(COMPUTE);
     }
