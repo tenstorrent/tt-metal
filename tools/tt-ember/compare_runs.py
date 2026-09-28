@@ -24,15 +24,23 @@ import numpy as np
 import pandas as pd
 
 METRICS = {
-    "duration":             ("window_s",                  "Duration [s]",                        "Duration vs Grid Size"),
-    "charge_total_avg":     ("charge_avg_mah",             "Charge total avg [mAh]",              "Total Charge (Avg Current) vs Grid Size"),
-    "charge_total_peak":    ("charge_peak_mah",            "Charge total peak [mAh]",             "Total Charge (Peak Current) vs Grid Size"),
-    "charge_dynamic_avg":   ("dynamic_charge_avg_mah",     "Dynamic charge avg [mAh]",            "Dynamic Charge (Avg Current) vs Grid Size"),
-    "charge_dynamic_peak":  ("dynamic_charge_peak_mah",    "Dynamic charge peak [mAh]",           "Dynamic Charge (Peak Current) vs Grid Size"),
-    "current_total_avg":    ("avg_current_a",              "Avg current [A]",                     "Total Average Current vs Grid Size"),
-    "current_total_peak":   ("peak_current_a",             "Peak current [A]",                    "Total Peak Current vs Grid Size"),
-    "current_dynamic_avg":  ("dynamic_avg_current_a",      "Dynamic avg current [A]",             "Dynamic Average Current vs Grid Size"),
-    "current_dynamic_peak": ("dynamic_peak_current_a",     "Dynamic peak current [A]",            "Dynamic Peak Current vs Grid Size"),
+    "duration": ("window_s", "Duration [s]", "Duration vs Grid Size"),
+    "charge_total_avg": ("charge_avg_mah", "Charge total avg [mAh]", "Total Charge (Avg Current) vs Grid Size"),
+    "charge_total_peak": ("charge_peak_mah", "Charge total peak [mAh]", "Total Charge (Peak Current) vs Grid Size"),
+    "charge_dynamic_avg": (
+        "dynamic_charge_avg_mah",
+        "Dynamic charge avg [mAh]",
+        "Dynamic Charge (Avg Current) vs Grid Size",
+    ),
+    "charge_dynamic_peak": (
+        "dynamic_charge_peak_mah",
+        "Dynamic charge peak [mAh]",
+        "Dynamic Charge (Peak Current) vs Grid Size",
+    ),
+    "current_total_avg": ("avg_current_a", "Avg current [A]", "Total Average Current vs Grid Size"),
+    "current_total_peak": ("peak_current_a", "Peak current [A]", "Total Peak Current vs Grid Size"),
+    "current_dynamic_avg": ("dynamic_avg_current_a", "Dynamic avg current [A]", "Dynamic Average Current vs Grid Size"),
+    "current_dynamic_peak": ("dynamic_peak_current_a", "Dynamic peak current [A]", "Dynamic Peak Current vs Grid Size"),
 }
 
 
@@ -55,8 +63,7 @@ def load_runs(out_root: Path, filters: list[str]) -> dict[str, pd.DataFrame]:
     return runs
 
 
-def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: str,
-                out_path: Path, dpi: int) -> None:
+def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: str, out_path: Path, dpi: int) -> None:
     """One PNG: all runs overlaid on the same axes, x = grid string."""
 
     # Collect union of all grids in order of first appearance
@@ -72,7 +79,7 @@ def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: 
         df = df.copy()
         df["grid"] = df["grid"].astype(str)
 
-        grids  = df["grid"].tolist()
+        grids = df["grid"].tolist()
         values = df[column].tolist()
 
         # Map grid → position in the shared x-axis
@@ -95,8 +102,7 @@ def plot_metric(runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: 
     print(f"  Saved: {out_path}")
 
 
-def plot_overcompute(runs: dict[str, pd.DataFrame], column: str,
-                     out_path: Path, dpi: int) -> None:
+def plot_overcompute(runs: dict[str, pd.DataFrame], column: str, out_path: Path, dpi: int) -> None:
     """Plot (ideal - measured) for each run on one graph."""
 
     all_grids: list[str] = []
@@ -114,7 +120,7 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str,
         df = df.copy()
         df["grid"] = df["grid"].astype(str)
 
-        cores  = df["cores"].to_numpy(dtype=float)
+        cores = df["cores"].to_numpy(dtype=float)
         values = df[column].to_numpy(dtype=float)
 
         finite = np.where(np.isfinite(values))[0]
@@ -126,7 +132,7 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str,
         if c0 == 0 or not np.isfinite(y0):
             continue
 
-        ideal      = y0 * (cores / c0)
+        ideal = y0 * (cores / c0)
         overcompute = ideal - values
 
         x_pos = [all_grids.index(g) for g in df["grid"].tolist()]
@@ -148,8 +154,7 @@ def plot_overcompute(runs: dict[str, pd.DataFrame], column: str,
     print(f"  Saved: {out_path}")
 
 
-def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str,
-                                out_path: Path, dpi: int) -> None:
+def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str, out_path: Path, dpi: int) -> None:
     """Plot ideal / measured for each run — values > 1 mean measured is below ideal."""
 
     all_grids: list[str] = []
@@ -167,7 +172,7 @@ def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str,
         df = df.copy()
         df["grid"] = df["grid"].astype(str)
 
-        cores  = df["cores"].to_numpy(dtype=float)
+        cores = df["cores"].to_numpy(dtype=float)
         values = df[column].to_numpy(dtype=float)
 
         finite = np.where(np.isfinite(values) & (values != 0))[0]
@@ -179,8 +184,8 @@ def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str,
         if c0 == 0 or not np.isfinite(y0) or y0 == 0:
             continue
 
-        ideal      = y0 * (cores / c0)
-        ratio      = ideal / values
+        ideal = y0 * (cores / c0)
+        ratio = ideal / values
 
         x_pos = [all_grids.index(g) for g in df["grid"].tolist()]
         ax.plot(x_pos, ratio, marker="o", label=run_name)
@@ -201,9 +206,9 @@ def plot_overcompute_percentage(runs: dict[str, pd.DataFrame], column: str,
     print(f"  Saved: {out_path}")
 
 
-def plot_percentage_change(runs: dict[str, pd.DataFrame], column: str,
-                           ylabel: str, title: str,
-                           out_path: Path, dpi: int) -> None:
+def plot_percentage_change(
+    runs: dict[str, pd.DataFrame], column: str, ylabel: str, title: str, out_path: Path, dpi: int
+) -> None:
     """Plot % change relative to first (minimum) grid: (value[i] - value[0]) / value[0] * 100."""
 
     all_grids: list[str] = []
@@ -251,16 +256,22 @@ def plot_percentage_change(runs: dict[str, pd.DataFrame], column: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compare power sweep runs from program_intervals CSV files.")
-    parser.add_argument("--out-root", type=Path, default=Path("out"),
-                        help="Root directory containing run subdirectories. Default: out/")
-    parser.add_argument("--filter", nargs="*", default=[],
-                        help="Only include runs whose directory name starts with one of these prefixes.")
-    parser.add_argument("--output-dir", type=Path, default=None,
-                        help="Where to save comparison PNGs. Default: <out-root>/comparison/")
+    parser.add_argument(
+        "--out-root", type=Path, default=Path("out"), help="Root directory containing run subdirectories. Default: out/"
+    )
+    parser.add_argument(
+        "--filter",
+        nargs="*",
+        default=[],
+        help="Only include runs whose directory name starts with one of these prefixes.",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=None, help="Where to save comparison PNGs. Default: <out-root>/comparison/"
+    )
     parser.add_argument("--dpi", type=int, default=150)
     args = parser.parse_args()
 
-    out_root   = args.out_root.expanduser().resolve()
+    out_root = args.out_root.expanduser().resolve()
     output_dir = args.output_dir or out_root / "comparison"
 
     if not out_root.is_dir():
@@ -294,14 +305,26 @@ def main() -> int:
         )
 
     for col, out_name, ylabel, title in [
-        ("charge_avg_mah",  "charge_total_avg_percentage",
-         "% change vs min grid", "Total Charge Avg — % change vs minimum grid"),
-        ("charge_peak_mah", "charge_total_peak_percentage",
-         "% change vs min grid", "Total Charge Peak — % change vs minimum grid"),
+        (
+            "charge_avg_mah",
+            "charge_total_avg_percentage",
+            "% change vs min grid",
+            "Total Charge Avg — % change vs minimum grid",
+        ),
+        (
+            "charge_peak_mah",
+            "charge_total_peak_percentage",
+            "% change vs min grid",
+            "Total Charge Peak — % change vs minimum grid",
+        ),
     ]:
         plot_percentage_change(
-            runs=runs, column=col, ylabel=ylabel, title=title,
-            out_path=output_dir / f"{out_name}.png", dpi=args.dpi,
+            runs=runs,
+            column=col,
+            ylabel=ylabel,
+            title=title,
+            out_path=output_dir / f"{out_name}.png",
+            dpi=args.dpi,
         )
 
     plot_overcompute(
