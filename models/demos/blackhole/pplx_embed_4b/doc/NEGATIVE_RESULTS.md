@@ -1079,8 +1079,9 @@ in L1 (446 KB per core on 12×10) while the norm output is also L1 resident; the
 default 8,8,8 blocks end at 595072, and the output lands at 517184: `Statically allocated dataflow buffers ... clash
 with L1 buffers` (78 KB per core short). Smaller blocks make room, but the matmul slows down more than the heads op speeds
 up (e2e best of 10, `ab_one.sh`, same chip): 8,8,8 DRAM 189.2 → 8,4,8 L1 189.0 ms (sustained iteration 9 223.4 →
-225.7); 8,8,8 DRAM 189.5 → 4,8,8 L1 197.8; 4,4,8 DRAM 202.0 → 4,4,8 L1 200.3. bs16 keeps the QKV output in DRAM. bs8
-fits (27 MB, 223 KB per core) and gains: QKV output in L1, default on at bs8 (POSITIVE_RESULTS).
+225.7); 8,8,8 DRAM 189.5 → 4,8,8 L1 197.8; 4,4,8 DRAM 202.0 → 4,4,8 L1 200.3. bs8 fits (27 MB, 223 KB per core) and gains: QKV output in L1,
+default on at bs8 (POSITIVE_RESULTS). At bs16 the clash turned out to be fragmentation (below); with the post-attention
+sum in DRAM the QKV output fits at the default blocks and it lands at bs16 too.
 
 **The QKV matmul is compute-bound, but its output write does not overlap.** `perf_tools/bench_qkv_mm_bs16_ablate.py`
 (bs16 QKV minimal_matmul at the model's config: 12×10, 8,8,8 blocks, subblock 1,8, LoFi, bfp8 in / out; variants patch
@@ -1102,3 +1103,16 @@ row (all 120 cores, rows 0-1 12 units, rows 7-9 20) even out the finish: v3 DRAM
 matches v1 (328). The op moves 107 MB per call (read + write) and its data movement alone takes 272 µs (~390 GB/s), so
 with a DRAM input v1 is within ~55 µs of the floor and a faster compute cannot go below it. The experiment knobs (NoC
 swap, reversed units, row weights) were removed; v3 follows the QKV-output-in-L1 knob (bs8 default).
+
+**L1 at the bs16 QKV call: the room is there, fragmented.** `perf_tools/l1_map_first_layer.py 16` (live L1 buffers
+after each op of one eager prefill; CB region from 111,744 B, 1,461,120 B limit): when the QKV matmul runs, the only
+large L1 tensor is the norm output (181 KiB per core), but it sits at 963,264 B, low, because it was allocated while the
+FF2 output and the post-attention sum were still live above it. The QKV matmul's CBs end at 595,072 B (472 KiB), so
+~360 KiB per core is free below the norm output and ~364 KiB above it. A fused QKV + heads op fits: the heads op's own
+CBs other than its input and output are ~90 KB (v1 layout) or ~230 KB (v3, a unit's heads), under the 360 KiB at the
+default 8,8,8 blocks. The unfused QKV output in L1 (446 KiB) fits in neither gap alone although ~723 KiB are free:
+`TT_PREFILL_QKV_L1=1`'s clash at bs16 is fragmentation, not capacity. With the post-attention sum in DRAM
+(`QWEN_FUSED_ADD_NORM_SUM1_L1=0`) the norm output is allocated high and the QKV output fits below it at 8,8,8; with the
+v3 heads compute, sustained_run.sh, 3 alternating rounds, chip 0: cold / sustained 189.2 / 222.0, 189.3 / 223.4, 189.4 /
+223.3 → 186.0 / 219.3, 186.1 / 221.1, 186.0 / 220.6 ms (−1.7 / −1.2%): the QKV output's L1 gain outweighs the sum's.
+Landed as the bs16 default (POSITIVE_RESULTS).

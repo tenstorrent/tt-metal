@@ -481,5 +481,49 @@
     },
     "stsb_spearman_bs8": 0.8114,
     "note": "bs16 QKV output does not fit next to the QKV matmul's CBs at 8,8,8 (NEGATIVE_RESULTS 56); v3 with a DRAM input is slower than v1"
+  },
+  "bs16_qkv_l1_sum1_dram_heads_v3_20260928": {
+    "l1_at_qkv_call_bytes_per_core": {
+      "cb_region_start": 111744,
+      "qkv_matmul_cb_end_8_8_8": 595072,
+      "norm_output_low_address": 963264,
+      "free_below_norm_output": 368192,
+      "note": "sum1 in L1 held the norm output low; QKV output needs 446 KiB"
+    },
+    "bs16_sustained_run_3_alternating_rounds_chip0": {
+      "default_before": {
+        "cold": [
+          189.2,
+          189.3,
+          189.4
+        ],
+        "sustained": [
+          222.0,
+          223.4,
+          223.3
+        ],
+        "aiclk_mhz": 1141
+      },
+      "qkv_l1_sum1_dram_v3": {
+        "cold": [
+          186.0,
+          186.1,
+          186.0
+        ],
+        "sustained": [
+          219.3,
+          221.1,
+          220.6
+        ],
+        "aiclk_mhz": 1130
+      }
+    },
+    "defaults_confirmed_best_of_10": {
+      "bs16": 186.1,
+      "bs16_opt_out": 189.4,
+      "bs8": 98.8,
+      "bs8_opt_out": 102.3
+    },
+    "stsb_spearman_bs16": 0.8144
   }
 }
