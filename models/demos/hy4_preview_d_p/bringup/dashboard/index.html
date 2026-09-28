@@ -1,0 +1,757 @@
+<title>Hy4 Preview (layers 0-5) Prefill Bring-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#f4f4f1; --surface:#fcfcfb; --surface2:#efeee9; --ink:#0b0b0b; --ink2:#52514e; --muted:#7c7b75; --line:#dfded8;
+  --accent:#9a4f1c; --accent-soft:#f3e4d8;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+  --dev-fill:#e3f1e3; --dev-line:#0a8a0a;
+  --b-compute:#2a78d6; --b-compute-soft:#dde9f9; --b-memory:#138a61; --b-memory-soft:#d9f0e7;
+  --b-comm:#c4561f; --b-comm-soft:#f8e3d8; --b-other:#7c7b75; --b-other-soft:#ecebe6;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#121211; --surface:#1a1a19; --surface2:#232321; --ink:#ffffff; --ink2:#c3c2b7; --muted:#8f8e87; --line:#33332f;
+    --accent:#e0915a; --accent-soft:#3a2a1f;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+    --dev-fill:#15301a; --dev-line:#39c039;
+    --b-compute:#6ea6ec; --b-compute-soft:#1b2a40; --b-memory:#3cc595; --b-memory-soft:#14302a;
+    --b-comm:#ec8a5a; --b-comm-soft:#3a2418; --b-other:#8f8e87; --b-other-soft:#262624;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#121211; --surface:#1a1a19; --surface2:#232321; --ink:#ffffff; --ink2:#c3c2b7; --muted:#8f8e87; --line:#33332f;
+  --accent:#e0915a; --accent-soft:#3a2a1f;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300;
+  --dev-fill:#15301a; --dev-line:#39c039;
+  --b-compute:#6ea6ec; --b-compute-soft:#1b2a40; --b-memory:#3cc595; --b-memory-soft:#14302a;
+  --b-comm:#ec8a5a; --b-comm-soft:#3a2418; --b-other:#8f8e87; --b-other-soft:#262624;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--f-body);margin:0}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:20px;padding-block:28px 64px;display:grid;gap:28px}
+h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:.005em}
+h1{font-size:30px;font-weight:700;line-height:1.1}
+h2{font-size:19px;font-weight:600}
+.eyebrow{font:500 11px/1 var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+.sub{color:var(--ink2);max-width:72ch}
+.mono,.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+header{display:grid;gap:10px}
+.facts{display:flex;flex-wrap:wrap;gap:8px 22px;color:var(--ink2);font-size:13px}
+.facts b{color:var(--ink);font-weight:600}
+section{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px;display:grid;gap:14px;min-width:0}
+.sec-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
+.sec-head p{margin:0;color:var(--muted);font-size:13px}
+.summary{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:20px;align-items:center}
+@media (max-width:760px){.summary{grid-template-columns:1fr}}
+.meter{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--surface2);gap:2px}
+.meter span{display:block;height:100%}
+.meter-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink2);margin-top:8px}
+.big{font:600 40px/1 var(--f-display)}
+.next{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:500 12px/1 var(--f-mono);padding:6px 8px;border-radius:6px;background:var(--accent-soft);color:var(--ink);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+.pill{display:inline-flex;align-items:center;gap:6px;font:500 12px/1 var(--f-mono);padding:4px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap;color:var(--ink)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font:500 11px/1.2 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.task{cursor:pointer}
+tr.task:hover td{background:var(--surface2)}
+tr.task:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+tr.phase td{font:600 13px/1 var(--f-display);color:var(--accent);background:transparent;padding-top:16px;letter-spacing:.04em}
+tr.detail td{background:var(--surface2);font-size:12.5px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px}
+.kv code,.detail code{font-family:var(--f-mono);font-size:12px;word-break:break-all}
+.metric-ok{color:var(--ink)} .metric-bad{color:var(--crit);font-weight:600}
+.two{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:20px}
+@media (max-width:900px){.two{grid-template-columns:1fr}}
+.svg-wrap{overflow-x:auto}
+svg text{font-family:var(--f-body)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink2)}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;vertical-align:-2px;margin-right:6px}
+.chips4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:820px){.chips4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:440px){.chips4{grid-template-columns:1fr}}
+.chipcard{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:8px;background:var(--bg)}
+.chipcard h3{font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+.chipcard dl{display:grid;grid-template-columns:max-content 1fr;gap:3px 10px;margin:0;font-size:12.5px}
+.chipcard dt{color:var(--muted)} .chipcard dd{margin:0;font-family:var(--f-mono);font-size:12px}
+.membar{display:flex;height:12px;border-radius:4px;overflow:hidden;background:var(--surface2);gap:2px}
+.heads{display:flex;gap:3px;flex-wrap:wrap}
+.hd{width:18px;height:18px;border-radius:4px;font:500 10px/18px var(--f-mono);text-align:center;color:#fff}
+.tag{font:500 10.5px/1 var(--f-mono);letter-spacing:.05em;padding:3px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);white-space:nowrap}
+.tag.COMPOSED{border-color:var(--s4);} .tag.CPU{border-color:var(--crit);color:var(--crit)}
+.tag.OPGEN,.tag.DEFERRED{border-color:var(--accent);color:var(--accent)}
+.def-banner{margin:10px 0 0;padding:8px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);font-size:13.5px}
+.strip{display:grid;gap:2px}
+.strip div{height:26px;border-radius:3px;font:500 9.5px/26px var(--f-mono);text-align:center;color:var(--ink2);background:var(--surface2);border:1px solid var(--line)}
+.strip div.moe{border-color:color-mix(in srgb,var(--s2) 55%,var(--line))}
+.strip div.dense{border-color:color-mix(in srgb,var(--s3) 70%,var(--line))}
+#tip{position:fixed;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font:12px/1.4 var(--f-mono);box-shadow:0 4px 14px rgb(0 0 0/.12);z-index:10}
+.empty{color:var(--muted);font-size:13px;padding:24px 0;text-align:center;border:1px dashed var(--line);border-radius:8px}
+footer{color:var(--muted);font-size:12px}
+.tl-total{font:600 26px/1 var(--f-display);font-variant-numeric:tabular-nums}
+.pbar{display:flex;height:34px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.pseg{border:0;padding:0;margin:0;cursor:pointer;min-width:3px;border-right:1px solid var(--surface)}
+.pseg:last-child{border-right:0}
+.pseg[aria-current="true"]{outline:3px solid var(--ink);outline-offset:-3px;position:relative;z-index:1}
+.pseg:focus-visible{outline:3px solid var(--ink);outline-offset:-3px}
+#prof-sec>*{min-width:0}
+.pparts{display:flex;font:500 12px/1.3 var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.pparts span{border-left:1px solid var(--line);padding-left:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pmain{display:grid;grid-template-columns:minmax(240px,330px) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.pmain{grid-template-columns:minmax(0,1fr)}}
+.psteps{display:flex;flex-direction:column;gap:2px;max-height:620px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--bg)}
+@media (max-width:900px){.psteps{max-height:none}}
+.ptabs{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
+.ptab{font:500 13px/1 var(--f-sans);border:1px solid var(--line);background:var(--surface);color:var(--ink2);border-radius:999px;padding:7px 12px;cursor:pointer}
+.ptab:hover{background:var(--surface2)}
+.ptab[aria-selected="true"]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.ptab:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.ptab .pt-ms{font:12px var(--f-mono);opacity:.75;margin-left:6px;font-variant-numeric:tabular-nums}
+.pops{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+.pops-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.pops-head h4{margin:0;font-size:14px}
+.pops-head span{font-size:12.5px;color:var(--muted)}
+.opchain{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:0}
+.opchain li{display:grid;grid-template-columns:26px minmax(0,1fr) minmax(90px,200px) 78px;gap:4px 10px;align-items:center;padding:7px 4px;position:relative}
+.opchain li+li::before{content:"";position:absolute;left:12px;top:-6px;height:12px;border-left:1.5px solid var(--line)}
+.opchain .oi{font:12px var(--f-mono);color:var(--muted);text-align:center;border:1.5px solid var(--line);border-radius:50%;width:22px;height:22px;line-height:19px;background:var(--surface)}
+.opchain .on{font:500 13px/1.3 var(--f-mono);overflow-wrap:break-word}
+.opchain .os{display:block;font:11.5px/1.35 var(--f-mono);color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.opchain .ob{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
+.opchain .ob i{display:block;height:100%;border-radius:4px}
+.opchain .om{font:12px var(--f-mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.opchain .om small{display:block;color:var(--muted);font-size:11px}
+.omem{display:flex;flex-wrap:wrap;align-items:center;gap:3px 5px;margin-top:4px}
+.omem .ml{font:11px var(--f-mono);color:var(--muted)}
+.mc{font:11px/1.2 var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);background:var(--surface)}
+.mc-dram{background:var(--b-memory-soft);border-color:var(--b-memory);color:var(--ink)}
+.mc-l1{background:var(--b-compute-soft);border-color:var(--b-compute);color:var(--ink)}
+.opchain .ot{grid-column:2/-1;font:11.5px/1.3 var(--f-mono);color:var(--muted);margin-top:-2px}
+@media (max-width:640px){.opchain li{grid-template-columns:26px minmax(0,1fr) auto}
+  .opchain .oi{grid-row:1/3;align-self:start}.opchain .ox{grid-column:2;grid-row:1}.opchain .om{grid-column:3;grid-row:1;align-self:start}
+  .opchain .ob{grid-column:2/4;grid-row:2}.omem{display:flex;flex-wrap:wrap;align-items:center;gap:3px 5px;margin-top:4px}
+.omem .ml{font:11px var(--f-mono);color:var(--muted)}
+.mc{font:11px/1.2 var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid var(--line);color:var(--ink2);background:var(--surface)}
+.mc-dram{background:var(--b-memory-soft);border-color:var(--b-memory);color:var(--ink)}
+.mc-l1{background:var(--b-compute-soft);border-color:var(--b-compute);color:var(--ink)}
+.opchain .ot{grid-column:2/4;grid-row:3;margin-top:0}}
+.pgrp{font:500 11px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:10px 8px 4px}
+.pstep{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:7px 8px;cursor:pointer;color:var(--ink);font:inherit;font-size:13px}
+.pstep:hover{background:var(--surface2)}
+.pstep[aria-current="true"]{background:var(--surface2);box-shadow:inset 3px 0 0 var(--ink)}
+.pstep:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.pstep .n{font:12px var(--f-mono);color:var(--muted)}
+.pstep .ms{font:12px var(--f-mono);font-variant-numeric:tabular-nums;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.pdetail{display:flex;flex-direction:column;gap:14px;min-width:0}
+.pd-head{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline}
+.bpill{font:600 11px/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:999px}
+.pd-ms{font:600 20px/1 var(--f-display);font-variant-numeric:tabular-nums;margin-left:auto}
+.pd-body{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:700px){.pd-body{grid-template-columns:minmax(0,1fr)}}
+.pd-body figure{margin:0;display:grid;gap:6px}
+.pd-body figcaption{font-size:12.5px;color:var(--muted)}
+.pkv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}
+.pkv dt{color:var(--muted)} .pkv dd{margin:0;font:12px var(--f-mono);overflow-wrap:anywhere}
+.pnav{display:flex;gap:8px}
+.pnav button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:6px;padding:5px 12px;cursor:pointer}
+.pnav button:hover{background:var(--surface2)}
+.pnav button:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+section[hidden]{display:none}
+.pv-tables{display:grid;gap:18px}
+.pv-tables h3{font-size:15px;margin:0 0 6px}
+.pv-tables td.num,.pv-tables th.num{text-align:right}
+.pv-tables table.fixed{table-layout:fixed}
+.pv-tables table.fixed th.num{width:15%}
+.d-good{color:var(--good)} .d-bad{color:var(--crit)}
+@media (prefers-reduced-motion:no-preference){tr.task td{transition:background .12s}}
+</style>
+
+<div class="wrap">
+  <header>
+    <span class="eyebrow">Prefill bring-up · Tenstorrent</span>
+    <h1 id="h1"></h1>
+    <div class="facts" id="facts"></div>
+    <p class="def-banner" id="def-banner" hidden></p>
+  </header>
+
+  <section aria-labelledby="s-sum">
+    <div class="sec-head"><h2 id="s-sum">Progress</h2><p id="gen"></p></div>
+    <div class="summary">
+      <div>
+        <div style="display:flex;align-items:baseline;gap:10px"><span class="big num" id="passn"></span><span class="sub" id="passof"></span></div>
+        <div class="meter" id="meter" style="margin-top:10px"></div>
+        <div class="meter-legend" id="meter-legend"></div>
+      </div>
+      <div style="display:grid;gap:8px">
+        <span class="eyebrow" style="color:var(--muted)">Ready to run (all deps PASS)</span>
+        <div class="next" id="next"></div>
+        <span class="eyebrow" style="color:var(--muted);margin-top:6px" id="wait-h" hidden>Waiting for a person</span>
+        <div class="next" id="wait"></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-def" id="def-sec" hidden>
+    <div class="sec-head"><h2 id="s-def">Deferred to op-gen</h2><p>Steps TTNN has no op for yet: they run on the CPU through the bridge until the op code generator delivers one. Launching op-gen is the owner's call.</p></div>
+    <div class="tbl-wrap"><table id="deferred"><thead><tr><th>Task</th><th>Step · layers</th><th>Op request</th><th>Status</th><th>Evidence</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section aria-labelledby="s-ladder">
+    <div class="sec-head"><h2 id="s-ladder">Gate ladder</h2><p>Each task has a gate command and metric thresholds. Click a row for details.</p></div>
+    <div class="tbl-wrap"><table id="ladder"><thead><tr><th>Task</th><th>Status</th><th>What</th><th>Gate metric (worst)</th><th>Commit</th><th>Run</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <div class="two">
+    <section aria-labelledby="s-dag">
+      <div class="sec-head"><h2 id="s-dag">Model graph</h2><p id="dag-sub"></p></div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--dev-fill);border:1.5px solid var(--dev-line)"></span>On device, gate passed</span>
+        <span><span class="sw" style="background:var(--surface);border:1.5px dashed var(--muted)"></span>CPU reference</span>
+      </div>
+      <div class="svg-wrap"><svg id="dag" width="100%" role="img" aria-label="Decoder block dataflow graphs"></svg></div>
+      <div>
+        <span class="eyebrow" style="color:var(--muted)">Layer stack · per-layer PCC of the latest device run</span>
+        <div class="strip" id="strip" style="margin-top:8px"></div>
+        <div class="legend" id="strip-legend" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="s-ops">
+      <div class="sec-head"><h2 id="s-ops">Op coverage</h2><p>Reference op to TTNN</p></div>
+      <div class="legend"><span><span class="tag">NATIVE</span> single TTNN op</span><span><span class="tag COMPOSED">COMPOSED</span> built from TTNN pieces</span><span><span class="tag CPU">CPU</span> stays on host</span><span><span class="tag OPGEN">OPGEN</span> requested from op-gen</span></div>
+      <div class="tbl-wrap"><table id="ops"><thead><tr><th>Component</th><th>TTNN</th><th>Tag</th></tr></thead><tbody></tbody></table></div>
+    </section>
+  </div>
+
+  <div class="two">
+    <section aria-labelledby="s-find">
+      <div class="sec-head"><h2 id="s-find">Findings and tagged gaps</h2><p>Missing TTNN ops, harness pitfalls, contract notes</p></div>
+      <div id="findings" style="display:grid;gap:12px"></div>
+    </section>
+    <section aria-labelledby="s-time">
+      <div class="sec-head"><h2 id="s-time">Chunk timing</h2><p>Warm prefill time by token range (k = 1024 tokens): nothing read back. Accuracy runs (the ladder) are not timed here</p></div>
+      <div class="tbl-wrap"><table id="timing"></table></div>
+      <h3 id="pos-head" style="margin:22px 0 4px">Chunk time by position</h3>
+      <p id="pos-sub" class="muted" style="margin:0 0 8px"></p>
+      <div id="pos-wrap"><svg id="pos" viewBox="0 0 900 260" role="img" style="width:100%;height:auto"></svg></div>
+      <div class="tbl-wrap"><table id="pos-table"></table></div>
+    </section>
+  </div>
+
+  <section aria-labelledby="s-shard">
+    <div class="sec-head"><h2 id="s-shard">Sharding across chips</h2><p id="shard-sub"></p></div>
+    <div class="legend" id="mem-legend"></div>
+    <div class="chips4" id="chips"></div>
+    <div class="sub" style="font-size:13px" id="shard-notes"></div>
+  </section>
+
+  <section aria-labelledby="s-prof" id="prof-sec">
+    <div class="sec-head"><h2 id="s-prof"></h2><span class="tl-total" id="p-total"></span></div>
+    <p class="sub" id="p-note" style="margin:0;font-size:13px"></p>
+    <p class="sub" id="p-tl" style="margin:6px 0 0;font-size:13px" hidden></p>
+    <div class="ptabs" id="p-tabs" role="tablist" aria-label="Layers shown"></div>
+    <div class="pbar" id="p-bar"></div>
+    <div class="pparts" id="p-parts"></div>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--b-compute)"></span>matmul / attention maths</span>
+      <span><span class="sw" style="background:var(--b-memory)"></span>data movement on the chip</span>
+      <span><span class="sw" style="background:var(--b-comm)"></span>chip-to-chip (collectives)</span>
+      <span><span class="sw" style="background:var(--b-other)"></span>norms, adds, router, embed</span>
+    </div>
+    <div class="pmain">
+      <nav class="psteps" id="p-steps" aria-label="Phases of the chunk"></nav>
+      <article class="pdetail" aria-live="polite">
+        <div class="pd-head"><h3 id="pd-name" style="font-size:17px"></h3><span class="bpill" id="pd-pill"></span><span class="pd-ms" id="pd-ms"></span></div>
+        <div class="pd-body">
+          <figure><div class="svg-wrap"><svg id="p-grid" width="100%" role="img" aria-label=""></svg></div><figcaption id="pd-cap"></figcaption></figure>
+          <div style="display:grid;gap:10px">
+            <p id="pd-what" style="margin:0;font-size:13.5px;max-width:62ch"></p>
+            <dl class="pkv"><dt>One chip reads</dt><dd id="pd-in"></dd><dt>One chip writes</dt><dd id="pd-out"></dd><dt>Programs</dt><dd id="pd-progs"></dd></dl>
+            <div class="pnav"><button type="button" id="p-prev">← Previous phase</button><button type="button" id="p-next">Next phase →</button></div>
+          </div>
+        </div>
+        <div class="pops" id="pd-ops-wrap">
+          <div class="pops-head"><h4>TTNN operations, in execution order</h4><span id="pd-ops-note"></span></div>
+          <p class="omem" id="pd-ops-leg" style="margin:6px 0 0"><span class="ml">tensor placement (per chip):</span><span class="mc mc-dram">DRAM …</span><span class="mc mc-l1">L1 …</span><span class="ml">interleaved or sharded (cores); RM = row-major, else tiled</span></p>
+          <ol class="opchain" id="pd-ops"></ol>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="s-prior" id="prior-sec" hidden>
+    <div class="sec-head"><h2 id="s-prior">vs prior</h2><p id="prior-sub"></p></div>
+    <div class="ptabs" id="prior-tabs" role="tablist" aria-label="Comparison shown"></div>
+    <div class="pv-tables" id="prior-body"></div>
+  </section>
+
+  <section aria-labelledby="s-pcc">
+    <div class="sec-head"><h2 id="s-pcc">PCC trail by layer</h2><p id="pcc-sub"></p></div>
+    <div class="legend" id="pcc-legend"></div>
+    <div class="svg-wrap" id="pcc-wrap"><svg id="pcc" viewBox="0 0 900 300" width="100%" role="img" aria-label="Per-layer PCC chart"></svg></div>
+    <details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Table view</summary><div class="tbl-wrap"><table id="pcc-table"></table></div></details>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+const D = {"generated": "2026-09-28 22:36", "branch": "dnijemcevic/ernie45_prefill", "head": "a703a8e1246", "title": "Hy4-preview chunked prefill", "page_title": "Hy4 Preview (layers 0-5) Prefill Bring-up", "short_name": "Hy4 Preview (layers 0-5)", "model": "tencent/Hy4-preview", "target": "56,320 tokens in 5,120-token chunks, bf16", "box": "Blackhole QuietBox, 4x p150b, mesh 2x2 (FABRIC_2D)", "arch": "78 layers \u00b7 d=6144 \u00b7 GQA 64/8\u00d764 \u00b7 256 experts top-8", "mesh": [2, 2], "chip_name": "Blackhole p150b", "tasks": [{"id": "R.1", "title": "Checkpoint, intake approval, canonical prompt", "step": "intake", "deps": [], "cmd": "python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt", "thresholds": {"intake_approved": "== 1", "prompt_hash_ok": "== 1", "missing_tensors": "== 0", "shape_mismatches": "== 0", "count_mismatches": "== 0", "config_mismatches": "== 0", "checkpoint_tensors": ">= 1"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "R.2", "title": "HF sanity on the model's loader (revision, smoke, accuracy floor); reference matches HF per layer and on logits (fp32)", "step": "reference", "deps": ["R.1"], "cmd": "python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf --seq 4096", "thresholds": {"revision_ok": "== 1", "text_top1_acc": ">= 0.4", "smoke_ok": "== 1", "pcc_hidden_L*": ">= 0.9999", "pcc_logits": ">= 0.9999", "top1_match_frac": ">= 0.99"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "R.3", "title": "Reference chunked == one-shot (4096 in 2048) and block graphs replay exactly", "step": "reference", "deps": ["R.2"], "cmd": "python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048", "thresholds": {"pcc_hidden": ">= 0.99999", "pcc_state_min": ">= 0.99999", "graph_errors": "== 0", "boundaries_missing": "== 0", "graph_replay_maxabs": "<= 0"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "R.4", "title": "Trim the checkpoint to layers 0-5 (the whole model was needed only for the HF sanity)", "step": "intake", "deps": ["R.2"], "cmd": "python -m models.demos.common.bringup.intake.trim_checkpoint", "thresholds": {"trim_done": "== 1", "trim_verify_errors": "== 0", "trim_freed_gb": ">= 0"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "G.s4096", "title": "Golden s4096: 4096 tokens in 2048-token chunks, full dumps", "step": "goldens", "deps": ["R.3"], "cmd": "python -m models.demos.common.bringup.reference.generate_golden --rung s4096", "thresholds": {"golden_layers": "== 6", "golden_chunks": "== 2", "golden_hash_ok": "== 1"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "G.s16384", "title": "Golden s16384: 16384 tokens in 8192-token chunks", "step": "goldens", "deps": ["G.s4096"], "cmd": "python -m models.demos.common.bringup.reference.generate_golden --rung s16384", "thresholds": {"golden_layers": "== 6", "golden_chunks": "== 2", "golden_hash_ok": "== 1"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "G.s56320", "title": "Golden s56320: 56320 tokens in 5120-token chunks", "step": "goldens", "deps": ["G.s16384"], "cmd": "python -m models.demos.common.bringup.reference.generate_golden --rung s56320", "thresholds": {"golden_layers": "== 6", "golden_chunks": "== 11", "golden_hash_ok": "== 1"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "B.1", "title": "Box: mesh opens with the spec's device params, collectives are exact", "step": "box", "deps": [], "cmd": "scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_box.py", "thresholds": {"chips": "== 4", "all_gather_maxabs": "== 0"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}, {"id": "PL.0", "title": "Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs", "step": "ledger", "deps": ["R.3"], "cmd": "python -m models.demos.common.bringup.plan.ledger_gen --extend", "thresholds": {"ledger_errors": "== 0", "ledger_tasks": ">= 1"}, "status": "TODO", "last_run": null, "duration_s": null, "metrics": {}, "commit": null, "waiting": null, "reason": null, "frozen": null, "agent": null}], "block_types": ["dense_full", "moe_full", "moe_shared"], "layer_types": ["dense_full", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full", "moe_shared", "moe_shared", "moe_shared", "moe_full"], "selected_layers": [0, 1, 2, 3, 4, 5], "subset": true, "graphs": {}, "components": [], "trails": [], "timing": [], "positions": null, "plan": null, "plan_chips": [], "plan_ccl": [], "profile": null, "prior": null, "findings": [], "deferred": [], "thresholds": {"component": 0.99, "block": 0.98, "layer": 0.97, "state": 0.97, "final_hidden": 0.97, "top5": 0.9}, "source": "models/demos/hy4_preview_d_p/bringup"};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const STATUS = {
+  PASS:{c:"--good", i:"✓", l:"PASS"}, FAIL:{c:"--crit", i:"✕", l:"FAIL"}, HANG:{c:"--crit", i:"⧗", l:"HANG"},
+  RUNNING:{c:"--warn", i:"◐", l:"RUNNING"}, TODO:{c:"--muted", i:"○", l:"TODO"}, BLOCKED:{c:"--serious", i:"!", l:"BLOCKED"},
+  STOPPED:{c:"--serious", i:"■", l:"STOPPED"}, DEFERRED:{c:"--accent", i:"↷", l:"DEFERRED"}
+};
+const DONE = s => s === "PASS" || s === "DEFERRED";
+const STEP_NAMES = {reference:"Reference (CPU) and HF parity", goldens:"Goldens", box:"Box", plan:"Plan (approved by a person)",
+  implement:"Implement: components and swap order", integrate:"Integrate: ladder on device", contract:"Serving contract",
+  perf:"Performance review", framework:"Framework"};
+const SERIES = ["--s1","--s2","--s3","--s4","--s5","--s6"];
+const tip = $("#tip");
+function showTip(e, html){ tip.innerHTML = html; tip.hidden = false; moveTip(e); }
+function moveTip(e){ const r = tip.getBoundingClientRect(); let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14; if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px"; }
+function hideTip(){ tip.hidden = true; }
+function pill(st){ const s = STATUS[st] || STATUS.TODO; return `<span class="pill"><span class="dot" style="background:var(${s.c})"></span>${s.i} ${s.l}</span>`; }
+function fmt(v){ if (typeof v !== "number") return esc(v); if (Number.isInteger(v)) return String(v);
+  if (v > 0.9 && v <= 1) return v.toFixed(v > 0.99999 ? 7 : 5); return v.toPrecision(4); }
+function fmtDur(s){ return s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s/60)}m` : `${(s/3600).toFixed(1)}h`; }
+const btColor = bt => SERIES[Math.max(0, D.block_types.indexOf(bt)) % SERIES.length];
+
+function worstMetric(t){
+  const ops = {">=":(a,b)=>a>=b,"<=":(a,b)=>a<=b,">":(a,b)=>a>b,"<":(a,b)=>a<b,"==":(a,b)=>a==b};
+  const glob = g => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  let worst = null;
+  for (const [g, cond] of Object.entries(t.thresholds)){
+    const [op, vs] = cond.split(" "); const want = +vs; const re = glob(g);
+    const hits = Object.entries(t.metrics).filter(([k]) => re.test(k));
+    if (!hits.length){ if (t.status !== "TODO") worst = worst || {k:g, v:"missing", ok:false, cond}; continue; }
+    for (const [k, v] of hits){
+      const ok = ops[op](+v, want);
+      const margin = op.startsWith(">") ? +v - want : want - +v;
+      if (!worst || (!ok && worst.ok) || (ok === worst.ok && margin < worst.margin)) worst = {k, v, ok, cond, margin};
+    }
+  }
+  return worst;
+}
+
+function header(){
+  $("#h1").textContent = D.title;
+  document.title = D.page_title;
+  $("#facts").innerHTML = [["Model", D.model], ["Target", D.target], ["Box", D.box], ["Arch", D.arch]]
+    .filter(([, v]) => v).map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
+  $("#gen").textContent = `Snapshot ${D.generated} · ${D.branch} @ ${D.head}`;
+  const n = D.tasks.length, counts = {};
+  D.tasks.forEach(t => counts[t.status] = (counts[t.status] || 0) + 1);
+  $("#passn").textContent = `${counts.PASS || 0}/${n}`;
+  $("#passof").textContent = "gates passed";
+  const keys = ["PASS","DEFERRED","FAIL","HANG","STOPPED","RUNNING","TODO"].filter(k => counts[k]);
+  $("#meter").innerHTML = keys.map(k => `<span style="width:${100*counts[k]/n}%;background:var(${STATUS[k].c})" title="${k}: ${counts[k]}"></span>`).join("");
+  $("#meter-legend").innerHTML = keys.map(k => `<span><span class="dot" style="background:var(${STATUS[k].c})"></span> ${STATUS[k].i} ${k} <span class="num">${counts[k]}</span></span>`).join("");
+  const st = Object.fromEntries(D.tasks.map(t => [t.id, t.status]));
+  const ready = D.tasks.filter(t => !DONE(t.status) && t.status !== "STOPPED" && t.deps.every(d => DONE(st[d])));
+  $("#next").innerHTML = ready.map(t => `<span class="chip" title="${esc(t.title)}">${t.id} ${esc(t.title.split(" (")[0].slice(0, 46))}</span>`).join("") || `<span class="sub">none</span>`;
+  const waiting = D.tasks.filter(t => t.waiting && t.status !== "PASS");
+  $("#wait-h").hidden = !waiting.length;
+  $("#wait").innerHTML = waiting.map(t => `<span class="chip" title="${esc(t.waiting)}">${t.id} ${esc(t.waiting.slice(0, 60))}</span>`).join("");
+  const F = D.deferred || [];
+  $("#def-banner").hidden = !F.length;
+  $("#def-banner").textContent = F.length ? `These results include ${F.length} step${F.length > 1 ? "s" : ""} on the CPU, deferred to op-gen: ${F.map(f => `${f.block_type}.${f.step} (${f.op}, ${f.status})`).join(", ")}. Accuracy and timing below include their host work.` : "";
+}
+
+function deferred(){
+  const F = D.deferred || [];
+  $("#def-sec").hidden = !F.length;
+  $("#deferred tbody").innerHTML = F.map(f => `<tr><td class="mono">${esc(f.task)}</td><td>${esc(f.block_type)}.${esc(f.step)} <span class="sub mono">${esc(f.layers)}</span></td>
+    <td class="mono" style="font-size:12px">${esc(f.op)}<br><span class="sub">${esc(f.request || "no request file")}</span></td><td><span class="tag DEFERRED">${esc(f.status)}</span></td>
+    <td style="font-size:12.5px"><div>Searched: ${esc(f.searched.join("; ") || "—")}</div><div>Tried: ${esc(f.tried.join("; ") || "—")}</div><div>Not a fork: ${esc(f.why_not_fork || "—")}</div></td></tr>`).join("");
+}
+
+function ladder(){
+  const tb = $("#ladder tbody"); let html = "", phase = null;
+  D.tasks.forEach((t, i) => {
+    if (t.step !== phase){ phase = t.step; html += `<tr class="phase"><td colspan="6">${esc(STEP_NAMES[phase] || phase)}</td></tr>`; }
+    const w = worstMetric(t);
+    const wm = w ? `<span class="mono ${w.ok ? "metric-ok" : "metric-bad"}">${esc(w.k)} = ${fmt(w.v)}</span> <span class="sub mono" style="font-size:11.5px">${esc(w.cond)}</span>` : `<span class="sub">—</span>`;
+    html += `<tr class="task" tabindex="0" data-i="${i}"><td class="mono">${t.id}</td><td>${pill(t.status)}</td><td>${esc(t.title)}</td><td>${wm}</td>
+      <td class="mono">${t.commit ? esc(t.commit) : "—"}</td><td class="mono" style="white-space:nowrap">${t.duration_s != null ? fmtDur(t.duration_s) : "—"}</td></tr>
+      <tr class="detail" data-d="${i}" hidden><td colspan="6"><div class="kv">
+        <span>Gate</span><code>${esc(t.cmd)}</code>
+        <span>Deps</span><span class="mono">${t.deps.join(", ") || "none"}</span>
+        <span>Thresholds</span><span class="mono">${Object.entries(t.thresholds).map(([k, v]) => esc(k + " " + v)).join(" · ") || "exit code"}</span>
+        ${t.frozen ? `<span>Frozen</span><span class="mono">${esc(t.frozen)}</span>` : ""}
+        ${t.agent ? `<span>Agent runs</span><span class="mono">${esc(t.agent)}</span>` : ""}
+        ${t.reason ? `<span>Reason</span><span class="mono">${esc(t.reason)}</span>` : ""}
+        <span>Last run</span><span class="mono">${esc(t.last_run || "never")}</span>
+        <span>Metrics</span><span class="mono">${Object.entries(t.metrics).slice(0, 60).map(([k, v]) => esc(k) + "=" + fmt(v)).join(" · ") || "—"}</span>
+      </div></td></tr>`;
+  });
+  tb.innerHTML = html;
+  const toggle = row => { const d = tb.querySelector(`tr[data-d="${row.dataset.i}"]`); d.hidden = !d.hidden; };
+  tb.querySelectorAll("tr.task").forEach(r => { r.addEventListener("click", () => toggle(r));
+    r.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); toggle(r); } }); });
+}
+
+function dag(){
+  const G = D.graphs, BT = D.block_types, W = 150, H = 38, dy = 54, colW = 190, top = 96;
+  const n = Math.max(1, ...BT.map(b => (G[b] || []).length));
+  const width = Math.max(420, 40 + BT.length * colW), height = top + n * dy + 120;
+  const svg = $("#dag"); svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const muted = css("--muted"), ink = css("--ink"), ink2 = css("--ink2"), acc = css("--accent");
+  let s = `<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0L10,5L0,10z" fill="${muted}"/></marker></defs>`;
+  const cx = k => 20 + colW * k + colW / 2;
+  const node = (x, y, c, label, sub) => {
+    const dev = c && c.state === "device";
+    if (c && c.deferred) sub = `${sub} · op-gen`;
+    const fill = dev ? css("--dev-fill") : css("--surface"), stroke = dev ? css("--dev-line") : muted;
+    return `<g class="node" data-k="${esc(c ? c.key : "")}" tabindex="0"><rect x="${x - W/2}" y="${y - H/2}" width="${W}" height="${H}" rx="7" fill="${fill}" stroke="${stroke}" stroke-width="1.5" ${dev ? "" : 'stroke-dasharray="4 3"'}/>
+      <text x="${x}" y="${y - 3}" font-size="12" font-weight="600" text-anchor="middle" fill="${ink}">${dev ? "✓ " : ""}${esc(label.slice(0, 22))}</text>
+      <text x="${x}" y="${y + 12}" font-size="9.5" text-anchor="middle" fill="${ink2}" font-family="IBM Plex Mono, monospace">${esc(sub)}</text></g>`;
+  };
+  const C = Object.fromEntries(D.components.map(c => [c.key, c]));
+  const mid = width / 2;
+  s += node(mid, 30, C["model/embed"], "embed", `${(C["model/embed"] || {}).tag || "—"}`);
+  BT.forEach((bt, k) => {
+    const steps = G[bt] || [], x = cx(k), col = css(btColor(bt));
+    s += `<rect x="${x - colW/2 + 6}" y="${top - 30}" width="${colW - 12}" height="${steps.length * dy + 22}" rx="12" fill="none" stroke="${col}" stroke-dasharray="5 5" stroke-width="1.2"/>`;
+    s += `<text x="${x - colW/2 + 16}" y="${top - 14}" font-size="11.5" fill="${col}" font-family="IBM Plex Mono, monospace">${esc(bt)} × ${D.layer_types.filter(t => t === bt).length}</text>`;
+    s += `<path d="M${mid},${30 + H/2} C${mid},${top - 40} ${x},${top - 40} ${x},${top + 4 - H/2}" fill="none" stroke="${muted}" stroke-width="1.1" marker-end="url(#ar)"/>`;
+    const yOf = {in: top - 30};
+    steps.forEach((st, i) => { yOf[st.output] = top + 12 + i * dy; });
+    steps.forEach((st, i) => {
+      const y = top + 12 + i * dy;
+      for (const inp of st.inputs){
+        const y0 = yOf[inp];
+        if (y0 == null) continue;
+        if (i > 0 && inp === steps[i - 1].output) s += `<line x1="${x}" y1="${y0 + H/2}" x2="${x}" y2="${y - H/2}" stroke="${muted}" stroke-width="1.3" marker-end="url(#ar)"/>`;
+        else if (i > 0 || inp !== "in") { const bx = x - W/2 - 10 - 6 * (i % 3);
+          s += `<path d="M${x - W/2},${y0} C${bx},${y0} ${bx},${y} ${x - W/2},${y}" fill="none" stroke="${muted}" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#ar)"/>`; }
+      }
+      const c = C[`${bt}/${st.name}`] || {key: `${bt}/${st.name}`, state: st.state};
+      s += node(x, y, {...c, state: st.state, deferred: st.deferred || c.deferred}, st.name, `${st.kind}${c.tag ? " · " + c.tag : ""} · ${st.task || "—"}`);
+    });
+    s += `<path d="M${x},${top + 12 + (steps.length - 1) * dy + H/2} C${x},${height - 70} ${mid},${height - 90} ${mid},${height - 64 - H/2}" fill="none" stroke="${muted}" stroke-width="1.1" marker-end="url(#ar)"/>`;
+  });
+  s += node(mid - 90, height - 64, C["model/final_norm"], "final norm", (C["model/final_norm"] || {}).tag || "—");
+  s += node(mid + 90, height - 64, C["model/lm_head"], "lm head", (C["model/lm_head"] || {}).tag || "—");
+  svg.innerHTML = s;
+  svg.querySelectorAll(".node").forEach(g => {
+    const c = C[g.dataset.k]; if (!c) return;
+    const h = `<b>${esc(c.key)}</b><br>ttnn: ${esc(c.ttnn)}<br>reuse: ${esc(c.reuse)}<br>${esc(c.tag)} · gate ${esc(c.task || "—")} · ${c.state === "device" ? "on device" : c.deferred ? "CPU bridge (deferred to op-gen)" : "CPU reference"}`;
+    g.addEventListener("mouseenter", e => showTip(e, h)); g.addEventListener("mousemove", moveTip); g.addEventListener("mouseleave", hideTip);
+  });
+  $("#dag-sub").textContent = `One block per block type; ${D.layer_types.length} layers in total${D.subset ? `, ${D.selected_layers.length} selected on device` : ""}`;
+  const latest = [...D.trails].reverse().find(t => t.device);
+  const pm = latest ? Object.fromEntries(latest.points) : {};
+  const strip = $("#strip"); strip.style.gridTemplateColumns = `repeat(${D.layer_types.length}, minmax(0,1fr))`;
+  strip.innerHTML = D.layer_types.map((ty, i) => {
+    const p = pm[i]; const bad = p != null && p < D.thresholds.layer;
+    const sel = D.selected_layers.includes(i);
+    const st = `border-color:color-mix(in srgb,var(${btColor(ty)}) 60%,var(--line));` + (p != null ? `background:${bad ? "color-mix(in srgb,var(--crit) 22%,var(--surface))" : "var(--dev-fill)"}` : "") + (sel ? "" : ";opacity:.4");
+    return `<div style="${st}" title="L${i} · ${ty}${sel ? "" : " · not selected"}${p != null ? " · PCC " + p.toFixed(5) : " · not yet on device"}">${i}</div>`;
+  }).join("");
+  $("#strip-legend").innerHTML = D.block_types.map(bt => `<span><span class="sw" style="border:1.5px solid var(${btColor(bt)});background:transparent"></span>${esc(bt)}</span>`).join("");
+}
+
+function ops(){
+  $("#ops tbody").innerHTML = D.components.map(c => `<tr><td>${c.state === "device" ? "✓ " : ""}${esc(c.key)}</td><td class="mono" style="font-size:12px">${esc(c.ttnn)}</td><td><span class="tag ${c.tag}">${esc(c.tag)}</span>${c.deferred ? ` <span class="tag DEFERRED">DEFERRED</span>` : ""}</td></tr>`).join("")
+    || `<tr><td colspan="3"><div class="empty">No components.yaml yet (written by the plan step)</div></td></tr>`;
+}
+
+function sharding(){
+  const P = D.plan, sec = $("#chips");
+  if (!P){ sec.innerHTML = `<div class="empty">No plan checked yet (the plan gate writes results/plan_memory.json)</div>`; $("#shard-sub").textContent = ""; return; }
+  const rows = P.rows || [], cap = P.capacity_gb;
+  const colOf = (r, i) => SERIES[i % SERIES.length];
+  $("#mem-legend").innerHTML = rows.map((r, i) => `<span><span class="sw" style="background:var(${colOf(r, i)})"></span>${esc(r.group)} <span class="num">${r.gb.toFixed(2)} GB</span></span>`).join("");
+  $("#shard-sub").textContent = `mesh ${P.mesh.join("×")} · ${P.total_gb.toFixed(1)} of ${cap} GB DRAM per chip (budget ${P.budget_gb.toFixed(1)} GB, ${Math.round(100 * P.headroom_frac)}% headroom) at ${P.seq.toLocaleString()} tokens, ${P.users} user${P.users > 1 ? "s" : ""} · ${P.fits ? "fits" : "DOES NOT FIT"}`;
+  const [R, Cc] = P.mesh, chips = D.plan_chips || [];
+  sec.style.gridTemplateColumns = `repeat(${Math.min(Cc, 4)}, minmax(0,1fr))`;
+  let html = "";
+  for (let r = 0; r < R; r++) for (let c = 0; c < Cc; c++){
+    const k = r * Cc + c, info = chips[k] || {};
+    html += `<div class="chipcard"><h3>Chip ${k} <span class="mono" style="font-size:11px;color:var(--muted)">(${r},${c})</span></h3>
+      <div class="membar" aria-label="DRAM use">${rows.map((g, i) => `<span style="width:${100 * g.gb / cap}%;background:var(${colOf(g, i)})" title="${esc(g.group)}: ${g.gb.toFixed(2)} GB"></span>`).join("")}</div>
+      <dl>${Object.entries(info).filter(([key]) => key !== "chip").map(([key, v]) => `<dt>${esc(key)}</dt><dd>${esc(Array.isArray(v) ? v.join("–") : v)}</dd>`).join("") || `<dt>layout</dt><dd>see plan.md</dd>`}</dl></div>`;
+  }
+  sec.innerHTML = html;
+  const errs = (P.errors || []).map(e => `<li>${esc(e)}</li>`).join("");
+  $("#shard-notes").innerHTML = (D.plan_ccl && D.plan_ccl.length ? `Per layer: <b>${D.plan_ccl.map(esc).join("</b>, <b>")}</b>. ` : "") +
+    `Memory is computed by the plan gate from the checkpoint's tensor shapes under the plan's placements, plus per-layer state at the target context and the planner's activation estimate.` + (errs ? `<ul>${errs}</ul>` : "");
+}
+
+function pccChart(){
+  const tr = D.trails, svg = $("#pcc"), N = D.layer_types.length;
+  $("#pcc-sub").textContent = `Plotted as 1 − PCC on a log scale; lower is better. Dashed lines mark the ${D.thresholds.layer} layer and ${D.thresholds.final_hidden} end-to-end gates.`;
+  if (!tr.length){ $("#pcc-wrap").innerHTML = `<div class="empty">No per-layer PCC recorded yet</div>`; return; }
+  const W = 900, H = 300, m = {l:64, r:20, t:14, b:40};
+  const lo = -13, hi = -0.5;
+  const x = i => m.l + (W - m.l - m.r) * i / Math.max(1, N - 1);
+  const y = v => { const e = Math.log10(Math.max(1 - v, 1e-13)); return m.t + (H - m.t - m.b) * (e - hi) / (lo - hi); };
+  const cols = SERIES.map(css);
+  const muted = css("--muted"), line = css("--line"), ink2 = css("--ink2");
+  let s = "";
+  for (let e = -12; e <= -1; e += 1){ const yy = m.t + (H - m.t - m.b) * (e - hi) / (lo - hi);
+    s += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${line}" stroke-width="1"/>`;
+    if (e % 2 === 0 || e === -1) s += `<text x="${m.l - 8}" y="${yy + 4}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">1e${e}</text>`; }
+  for (const p of [D.thresholds.layer, D.thresholds.final_hidden].filter((v, i, a) => a.indexOf(v) === i)){ const yy = y(p);
+    s += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${css("--crit")}" stroke-dasharray="5 4" stroke-width="1.2"/>
+      <text x="${W - m.r}" y="${yy - 5}" font-size="11" text-anchor="end" fill="${ink2}" font-family="IBM Plex Mono, monospace">PCC ${p}</text>`; }
+  const step = Math.max(1, Math.ceil(N / 10));
+  for (let i = 0; i < N; i += step) s += `<text x="${x(i)}" y="${H - m.b + 18}" font-size="11" text-anchor="middle" fill="${ink2}" font-family="IBM Plex Mono, monospace">L${i}</text>`;
+  s += `<text x="${(W + m.l)/2}" y="${H - 6}" font-size="11.5" text-anchor="middle" fill="${muted}">decoder layer output</text>`;
+  s += `<text x="14" y="${(H - m.b + m.t)/2}" font-size="11.5" text-anchor="middle" fill="${muted}" transform="rotate(-90 14 ${(H - m.b + m.t)/2})">1 − PCC</text>`;
+  tr.forEach((t, k) => { const pts = t.points.map(([i, v]) => `${x(i)},${y(v)}`).join(" ");
+    s += `<polyline points="${pts}" fill="none" stroke="${cols[k % cols.length]}" stroke-width="2" stroke-linejoin="round"/>`;
+    for (const [i, v] of t.points.length < 8 ? t.points : [t.points.at(-1)]) s += `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${cols[k % cols.length]}" stroke="${css("--surface")}" stroke-width="2"/>`; });
+  s += `<line id="xh" y1="${m.t}" y2="${H - m.b}" stroke="${muted}" stroke-width="1" visibility="hidden"/>`;
+  s += `<rect id="hit" x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/>`;
+  svg.innerHTML = s;
+  $("#pcc-legend").innerHTML = tr.map((t, k) => `<span><span class="sw" style="background:${cols[k % cols.length]}"></span>${esc(t.label)} · min ${Math.min(...t.points.map(p => p[1])).toFixed(5)}</span>`).join("");
+  const hit = svg.querySelector("#hit"), xh = svg.querySelector("#xh");
+  hit.addEventListener("mousemove", e => { const r = svg.getBoundingClientRect(); const px = (e.clientX - r.left) * W / r.width;
+    const i = Math.max(0, Math.min(N - 1, Math.round((px - m.l) / (W - m.l - m.r) * (N - 1))));
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
+    const rows = tr.map((t, k) => { const p = t.points.find(q => q[0] === i); return p ? `<span style="color:${cols[k % cols.length]}">■</span> ${esc(t.label)}: ${p[1].toFixed(7)}` : null; }).filter(Boolean);
+    showTip(e, `<b>Layer ${i}</b> · ${D.layer_types[i]}<br>${rows.join("<br>") || "no data"}`); });
+  hit.addEventListener("mouseleave", () => { hideTip(); xh.setAttribute("visibility", "hidden"); });
+  $("#pcc-table").innerHTML = `<thead><tr><th>Layer</th>${tr.map(t => `<th>${esc(t.label)}</th>`).join("")}</tr></thead><tbody>` +
+    D.layer_types.map((ty, i) => `<tr><td class="mono">L${i} ${ty}</td>${tr.map(t => { const p = t.points.find(q => q[0] === i); return `<td class="mono">${p ? p[1].toFixed(7) : "—"}</td>`; }).join("")}</tr>`).join("") + "</tbody>";
+}
+
+function findings(){
+  const col = {API:"--s4", ACCURACY:"--s2", PERF:"--s3", INFRA:"--crit", CONTRACT:"--s1"};
+  $("#findings").innerHTML = (D.findings || []).map(f => `<div style="display:grid;gap:4px">
+    <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><span class="tag" style="border-color:var(${col[f.kind] || "--line"})">${esc(f.kind)}</span><b style="font-size:13.5px">${esc(f.title)}</b><span class="sub mono" style="font-size:11.5px">${esc(f.task || "")}</span></div>
+    <div class="sub" style="font-size:13px">${esc(f.detail)}</div></div>`).join("") || `<div class="empty">None yet</div>`;
+}
+
+function timing(){
+  const T = D.timing || [];
+  if (!T.length){ $("#timing").outerHTML = `<div class="empty">No device runs yet</div>`; return; }
+  const R = T.slice().sort((a, b) => (a.model === "hybrid harness") - (b.model === "hybrid harness"));
+  $("#timing").innerHTML = `<thead><tr><th>Tokens</th><th>Time</th><th>Tokens/s</th><th>Chunks</th><th>How</th><th>Model</th><th>Task</th></tr></thead><tbody>` +
+    R.map(t => { const n = t.chunks.length, tps = t.tokens ? (t.tokens / t.seconds).toFixed(0) : "";
+      const per = n > 1 ? ` <span class="muted">(${(t.seconds / n).toFixed(2)} s each)</span>` : "";
+      const old = t.model === "hybrid harness" ? ` style="opacity:.55"` : "";
+      return `<tr${old}><td><b>${esc(t.headline)}</b></td><td class="num"><b>${t.seconds.toFixed(t.seconds < 10 ? 2 : 1)} s</b>${per}</td><td class="num">${tps}</td><td class="num">${n}</td><td>${esc(t.how)}</td><td>${esc(t.model)}</td><td>${esc(t.task)}</td></tr>`; }).join("") + "</tbody>";
+}
+
+function positionsChart(){
+  const P = D.positions, kt = n => n < 1024 ? String(n) : `${(n / 1024).toFixed(Math.abs(n / 1024 - Math.round(n / 1024)) < 0.05 ? 0 : 1)}k`;
+  if (!P){ $("#pos-wrap").innerHTML = `<div class="empty">No position sweep yet (the final perf task measures it)</div>`; $("#pos-table").outerHTML = ""; $("#pos-sub").textContent = ""; return; }
+  const pts = P.points, c = P.chunk || 0, W = 900, H = 260, m = {l:64, r:24, t:16, b:42};
+  $("#pos-sub").textContent = `One warm ${kt(c)}-token chunk starting at each position (${P.model}, nothing read back; ${P.task}). The rise is attention over the longer prefix.`;
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y1 = Math.max(...ys) * 1.12;
+  const x = v => m.l + (W - m.l - m.r) * (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5), y = v => m.t + (H - m.t - m.b) * (1 - v / y1);
+  const muted = css("--muted"), line = css("--line"), acc = css("--accent"), ink = css("--ink");
+  let s = "";
+  const step = y1 > 2000 ? 500 : y1 > 800 ? 200 : 100;
+  for (let v = 0; v <= y1; v += step){ s += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="${line}"/>`;
+    s += `<text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="12" fill="${muted}">${v} ms</text>`; }
+  s += `<polyline points="${pts.map(p => `${x(p[0])},${y(p[1])}`).join(" ")}" fill="none" stroke="${acc}" stroke-width="2.5"/>`;
+  pts.forEach(p => { s += `<circle cx="${x(p[0])}" cy="${y(p[1])}" r="5" fill="${acc}"/>`;
+    s += `<text x="${x(p[0])}" y="${y(p[1]) - 10}" text-anchor="middle" font-size="12" fill="${ink}">${p[1].toFixed(0)} ms</text>`;
+    s += `<text x="${x(p[0])}" y="${H - m.b + 20}" text-anchor="middle" font-size="12" fill="${muted}">${kt(p[0])}→${kt(p[0] + c)}</text>`; });
+  $("#pos").innerHTML = s;
+  $("#pos").setAttribute("aria-label", `Chunk time by start position: ${pts.map(p => `${kt(p[0])} ${p[1].toFixed(0)} ms`).join(", ")}`);
+  const base = pts[0][1];
+  $("#pos-table").innerHTML = `<thead><tr><th>Chunk</th><th>Time</th><th>Tokens/s</th><th>vs first</th></tr></thead><tbody>` +
+    pts.map(p => `<tr><td><b>${kt(p[0])} → ${kt(p[0] + c)}</b></td><td class="num">${p[1].toFixed(0)} ms</td><td class="num">${c ? (c / p[1] * 1e3).toFixed(0) : ""}</td><td class="num">${(p[1] / base).toFixed(2)}×</td></tr>`).join("") + "</tbody>";
+}
+
+function profile(){
+  const P = D.profile, secEl = $("#prof-sec");
+  if (!P){ secEl.hidden = true; return; }
+  $("#s-prof").textContent = P.heading;
+  const V = P.views && P.views.length ? P.views : [{id:"all", label:"All layers", n:1, steps:P.steps}];
+  const TL = P.timeline, tlEl = $("#p-tl");
+  if (TL && !TL.error){ tlEl.hidden = false;
+    tlEl.textContent = `Pipelined run (no syncs): the device timeline of chip ${TL.critical_chip} is ${TL.device_timeline_ms.toFixed(1)} ms = kernels ${TL.kernel_ms.toFixed(1)} ms + idle gaps ${TL.gap_ms.toFixed(1)} ms between ops. Host dispatch of the ${TL.calls} ttnn calls takes ${TL.host_dispatch_ms.toFixed(1)} ms in total and ${TL.gap_ms < 0.02 * TL.device_timeline_ms ? "is hidden behind device work: this chunk is device-bound" : "shows up as device idle time"}; host wall ${TL.host_wall_ms.toFixed(1)} ms.`; }
+  const tabs = $("#p-tabs");
+  tabs.hidden = V.length < 2;
+  let vi = 0;
+  try { const k = localStorage.getItem("prof-view"); const j = V.findIndex(v => v.id === k); if (j >= 0) vi = j; } catch (e) {}
+  const vms = v => v.steps.reduce((a, s) => a + s.ms, 0);
+  tabs.innerHTML = V.map((v, i) => `<button type="button" class="ptab" role="tab" data-v="${i}" aria-selected="${i === vi}">${esc(v.label)}<span class="pt-ms">${vms(v).toFixed(0)} ms${v.n > 1 ? " / layer" : ""}</span></button>`).join("");
+  tabs.querySelectorAll(".ptab").forEach(t => t.addEventListener("click", () => { vi = +t.dataset.v;
+    tabs.querySelectorAll(".ptab").forEach(u => u.setAttribute("aria-selected", u === t ? "true" : "false"));
+    try { localStorage.setItem("prof-view", V[vi].id); } catch (e) {}
+    view(V[vi]); }));
+  tabs.onkeydown = e => { if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return; e.preventDefault(); e.stopPropagation();
+    const n = (vi + (e.key === "ArrowRight" ? 1 : -1) + V.length) % V.length; const t = tabs.querySelector(`[data-v="${n}"]`); t.click(); t.focus(); };
+  view(V[vi]);
+  function view(v){
+  const S = v.steps, BN = {compute:"maths", memory:"on-chip data movement", comm:"chip-to-chip", other:"norms / adds / misc"};
+  const parts = [...new Set(S.map(s => s.part))];
+  const total = S.reduce((a, s) => a + s.ms, 0);
+  $("#p-total").textContent = v.id === "all" ? `${(total / 1e3).toFixed(2)} s device · ${(P.wall_ms / 1e3).toFixed(2)} s wall` : `${total.toFixed(1)} ms device per layer`;
+  $("#p-note").textContent = v.id === "all" ? P.note : `Device kernel time of one ${v.label.split(" · ")[0]} layer during the same chunk` + (v.n > 1 ? `, averaged over its ${v.n} profiled layers (${v.label.split(" · ")[1]}).` : ` (${v.label.split(" · ")[1]}).`) + ` Per chip = that chip's own programs; the bar uses the slowest chip per section. Click a phase to see the TTNN operations it ran.`;
+  const order = [...S].sort((a, b) => b.ms - a.ms);
+  const bar = $("#p-bar");
+  bar.innerHTML = order.map(s => `<button type="button" class="pseg" data-k="${esc(s.key)}" style="flex-grow:${s.ms};background:var(--b-${s.bound})" title="${esc(s.name)} · ${s.ms.toFixed(1)} ms" aria-label="${esc(s.name)}, ${s.ms.toFixed(1)} milliseconds"></button>`).join("");
+  $("#p-parts").innerHTML = parts.map(p => { const ms = S.filter(s => s.part === p).reduce((a, s) => a + s.ms, 0);
+    const lab = `${p} ${ms.toFixed(0)} ms (${(100 * ms / total).toFixed(1)}%)`;
+    return `<span style="flex-grow:${ms}" title="${esc(lab)}">${esc(lab)}</span>`; }).join("");
+  let html = "", last = null;
+  S.forEach((s, i) => { if (s.part !== last){ html += `<div class="pgrp">${esc(s.part)}</div>`; last = s.part; }
+    html += `<button type="button" class="pstep" data-i="${i}"><span class="n">${i + 1}</span><span>${esc(s.name)}</span><span class="ms"><span class="dot" style="background:var(--b-${s.bound})"></span>${s.ms >= 100 ? s.ms.toFixed(0) : s.ms.toFixed(1)} ms</span></button>`; });
+  $("#p-steps").innerHTML = html;
+  let cur = S.indexOf(order[0]);
+  const NS = "http://www.w3.org/2000/svg";
+  function node(tag, attrs, text){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+  const [R, C] = D.mesh, nch = R * C;
+  function draw(s){
+    const svg = $("#p-grid"); svg.innerHTML = "";
+    const w = 106, h = 150, gx = 12, gy = 16, x0 = 10, y0 = 34;
+    const cols = Math.min(C, 4), rowsN = Math.ceil(nch / cols);
+    svg.setAttribute("viewBox", `0 0 ${x0 * 2 + cols * (w + gx)} ${y0 + rowsN * (h + gy) + 50}`);
+    const ink = css("--ink"), muted = css("--muted"), tone = css(`--b-${s.bound}`), soft = css(`--b-${s.bound}-soft`), comm = css("--b-comm");
+    const mx = Math.max(...s.per_chip, 1e-9);
+    const defs = node("defs", {}); const mk = node("marker", {id:"pah", viewBox:"0 0 10 10", refX:"9", refY:"5", markerWidth:"6", markerHeight:"6", orient:"auto-start-reverse"});
+    mk.appendChild(node("path", {d:"M0,0L10,5L0,10z", fill:comm})); defs.appendChild(mk); svg.appendChild(defs);
+    svg.appendChild(node("text", {x:x0, y:16, "font-size":"12", fill:muted, "font-family":"IBM Plex Mono, monospace"}, `mesh ${R}×${C} · ${D.chip_name}`));
+    for (let c = 0; c < nch; c++){
+      const x = x0 + (c % cols) * (w + gx), yy = y0 + Math.floor(c / cols) * (h + gy), cell = s.cells[c] || [`chip ${c}`, ""], ms = s.per_chip[c] || 0;
+      svg.appendChild(node("rect", {x, y:yy, width:w, height:h, rx:"7", fill:soft, stroke:tone, "stroke-width":"1.4"}));
+      svg.appendChild(node("text", {x:x + 8, y:yy + 17, "font-size":"11", fill:muted, "font-family":"IBM Plex Mono, monospace"}, `chip ${c}`));
+      svg.appendChild(node("text", {x:x + w / 2, y:yy + 44, "text-anchor":"middle", "font-size":"11.5", fill:ink, "font-family":"IBM Plex Sans, sans-serif"}, cell[0]));
+      svg.appendChild(node("text", {x:x + w / 2, y:yy + 61, "text-anchor":"middle", "font-size":"11", fill:ink, opacity:"0.75", "font-family":"IBM Plex Sans, sans-serif"}, cell[1]));
+      const bh = 58 * ms / mx, by = yy + h - 14 - bh;
+      svg.appendChild(node("rect", {x:x + 18, y:yy + h - 72, width:w - 36, height:58, rx:"3", fill:css("--surface"), opacity:"0.7"}));
+      svg.appendChild(node("rect", {x:x + 18, y:by, width:w - 36, height:Math.max(bh, 1), rx:"3", fill:tone}));
+      svg.appendChild(node("text", {x:x + w / 2, y:yy + h - 78, "text-anchor":"middle", "font-size":"12", "font-weight":"600", fill:ink, "font-family":"IBM Plex Mono, monospace"}, `${ms >= 100 ? ms.toFixed(0) : ms.toFixed(1)} ms`));
+    }
+    const yb = y0 + rowsN * (h + gy) + 6;
+    if (s.pat === "ring" && nch > 1){
+      const xa = x0 + 20, xb = x0 + (Math.min(nch, cols) - 1) * (w + gx) + w - 20;
+      svg.appendChild(node("path", {d:`M${xa},${yb - 12} V${yb} H${xb} V${yb - 12}`, fill:"none", stroke:comm, "stroke-width":"2", "marker-start":"url(#pah)", "marker-end":"url(#pah)"}));
+    }
+    const spread = Math.max(...s.per_chip) - Math.min(...s.per_chip);
+    const msg = s.pat === "ring" ? `traffic: collective across the ${nch} chips` : "no chip-to-chip traffic: every chip works on its own data";
+    svg.appendChild(node("text", {x:x0, y:yb + 22, "font-size":"12", fill:s.pat === "ring" ? comm : muted, "font-family":"IBM Plex Sans, sans-serif"}, `${msg} · spread ${spread.toFixed(1)} ms (${(100 * spread / mx).toFixed(1)}%)`));
+    svg.setAttribute("aria-label", `${s.name}: per chip ${s.per_chip.map(v => v.toFixed(1)).join(", ")} ms; ${msg}`);
+    return msg;
+  }
+  function select(i){
+    cur = Math.max(0, Math.min(S.length - 1, i)); const s = S[cur];
+    bar.querySelectorAll(".pseg").forEach(b => b.setAttribute("aria-current", b.dataset.k === s.key ? "true" : "false"));
+    $("#p-steps").querySelectorAll(".pstep").forEach(b => b.setAttribute("aria-current", +b.dataset.i === cur ? "true" : "false"));
+    $("#pd-name").textContent = `${cur + 1}. ${s.name}`;
+    const pl = $("#pd-pill"); pl.textContent = BN[s.bound]; pl.style.background = `var(--b-${s.bound}-soft)`; pl.style.color = `var(--b-${s.bound})`;
+    $("#pd-ms").textContent = `${s.ms.toFixed(1)} ms · ${(100 * s.ms / total).toFixed(1)}%`;
+    $("#pd-what").textContent = s.what; $("#pd-in").textContent = s.inp || "—"; $("#pd-out").textContent = s.out || "—";
+    $("#pd-progs").textContent = `${s.programs} device programs (${v.id === "all" ? "all layers" : v.n > 1 ? "per layer" : "this layer"}, all chips)` + (s.before_ms != null ? ` · before: ${s.before_ms.toFixed(1)} ms` : "");
+    const msg = draw(s);
+    $("#pd-cap").textContent = `What each chip holds during this phase, and its measured device time ${v.id === "all" ? "summed over the profiled layers" : v.n > 1 ? "per layer" : "in this layer"}. ${msg.charAt(0).toUpperCase() + msg.slice(1)}.`;
+    opsList(s);
+  }
+  function fmu(ms){ return ms >= 1 ? `${ms.toFixed(2)} ms` : `${(ms * 1e3).toFixed(ms * 1e3 >= 10 ? 0 : 1)} µs`; }
+  function memChip(m){ const t = m.trim(); if (!t || t === "?") return `<span class="mc">?</span>`;
+    const k = t.startsWith("L1") ? "l1" : t.startsWith("DRAM") ? "dram" : "oth";
+    return `<span class="mc mc-${k}">${esc(t)}</span>`; }
+  function memLine(m){ if (!m) return ""; const [a, b = ""] = m.split(" -> ");
+    const side = x => x ? x.split(" · ").map(memChip).join("") : `<span class="mc">none</span>`;
+    return `<span class="omem"><span class="ml">in</span>${side(a)}<span class="ml">→ out</span>${side(b)}</span>`; }
+  function opsList(s){
+    const O = s.ops || [], wrap = $("#pd-ops-wrap");
+    wrap.hidden = !O.length;
+    if (!O.length) return;
+    const mx = Math.max(...O.map(o => o.ms), 1e-9), sum = O.reduce((a, o) => a + o.ms, 0);
+    const hasTL = O.some(o => o.gap_ms != null), sg = O.reduce((a, o) => a + (o.gap_ms || 0), 0), sh = O.reduce((a, o) => a + (o.host_ms || 0), 0);
+    $("#pd-ops-leg").hidden = !O.some(o => o.mem);
+    $("#pd-ops-note").textContent = `${O.length} distinct call${O.length > 1 ? "s" : ""} · device ${sum.toFixed(sum >= 10 ? 1 : 2)} ms` +
+      (hasTL ? ` · idle gaps ${fmu(sg)} · host dispatch ${fmu(sh)}` : "") + ` · shapes are per chip` + (v.id === "all" ? " · summed over layers" : v.n > 1 ? " · per layer" : "");
+    const fm = x => x >= 10 ? x.toFixed(1) : x >= 0.1 ? x.toFixed(2) : x.toFixed(3);
+    $("#pd-ops").innerHTML = O.map((o, i) => { const c = o.calls, cs = Math.abs(c - 1) > 1e-6 ? ` ×${Number.isInteger(c) ? c : c.toFixed(1)}` : "";
+      return `<li><span class="oi">${i + 1}</span><span class="ox"><span class="on">ttnn.${esc(o.op).replace(/([._])/g, "$1<wbr>")}${cs}</span><span class="os">${esc(o.shape || "—")}</span>${memLine(o.mem)}</span>` +
+        `<span class="ob" title="${fm(o.ms)} ms"><i style="width:${(100 * o.ms / mx).toFixed(1)}%;background:var(--b-${s.bound})"></i></span>` +
+        `<span class="om">${fm(o.ms)} ms<small>${(100 * o.ms / (sum || 1)).toFixed(0)}%</small></span>` +
+        (o.gap_ms != null ? `<span class="ot">device idle before it ${fmu(o.gap_ms)} · host dispatch ${fmu(o.host_ms)}</span>` : "") + `</li>`; }).join("");
+  }
+  bar.querySelectorAll(".pseg").forEach(b => b.addEventListener("click", () => select(S.findIndex(s => s.key === b.dataset.k))));
+  $("#p-steps").querySelectorAll(".pstep").forEach(b => b.addEventListener("click", () => select(+b.dataset.i)));
+  $("#p-prev").onclick = () => select(cur - 1); $("#p-next").onclick = () => select(cur + 1);
+  secEl.onkeydown = e => { if (e.key === "ArrowRight"){ select(cur + 1); e.preventDefault(); } if (e.key === "ArrowLeft"){ select(cur - 1); e.preventDefault(); } };
+  select(cur);
+  }
+}
+function prior(){
+  const P = D.prior, sec = $("#prior-sec");
+  sec.hidden = !P;
+  if (!P) return;
+  const A = P.this.label, B = P.prior.label, NA = "—";
+  $("#s-prior").textContent = `vs prior: ${A} (this run) vs ${B}`;
+  $("#prior-sub").textContent = `This run ${P.this.model} (${A}) next to ${P.prior.model} (${B}). Δ = this − prior; ${NA} = not measured on that side (yet).`;
+  const body = $("#prior-body"), tabs = $("#prior-tabs");
+  if (P.error){ tabs.hidden = true; body.innerHTML = `<div class="empty">Prior ${esc(P.source)}: ${esc(P.error)}</div>`; return; }
+  const cell = (v, f) => v == null ? `<span class="sub">${NA}</span>` : f(v);
+  const pcc = v => cell(v, fmt);
+  const dp = d => cell(d, x => x === 0 ? "0" : (x > 0 ? "+" : "−") + Math.abs(x).toExponential(1));
+  const ms = v => cell(v, x => x.toFixed(x >= 10 ? 1 : 2));
+  const dms = r => { if (r.delta == null) return cell(null); const q = r.prior ? r.this / r.prior : null;
+    const cls = q == null || Math.abs(q - 1) < 0.01 ? "" : q < 1 ? "d-good" : "d-bad";
+    return `<span class="${cls}">${r.delta > 0 ? "+" : r.delta < 0 ? "−" : ""}${Math.abs(r.delta).toFixed(Math.abs(r.delta) >= 10 ? 1 : 2)}${q ? ` (${q.toFixed(2)}×)` : ""}</span>`; };
+  const head = (first, extra = "") => `<thead><tr><th>${first}</th><th class="num">${esc(A)}</th><th class="num">${esc(B)}</th><th class="num">Δ</th>${extra}</tr></thead>`;
+  const grouped = (rows, key, lab, v, d) => { let h = "", last = null;
+    rows.forEach(r => { if (r.task !== last){ last = r.task; h += `<tr class="phase"><td colspan="4">${esc(r.task)}</td></tr>`; }
+      h += `<tr><td class="mono">${lab(r)}</td><td class="num">${v(r.this)}</td><td class="num">${v(r.prior)}</td><td class="num">${d(r.delta)}</td></tr>`; });
+    return h; };
+  const tbl = (title, note, h, cls = "fixed") => `<div>${title ? `<h3>${esc(title)}</h3>` : ""}${note ? `<p class="sub" style="margin:0 0 6px;font-size:13px">${esc(note)}</p>` : ""}<div class="tbl-wrap"><table class="${cls}">${h}</table></div></div>`;
+  const minor = r => /_L\d+$|^pcc_swap_/.test(r.metric);  // per-layer component PCC and swap-step PCC
+  const V = [
+    {id:"acc", label:"Accuracy", rows:[...P.layers, ...P.gate], html(){
+      if (!P.layers.length && !P.gate.length) return `<div class="empty">No accuracy metrics on either side yet</div>`;
+      return tbl("Per-layer PCC", "Layer output against the golden, per device run (ladder rungs and perf runs), matching task ids.",
+          head("Task / layer") + "<tbody>" + grouped(P.layers, "task", r => `L${r.layer} ${esc(D.layer_types[r.layer] || "")}`, pcc, dp) + "</tbody>") +
+        tbl("Gate metrics", "Other accuracy metrics of matching tasks: end-to-end and chunk output, state (KV) PCC, top-k, reference parity.",
+          head("Task / metric") + "<tbody>" + grouped(P.gate.filter(r => !minor(r)), "task", r => esc(r.metric), pcc, dp) + "</tbody>") +
+        (P.gate.some(minor) ? `<details><summary style="cursor:pointer;color:var(--ink2);font-size:13px">Component and swap PCC (${P.gate.filter(minor).length})</summary>` +
+          tbl("", "", head("Task / metric") + "<tbody>" + grouped(P.gate.filter(minor), "task", r => esc(r.metric), pcc, dp) + "</tbody>") + "</details>" : ""); }},
+    {id:"perf", label:"Performance", rows:[...P.perf, ...P.blocks, ...P.sections], html(){
+      const rows = (R, src) => R.map(r => `<tr><td>${esc(r.what)}</td><td class="num">${ms(r.this)}</td><td class="num">${ms(r.prior)}</td><td class="num">${dms(r)}</td>${src ? `<td class="mono" style="font-size:12px">${esc(r.src[0] || NA)} · ${esc(r.src[1] || NA)}</td>` : ""}</tr>`).join("");
+      return tbl("Headline", "Device and wall time of the current profile (the one the section above shows), and the latest warm full prefill. Times in ms.",
+          head("Measure", "<th>Source (this · prior)</th>") + "<tbody>" + rows(P.perf, true) + "</tbody>") +
+        (P.blocks.length ? tbl("Per block type", "Device ms per layer of each block type in the same chunk (mean over its profiled layers).", head("Block type") + "<tbody>" + rows(P.blocks) + "</tbody>") : "") +
+        (P.sections.length ? tbl("Per section", "Device ms per section, summed over the profiled layers (slowest chip).", head("Section") + "<tbody>" + rows(P.sections) + "</tbody>") : ""); }},
+    {id:"tasks", label:"Tasks", rows:P.tasks.map(t => ({this:t.status[0] === "PASS" ? 1 : null})), html(){
+      const pass = i => P.tasks.filter(t => t.status[i] === "PASS").length, has = i => P.tasks.filter(t => t.status[i] != null).length;
+      const pair = (v, f = x => x) => `${v[0] == null ? NA : f(v[0])} · ${v[1] == null ? NA : f(v[1])}`;
+      return tbl("Task summary", `${A}: ${pass(0)}/${has(0)} passed · ${B}: ${pass(1)}/${has(1)} passed. Pairs are ${A} · ${B}; from runs.compare.`,
+        `<thead><tr><th>Task</th><th>${esc(A)}</th><th>${esc(B)}</th><th class="num">Attempts</th><th class="num">Debugger</th><th class="num">Run</th><th class="num">Agent defs changed</th></tr></thead><tbody>` +
+        P.tasks.map(t => `<tr><td class="mono">${esc(t.task)}</td><td>${t.status[0] ? pill(t.status[0]) : cell(null)}</td><td>${t.status[1] ? pill(t.status[1]) : cell(null)}</td>` +
+          `<td class="num">${pair(t.attempts)}</td><td class="num">${pair(t.debugger)}</td><td class="num">${pair(t.duration_s, fmtDur)}</td><td class="num">${t.agent_defs_changed || ""}</td></tr>`).join("") + "</tbody>", "tasks"); }},
+  ];
+  let vi = 0;
+  try { const k = localStorage.getItem("prior-view"); const j = V.findIndex(v => v.id === k); if (j >= 0) vi = j; } catch (e) {}
+  tabs.innerHTML = V.map((v, i) => `<button type="button" class="ptab" role="tab" data-v="${i}" aria-selected="${i === vi}">${esc(v.label)}<span class="pt-ms" title="measured on ${esc(A)} / rows">${v.rows.filter(r => r.this != null).length}/${v.rows.length}</span></button>`).join("");
+  const show = i => { vi = i; tabs.querySelectorAll(".ptab").forEach(u => u.setAttribute("aria-selected", +u.dataset.v === i ? "true" : "false"));
+    try { localStorage.setItem("prior-view", V[i].id); } catch (e) {}
+    body.innerHTML = V[i].html(); };
+  tabs.querySelectorAll(".ptab").forEach(t => t.addEventListener("click", () => show(+t.dataset.v)));
+  tabs.onkeydown = e => { if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return; e.preventDefault(); e.stopPropagation();
+    const n = (vi + (e.key === "ArrowRight" ? 1 : -1) + V.length) % V.length; show(n); tabs.querySelector(`[data-v="${n}"]`).focus(); };
+  show(vi);
+}
+function render(){ header(); deferred(); profile(); prior(); ladder(); dag(); ops(); findings(); timing(); positionsChart(); sharding(); pccChart();
+  $("#foot").textContent = `Generated from ${D.source} (tasks.yaml, state.json, results/, components.yaml, plan.yaml, findings.yaml) by models/demos/common/bringup/dashboard/export.py.`; }
+if (D) render();
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => D && render());
+new MutationObserver(() => D && render()).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
+</script>
