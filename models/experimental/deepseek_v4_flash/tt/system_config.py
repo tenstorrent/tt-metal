@@ -63,7 +63,7 @@ class DeviceSettings:
     """How the mesh is opened. Consumed by the demo/test entry points, since the
     device exists before the model does."""
 
-    fabric_config: str = "FABRIC_2D"
+    fabric_config: str = "FABRIC_2D_TORUS_XY"
     num_command_queues: int = 2
     trace_region_size: int = 0
     # ``None`` = the whole system flattened to a 1xN line (what the submesh

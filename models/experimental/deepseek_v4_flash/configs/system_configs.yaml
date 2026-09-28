@@ -38,7 +38,7 @@ profiles:
 
     device:
       # Submesh pipeline sockets require 2D fabric. env: DEEPSEEK_V4_FABRIC_CONFIG
-      fabric_config: FABRIC_2D
+      fabric_config: FABRIC_2D_TORUS_XY
       # Two queues so weight prefetch and compute dispatch do not serialize.
       # env: DEEPSEEK_V4_NUM_COMMAND_QUEUES
       num_command_queues: 2

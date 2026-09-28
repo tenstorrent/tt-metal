@@ -478,7 +478,7 @@ def _generate(
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "num_command_queues": 2}],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
