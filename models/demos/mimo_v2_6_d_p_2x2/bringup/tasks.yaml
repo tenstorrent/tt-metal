@@ -236,6 +236,13 @@ tasks:
     - attn_norm
     - attention
     layer: 0
+  frozen:
+    at: '2026-09-28T05:09:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_02_attention.py: 05414c89427364053c19ff1fe8ef4f67eeec3307d71cc9bc76a18edf1b798d51
+      /localdev/dnijemcevic/bringup/mimo_v2_6_d_p/golden/s4096_c2048/manifest.json: 7551c6cae2f8c65a4c62f37dd9c3cd418b52f99e8c986901116b91e32f5f9933
 - id: C.full_dense.attn_residual
   title: full_dense attn_residual (residual) on device, layer 0
   step: implement
