@@ -26,7 +26,7 @@ for fp32 tensors. Before it, a bf16 tensor was stored once and returned for both
 
 ## 1. How the two views stay coherent
 
-**Status: decided, option C. Implemented in PR 2.**
+**Status: decided, option C. Planned for PR 2; none of it exists in the code yet.**
 
 Options:
 
@@ -36,15 +36,23 @@ Options:
 - **C. Version stamp.** Keep both slots. The native slot carries a version counter that the mutating accessor
   bumps; the derived slot remembers the version it was cast from and is re-derived on read when it is behind.
 
-The native slot is the only one that can be written. `get_value_for_update(precision)` returns a
-`MutableTensorView` over it. Only `AutocastTensor` can construct that type, and it bumps a `uint64` version
-counter when it is destroyed, after the kernel that writes through it has been enqueued. Asking for a
-precision other than the native one is a `TT_FATAL`. The derived slot stores the version it was cast from.
-When a read of it finds an older version, it is refreshed in place with
+In PR 2 the native slot will be the only one that can be written. `get_value_for_update(precision)` will
+return a `MutableTensorView` over it. Only `AutocastTensor` will be able to construct that type, and it will
+bump a `uint64` version counter when it is destroyed, after the kernel that writes through it has been
+enqueued. Asking for a precision other than the native one will be a `TT_FATAL`. The derived slot will store
+the version it was cast from. When a read of it finds an older version, it will be refreshed in place with
 `ttnn::typecast(native, dtype, std::nullopt, derived)`, which writes into the existing buffer.
-`get_value(NATIVE)` returns the native slot as stored, and `set_value` installs a new native tensor and
-resets the derived one. The fused `AdamW` and `SGD` steps take a `MutableTensorView` for the parameter and
-their state. Composite optimizers already go through `set_value` and do not change.
+`get_value(NATIVE)` will keep returning the native slot as stored, and `set_value` will install a new native
+tensor and reset the derived one. The fused `AdamW` and `SGD` steps will take a `MutableTensorView` for the
+parameter and their state. Composite optimizers already go through `set_value` and will not change.
+
+Two optimizer contracts have to move with it. `AdamW` creates its moments from the `HALF` view
+(`optimizers/adamw.cpp`), while its device op requires the moments to have the parameter's dtype
+(`adamw_device_operation.cpp`), so for an fp32-native parameter PR 2 will create the moments from `NATIVE`;
+the kernel already accepts fp32 moments. The fused `SGD` kernel accepts only bf16 parameters and momentum
+(`sgd_device_operation.cpp`), so an fp32-native parameter under fused `SGD` is not supported today. Whether
+PR 2 adds an fp32 path to that kernel or fails with a clear error until PR 5 is still open. Until that is
+decided, the claim below holds for every parameter and optimizer combination the fused kernels accept.
 
 One rule covers both storage classes: a bf16-native parameter with an fp32 view, and an fp32-native master
 weight with a bf16 compute copy. A cast happens only when a stale derived view is read, which is at most once
@@ -68,8 +76,8 @@ replace it.
 
 The C++ writer stored `get_value(FULL)`. Since #41385 that is an fp32 copy for bf16 parameters, so C++
 checkpoints written since then hold fp32 tensors, and loading one makes those parameters fp32-native.
-[#57863](https://github.com/tenstorrent/tt-metal/pull/57863) switched the writer to `NATIVE`. The open part is
-old checkpoints.
+[#57863](https://github.com/tenstorrent/tt-metal/pull/57863) (in review) switches the writer to `NATIVE`. The
+open part is old checkpoints.
 
 - **A. Write `NATIVE`, read as-is.** Loading an old checkpoint gives fp32-native parameters; document the
   memory cost.
