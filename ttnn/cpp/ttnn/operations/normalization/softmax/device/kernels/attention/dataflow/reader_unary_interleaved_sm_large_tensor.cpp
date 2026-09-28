@@ -79,7 +79,12 @@ void kernel_main() {
     constexpr std::uint32_t total_passes = 2;
 #endif
 #ifdef FUSED_SCALE_MASK
+#ifdef CAUSAL_MASK
+    // Causal: mask_id is the current tile-row's first mask tile, mask_id_offset the batch base.
+    std::uint32_t mask_id_offset = mask_offset;
+#else
     std::uint32_t mask_id_offset = mask_id;
+#endif
     std::uint32_t mask_index = mask_id;
 #endif
 
@@ -88,7 +93,9 @@ void kernel_main() {
         for (std::uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             std::uint32_t tile_index = tile_offset + (ncht * Wt);
-#ifdef FUSED_SCALE_MASK
+#ifdef CAUSAL_MASK
+            mask_index = mask_id;
+#elif defined(FUSED_SCALE_MASK)
             mask_index = mask_id_offset;
 #endif
             for (std::uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -139,6 +146,7 @@ void kernel_main() {
             }
         }
 #ifdef CAUSAL_MASK
+        mask_id += Wt;
         ++ht;
         ++mask_ht;
         if (ht == Ht) {
