@@ -251,7 +251,14 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
     <div class="panel prose" id="roadHead"></div>
     <div class="panel">
       <h2>Feature priorities</h2>
-      <p class="muted small" style="margin:4px 0 10px">Tier from the leave-one-out loss on the full stack and the greedy gain, across the four scenarios (P0 ≥ 1.25x in any scenario, P1 ≥ 1.07x, P2 below). Scope is a rough engineering estimate.</p>
+      <div class="prose small" style="margin:4px 0 10px">
+        <p>Each scenario has two numbers per feature, measured from opposite ends:</p>
+        <ul>
+          <li><b>Gain when added (step #).</b> Start from today's configuration, try every feature and keep the best; repeat from the new configuration until all features are in. "×1.65 #2" = this feature was the 2nd one added and multiplied goodput by 1.65 at that point. The order is a suggested build order; a gain depends on the features added before it.</li>
+          <li><b>Loss if removed.</b> Start with every feature on and turn only this one off. "×1.96" = goodput drops 1.96x without it. ×1.00 = it adds nothing once everything else is on. That is usually because another feature does the same job: bounded dense gather and variable-size lanes both remove the whole-slot scan, and variable chunk already includes unaligned resume.</li>
+        </ul>
+        <p><b>Tier</b> = the larger of the two numbers, maximised over the four scenarios: P0 ≥ 1.25x, P1 ≥ 1.07x, else P2. Scope is a rough single-engineer estimate.</p>
+      </div>
       <div class="tablewrap" id="prioTable"></div>
     </div>
     <div class="panel">
@@ -259,7 +266,7 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
         <h2>Greedy roadmap</h2>
         <div class="seg" id="scSeg" role="group" aria-label="Scenario"></div>
       </div>
-      <p class="muted small" style="margin:4px 0 10px">From the scenario's baseline (today's configuration: 16x[2,4] or 32x[2,4], chunk 2048, static 1M slots), each row adds the feature with the largest goodput gain. Blue = goodput, orange tick = same stack with an infinite cache.</p>
+      <p class="muted small" style="margin:4px 0 10px">From the scenario's baseline (today's configuration: 16x[2,4] or 32x[2,4], chunk 2048, static 1M slots), each row adds whichever remaining feature raises goodput the most, on top of all the rows above it. The bar is the goodput after that step, the ×-number is the gain from that step alone, and the orange tick is the same configuration with an infinite cache (the gap is what the KV cache still loses).</p>
       <div class="steps" id="greedy"></div>
     </div>
     <div class="cols2">
@@ -469,8 +476,8 @@ details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
         </ul>
       </li>
       <li><b>Concurrency sweep.</b> Each configuration is simulated at C = 8 to 4096 (28 points), stopping early once it is past the cache cliff, and summarised as goodput.</li>
-      <li><b>Greedy roadmap.</b> From the baseline, try every remaining feature, keep the one with the largest goodput, repeat. The order is a suggested build order; each gain is measured in the context of the features before it.</li>
-      <li><b>Leave-one-out.</b> Start from all features on, remove one at a time. It shows what each feature is still worth at the end.</li>
+      <li><b>Greedy roadmap ("gain when added").</b> From the baseline, try every remaining feature, keep the one with the largest goodput, repeat. The order is a suggested build order; each gain is measured in the context of the features before it.</li>
+      <li><b>Leave-one-out ("loss if removed").</b> Start from all features on, remove one at a time. It shows what each feature is still worth at the end.</li>
       <li><b>Priority tier.</b> For each feature, take the larger of its greedy gain and its leave-one-out loss in every scenario, then the maximum over scenarios. P0 ≥ 1.25×, P1 ≥ 1.07×, else P2.</li>
       <li><b>Grid.</b> On the features that helped, search topology (stage count × mesh × replicas), batching budget or chunk size, and lanes or arena size. The top result per scenario becomes the <span class="mono">best-*</span> preset.</li>
       <li><b>Sensitivity.</b> The best configuration re-run with:
@@ -822,7 +829,7 @@ function renderRoadmap() {
     }).join('');
     return { t, html: `<tr><td><span class="pill ${t.tier.toLowerCase()}">${t.tier}</span></td><td>${esc(f.name)}${f.requires.length ? ` <span class="muted small">(needs ${f.requires.join(', ')})</span>` : ''}</td>${cells}<td><span class="pill">${f.scope ? f.scope[0] : ''}</span> <span class="small muted">${f.scope ? esc(f.scope[1]) : ''}</span></td><td class="small muted">${f.scope ? esc(f.scope[2]) : ''}</td></tr>` };
   }).sort((a, b) => b.t.score - a.t.score);
-  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2">${esc(STUDY.scenarios[sk].label)}<br><span class="muted">greedy · LOO</span></th>`).join('')}<th>scope</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
+  $('prioTable').innerHTML = `<table><thead><tr><th>tier</th><th>feature</th>${SCS.map((sk) => `<th class="n" colspan="2">${esc(STUDY.scenarios[sk].label)}<br><span class="muted">gain when added (step #) · loss if removed</span></th>`).join('')}<th>scope</th><th>what it takes</th></tr></thead><tbody>${rows.map((r) => r.html).join('')}</tbody></table>`;
   $('scSeg').innerHTML = SCS.map((sk) => `<button type="button" data-sc="${sk}" aria-pressed="${sk === curSc}">${esc(STUDY.scenarios[sk].label)}</button>`).join('');
   $('scSeg').querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { curSc = b.dataset.sc; renderRoadmap(); }));
   const S = STUDY.scenarios[curSc];
