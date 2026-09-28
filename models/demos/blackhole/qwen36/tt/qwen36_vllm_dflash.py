@@ -948,6 +948,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         if _W <= 1 or not self._spec_ready():
+            # Reachable with the tripwire armed only after release_persistent_capture (_spec None) while a plugin
+            # warm-up runs again (_in_warmup; otherwise _spec_ready() raises first): a plain forward would replay plain
+            # traces in a process that captured spec traces. On the request path _spec_ready() is True whenever the
+            # tripwire is armed; there the guard is model._check_plain_trace_allowed at the plain prefill replay sites.
             if self._forbid_plain:
                 raise RuntimeError(
                     "Qwen36DFlash: plain prefill after the speculative traces were captured (hang class)"
@@ -1131,6 +1135,8 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     def decode_forward(self, *args, **kwargs):
         if _W <= 1 or not self._spec_ready():
+            # Same reachability as in prefill_forward (a re-warm-up after release_persistent_capture); the plain decode
+            # trace replay lives in the generator base class and has no model-side guard of its own.
             if self._forbid_plain:
                 raise RuntimeError("Qwen36DFlash: plain decode after the speculative traces were captured (hang class)")
             if _W > 1 and kwargs.get("sampling_params") is not None and self._no_device_sampler():

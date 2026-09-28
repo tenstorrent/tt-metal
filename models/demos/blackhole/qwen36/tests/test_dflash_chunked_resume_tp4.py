@@ -12,6 +12,13 @@ verify buckets and multi-chunk resume calls in between -- must leave EXACTLY the
   * the paged target K/V over [0, L) (first and last full-attention layer);
   * after ``begin``, the first MAX_NEW committed tokens of the chunked slot equal the unchunked slot's.
 
+RIDER cases (review F2): a short prompt prefilled WHILE a partial is held (a rider-only call with the partial parked,
+the plugin's oversized-rider step; or a rider sharing a call with the partial's intermediate chunk, the served chunk
+step) must leave exactly the state the same prompt leaves when no partial is held (slots RREF / RCAND, same
+snapshot and host-copy comparison). A preempted request's replay reaches the model as exactly such a prompt (prompt +
+outputs as prompt ids, admitted whole). A second NEGATIVE CONTROL (the rider's GDN reset skipped, so it starts from the
+partial's state) must be DETECTED.
+
 The REFERENCE (unchunked, today's path) and the CANDIDATE (chunked) run in DIFFERENT physical slots (1 and 6) with
 disjoint page-table rows, and are compared through host copies, so a candidate that skips its slot write or writes
 the wrong slot cannot pass on the reference's leftover bytes (review M1). The live sessions' committed tokens must
@@ -50,10 +57,12 @@ C = 2048
 REF, CAND = 1, 6  # physical slots of the unchunked reference and the chunked candidate
 LIVE = (0, 2, 3)  # slots of the live speculative sessions
 RIDER = 4  # slot of the short riders
+RREF, RCAND = 5, 7  # slots of the rider-state cases: rider with no partial held / rider while a partial is held
 MAX_NEW = 48
 L_LONG = int(os.environ.get("D1_LONG", "32768"))
 BPU_BIG = ((-(-(L_LONG + 2 * MAX_NEW + 64) // BLOCK_SIZE)) + 31) // 32 * 32
 BPU_SMALL = 16
+BPU_MID = 48  # rider-state slots: prompts up to 3072 tokens
 
 
 def _tables():
@@ -61,7 +70,7 @@ def _tables():
     BPU_BIG blocks each, the others BPU_SMALL blocks (zero-padded, as vLLM pads)."""
     rows, nxt = [], 0
     for u in range(S):
-        n = BPU_BIG if u in (REF, CAND) else BPU_SMALL
+        n = BPU_BIG if u in (REF, CAND) else (BPU_MID if u in (RREF, RCAND) else BPU_SMALL)
         r = torch.zeros(BPU_BIG, dtype=torch.int32)
         r[:n] = torch.arange(nxt, nxt + n, dtype=torch.int32)
         nxt += n
@@ -426,9 +435,66 @@ def test_dflash_chunked_prefill_equals_unchunked(mesh_device, monkeypatch):
             bucket=SMALL,
             check_decode=True,
         )
-        # negative control: the rider's reset is not undone (no unpark) -> must be detected
+
+        def run_rider_case(name, R, L, mode, negative=False):
+            """Review F2: rider state while a partial is held == the same prompt with no partial held. REF: the rider
+            alone into RREF (no scratch owner). CAND: a long prompt's first chunk into CAND, then the rider into RCAND
+            in a rider-only call (``mode`` "only": the partial parked) or next to the partial's intermediate chunk
+            (``mode`` "with_chunk": park after that chunk); the partial then finishes. Compared: the rider's anchor
+            logits, GDN row, drafter ring window, ctx_len and target KV."""
+            assert sh.owner_clear(), f"[D1] {name}: scratch owner before the case"
+            p_r = _long_ids(tokenizer, R, 100 + len(results))
+            p_l = _long_ids(tokenizer, L, 200 + len(results))
+            n_a = _programs(device)
+            lr = sh.call([(p_r, pt[RREF], RREF, 0, R, False, True)])[0]
+            n_ref = _programs(device)
+            ref = _snap(model, dec, RREF, pt[RREF], R, lr)
+            sh.call([(p_l, pt[CAND], CAND, 0, C, False, False)])
+            rider_row = (p_r, pt[RCAND], RCAND, 0, R, False, True)
+            if mode == "only":
+                rider_call, rest = [rider_row], [(C, L)]
+            else:
+                rider_call, rest = [(p_l, pt[CAND], CAND, C, 2 * C, True, False), rider_row], [(2 * C, L)]
+            if negative:
+                monkeypatch.setattr(model, "_reset_gdn_state_for_new_sequence", lambda: None)
+            try:
+                lc = sh.call(rider_call)[-1]
+            finally:
+                if negative:
+                    monkeypatch.undo()
+                    monkeypatch.setenv("QWEN36_DFLASH_CHUNKED_PREFILL", "1")
+                    monkeypatch.setenv("QWEN36_DFLASH_BUCKET_DOWN_STEPS", "1000000")
+            n_cand = _programs(device)
+            cand = _snap(model, dec, RCAND, pt[RCAND], R, lc)
+            for s_, e_ in rest:
+                sh.call([(p_l, pt[CAND], CAND, s_, e_, True, e_ == L)])
+            assert sh.owner_clear(), f"[D1] {name}: scratch owner left behind"
+            d = _diff(ref, cand)
+            programs[name] = (n_ref - n_a, n_cand - n_ref)
+            logger.info(
+                f"[D1] {name}: programs compiled by the rider alone {n_ref - n_a}, by the rider next to a partial "
+                f"{n_cand - n_ref}"
+            )
+            if negative:
+                assert d is not None, f"[D1] NEGATIVE CONTROL {name}: a rider without its GDN reset was NOT detected"
+                logger.info(f"[D1] negative control {name}: mismatch detected as required ({d})")
+                results[name] = f"negative: detected ({d})"
+                return
+            assert d is None, f"[D1] {name}: the rider's state differs with a partial held: {d}"
+            results[name] = "rider bit-identical"
+            logger.info(f"[D1] {name}: {results[name]}")
+
+        # (g) rider state while a partial is held: a 600-token rider in a rider-only call (partial parked); a 2048-token
+        #     rider (one full chunk, the largest short) next to the partial's intermediate chunk; a 2600-token whole
+        #     prompt in a rider-only call (model level: the plugin admits a long replay only with no partial in flight)
+        run_rider_case("RIDER_600_only_call", 600, 4200, "only")
+        run_rider_case("RIDER_2048_with_chunk", 2048, 6200, "with_chunk")
+        run_rider_case("RIDER_2600_only_call", 2600, 4200, "only")
+        # negative controls: the rider's reset is not undone (no unpark) -> must be detected; a rider that skips its own
+        # GDN reset (starts from the partial's state) -> must be detected
         if os.environ.get("D1_SKIP_NEGATIVE", "0") != "1":
             run_case("NEG_L4096_no_unpark", 4096, [(0, C), None, (C, 2 * C)], riders={1: [rider]}, negative=True)
+            run_rider_case("NEG_RIDER_2048_no_reset", 2048, 6200, "with_chunk", negative=True)
 
         ttnn.synchronize_device(device)
         n1 = device.num_program_cache_entries()
