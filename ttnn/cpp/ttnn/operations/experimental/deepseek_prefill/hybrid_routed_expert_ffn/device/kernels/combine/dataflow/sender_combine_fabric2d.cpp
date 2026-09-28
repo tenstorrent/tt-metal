@@ -22,7 +22,6 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "combine_fabric2d_sender_ct_args.hpp"
-#include "combine_fabric2d_tail_probe.hpp"
 
 // Forwarded tokens between semaphore bumps to the downstream reader. A chunk's last page forces a bump
 // regardless, so this only sets how finely that reader can pipeline within a chunk.
@@ -93,7 +92,7 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
     // Header first, THEN wait for the slot: building it while the EDM may still be busy is free overlap, and
     // reversing the two costs ~8% of the bandwidth.
     hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
-    hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::FABRIC, [&] { fabric.wait_for_empty_write_slot(); });
+    fabric.wait_for_empty_write_slot();
     fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
     // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
     // per batch below, which is what lets token N+1 issue while N is still draining. Payload and credit go
@@ -123,7 +122,7 @@ uint32_t pump_stream(FabricSender& fabric) {
     uint32_t fwd_since_bump = 0;
     while (!end_of_stream) {
         uint32_t avail = 0;
-        hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::FILLED, [&] { avail = wait_for_filled(sent); });
+        avail = wait_for_filled(sent);
         const uint32_t n = avail < ct.batch ? avail : ct.batch;
 
         uint32_t processed = 0;
@@ -185,13 +184,11 @@ void kernel_main() {
     prebuild_routes();
     const uint32_t sent = pump_stream(fabric);
     if (sent > 0) {
-        hyb_cmbf2d::tail_probe::timed(hyb_cmbf2d::tail_probe::DRAIN, [&] { drain_fabric(fabric); });
+        drain_fabric(fabric);
     }
 
     noc_async_writes_flushed();
     fabric_connections.close();
-
-    hyb_cmbf2d::tail_probe::report();
 
     // `filled` and `freed` are program semaphores, re-initialised at every launch, so nothing resets them here.
     // The last `freed` bump is a NoC atomic that noc_async_writes_flushed does not cover; it must land before
