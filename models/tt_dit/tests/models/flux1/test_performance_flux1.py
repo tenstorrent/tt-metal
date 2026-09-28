@@ -448,13 +448,8 @@ def test_flux1_pipeline_performance_accuracy(
 
     for prompt, score in zip(TEST_PROMPTS, clip_scores):
         logger.info(f'Prompt "{prompt[:50]}". Score {score}')
-        # TODO: At some point this was above 30 for all prompts. The gate has been lowered twice since:
-        # - to 28.0 after an unexplained drop (possible culprit
-        #   https://github.com/tenstorrent/tt-metal/actions/runs/27652185143);
-        # - to 25.0 after #56292 (drop legacy sqrt/rsqrt/reciprocal paths) moved the Roman general
-        #   prompt from 30.34 to 27.64 on bh_quietbox_2. Bisected to that single commit; tracked in
-        #   https://github.com/tenstorrent/tt-metal/issues/58132. Outputs are deterministic run to run,
-        #   so any further drop is a code change, not noise.
+        # Link to what the images can look like with this threshold.
+        # https://claude.ai/artifact/LJPbqf4voMmm2uHPqZRbMs?sk=Qa7eBjkWRxd_NYC8heupFQ
         assert score > 25.0
 
 
