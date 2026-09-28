@@ -362,6 +362,74 @@ inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint
     cb_push_back(o, Ct * Ct);
 }
 
+// ---- fused qk-norm (C5). rowsum(x^2) is the diagonal of x @ x^T, so the per-row inverse rms comes out of one
+// matmul window as a diagonal tile, and the normalization itself is one block-diagonal matmul: 2 blocks per
+// operand instead of 4 (x^2, rowsum, rsqrt, broadcast), and no packed intermediates.
+
+// D[mi] = diag(rsqrt(rowsum(x[mi,:]^2) + eps) [* scale]) for each row-tile of x [Ct, Kt], one DST pass per tile:
+// the Kt products x[mi,ki] @ x[mi,ki]^T accumulate the row sums of squares on the diagonal of DST0 (the
+// off-diagonal x_i.x_j are discarded); the identity is copied to DST1 and applied before and after the SFPU chain
+// (+eps, rsqrt, *scale), so the off-diagonal rsqrt(eps) never leaves DST.
+inline void inv_rms_diag(
+    uint32_t x,
+    uint32_t eye,
+    uint32_t o,
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t eps_bits,
+    uint32_t scale_bits,
+    bool do_scale) {
+    cb_reserve_back(o, Ct);
+    pack_reconfig_data_format(o);
+    for (uint32_t mi = 0; mi < Ct; mi++) {
+        tile_regs_acquire();
+        reconfig_data_format(x, x);  // matmul(x, x^T): x on both srcA and srcB
+        matmul_init(x, x, 1);
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            matmul_tiles(x, x, mi * Kt + ki, mi * Kt + ki, 0);  // DST0 = x_mi @ x_mi^T
+        }
+        reconfig_data_format_srca(eye);
+        copy_init(eye);
+        copy_tile(eye, 0, 1);  // the identity block (cb.eye tile 0)
+        mul_binary_tile_init();
+        sfpu_mul_dst(0, 1, 0);  // diag(rowsum)
+        binop_with_scalar_tile_init();
+        add_unary_tile(0, eps_bits);  // + eps (off-diagonal: eps)
+        rsqrt_tile_init();
+        rsqrt_tile(0);  // off-diagonal: rsqrt(eps), finite
+        if (do_scale) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(0, scale_bits);  // * scale (q only)
+        }
+        mul_binary_tile_init();
+        sfpu_mul_dst(0, 1, 0);  // off-diagonal -> 0
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, o, mi);
+        tile_regs_release();
+    }
+    cb_push_back(o, Ct);
+}
+
+// out[mi, ki] = D[mi] @ x[mi, ki]: block-diagonal left multiply (D holds Ct diagonal tiles), one product per tile.
+inline void mm_diag(uint32_t d, uint32_t x, uint32_t o, uint32_t Ct, uint32_t Kt) {
+    cb_reserve_back(o, Ct * Kt);
+    pack_reconfig_data_format(o);
+    reconfig_data_format(x, d);  // matmul(d, x): d->srcB, x->srcA
+    matmul_init(d, x, 0);
+    for (uint32_t mi = 0; mi < Ct; mi++) {
+        for (uint32_t ki = 0; ki < Kt; ki++) {
+            tile_regs_acquire();
+            matmul_tiles(d, x, mi, mi * Kt + ki, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, o, mi * Kt + ki);
+            tile_regs_release();
+        }
+    }
+    cb_push_back(o, Ct * Kt);
+}
+
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
 inline void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t Nt) {
     cb_reserve_back(o, Mt * Nt);
@@ -591,54 +659,6 @@ inline void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
     cb_push_back(o, Ct);
 }
 
-// In-kernel L2-norm over K. rowsum_k: o[Mt,1(broadcast)] = sum over the full K dim of
-// in[Mt,Kt], computed as in @ ones by reusing cb_ones tile 0 as the [K,1] contraction operand
-// (avoids a dedicated ones-column constant). Mirrors the `mm` helper's reconfig/matmul discipline.
-inline void rowsum_k(uint32_t in, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t cb_ones) {
-    cb_reserve_back(o, Mt);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(cb_ones, in);  // matmul(in, cb_ones): in->srcB, cb_ones->srcA
-    matmul_init(in, cb_ones, 0);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        tile_regs_acquire();
-        for (uint32_t ki = 0; ki < Kt; ki++) {
-            matmul_tiles(in, cb_ones, mi * Kt + ki, 0, 0);  // reuse ones tile 0 for every ki
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, mi);
-        tile_regs_release();
-    }
-    cb_push_back(o, Mt);
-}
-
-// inv_rms: o[i] = rsqrt(in[i] + eps) [* scale]. in holds per-row sum-of-squares (rowsum_k output);
-// out is the per-row inverse-L2 factor (optionally pre-scaled, for folding q's scale into the norm).
-// eps/scale arrive as fp32-bit-cast uint32 compile args.
-inline void inv_rms(uint32_t in, uint32_t o, uint32_t n, uint32_t eps_bits, uint32_t scale_bits, bool do_scale) {
-    cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);
-    copy_init(in);
-    for (uint32_t i = 0; i < n; i++) {
-        tile_regs_acquire();
-        copy_tile(in, i, 0);
-        binop_with_scalar_tile_init();
-        add_unary_tile(0, eps_bits);  // + eps
-        rsqrt_tile_init();
-        rsqrt_tile(0);  // 1/sqrt(sumsq + eps)
-        if (do_scale) {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, scale_bits);  // * scale (q only)
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, i);
-        tile_regs_release();
-    }
-    cb_push_back(o, n);
-}
-
 // CB map for prep_chunk — one field per CB the body touches. dl/mask are the prep kernel's
 // aliases (cb_dl = the vnew slot, cb_mask = the u slot); the map carries the resolved ids.
 struct GdnPrepCbs {
@@ -691,29 +711,18 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     {
         GDN_ZONE("pp_norm");
         if constexpr (qk_norm) {
-            // q: q^2 -> rowsum_K -> rsqrt(+eps)*scale -> q_normed (cb.supd)
-            ew(cb.q, cb.q, cb.scr1, ck_rt, EwOp::Mul);
-            WAIT(cb.scr1, ck);
-            rowsum_k(cb.scr1, cb.scr2, ct, Kt, cb.ones);
-            WAIT(cb.scr2, Ct);
-            POP(cb.scr1, ck);
-            inv_rms(cb.scr2, cb.scr3, ct, eps_bits, scale_bits, /*do_scale=*/true);
+            // q: D = diag(rsqrt(rowsum(q^2) + eps) * scale) from q @ q^T in one DST pass, then q_normed = D @ q
+            // (cb.supd)
+            inv_rms_diag(cb.q, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/true);
             WAIT(cb.scr3, Ct);
-            POP(cb.scr2, Ct);
-            bcast_cols_mul(cb.q, cb.scr3, cb.supd, ct, Kt);
+            mm_diag(cb.scr3, cb.q, cb.supd, ct, Kt);
             WAIT(cb.supd, ck);
             POP(cb.scr3, Ct);
             POP(cb.q, ck);
             // k: same, no scale -> k_normed (cb.stmp)
-            ew(cb.k, cb.k, cb.scr1, ck_rt, EwOp::Mul);
-            WAIT(cb.scr1, ck);
-            rowsum_k(cb.scr1, cb.scr2, ct, Kt, cb.ones);
-            WAIT(cb.scr2, Ct);
-            POP(cb.scr1, ck);
-            inv_rms(cb.scr2, cb.scr3, ct, eps_bits, scale_bits, /*do_scale=*/false);
+            inv_rms_diag(cb.k, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/false);
             WAIT(cb.scr3, Ct);
-            POP(cb.scr2, Ct);
-            bcast_cols_mul(cb.k, cb.scr3, cb.stmp, ct, Kt);
+            mm_diag(cb.scr3, cb.k, cb.stmp, ct, Kt);
             WAIT(cb.stmp, ck);
             POP(cb.scr3, Ct);
             POP(cb.k, ck);
