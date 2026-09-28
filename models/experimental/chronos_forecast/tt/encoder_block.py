@@ -78,14 +78,9 @@ class TtEncoderBlock:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        rms_w = ttnn.from_torch(
-            weights.ff_rms_weight.detach().to(torch.float32).reshape(1, -1).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return (_weight(weights.ff_wi), _weight(weights.ff_wo), rms_w)
+        # RMSNorm's gamma is folded into Wi's input columns.
+        wi = weights.ff_wi.detach().to(torch.float32) * weights.ff_rms_weight.detach().to(torch.float32).reshape(1, -1)
+        return (_weight(wi), _weight(weights.ff_wo))
 
     def forward_device(
         self,
@@ -109,7 +104,7 @@ class TtEncoderBlock:
         import ttnn
 
         mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
-        ff_wi, ff_wo, ff_rms = self._ff
+        ff_wi, ff_wo = self._ff
 
         # Sublayer 1: time attention + residual
         out = self.time_core(x, time_mask, cos, sin, memory_config=mem)
@@ -134,7 +129,7 @@ class TtEncoderBlock:
 
         # Sublayer 3: feedforward (inline) + residual
         ff_fidelity = self.precision.ff_math_fidelity()
-        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, weight=ff_rms, memory_config=mem)
+        n = ttnn.rms_norm(x, epsilon=self.weights.ff_eps, memory_config=mem)
         h = program_configs.linear(
             n,
             ff_wi,

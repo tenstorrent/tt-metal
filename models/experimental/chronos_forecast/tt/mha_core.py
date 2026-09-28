@@ -78,7 +78,7 @@ class TtMhaCore:
             import ttnn
 
             inner = weights.num_heads * weights.head_dim
-            v_weight = weights.wqkv[2 * inner : 3 * inner].detach().to(torch.float32).t()
+            v_weight = (weights.wqkv[2 * inner : 3 * inner].detach().to(torch.float32) * self._rms_gamma(weights)).t()
             o_weight = weights.wo.detach().to(torch.float32).t()
             self._diagonal_vo_weight = ttnn.from_torch(
                 (v_weight @ o_weight).contiguous(),
@@ -89,7 +89,12 @@ class TtMhaCore:
             )
 
     @staticmethod
-    def _move_weights_to_device(device, weights: TtMhaWeights, weight_dtype):
+    def _rms_gamma(weights: TtMhaWeights) -> torch.Tensor:
+        """RMSNorm's gamma, folded into the input columns of every linear that consumes the norm."""
+        return weights.rms_weight.detach().to(torch.float32).reshape(1, -1)
+
+    @classmethod
+    def _move_weights_to_device(cls, device, weights: TtMhaWeights, weight_dtype):
         import ttnn
 
         def _weight(out_in: torch.Tensor):
@@ -103,14 +108,8 @@ class TtMhaCore:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        rms_w = ttnn.from_torch(
-            weights.rms_weight.detach().to(torch.float32).reshape(1, -1).contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return (_weight(weights.wqkv), _weight(weights.wo), rms_w)
+        wqkv = weights.wqkv.detach().to(torch.float32) * cls._rms_gamma(weights)
+        return (_weight(wqkv), _weight(weights.wo))
 
     @staticmethod
     def _can_fuse_rope(cos, head_dim: int) -> bool:
@@ -151,11 +150,11 @@ class TtMhaCore:
         import ttnn
 
         mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
-        wqkv, wo, rms_w = self._tt
+        wqkv, wo = self._tt
         num_heads, head_dim = self.weights.num_heads, self.weights.head_dim
         batch, seq = x.shape[0], x.shape[1]
-        # 1. RMSNorm (T5-style: no mean subtraction, no bias).
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w, memory_config=mem)
+        # 1. RMSNorm (T5-style: no mean subtraction, no bias); gamma is folded into wqkv.
+        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, memory_config=mem)
         # 2. Fused QKV + head split. transpose_key=False: SDPA needs K as [B,H,S,Dh].
         xqkv = program_configs.linear(x_norm, wqkv, dtype=self.precision.attention_dtype(), memory_config=mem)
         ttnn.deallocate(x_norm)
@@ -251,8 +250,7 @@ class TtMhaCore:
         if self._diagonal_vo_weight is None:
             raise RuntimeError("diagonal group path was not enabled for this MHA core")
         mem = ttnn.DRAM_MEMORY_CONFIG if memory_config is None else memory_config
-        _wqkv, _wo, rms_w = self._tt
-        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, weight=rms_w, memory_config=mem)
+        x_norm = ttnn.rms_norm(x, epsilon=self.weights.eps, memory_config=mem)
         out = program_configs.linear(
             x_norm, self._diagonal_vo_weight, dtype=self.precision.sublayer_out_dtype(), memory_config=mem
         )
