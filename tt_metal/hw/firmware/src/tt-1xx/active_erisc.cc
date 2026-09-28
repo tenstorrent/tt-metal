@@ -228,13 +228,21 @@ int __attribute__((noinline)) main(void) {
     set_deassert_addresses();
 
     kg_noc_mode = DM_DEDICATED_NOC;
+#if !defined(ENABLE_2_ERISC_MODE)
+    // Base FW on ERISC0 uses NoC0 concurrently, so only touch our own NoC.
+    noc_init_one(PHYSICAL_AERISC_ID, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    noc_local_state_init(PHYSICAL_AERISC_ID);
+    noc_clear_packet_tags(PHYSICAL_AERISC_ID);
+    ncrisc_noc_sync(PHYSICAL_AERISC_ID);
+#else
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
     noc_clear_all_packet_tags();
-    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
+#endif
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 #if defined(ENABLE_2_ERISC_MODE)
     deassert_all_reset();
