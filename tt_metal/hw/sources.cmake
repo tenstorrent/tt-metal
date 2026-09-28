@@ -439,4 +439,7 @@ set(HW_JIT_API_HEADERS
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exponent_bucket_core.h
     ckernels/common/llk_sfpu/ckernel_sfpu_erfinv_bf16.h
     ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log_square_factorized_odd.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_algebraic.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_simple_forward.h
+    inc/api/compute/eltwise_unary/hardswish_tt_poly_bf16.h
 )
