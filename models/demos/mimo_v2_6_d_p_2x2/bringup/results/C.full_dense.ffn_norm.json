@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "pcc_ffn_norm_L00": {
+   "t": "2026-09-28T05:19:00",
+   "value": 0.9999960483912751
+  },
+  "rel_l2_ffn_norm_L00": {
+   "t": "2026-09-28T05:19:00",
+   "value": 0.0028950602281838655
+  },
+  "row_norm_ratio_max_ffn_norm_L00": {
+   "t": "2026-09-28T05:19:00",
+   "value": 1.0053812265396118
+  },
+  "row_norm_ratio_min_ffn_norm_L00": {
+   "t": "2026-09-28T05:19:00",
+   "value": 0.9932621121406555
+  }
+ },
+ "task": "C.full_dense.ffn_norm"
+}
