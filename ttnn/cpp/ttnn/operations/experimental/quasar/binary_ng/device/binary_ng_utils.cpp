@@ -819,22 +819,14 @@ bool is_native_L1_sharding(
             return false;
         }
 
-        // Check if output grid differs from input grids - if so, cannot use native sharding
-        // This will force resharding through interleaved path
-        if (c.is_sharded() && c.shard_spec().has_value()) {
-            const auto& c_grid = c.shard_spec()->grid;
-            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
-                const auto& a_grid = a.memory_config().shard_spec()->grid;
-                if (a_grid != c_grid) {
-                    return false;
-                }
-            }
-            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
-                const auto& b_grid = b->memory_config().shard_spec()->grid;
-                if (b_grid != c_grid) {
-                    return false;
-                }
-            }
+        // A sharded input must carry the output's exact shard spec, not only its grid: the factories borrow
+        // the shards in place, one output shard per core, so any other shape, strategy or orientation maps
+        // core i's inputs to tiles its output shard does not hold. a and b share one memory config here.
+        const bool input_spec_differs = c.is_sharded() && c.shard_spec().has_value() &&
+                                        a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value() &&
+                                        *a.memory_config().shard_spec() != *c.shard_spec();
+        if (input_spec_differs) {
+            return false;
         }
 
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
