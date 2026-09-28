@@ -26,8 +26,7 @@ tasks:
   deps:
   - R.1
   gate:
-    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf
-      --seq 2048
+    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf --seq 2048
     metrics:
       revision_ok: == 1
       text_top1_acc: '>= 0.4'
@@ -1377,8 +1376,8 @@ tasks:
   deps:
   - L.s56320
   gate:
-    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
     metrics:
       device_ms_total: '> 0'
       profiled_programs: '>= 1'
@@ -1394,16 +1393,50 @@ tasks:
       opportunities_listed: '>= 1'
   paths:
   - models/demos/mimo_v2_6_d_p_2x2/bringup/opportunities.md
+- id: P.1
+  title: 'Full-attention SDPA (layers 0, 5) at HiFi2: preset A as on 1x4 (owner decision)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - X.2
+  paths:
+  - models/demos/mimo_v2_6_d_p_2x2/tt
+  - models/demos/mimo_v2_6_d_p_2x2/bringup/hooks.py
+  brief:
+    details: 'Owner decision (2026-09-28): run the full-attention SDPA of layers 0 and 5 at HiFi2, i.e. preset "A" in tt/attention.py (HiFi2, fp32 dest
+      off, approx exp, q512/k128), exactly as the 1x4 prior (models/demos/mimo_v2_6_d_p) ends. This is an explicit owner exception to agent rule 7 (HiFi4
+      everywhere) for this one op only; everything else stays at HiFi4, and the sliding layers keep preset S. Change: FULL_SDPA_DEFAULT = "A" (keep A4 selectable
+      via MIMO_SDPA_CFG=A4) and record it in perf_settings() if the model has one. No other change. Baseline (X.1): 278.5 ms device for the 51200->56320
+      chunk; attention.sdpa 73.5 ms (the 1x4 prior measured 45.0 ms with preset A). The gate reruns the frozen full-layer attention component tests and
+      every full_dense / full_moe swap test with attention on device, then the last rung and the profile. Frozen tests must pass unchanged (never edit a
+      frozen test or its limits). If a frozen test fails at HiFi2, stop and report the numbers; do not tune around it.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_dense_attention.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_c_full_moe_attention.py && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_02_attention.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_03_attn_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_04_ffn_norm.py && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_05_mlp.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_dense_06_mlp_residual.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_02_attention.py && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_03_attn_residual.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_04_ffn_norm.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_05_router.py && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_06_experts.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/mimo_v2_6_d_p_2x2/tests/bringup/test_swap_full_moe_07_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: < 265
+      device_ms_attention_sdpa: < 55
+      host_transfers_per_layer: == 0
+      pcc_chunk_out: '>= 0.97'
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - X.2
+  - P.1
   gate:
-    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
-      BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
-      scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
-      --run-all models/demos/common/bringup/tests/test_positions.py
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1
+      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
     metrics:
       pcc_layer_L*: '>= 0.97'
       pcc_state_min: '>= 0.97'
@@ -1418,10 +1451,9 @@ tasks:
   deps:
   - X.3
   gate:
-    cmd: BRINGUP_CAPTURE_FORKS=models/demos/mimo_v2_6_d_p_2x2/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
-      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/mimo_v2_6_d_p_2x2/bringup/results/fork_calls.json
-      --run-tests
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/mimo_v2_6_d_p_2x2/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases
+      --capture models/demos/mimo_v2_6_d_p_2x2/bringup/results/fork_calls.json --run-tests
     metrics:
       forks_used: '>= 0'
       fork_calls_uncovered: == 0

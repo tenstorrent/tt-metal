@@ -14,3 +14,10 @@ plan:
   note: owner approved 2026-09-28 (DeepSeek 2D dispatch on axis 0, TP=4 attention,
     no SP)
   ledger: a166f4a8bc1afd9a8e2e198b4a42f36923012f9d597f6efbc5a8930850b4fd5e
+perf:
+  by: dnijemcevic
+  at: '2026-09-28T13:58:26'
+  files:
+    models/demos/mimo_v2_6_d_p_2x2/bringup/opportunities.md: d2c6a4c81113734f1a84f2d7b722824aabfbd047ceed6ac3398c2a4d32b68aac
+  note: 'owner 2026-09-28: only pick = full-attention SDPA at HiFi2 (preset A, owner
+    exception to rule 7) -> P.1; declined local expert dispatch and dispatch tuning'
